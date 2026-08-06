@@ -1,0 +1,27 @@
+# Environment variables — NEVER commit these
+.env
+.env.local
+.env*.local
+
+# Python
+backend/venv/
+backend/.venv/
+backend/__pycache__/
+backend/**/*.pyc
+backend/.pytest_cache/
+
+# Node
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Uploaded test files
+test-uploads/
