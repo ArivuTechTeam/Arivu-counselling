@@ -106,14 +106,16 @@ export function WeakAreaAnalysis() {
   function toggleS(s: string) {
     setOpenS((prev) => {
       const next = new Set(prev);
-      next.has(s) ? next.delete(s) : next.add(s);
+      if (next.has(s)) next.delete(s);
+      else next.add(s);
       return next;
     });
   }
   function toggleC(k: string) {
     setOpenC((prev) => {
       const next = new Set(prev);
-      next.has(k) ? next.delete(k) : next.add(k);
+      if (next.has(k)) next.delete(k);
+      else next.add(k);
       return next;
     });
   }

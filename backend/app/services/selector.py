@@ -17,8 +17,9 @@ import random
 from app.lib.auth import CurrentProfile
 
 # Absolute ceiling on how many questions one selection scans / returns.
+# 100 covers a full-length exam (e.g. CA Foundation 100Q); shorter modes cap lower.
 _MAX_POOL = 2000
-_MAX_COUNT = 50
+_MAX_COUNT = 100
 
 
 def enrolled_subject_ids(service, profile: CurrentProfile) -> set[str]:

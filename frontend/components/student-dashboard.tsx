@@ -3,6 +3,7 @@
 import * as React from "react";
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import {
   Area,
   AreaChart,
@@ -96,6 +97,141 @@ const AlertIcon = () => (
     <path d="M12 17h.01" />
   </Icon>
 );
+
+const BoltIcon = () => (
+  <Icon>
+    <path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z" />
+  </Icon>
+);
+const CalendarIcon = () => (
+  <Icon>
+    <rect x="3" y="4" width="18" height="18" rx="2" />
+    <path d="M16 2v4M8 2v4M3 10h18" />
+  </Icon>
+);
+const ClockIcon = () => (
+  <Icon>
+    <circle cx="12" cy="12" r="10" />
+    <path d="M12 6v6l4 2" />
+  </Icon>
+);
+const UsersIcon = () => (
+  <Icon>
+    <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
+    <circle cx="9" cy="7" r="4" />
+    <path d="M22 21v-2a4 4 0 0 0-3-3.87" />
+    <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+  </Icon>
+);
+const BookmarkIcon = () => (
+  <Icon>
+    <path d="m19 21-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z" />
+  </Icon>
+);
+const GridIcon = () => (
+  <Icon>
+    <rect x="3" y="3" width="7" height="7" />
+    <rect x="14" y="3" width="7" height="7" />
+    <rect x="14" y="14" width="7" height="7" />
+    <rect x="3" y="14" width="7" height="7" />
+  </Icon>
+);
+
+const FEATURES: {
+  href: string;
+  title: string;
+  desc: string;
+  chip: string;
+  icon: React.ReactNode;
+}[] = [
+  {
+    href: "/dashboard/student/smart-quiz",
+    title: "Smart Quiz",
+    desc: "Random questions, any time",
+    chip: "bg-amber-500/10 text-amber-600",
+    icon: <BoltIcon />,
+  },
+  {
+    href: "/dashboard/student/daily",
+    title: "Daily Challenge",
+    desc: "Keep your streak alive",
+    chip: "bg-emerald-500/10 text-emerald-600",
+    icon: <CalendarIcon />,
+  },
+  {
+    href: "/dashboard/student/exam",
+    title: "Exam Simulator",
+    desc: "A full, timed mock",
+    chip: "bg-rose-500/10 text-rose-500",
+    icon: <ClockIcon />,
+  },
+  {
+    href: "/dashboard/student/challenge",
+    title: "Challenge a Friend",
+    desc: "Compete with classmates",
+    chip: "bg-violet-500/10 text-violet-600",
+    icon: <UsersIcon />,
+  },
+  {
+    href: "/dashboard/student/revision",
+    title: "Revision",
+    desc: "Weak topics & saved questions",
+    chip: "bg-blue-500/10 text-blue-600",
+    icon: <BookmarkIcon />,
+  },
+  {
+    href: "/dashboard/student/leaderboard",
+    title: "Leaderboard",
+    desc: "See where you rank",
+    chip: "bg-amber-500/10 text-amber-600",
+    icon: <TrophyIcon />,
+  },
+  {
+    href: "/dashboard/student/subjects",
+    title: "Subjects",
+    desc: "Browse by chapter",
+    chip: "bg-brand-500/10 text-brand-600",
+    icon: <GridIcon />,
+  },
+  {
+    href: "/dashboard/student/weak-areas",
+    title: "Weak areas",
+    desc: "Where to focus next",
+    chip: "bg-rose-500/10 text-rose-500",
+    icon: <AlertIcon />,
+  },
+];
+
+function FeatureCard({
+  href,
+  title,
+  desc,
+  chip,
+  icon,
+}: {
+  href: string;
+  title: string;
+  desc: string;
+  chip: string;
+  icon: React.ReactNode;
+}) {
+  return (
+    <Link
+      href={href}
+      className="animate-rise flex items-start gap-3 rounded-xl border bg-card p-4 shadow-sm transition-all hover:-translate-y-0.5 hover:border-primary/40 hover:shadow-md"
+    >
+      <span
+        className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-full ${chip}`}
+      >
+        {icon}
+      </span>
+      <span className="min-w-0">
+        <span className="block text-sm font-semibold text-foreground">{title}</span>
+        <span className="block text-xs text-muted-foreground">{desc}</span>
+      </span>
+    </Link>
+  );
+}
 
 function MetricTile({
   label,
@@ -343,6 +479,21 @@ export function StudentDashboard() {
       <div id="available" className="scroll-mt-24">
         <StudentQuizzes />
       </div>
+
+      {/* Practice launchpad — everything self-serve, one tap away */}
+      <Card className="animate-rise">
+        <CardHeader>
+          <CardTitle>Practice &amp; compete</CardTitle>
+          <CardDescription>
+            Everything you need to prep — pick one and go.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          {FEATURES.map((f) => (
+            <FeatureCard key={f.href} {...f} />
+          ))}
+        </CardContent>
+      </Card>
 
       {/* Score trend area chart */}
       <Card id="score-trend" className="animate-rise scroll-mt-24">
