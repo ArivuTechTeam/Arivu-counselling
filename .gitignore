@@ -23,5 +23,15 @@ Thumbs.db
 .vscode/
 .idea/
 
+# Claude Code agent tooling / skills (local, not product source)
+.claude/
+
+# Local scratch scripts
+/_co.py
+
+# Design-review exports (large binaries, not source)
+docs/Multi-tenant product prototype review*
+docs/*.zip
+
 # Uploaded test files
 test-uploads/
