@@ -35,19 +35,64 @@ function formatAnswer(q: ReviewQuestion): string {
   return String(a);
 }
 
+// Status tones from the design system: emerald = approved, rose = rejected,
+// amber = needs_edit, warm-neutral = pending. Strings render exactly as the API
+// returns them (lowercase, snake_cased) — no prettifying.
+const STATUS_TONE: Record<string, string> = {
+  approved: "bg-emerald-100 text-emerald-700",
+  rejected: "bg-rose-100 text-rose-700",
+  needs_edit: "bg-amber-100 text-amber-700",
+  pending_review: "bg-muted text-muted-foreground",
+};
+
 function StatusBadge({ status }: { status: string }) {
-  const color =
-    status === "approved"
-      ? "bg-green-100 text-green-800"
-      : status === "rejected"
-        ? "bg-red-100 text-red-800"
-        : status === "needs_edit"
-          ? "bg-yellow-100 text-yellow-800"
-          : "bg-gray-100 text-gray-700";
+  const tone = STATUS_TONE[status] ?? "bg-muted text-muted-foreground";
   return (
-    <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${color}`}>
+    <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${tone}`}>
       {status}
     </span>
+  );
+}
+
+// Left-edge accent strip colour, keyed to review status (design-system tones).
+const ACCENT: Record<string, string> = {
+  approved: "#16a34a",
+  rejected: "#f43f5e",
+  needs_edit: "#f59e0b",
+  pending_review: "#cbd5e1",
+};
+
+// Difficulty pill tones. Only the values the API actually emits.
+const DIFFICULTY_TONE: Record<string, string> = {
+  easy: "border-emerald-200 bg-emerald-50 text-emerald-700",
+  medium: "border-amber-200 bg-amber-50 text-amber-700",
+  hard: "border-rose-200 bg-rose-50 text-rose-700",
+};
+
+// Friendly labels for the snake_cased question types (display only).
+const TYPE_LABEL: Record<string, string> = {
+  mcq_single: "Single choice",
+  mcq_multi: "Multiple choice",
+  true_false: "True / False",
+  numerical: "Numerical",
+  fill_blank: "Fill in the blank",
+  matching: "Matching",
+};
+
+function CheckIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      className={className}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2.5"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <polyline points="20 6 9 17 4 12" />
+    </svg>
   );
 }
 
@@ -78,14 +123,40 @@ export function QuestionReviewCard({
 
   const correct = correctIds(question);
 
+  const accent = ACCENT[question.review_status] ?? "#cbd5e1";
+
   return (
-    <div className="rounded-md border p-4 text-sm">
-      <div className="mb-2 flex items-center justify-between">
-        <span className="font-medium">Q{index + 1}</span>
-        <span className="flex items-center gap-2">
-          <span className="rounded-full bg-gray-100 px-2 py-0.5 text-xs uppercase text-gray-700">
-            {question.type}
+    <div className="relative overflow-hidden rounded-xl border bg-card pl-5 pr-4 py-4 text-sm shadow-sm transition-shadow hover:shadow-md">
+      {/* status accent strip */}
+      <span
+        className="absolute inset-y-0 left-0 w-1.5"
+        style={{ background: accent }}
+        aria-hidden="true"
+      />
+
+      <div className="mb-3 flex flex-wrap items-center gap-2">
+        <span className="flex h-7 w-7 items-center justify-center rounded-full bg-primary/10 text-xs font-semibold text-primary">
+          {index + 1}
+        </span>
+        <span className="rounded-full border border-border bg-muted px-2.5 py-0.5 text-xs font-medium text-muted-foreground">
+          {TYPE_LABEL[question.type] ?? question.type}
+        </span>
+        {question.difficulty && (
+          <span
+            className={`rounded-full border px-2.5 py-0.5 text-xs font-medium capitalize ${
+              DIFFICULTY_TONE[question.difficulty] ??
+              "border-border bg-muted text-muted-foreground"
+            }`}
+          >
+            {question.difficulty}
           </span>
+        )}
+        {question.marks != null && (
+          <span className="rounded-full border border-border bg-muted px-2.5 py-0.5 text-xs font-medium text-muted-foreground">
+            {question.marks} {question.marks === 1 ? "mark" : "marks"}
+          </span>
+        )}
+        <span className="ml-auto">
           <StatusBadge status={question.review_status} />
         </span>
       </div>
@@ -101,25 +172,43 @@ export function QuestionReviewCard({
         />
       ) : (
         <>
-          <p className="mb-2">{question.question_text}</p>
+          <p className="mb-3 text-[15px] font-medium leading-relaxed text-foreground">
+            {question.question_text}
+          </p>
           {question.options && (
-            <ul className="mb-2 flex flex-col gap-1">
-              {question.options.map((o) => (
-                <li
-                  key={o.id}
-                  className={
-                    correct.includes(o.id)
-                      ? "text-green-700"
-                      : "text-muted-foreground"
-                  }
-                >
-                  <span className="font-mono">{o.id}.</span> {o.text}
-                  {correct.includes(o.id) && " ✓"}
-                </li>
-              ))}
-            </ul>
+            <div className="mb-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
+              {question.options.map((o) => {
+                const isCorrect = correct.includes(o.id);
+                return (
+                  <div
+                    key={o.id}
+                    className={`flex items-center gap-2.5 rounded-lg border px-3 py-2.5 ${
+                      isCorrect
+                        ? "border-emerald-500 bg-emerald-50 text-emerald-800"
+                        : "border-input bg-card text-foreground/80"
+                    }`}
+                  >
+                    <span
+                      className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-xs font-semibold uppercase ${
+                        isCorrect
+                          ? "bg-emerald-600 text-white"
+                          : "bg-muted text-muted-foreground"
+                      }`}
+                    >
+                      {o.id}
+                    </span>
+                    <span className="flex-1">{o.text}</span>
+                    {isCorrect && (
+                      <CheckIcon className="h-4 w-4 shrink-0 text-emerald-600" />
+                    )}
+                  </div>
+                );
+              })}
+            </div>
           )}
-          <p className="text-green-700">Answer: {formatAnswer(question)}</p>
+          <p className="font-medium text-emerald-700">
+            Answer: {formatAnswer(question)}
+          </p>
           {question.explanation && (
             <p className="mt-1 text-muted-foreground">Why: {question.explanation}</p>
           )}

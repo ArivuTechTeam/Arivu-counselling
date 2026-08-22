@@ -17,6 +17,7 @@ from pydantic import BaseModel, Field
 
 from app.lib.auth import CurrentProfile, get_current_profile
 from app.lib.supabase import get_service_client
+from app.services.blueprint import generate_blueprint_quiz
 from app.services.generation import generate_quiz
 from app.services.llm import LLMError
 from app.services.review import get_quiz_set_detail
@@ -73,6 +74,84 @@ def generate(
         )
     except LLMError as exc:
         # The model call or its output failed.
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Quiz generation failed: {exc}",
+        )
+
+
+class BlueprintTopicIn(BaseModel):
+    name: str
+    weight: Literal["high", "medium", "low"]
+
+
+class BlueprintGenerateRequest(BaseModel):
+    document_id: str
+    subject_id: str
+    chapter_name: str
+    selected_topics: list[BlueprintTopicIn] = []
+    # How many questions of EACH type the teacher wants, e.g.
+    # {"mcq_single": 3, "true_false": 2, "fill_blank": 5}. The total is the sum;
+    # only types with a positive count are generated.
+    type_counts: dict[str, int]
+    cognitive_level: Literal["theory", "practical", "mixed"] = "mixed"
+    difficulty: Literal["easy", "medium", "hard"] = "medium"
+
+
+@router.post("/generate-blueprint")
+def generate_blueprint(
+    req: BlueprintGenerateRequest,
+    profile: CurrentProfile = Depends(get_current_profile),
+) -> dict:
+    """
+    Blueprint-driven generation (Slice 7): whole-document coverage weighted
+    toward the teacher's selected High/Med/Low topics. Stores chapter + topics
+    and tags questions to topics, then hands off to the normal review flow.
+    """
+    if profile.role not in STAFF_ROLES:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only staff can generate quizzes.",
+        )
+    if not req.chapter_name.strip():
+        raise HTTPException(status_code=400, detail="Chapter name is required.")
+
+    # Keep only positive counts; validate the types and the overall total.
+    type_counts = {t: n for t, n in req.type_counts.items() if n and n > 0}
+    invalid = set(type_counts) - CORE_TYPES
+    if invalid:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Unsupported question types: {sorted(invalid)}.",
+        )
+    total = sum(type_counts.values())
+    if total < 1:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Set a question count of at least 1 for one or more types.",
+        )
+    if total > 50:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="That's more than 50 questions in total — please reduce the counts.",
+        )
+
+    try:
+        return generate_blueprint_quiz(
+            document_id=req.document_id,
+            subject_id=req.subject_id,
+            chapter_name=req.chapter_name,
+            selected_topics=[t.model_dump() for t in req.selected_topics],
+            total_questions=total,
+            question_types=list(type_counts.keys()),
+            type_counts=type_counts,
+            cognitive_level=req.cognitive_level,
+            difficulty=req.difficulty,
+            profile=profile,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+    except LLMError as exc:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail=f"Quiz generation failed: {exc}",
@@ -144,3 +223,58 @@ def publish_quiz_set(
     if not updated.data:
         raise HTTPException(status_code=404, detail="Quiz set not found.")
     return updated.data[0]
+
+
+@router.post("/{quiz_set_id}/approve-all")
+def approve_all_questions(
+    quiz_set_id: str,
+    profile: CurrentProfile = Depends(get_current_profile),
+) -> dict:
+    """
+    Bulk-approve every still-'pending_review' question in the set. Questions the
+    teacher explicitly rejected stay rejected. Lets a teacher accept a good batch
+    in one click instead of approving 20 questions individually.
+    """
+    _require_staff(profile)
+    service = get_service_client()
+
+    variants = (
+        service.table("quiz_variants")
+        .select("id")
+        .eq("quiz_set_id", quiz_set_id)
+        .eq("tenant_id", profile.tenant_id)
+        .execute()
+        .data
+        or []
+    )
+    variant_ids = [v["id"] for v in variants]
+    if not variant_ids:
+        raise HTTPException(status_code=404, detail="Quiz set not found.")
+
+    links = (
+        service.table("quiz_variant_questions")
+        .select("question_id")
+        .in_("variant_id", variant_ids)
+        .execute()
+        .data
+        or []
+    )
+    question_ids = list({link["question_id"] for link in links})
+    if not question_ids:
+        return {"approved": 0}
+
+    updated = (
+        service.table("questions")
+        .update(
+            {
+                "review_status": "approved",
+                "reviewed_by": profile.user_id,
+                "reviewed_at": datetime.now(timezone.utc).isoformat(),
+            }
+        )
+        .in_("id", question_ids)
+        .eq("review_status", "pending_review")
+        .eq("tenant_id", profile.tenant_id)
+        .execute()
+    )
+    return {"approved": len(updated.data or [])}

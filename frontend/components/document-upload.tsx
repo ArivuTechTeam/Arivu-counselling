@@ -134,7 +134,7 @@ function StatusBadge({ status }: { status: string }) {
       ? "bg-green-100 text-green-800"
       : status === "failed"
         ? "bg-red-100 text-red-800"
-        : "bg-gray-100 text-gray-800";
+        : "bg-muted text-foreground";
   return (
     <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${color}`}>
       {status}

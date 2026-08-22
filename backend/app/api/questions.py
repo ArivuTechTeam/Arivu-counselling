@@ -17,8 +17,16 @@ from pydantic import BaseModel
 
 from app.lib.auth import CurrentProfile, get_current_profile
 from app.lib.supabase import get_service_client
+from app.services.events import (
+    QUESTION_APPROVED,
+    QUESTION_EDITED,
+    QUESTION_REGENERATED,
+    QUESTION_REJECTED,
+    log_event,
+)
 from app.services.llm import LLMError
 from app.services.review import regenerate_question
+from app.services.tutor import explain_question
 
 router = APIRouter(prefix="/api/v1/questions", tags=["questions"])
 
@@ -66,6 +74,17 @@ def edit_question(
     )
     if not updated.data:
         raise HTTPException(status_code=404, detail="Question not found.")
+    # Instrument: which fields the teacher changed (powers "approved without
+    # edits" and "what do teachers fix most").
+    log_event(
+        tenant_id=profile.tenant_id,
+        event_type=QUESTION_EDITED,
+        actor_id=profile.user_id,
+        actor_role=profile.role,
+        subject_type="question",
+        subject_id=question_id,
+        metadata={"edited_fields": list(updates.keys())},
+    )
     return updated.data[0]
 
 
@@ -97,7 +116,16 @@ def approve_question(
     profile: CurrentProfile = Depends(get_current_profile),
 ) -> dict:
     _require_staff(profile)
-    return _set_review_status(question_id, profile, "approved")
+    result = _set_review_status(question_id, profile, "approved")
+    log_event(
+        tenant_id=profile.tenant_id,
+        event_type=QUESTION_APPROVED,
+        actor_id=profile.user_id,
+        actor_role=profile.role,
+        subject_type="question",
+        subject_id=question_id,
+    )
+    return result
 
 
 @router.post("/{question_id}/reject")
@@ -106,7 +134,16 @@ def reject_question(
     profile: CurrentProfile = Depends(get_current_profile),
 ) -> dict:
     _require_staff(profile)
-    return _set_review_status(question_id, profile, "rejected")
+    result = _set_review_status(question_id, profile, "rejected")
+    log_event(
+        tenant_id=profile.tenant_id,
+        event_type=QUESTION_REJECTED,
+        actor_id=profile.user_id,
+        actor_role=profile.role,
+        subject_type="question",
+        subject_id=question_id,
+    )
+    return result
 
 
 @router.post("/{question_id}/regenerate")
@@ -116,11 +153,41 @@ def regenerate(
 ) -> dict:
     _require_staff(profile)
     try:
-        return regenerate_question(question_id, profile.tenant_id)
+        result = regenerate_question(question_id, profile.tenant_id)
+        log_event(
+            tenant_id=profile.tenant_id,
+            event_type=QUESTION_REGENERATED,
+            actor_id=profile.user_id,
+            actor_role=profile.role,
+            subject_type="question",
+            subject_id=question_id,
+        )
+        return result
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
     except LLMError as exc:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail=f"Regeneration failed: {exc}",
+        )
+
+
+@router.post("/{question_id}/explain")
+def explain(
+    question_id: str,
+    profile: CurrentProfile = Depends(get_current_profile),
+) -> dict:
+    """
+    AI Tutor: a deeper step-by-step explanation + a simplified version + hints,
+    cached per question in ai_explanations. Open to students AND staff (no
+    _require_staff) — the student is the one who learns from it.
+    """
+    try:
+        return explain_question(question_id, profile.tenant_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except LLMError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Explanation failed: {exc}",
         )

@@ -184,3 +184,213 @@ def delete_subject(
             detail=f"Could not delete subject (is it used by a quiz?): {exc}",
         )
     return {"deleted": subject_id}
+
+
+# ── Chapters (teacher-managed, within the teacher's own subjects) ─────────────
+def _require_teacher(profile: CurrentProfile) -> None:
+    if profile.role != "teacher":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only teachers can manage chapters.",
+        )
+
+
+def _teacher_subject_ids(service, profile: CurrentProfile) -> set[str]:
+    """Subjects that belong to the courses this teacher is mapped to."""
+    enrolled = (
+        service.table("enrollments")
+        .select("course_id")
+        .eq("profile_id", profile.user_id)
+        .eq("tenant_id", profile.tenant_id)
+        .execute()
+        .data
+        or []
+    )
+    course_ids = [e["course_id"] for e in enrolled]
+    if not course_ids:
+        return set()
+    subs = (
+        service.table("subjects")
+        .select("id")
+        .in_("course_id", course_ids)
+        .eq("tenant_id", profile.tenant_id)
+        .execute()
+        .data
+        or []
+    )
+    return {s["id"] for s in subs}
+
+
+def _assert_teacher_subject(service, subject_id: str, profile: CurrentProfile) -> None:
+    if subject_id not in _teacher_subject_ids(service, profile):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You can only manage chapters in your own subjects.",
+        )
+
+
+@router.get("/subjects/{subject_id}/chapters")
+def list_chapters(
+    subject_id: str, profile: CurrentProfile = Depends(get_current_profile)
+) -> list[dict]:
+    """Chapters in a subject, with how many quizzes/questions use each (for the
+    teacher's management view and the Generate-Quiz dropdown)."""
+    _require_teacher(profile)
+    service = get_service_client()
+    _assert_teacher_subject(service, subject_id, profile)
+
+    chapters = (
+        service.table("chapters")
+        .select("id, name, order_index")
+        .eq("subject_id", subject_id)
+        .eq("tenant_id", profile.tenant_id)
+        .order("order_index")
+        .order("name")
+        .execute()
+        .data
+        or []
+    )
+    ids = [c["id"] for c in chapters]
+    quiz_counts: dict = {}
+    q_counts: dict = {}
+    if ids:
+        for r in (
+            service.table("quiz_sets")
+            .select("chapter_id")
+            .in_("chapter_id", ids)
+            .eq("tenant_id", profile.tenant_id)
+            .execute()
+            .data
+            or []
+        ):
+            quiz_counts[r["chapter_id"]] = quiz_counts.get(r["chapter_id"], 0) + 1
+        for r in (
+            service.table("questions")
+            .select("chapter_id")
+            .in_("chapter_id", ids)
+            .eq("tenant_id", profile.tenant_id)
+            .execute()
+            .data
+            or []
+        ):
+            q_counts[r["chapter_id"]] = q_counts.get(r["chapter_id"], 0) + 1
+    return [
+        {
+            **c,
+            "quiz_count": quiz_counts.get(c["id"], 0),
+            "question_count": q_counts.get(c["id"], 0),
+        }
+        for c in chapters
+    ]
+
+
+class ChapterCreate(BaseModel):
+    subject_id: str
+    name: str
+
+
+@router.post("/chapters")
+def create_chapter(
+    body: ChapterCreate, profile: CurrentProfile = Depends(get_current_profile)
+) -> dict:
+    _require_teacher(profile)
+    name = body.name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Chapter name is required.")
+    service = get_service_client()
+    _assert_teacher_subject(service, body.subject_id, profile)
+
+    # Reuse an existing chapter with the same name rather than duplicate it.
+    existing = (
+        service.table("chapters")
+        .select("id, name, order_index")
+        .eq("subject_id", body.subject_id)
+        .eq("tenant_id", profile.tenant_id)
+        .eq("name", name)
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    if existing:
+        return {**existing[0], "quiz_count": 0, "question_count": 0}
+
+    last = (
+        service.table("chapters")
+        .select("order_index")
+        .eq("subject_id", body.subject_id)
+        .order("order_index", desc=True)
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    next_idx = (last[0]["order_index"] + 1) if last else 0
+    row = (
+        service.table("chapters")
+        .insert(
+            {
+                "tenant_id": profile.tenant_id,
+                "subject_id": body.subject_id,
+                "name": name,
+                "order_index": next_idx,
+            }
+        )
+        .execute()
+        .data[0]
+    )
+    return {**row, "quiz_count": 0, "question_count": 0}
+
+
+@router.delete("/chapters/{chapter_id}")
+def delete_chapter(
+    chapter_id: str, profile: CurrentProfile = Depends(get_current_profile)
+) -> dict:
+    _require_teacher(profile)
+    service = get_service_client()
+    chap = (
+        service.table("chapters")
+        .select("id, subject_id")
+        .eq("id", chapter_id)
+        .eq("tenant_id", profile.tenant_id)
+        .maybe_single()
+        .execute()
+    )
+    if chap is None or not chap.data:
+        raise HTTPException(status_code=404, detail="Chapter not found.")
+    _assert_teacher_subject(service, chap.data["subject_id"], profile)
+
+    # Protect existing content: refuse to delete a chapter that's still in use.
+    quiz_n = len(
+        service.table("quiz_sets")
+        .select("id")
+        .eq("chapter_id", chapter_id)
+        .eq("tenant_id", profile.tenant_id)
+        .execute()
+        .data
+        or []
+    )
+    ques_n = len(
+        service.table("questions")
+        .select("id")
+        .eq("chapter_id", chapter_id)
+        .eq("tenant_id", profile.tenant_id)
+        .execute()
+        .data
+        or []
+    )
+    if quiz_n or ques_n:
+        bits = []
+        if quiz_n:
+            bits.append(f"{quiz_n} quiz{'zes' if quiz_n != 1 else ''}")
+        if ques_n:
+            bits.append(f"{ques_n} question{'s' if ques_n != 1 else ''}")
+        raise HTTPException(
+            status_code=409,
+            detail=f"This chapter is used by {' and '.join(bits)}. "
+            "Move or delete those first.",
+        )
+    service.table("chapters").delete().eq("id", chapter_id).eq(
+        "tenant_id", profile.tenant_id
+    ).execute()
+    return {"deleted": chapter_id}

@@ -1,9 +1,9 @@
-import { StudentQuizzes } from "@/components/student-quizzes";
+import { StudentDashboard } from "@/components/student-dashboard";
 
-export default function StudentDashboard() {
+export default function StudentDashboardPage() {
   return (
-    <div className="mx-auto max-w-3xl">
-      <StudentQuizzes />
+    <div className="mx-auto max-w-5xl">
+      <StudentDashboard />
     </div>
   );
 }
