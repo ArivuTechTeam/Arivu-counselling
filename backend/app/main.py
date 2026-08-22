@@ -15,7 +15,18 @@ from __future__ import annotations
 from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import academics, admin, documents, questions, quiz, student
+from app.api import (
+    academics,
+    admin,
+    challenge,
+    documents,
+    practice,
+    questions,
+    quiz,
+    student,
+    teacher,
+    topics,
+)
 from app.lib.auth import (
     CurrentProfile,
     CurrentUser,
@@ -38,6 +49,10 @@ settings = get_settings()
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[settings.frontend_origin],
+    # Dev convenience: the Next dev server hops to :3001, :3002 … when a port is
+    # already taken. Allow any localhost / 127.0.0.1 port so the browser isn't
+    # blocked by CORS. In production, FRONTEND_ORIGIN pins the real domain.
+    allow_origin_regex=r"http://(localhost|127\.0\.0\.1):\d+",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -46,10 +61,14 @@ app.add_middleware(
 # --- Routers ------------------------------------------------------------
 app.include_router(academics.router)
 app.include_router(admin.router)
+app.include_router(challenge.router)
 app.include_router(documents.router)
+app.include_router(practice.router)
 app.include_router(quiz.router)
 app.include_router(questions.router)
 app.include_router(student.router)
+app.include_router(teacher.router)
+app.include_router(topics.router)
 
 
 # --- Health check -------------------------------------------------------

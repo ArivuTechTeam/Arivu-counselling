@@ -37,7 +37,9 @@ TYPE_SPECS: dict[str, str] = {
     "fill_blank": (
         'fill_blank: put a blank as "____" inside question_text. "options": null. '
         '"correct_answer": {"answers": ["accepted answer", "acceptable synonym"]} — '
-        'list every answer that should be marked correct.'
+        "ALWAYS list the primary answer PLUS every reasonable synonym, abbreviation, "
+        "or alternate spelling/phrasing a correct student might write, so grading "
+        "accepts equivalent answers (e.g. [\"depreciation\", \"depn\"])."
     ),
 }
 

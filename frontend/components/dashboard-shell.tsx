@@ -2,7 +2,11 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
+import { useEffect, useState } from "react";
 
+import { ChangePasswordModal } from "@/components/change-password-modal";
+import { DevAccountSwitcher } from "@/components/dev-account-switcher";
+import { ThemeToggle } from "@/components/theme-provider";
 import { createClient } from "@/lib/supabase";
 
 type NavItem = { label: string; href?: string; soon?: boolean };
@@ -12,39 +16,59 @@ type NavItem = { label: string; href?: string; soon?: boolean };
 // pretending the feature works.
 const NAV: Record<string, NavItem[]> = {
   teacher: [
-    { label: "Dashboard", href: "/dashboard/teacher" },
-    { label: "Analytics", soon: true },
+    { label: "Class overview", href: "/dashboard/teacher" },
+    { label: "Subjects", href: "/dashboard/teacher/subjects" },
+    { label: "Generate quiz", href: "/dashboard/teacher/generate" },
+    { label: "Review queue", href: "/dashboard/teacher/review" },
+    { label: "Class monitor", href: "/dashboard/teacher/class-monitor" },
   ],
   institution_admin: [
     { label: "Overview", href: "/dashboard/institution-admin" },
     { label: "Users", href: "/dashboard/institution-admin/users" },
     { label: "Courses & subjects", href: "/dashboard/institution-admin/courses" },
-    { label: "Analytics", soon: true },
+    { label: "Quizzes", href: "/dashboard/institution-admin/quizzes" },
+    { label: "Analytics", href: "/dashboard/institution-admin/analytics" },
   ],
   super_admin: [
     { label: "Overview", href: "/dashboard/super-admin" },
-    { label: "Courses & subjects", href: "/dashboard/super-admin/courses" },
-    { label: "Analytics", soon: true },
+    { label: "Institutions", href: "/dashboard/super-admin/institutions" },
+    { label: "Question Quality", href: "/dashboard/super-admin/ai-monitoring" },
   ],
   student: [
-    { label: "Quizzes", href: "/dashboard/student" },
-    { label: "Test history", soon: true },
-    { label: "AI practice", soon: true },
-    { label: "Adaptive drills", soon: true },
+    { label: "Dashboard", href: "/dashboard/student" },
+    { label: "Subjects", href: "/dashboard/student/subjects" },
+    { label: "Smart Quiz", href: "/dashboard/student/smart-quiz" },
+    { label: "Revision", href: "/dashboard/student/revision" },
+    { label: "Daily Challenge", href: "/dashboard/student/daily" },
+    { label: "Challenge a Friend", href: "/dashboard/student/challenge" },
+    { label: "Test history", href: "/dashboard/student/history" },
+    { label: "Exam Simulator", soon: true },
   ],
 };
 
 export function DashboardShell({
   role,
   email,
+  mustChangePassword = false,
   children,
 }: {
   role: string | null;
   email: string;
+  mustChangePassword?: boolean;
   children: React.ReactNode;
 }) {
   const pathname = usePathname();
   const router = useRouter();
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [pwOpen, setPwOpen] = useState(false);
+  const [pwDone, setPwDone] = useState(false);
+  const initial = (email?.[0] ?? "?").toUpperCase();
+
+  // First-login security prompt: admin-created accounts still hold a temp
+  // password the admin set — nudge them to replace it.
+  useEffect(() => {
+    if (mustChangePassword) setPwOpen(true);
+  }, [mustChangePassword]);
 
   const items = role ? NAV[role] ?? [] : [];
   // Pick the most specific matching nav item (longest href), so a parent like
@@ -61,9 +85,9 @@ export function DashboardShell({
   }
 
   return (
-    <div className="flex min-h-screen bg-background">
-      {/* Sidebar — the ArivuPro green gradient rail */}
-      <aside className="hidden w-64 shrink-0 flex-col bg-gradient-to-b from-[#1a6942] to-[#15603d] p-4 text-white md:flex">
+    <div className="flex h-screen overflow-hidden bg-background">
+      {/* Sidebar — the ArivuPro green gradient rail (fixed; never scrolls) */}
+      <aside className="hidden w-64 shrink-0 flex-col overflow-y-auto bg-gradient-to-b from-[#2E8857] to-[#245a41] p-4 text-white md:flex">
         <div className="mb-6 inline-flex w-fit rounded-xl bg-white px-3 py-2">
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img src="/arivu-logo.png" alt="ArivuPro Academy" className="h-6 w-auto" />
@@ -98,27 +122,80 @@ export function DashboardShell({
             ),
           )}
         </nav>
-        <button
-          onClick={signOut}
-          className="mt-auto rounded-lg px-3 py-2 text-left text-sm text-white/85 transition-colors hover:bg-white/10"
-        >
-          Sign out
-        </button>
       </aside>
 
       {/* Main column */}
       <div className="flex min-w-0 flex-1 flex-col">
-        <header className="sticky top-0 z-10 flex h-16 items-center justify-between border-b bg-white px-6">
+        <header className="sticky top-0 z-10 flex h-16 items-center justify-between border-b bg-card px-6">
           <h1 className="text-lg font-semibold">{title}</h1>
-          <div className="flex items-center gap-3 text-sm">
-            <span className="text-muted-foreground">{email}</span>
-            <span className="rounded-full bg-secondary px-2 py-0.5 text-xs font-medium capitalize">
-              {role ? role.replace("_", " ") : ""}
-            </span>
+
+          <div className="flex items-center gap-3">
+            <ThemeToggle />
+            {/* Dev-only account switcher — stripped from production builds */}
+            <DevAccountSwitcher currentEmail={email} />
+
+            {/* Account avatar + dropdown (sign out lives here) */}
+            <div className="relative">
+            <button
+              onClick={() => setMenuOpen((o) => !o)}
+              className="flex items-center gap-2 rounded-full py-1 pl-1 pr-2 transition-colors hover:bg-accent"
+              aria-label="Account menu"
+            >
+              <span className="flex h-8 w-8 items-center justify-center rounded-full bg-primary text-sm font-semibold text-primary-foreground">
+                {initial}
+              </span>
+              <span className="hidden max-w-[180px] truncate text-sm text-muted-foreground sm:inline">
+                {email}
+              </span>
+            </button>
+
+            {menuOpen && (
+              <>
+                {/* click-away backdrop */}
+                <div
+                  className="fixed inset-0 z-20"
+                  onClick={() => setMenuOpen(false)}
+                />
+                <div className="absolute right-0 top-full z-30 mt-2 w-60 overflow-hidden rounded-lg border bg-card shadow-lg">
+                  <div className="border-b px-4 py-3">
+                    <div className="truncate text-sm font-medium">{email}</div>
+                    <div className="text-xs capitalize text-muted-foreground">
+                      {role ? role.replace("_", " ") : ""}
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => {
+                      setMenuOpen(false);
+                      setPwOpen(true);
+                    }}
+                    className="w-full border-b px-4 py-2.5 text-left text-sm font-medium text-foreground hover:bg-accent"
+                  >
+                    Change password
+                  </button>
+                  <button
+                    onClick={signOut}
+                    className="w-full px-4 py-2.5 text-left text-sm font-medium text-red-600 hover:bg-accent"
+                  >
+                    Sign out
+                  </button>
+                </div>
+              </>
+            )}
+            </div>
           </div>
         </header>
         <main className="flex-1 overflow-auto p-6">{children}</main>
       </div>
+
+      <ChangePasswordModal
+        open={pwOpen}
+        forced={mustChangePassword && !pwDone}
+        onClose={() => setPwOpen(false)}
+        onDone={() => {
+          setPwDone(true);
+          setPwOpen(false);
+        }}
+      />
     </div>
   );
 }

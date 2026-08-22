@@ -1,13 +1,14 @@
 import type { Metadata } from "next";
-import { Plus_Jakarta_Sans } from "next/font/google";
+import { Inter } from "next/font/google";
 import "./globals.css";
 import { cn } from "@/lib/utils";
+import { ThemeProvider } from "@/components/theme-provider";
 
-// Plus Jakarta Sans is the ArivuPro brand typeface. Exposed as `--font-sans`,
-// which shadcn/ui's Tailwind config reads.
-const jakarta = Plus_Jakarta_Sans({
+// Inter is the ArivuPro reference typeface — its heavy weights drive the type
+// hierarchy. Exposed as `--font-sans`, which the Tailwind config reads.
+const inter = Inter({
   subsets: ["latin"],
-  weight: ["400", "500", "600", "700"],
+  weight: ["400", "500", "600", "700", "800", "900"],
   variable: "--font-sans",
 });
 
@@ -22,8 +23,19 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" className={cn(jakarta.variable)}>
-      <body className="font-sans antialiased">{children}</body>
+    <html lang="en" className={cn(inter.variable)} suppressHydrationWarning>
+      <head>
+        {/* Apply the saved theme before paint to avoid a flash of light. */}
+        <script
+          dangerouslySetInnerHTML={{
+            __html:
+              "try{if(localStorage.getItem('theme')==='dark')document.documentElement.classList.add('dark')}catch(e){}",
+          }}
+        />
+      </head>
+      <body className="font-sans antialiased">
+        <ThemeProvider>{children}</ThemeProvider>
+      </body>
     </html>
   );
 }

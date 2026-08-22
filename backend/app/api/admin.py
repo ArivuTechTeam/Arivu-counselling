@@ -114,6 +114,8 @@ def create_user(
         "tenant_id": profile.tenant_id,
         "role": body.role,
         "full_name": body.full_name.strip(),
+        # Admin set a temp password → prompt them to change it on first login.
+        "must_change_password": True,
     }
     if body.course_id:
         meta["course_id"] = body.course_id
@@ -157,6 +159,128 @@ def delete_user(
     return {"deleted": user_id}
 
 
+# ── Super-admin: institution admins ──────────────────────────────────────────
+class AdminCreate(BaseModel):
+    full_name: str
+    email: str
+    password: str
+    tenant_id: str
+
+
+@router.get("/tenants")
+def list_tenants(
+    profile: CurrentProfile = Depends(get_current_profile),
+) -> list[dict]:
+    """Institutions (tenants) the super-admin can assign an admin to."""
+    _require_super(profile)
+    service = get_service_client()
+    return (
+        service.table("tenants").select("id, name").order("name").execute().data or []
+    )
+
+
+@router.get("/admins")
+def list_admins(
+    profile: CurrentProfile = Depends(get_current_profile),
+) -> list[dict]:
+    """Every institution admin across the platform, with their institution."""
+    _require_super(profile)
+    service = get_service_client()
+    admins = (
+        service.table("profiles")
+        .select("id, full_name, tenant_id")
+        .eq("role", "institution_admin")
+        .execute()
+        .data
+        or []
+    )
+    auth_users = service.auth.admin.list_users()
+    auth_users = getattr(auth_users, "users", auth_users)
+    email_by_id = {u.id: getattr(u, "email", None) for u in auth_users}
+    tenants = service.table("tenants").select("id, name").execute().data or []
+    tname = {t["id"]: t["name"] for t in tenants}
+    return [
+        {
+            "id": a["id"],
+            "full_name": a["full_name"],
+            "email": email_by_id.get(a["id"]),
+            "institution": tname.get(a["tenant_id"], "?"),
+        }
+        for a in admins
+    ]
+
+
+@router.post("/admins")
+def create_admin(
+    body: AdminCreate, profile: CurrentProfile = Depends(get_current_profile)
+) -> dict:
+    """Super-admin creates an institution admin (aka principal) for a tenant."""
+    _require_super(profile)
+    service = get_service_client()
+
+    tenant = (
+        service.table("tenants")
+        .select("id")
+        .eq("id", body.tenant_id)
+        .maybe_single()
+        .execute()
+    )
+    if tenant is None or not tenant.data:
+        raise HTTPException(status_code=400, detail="Institution not found.")
+
+    try:
+        created = service.auth.admin.create_user(
+            {
+                "email": body.email.strip(),
+                "password": body.password,
+                "email_confirm": True,  # ready to sign in immediately
+                "user_metadata": {
+                    "tenant_id": body.tenant_id,
+                    "role": "institution_admin",
+                    "full_name": body.full_name.strip(),
+                    "must_change_password": True,
+                },
+            }
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=400, detail=f"Could not create admin: {exc}")
+
+    return {"id": created.user.id, "email": body.email}
+
+
+@router.delete("/platform/admins/{user_id}")
+def remove_admin(
+    user_id: str, profile: CurrentProfile = Depends(get_current_profile)
+) -> dict:
+    """Super-admin removes an institution admin (auth user + profile)."""
+    _require_super(profile)
+    service = get_service_client()
+
+    target = (
+        service.table("profiles")
+        .select("id, role")
+        .eq("id", user_id)
+        .maybe_single()
+        .execute()
+    )
+    if target is None or not target.data:
+        raise HTTPException(status_code=404, detail="Admin not found.")
+    if target.data["role"] != "institution_admin":
+        raise HTTPException(status_code=400, detail="That user is not an institution admin.")
+    if user_id == profile.user_id:
+        raise HTTPException(status_code=400, detail="You cannot remove your own account.")
+
+    # Delete the auth user first (source of truth); then clear the profile row in
+    # case the FK isn't set to cascade.
+    try:
+        service.auth.admin.delete_user(user_id)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=400, detail=f"Could not remove admin: {exc}")
+    service.table("profiles").delete().eq("id", user_id).execute()
+
+    return {"deleted": user_id}
+
+
 # ── Analytics ────────────────────────────────────────────────────────────────
 @router.get("/admin/stats")
 def institution_stats(
@@ -172,6 +296,576 @@ def institution_stats(
         "subjects": _count(service, "subjects", t),
         "quiz_sets": _count(service, "quiz_sets", t),
         "published_quizzes": _count(service, "quiz_sets", t, status="published"),
+    }
+
+
+@router.get("/admin/overview")
+def institution_overview(
+    profile: CurrentProfile = Depends(get_current_profile),
+) -> dict:
+    """
+    Rich, real-data overview for the institution-admin dashboard: people counts,
+    content counts, institution-wide accuracy, a 14-day activity trend, top
+    courses by enrolment, the question review pipeline, and recent quiz sets.
+    """
+    from collections import Counter
+    from datetime import date, timedelta
+
+    _require_admin(profile)
+    service = get_service_client()
+    t = profile.tenant_id
+
+    # Fetch every independent table concurrently (see _gather) — this is the
+    # dashboard's main speed lever: parallel round-trips instead of ~9 serial.
+    data = _gather(
+        {
+            "profiles": lambda: service.table("profiles")
+            .select("role")
+            .eq("tenant_id", t)
+            .execute()
+            .data
+            or [],
+            "courses": lambda: service.table("courses")
+            .select("id, name")
+            .eq("tenant_id", t)
+            .execute()
+            .data
+            or [],
+            "subjects": lambda: service.table("subjects")
+            .select("id")
+            .eq("tenant_id", t)
+            .execute()
+            .data
+            or [],
+            "documents": lambda: service.table("documents")
+            .select("id")
+            .eq("tenant_id", t)
+            .execute()
+            .data
+            or [],
+            "quiz_sets": lambda: service.table("quiz_sets")
+            .select("id, title, status, created_at")
+            .eq("tenant_id", t)
+            .order("created_at", desc=True)
+            .execute()
+            .data
+            or [],
+            "questions": lambda: service.table("questions")
+            .select("review_status")
+            .eq("tenant_id", t)
+            .execute()
+            .data
+            or [],
+            "variants": lambda: service.table("quiz_variants")
+            .select("id, total_marks")
+            .eq("tenant_id", t)
+            .execute()
+            .data
+            or [],
+            "attempts": lambda: service.table("quiz_attempts")
+            .select("status, total_score, variant_id, submitted_at")
+            .eq("tenant_id", t)
+            .execute()
+            .data
+            or [],
+            "enrollments": lambda: service.table("enrollments")
+            .select("course_id")
+            .eq("tenant_id", t)
+            .execute()
+            .data
+            or [],
+        }
+    )
+
+    # People
+    profiles = data["profiles"]
+    roles = Counter(p["role"] for p in profiles)
+
+    # Content counts
+    courses_rows = data["courses"]
+    course_name = {c["id"]: c["name"] for c in courses_rows}
+    subjects = len(data["subjects"])
+    documents = len(data["documents"])
+
+    quiz_sets = data["quiz_sets"]
+    published = sum(1 for q in quiz_sets if q["status"] == "published")
+    draft = sum(1 for q in quiz_sets if q["status"] == "draft")
+
+    # Question review pipeline
+    questions = data["questions"]
+    pipeline = {"pending_review": 0, "approved": 0, "rejected": 0}
+    for q in questions:
+        st = q.get("review_status")
+        if st in pipeline:
+            pipeline[st] += 1
+
+    # Attempts -> institution accuracy + activity trend
+    variants = data["variants"]
+    var_marks = {v["id"]: v.get("total_marks") for v in variants}
+    attempts = data["attempts"]
+    graded = [a for a in attempts if a["status"] == "graded"]
+    pcts = []
+    for a in graded:
+        m = var_marks.get(a["variant_id"])
+        if m:
+            pcts.append(max(0, min(100, round((a.get("total_score") or 0) / m * 100))))
+    accuracy = round(sum(pcts) / len(pcts)) if pcts else 0
+
+    today = date.today()
+    window = [(today - timedelta(days=i)) for i in range(13, -1, -1)]
+    day_counts = {d.isoformat(): 0 for d in window}
+    for a in graded:
+        sa = a.get("submitted_at")
+        if sa and sa[:10] in day_counts:
+            day_counts[sa[:10]] += 1
+    activity = [{"date": d.isoformat()[5:], "attempts": day_counts[d.isoformat()]} for d in window]
+
+    # Top courses by enrolment
+    enrollments = data["enrollments"]
+    enr_counts = Counter(e["course_id"] for e in enrollments)
+    top_courses = sorted(
+        [
+            {"name": course_name.get(cid, "Course"), "students": n}
+            for cid, n in enr_counts.items()
+        ],
+        key=lambda x: -x["students"],
+    )[:5]
+
+    recent_quiz_sets = [
+        {"title": q["title"], "status": q["status"], "created_at": q.get("created_at")}
+        for q in quiz_sets[:5]
+    ]
+
+    return {
+        "teachers": roles.get("teacher", 0),
+        "students": roles.get("student", 0),
+        "admins": roles.get("institution_admin", 0),
+        "courses": len(courses_rows),
+        "subjects": subjects,
+        "documents": documents,
+        "quiz_sets": len(quiz_sets),
+        "published_quizzes": published,
+        "draft_quizzes": draft,
+        "questions": len(questions),
+        "attempts": len(attempts),
+        "graded_attempts": len(graded),
+        "accuracy": accuracy,
+        "pipeline": pipeline,
+        "activity": activity,
+        "top_courses": top_courses,
+        "recent_quiz_sets": recent_quiz_sets,
+    }
+
+
+# ── Institution admin: Analytics (data-analyst report, no AI) ────────────────
+def _gather(thunks: dict) -> dict:
+    """Run independent Supabase reads concurrently and return {key: rows}.
+
+    supabase-py is blocking, so a small thread pool turns ~8 sequential network
+    round-trips into a handful of parallel ones — the real speed win. A failing
+    read degrades to an empty list rather than breaking the whole dashboard.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+
+    out: dict = {}
+    with ThreadPoolExecutor(max_workers=8) as ex:
+        futures = {k: ex.submit(fn) for k, fn in thunks.items()}
+        for k, fut in futures.items():
+            try:
+                out[k] = fut.result()
+            except Exception:  # noqa: BLE001 — one slow/failed read must not 500 the page
+                out[k] = []
+    return out
+
+
+def _admin_findings(
+    *, summary: dict, trend: dict, pipeline: dict, course_perf: list, teacher_activity: list
+) -> list[dict]:
+    """Turn institution metrics into ranked, plain-language decisions (no AI)."""
+    out: list[dict] = []
+    n_students = summary["students"]
+
+    if n_students == 0:
+        out.append(
+            {
+                "severity": "info",
+                "title": "No students enrolled yet",
+                "detail": "Enroll students and assign quizzes to see engagement and "
+                "outcomes here.",
+                "action": "Add students under your courses.",
+            }
+        )
+        return out
+
+    # 1) Outcome verdict.
+    if summary["graded_attempts"] > 0:
+        acc = summary["avg_accuracy"]
+        if acc >= 70:
+            out.append(
+                {
+                    "severity": "good",
+                    "title": f"Students are doing well — {acc}% average accuracy",
+                    "detail": f"Across {summary['graded_attempts']} graded attempts.",
+                    "action": "Consider harder quizzes to stretch your top students.",
+                }
+            )
+        elif acc >= 40:
+            out.append(
+                {
+                    "severity": "warn",
+                    "title": f"Average accuracy is {acc}% — room to improve",
+                    "detail": "Students are passing, but not comfortably.",
+                    "action": "Ask teachers to revisit weak topics and add practice quizzes.",
+                }
+            )
+        else:
+            out.append(
+                {
+                    "severity": "critical",
+                    "title": f"Low average accuracy — {acc}%",
+                    "detail": "Students are struggling across the board.",
+                    "action": "Check quiz difficulty and revisit the weak teaching material.",
+                }
+            )
+    else:
+        out.append(
+            {
+                "severity": "info",
+                "title": "No graded attempts yet",
+                "detail": "Once students take and submit quizzes, outcomes appear here.",
+                "action": "Ask teachers to publish quizzes and students to attempt them.",
+            }
+        )
+
+    # 2) Students who never attempted anything.
+    inactive = summary["inactive_students"]
+    if inactive and n_students:
+        share = round(inactive / n_students * 100)
+        if share >= 30:
+            out.append(
+                {
+                    "severity": "warn",
+                    "title": f"{share}% of students haven't taken any quiz",
+                    "detail": f"{inactive} of {n_students} students have zero attempts.",
+                    "action": "Ask teachers to assign or publish quizzes for them.",
+                }
+            )
+
+    # 3) Struggling students.
+    if summary["at_risk"] > 0:
+        out.append(
+            {
+                "severity": "critical" if summary["at_risk"] >= 3 else "warn",
+                "title": f"{summary['at_risk']} student(s) are struggling",
+                "detail": "These students average below 40% — they may need extra help.",
+                "action": "See the at-risk list below and share it with their teachers.",
+            }
+        )
+
+    # 4) Engagement trend.
+    if trend["has_trend"] and (trend["attempts_last7"] + trend["attempts_prev7"]) >= 4:
+        d = trend["delta"]
+        if d < 0:
+            out.append(
+                {
+                    "severity": "warn",
+                    "title": f"Engagement dropped this week ({d} attempts)",
+                    "detail": f"{trend['attempts_prev7']} attempts last week → "
+                    f"{trend['attempts_last7']} this week.",
+                    "action": "A fresh quiz or a reminder can bring students back.",
+                }
+            )
+        elif d > 0:
+            out.append(
+                {
+                    "severity": "good",
+                    "title": f"Engagement is up (+{d} attempts this week)",
+                    "detail": f"{trend['attempts_prev7']} → {trend['attempts_last7']} "
+                    "attempts week-over-week.",
+                    "action": "Keep the momentum with regular quizzes.",
+                }
+            )
+
+    # 5) Courses with students but nothing to attempt.
+    gaps = [c for c in course_perf if c["students"] > 0 and c["published"] == 0]
+    if gaps:
+        c = gaps[0]
+        more = f" (+{len(gaps) - 1} more course)" if len(gaps) > 1 else ""
+        out.append(
+            {
+                "severity": "warn",
+                "title": f"{c['name']} has students but no published quiz",
+                "detail": f"{c['students']} enrolled with nothing to attempt yet{more}.",
+                "action": "Ask that course's teacher to publish a quiz.",
+            }
+        )
+
+    # 6) Review backlog.
+    if pipeline["pending_review"] >= 10:
+        out.append(
+            {
+                "severity": "info",
+                "title": f"{pipeline['pending_review']} questions await review",
+                "detail": "Unreviewed questions can't be published to students.",
+                "action": "Nudge teachers to clear their review queue.",
+            }
+        )
+
+    # 7) Idle teachers.
+    idle = [t for t in teacher_activity if t["quiz_sets"] == 0]
+    if idle and summary["teachers"]:
+        out.append(
+            {
+                "severity": "info",
+                "title": f"{len(idle)} teacher(s) haven't created a quiz",
+                "detail": "Some teachers aren't using the platform yet.",
+                "action": "Check whether they need onboarding help.",
+            }
+        )
+
+    return out
+
+
+@router.get("/admin/analytics")
+def institution_analytics(
+    profile: CurrentProfile = Depends(get_current_profile),
+) -> dict:
+    """Data-analyst-style analytics for the institution admin: engagement, student
+    outcomes, course performance, teacher activity, and plain-language findings.
+    Pure database aggregation — no AI/ML."""
+    from collections import Counter, defaultdict
+    from datetime import date, datetime, timedelta
+
+    _require_admin(profile)
+    service = get_service_client()
+    t = profile.tenant_id
+
+    data = _gather(
+        {
+            "profiles": lambda: service.table("profiles")
+            .select("id, role, full_name")
+            .eq("tenant_id", t)
+            .execute()
+            .data
+            or [],
+            "courses": lambda: service.table("courses")
+            .select("id, name")
+            .eq("tenant_id", t)
+            .execute()
+            .data
+            or [],
+            "subjects": lambda: service.table("subjects")
+            .select("id, course_id")
+            .eq("tenant_id", t)
+            .execute()
+            .data
+            or [],
+            "quiz_sets": lambda: service.table("quiz_sets")
+            .select("id, title, status, created_by, subject_id, created_at")
+            .eq("tenant_id", t)
+            .execute()
+            .data
+            or [],
+            "questions": lambda: service.table("questions")
+            .select("review_status, source, type, reviewed_by")
+            .eq("tenant_id", t)
+            .execute()
+            .data
+            or [],
+            "variants": lambda: service.table("quiz_variants")
+            .select("id, total_marks, quiz_set_id")
+            .eq("tenant_id", t)
+            .execute()
+            .data
+            or [],
+            "attempts": lambda: service.table("quiz_attempts")
+            .select("student_id, status, total_score, variant_id, submitted_at")
+            .eq("tenant_id", t)
+            .execute()
+            .data
+            or [],
+            "enrollments": lambda: service.table("enrollments")
+            .select("profile_id, course_id")
+            .eq("tenant_id", t)
+            .execute()
+            .data
+            or [],
+        }
+    )
+    profiles = data["profiles"]
+    courses = data["courses"]
+    subjects = data["subjects"]
+    quiz_sets = data["quiz_sets"]
+    questions = data["questions"]
+    variants = data["variants"]
+    attempts = data["attempts"]
+    enrollments = data["enrollments"]
+
+    students = [p for p in profiles if p["role"] == "student"]
+    teachers = [p for p in profiles if p["role"] == "teacher"]
+    name_by_id = {p["id"]: (p.get("full_name") or "—") for p in profiles}
+
+    # Lookups to walk attempt -> variant -> quiz set -> subject -> course.
+    subject_course = {s["id"]: s.get("course_id") for s in subjects}
+    course_name = {c["id"]: c["name"] for c in courses}
+    var_marks = {v["id"]: v.get("total_marks") for v in variants}
+    var_quizset = {v["id"]: v.get("quiz_set_id") for v in variants}
+    quizset_course = {
+        q["id"]: subject_course.get(q.get("subject_id")) for q in quiz_sets
+    }
+
+    today = date.today()
+    iso7 = (today - timedelta(days=7)).isoformat()
+    iso14 = (today - timedelta(days=14)).isoformat()
+
+    def pct(a: dict):
+        m = var_marks.get(a["variant_id"])
+        if not m:
+            return None
+        return max(0, min(100, round((a.get("total_score") or 0) / m * 100)))
+
+    graded = [a for a in attempts if a["status"] == "graded"]
+    stu_pcts: dict = defaultdict(list)
+    course_pcts: dict = defaultdict(list)
+    active_ids: set = set()
+    attempts_last7 = attempts_prev7 = 0
+    for a in graded:
+        p = pct(a)
+        sid = a.get("student_id")
+        sa = a.get("submitted_at")
+        if p is not None:
+            if sid:
+                stu_pcts[sid].append(p)
+            cid = quizset_course.get(var_quizset.get(a["variant_id"]))
+            if cid:
+                course_pcts[cid].append(p)
+        if sa:
+            day = sa[:10]
+            if day >= iso7:
+                attempts_last7 += 1
+                if sid:
+                    active_ids.add(sid)
+            elif day >= iso14:
+                attempts_prev7 += 1
+
+    all_pcts = [p for lst in stu_pcts.values() for p in lst]
+    avg_accuracy = round(sum(all_pcts) / len(all_pcts)) if all_pcts else 0
+    with_attempts = set(stu_pcts.keys())
+    inactive_students = [s for s in students if s["id"] not in with_attempts]
+
+    at_risk = []
+    for s in students:
+        ps = stu_pcts.get(s["id"])
+        if ps:
+            avg = sum(ps) / len(ps)
+            if avg < 40:
+                at_risk.append(
+                    {
+                        "name": name_by_id.get(s["id"], "—"),
+                        "accuracy": round(avg),
+                        "attempts": len(ps),
+                    }
+                )
+    at_risk.sort(key=lambda x: x["accuracy"])
+
+    window = [(today - timedelta(days=i)) for i in range(13, -1, -1)]
+    dc = {d.isoformat(): 0 for d in window}
+    for a in graded:
+        sa = a.get("submitted_at")
+        if sa and sa[:10] in dc:
+            dc[sa[:10]] += 1
+    activity = [
+        {"date": d.isoformat()[5:], "attempts": dc[d.isoformat()]} for d in window
+    ]
+
+    # Course performance.
+    enr_by_course = Counter(e["course_id"] for e in enrollments)
+    published_by_course = Counter(
+        quizset_course.get(q["id"]) for q in quiz_sets if q["status"] == "published"
+    )
+    course_perf = sorted(
+        [
+            {
+                "name": course_name.get(c["id"], "Course"),
+                "students": enr_by_course.get(c["id"], 0),
+                "published": published_by_course.get(c["id"], 0),
+                "accuracy": (
+                    round(sum(course_pcts[c["id"]]) / len(course_pcts[c["id"]]))
+                    if course_pcts.get(c["id"])
+                    else 0
+                ),
+                "attempts": len(course_pcts.get(c["id"], [])),
+            }
+            for c in courses
+        ],
+        key=lambda x: -x["students"],
+    )
+
+    # Teacher activity.
+    qs_by_teacher: dict = defaultdict(lambda: {"sets": 0, "published": 0})
+    for q in quiz_sets:
+        b = qs_by_teacher[q.get("created_by")]
+        b["sets"] += 1
+        if q["status"] == "published":
+            b["published"] += 1
+    approved_by_teacher = Counter(
+        q.get("reviewed_by")
+        for q in questions
+        if q.get("review_status") == "approved" and q.get("reviewed_by")
+    )
+    teacher_activity = sorted(
+        [
+            {
+                "name": tt.get("full_name") or "—",
+                "quiz_sets": qs_by_teacher.get(tt["id"], {}).get("sets", 0),
+                "published": qs_by_teacher.get(tt["id"], {}).get("published", 0),
+                "approved": approved_by_teacher.get(tt["id"], 0),
+            }
+            for tt in teachers
+        ],
+        key=lambda x: -x["quiz_sets"],
+    )
+
+    pipeline = {"pending_review": 0, "approved": 0, "rejected": 0}
+    for q in questions:
+        st = q.get("review_status")
+        if st in pipeline:
+            pipeline[st] += 1
+
+    trend = {
+        "attempts_last7": attempts_last7,
+        "attempts_prev7": attempts_prev7,
+        "delta": attempts_last7 - attempts_prev7,
+        "has_trend": (attempts_last7 + attempts_prev7) > 0,
+    }
+    summary = {
+        "students": len(students),
+        "teachers": len(teachers),
+        "active_week": len(active_ids),
+        "inactive_students": len(inactive_students),
+        "at_risk": len(at_risk),
+        "avg_accuracy": avg_accuracy,
+        "graded_attempts": len(graded),
+        "published_quizzes": sum(1 for q in quiz_sets if q["status"] == "published"),
+        "courses": len(courses),
+    }
+
+    return {
+        "updated_at": datetime.now().isoformat(timespec="seconds"),
+        "summary": summary,
+        "trend": trend,
+        "activity": activity,
+        "pipeline": pipeline,
+        "course_perf": course_perf,
+        "teacher_activity": teacher_activity,
+        "at_risk_students": at_risk[:8],
+        "findings": _admin_findings(
+            summary=summary,
+            trend=trend,
+            pipeline=pipeline,
+            course_perf=course_perf,
+            teacher_activity=teacher_activity,
+        ),
     }
 
 
@@ -208,3 +902,909 @@ def platform_stats(profile: CurrentProfile = Depends(get_current_profile)) -> di
         "total_students": total_students,
         "per_institution": per_tenant,
     }
+
+
+@router.get("/platform/overview")
+def platform_overview(
+    profile: CurrentProfile = Depends(get_current_profile),
+) -> dict:
+    """
+    Cross-tenant command-center overview for the super admin: platform-wide
+    people/content counts, question approval rate (the ≥70% quality KPI),
+    platform accuracy, a 14-day activity trend, and a per-institution table
+    with each institution's key numbers + health. All real data.
+    """
+    from collections import Counter, defaultdict
+    from datetime import date, timedelta
+
+    _require_super(profile)
+    service = get_service_client()
+
+    tenants = (
+        service.table("tenants")
+        .select("id, name, subdomain, plan_tier, is_active, created_at")
+        .order("name")
+        .execute()
+        .data
+        or []
+    )
+
+    profiles = (
+        service.table("profiles").select("tenant_id, role").execute().data or []
+    )
+    quiz_sets = (
+        service.table("quiz_sets").select("tenant_id, status").execute().data or []
+    )
+    questions = (
+        service.table("questions").select("tenant_id, review_status").execute().data or []
+    )
+    variants = (
+        service.table("quiz_variants").select("id, tenant_id, total_marks").execute().data or []
+    )
+    var_marks = {v["id"]: v.get("total_marks") for v in variants}
+    attempts = (
+        service.table("quiz_attempts")
+        .select("tenant_id, status, total_score, variant_id, submitted_at")
+        .execute()
+        .data
+        or []
+    )
+    documents = service.table("documents").select("tenant_id").execute().data or []
+
+    # ---- Per-tenant aggregation -------------------------------------------
+    def blank() -> dict:
+        return {
+            "teachers": 0,
+            "students": 0,
+            "admins": 0,
+            "quiz_sets": 0,
+            "published": 0,
+            "attempts": 0,
+            "acc_sum": 0,
+            "acc_n": 0,
+        }
+
+    agg: dict = defaultdict(blank)
+    for p in profiles:
+        a = agg[p["tenant_id"]]
+        if p["role"] == "teacher":
+            a["teachers"] += 1
+        elif p["role"] == "student":
+            a["students"] += 1
+        elif p["role"] == "institution_admin":
+            a["admins"] += 1
+    for q in quiz_sets:
+        a = agg[q["tenant_id"]]
+        a["quiz_sets"] += 1
+        if q["status"] == "published":
+            a["published"] += 1
+
+    graded_pcts: list[int] = []
+    for at in attempts:
+        a = agg[at["tenant_id"]]
+        if at["status"] != "graded":
+            continue
+        a["attempts"] += 1
+        m = var_marks.get(at["variant_id"])
+        if m:
+            pct = max(0, min(100, round((at.get("total_score") or 0) / m * 100)))
+            a["acc_sum"] += pct
+            a["acc_n"] += 1
+            graded_pcts.append(pct)
+
+    institutions = []
+    for t in tenants:
+        a = agg.get(t["id"], blank())
+        acc = round(a["acc_sum"] / a["acc_n"]) if a["acc_n"] else 0
+        institutions.append(
+            {
+                "id": t["id"],
+                "name": t["name"],
+                "subdomain": t.get("subdomain"),
+                "created_at": t.get("created_at"),
+                "plan_tier": t.get("plan_tier"),
+                "is_active": t.get("is_active", True),
+                "teachers": a["teachers"],
+                "students": a["students"],
+                "admins": a["admins"],
+                "quiz_sets": a["quiz_sets"],
+                "published": a["published"],
+                "attempts": a["attempts"],
+                "accuracy": acc,
+            }
+        )
+    institutions.sort(key=lambda x: -(x["students"] + x["teachers"]))
+
+    # ---- Question approval rate (the ≥70% quality KPI) --------------------
+    q_status = Counter(q.get("review_status") for q in questions)
+    decided = (
+        q_status.get("approved", 0)
+        + q_status.get("rejected", 0)
+        + q_status.get("needs_edit", 0)
+    )
+    approval_rate = round(q_status.get("approved", 0) / decided * 100) if decided else 0
+
+    # ---- 14-day platform activity (graded attempts across all tenants) ----
+    today = date.today()
+    window = [(today - timedelta(days=i)) for i in range(13, -1, -1)]
+    day_counts = {d.isoformat(): 0 for d in window}
+    for at in attempts:
+        if at["status"] != "graded":
+            continue
+        sa = at.get("submitted_at")
+        if sa and sa[:10] in day_counts:
+            day_counts[sa[:10]] += 1
+    activity = [{"date": d.isoformat()[5:], "attempts": day_counts[d.isoformat()]} for d in window]
+
+    roles = Counter(p["role"] for p in profiles)
+    return {
+        "institutions": len(tenants),
+        "active_institutions": sum(1 for t in tenants if t.get("is_active", True)),
+        "teachers": roles.get("teacher", 0),
+        "students": roles.get("student", 0),
+        "admins": roles.get("institution_admin", 0),
+        "quiz_sets": len(quiz_sets),
+        "published_quizzes": sum(1 for q in quiz_sets if q["status"] == "published"),
+        "questions": len(questions),
+        "documents": len(documents),
+        "attempts": sum(1 for a in attempts if a["status"] == "graded"),
+        "accuracy": round(sum(graded_pcts) / len(graded_pcts)) if graded_pcts else 0,
+        "approval_rate": approval_rate,
+        "pipeline": {
+            "pending_review": q_status.get("pending_review", 0),
+            "approved": q_status.get("approved", 0),
+            "rejected": q_status.get("rejected", 0),
+            "needs_edit": q_status.get("needs_edit", 0),
+        },
+        "activity": activity,
+        "institutions_table": institutions,
+    }
+
+
+# ── Super-admin: onboard a new institution (tenant) ──────────────────────────
+class TenantCreate(BaseModel):
+    name: str
+    subdomain: str
+    plan_tier: str = "free"
+    # Optional first institution admin created alongside the tenant.
+    admin_full_name: str | None = None
+    admin_email: str | None = None
+    admin_password: str | None = None
+
+
+@router.post("/platform/tenants")
+def onboard_institution(
+    body: TenantCreate, profile: CurrentProfile = Depends(get_current_profile)
+) -> dict:
+    """Super-admin onboards a new institution (Stage 1 of the workflow)."""
+    _require_super(profile)
+    service = get_service_client()
+
+    name = body.name.strip()
+    subdomain = body.subdomain.strip().lower()
+    if not name or not subdomain:
+        raise HTTPException(status_code=400, detail="Name and subdomain are required.")
+    if not all(c.isalnum() or c == "-" for c in subdomain):
+        raise HTTPException(
+            status_code=400,
+            detail="Subdomain may only contain letters, numbers, and hyphens.",
+        )
+    taken = (
+        service.table("tenants").select("id").eq("subdomain", subdomain).execute().data
+        or []
+    )
+    if taken:
+        raise HTTPException(status_code=400, detail="That subdomain is already taken.")
+
+    try:
+        created = (
+            service.table("tenants")
+            .insert(
+                {
+                    "name": name,
+                    "subdomain": subdomain,
+                    "plan_tier": body.plan_tier,
+                    "is_active": True,
+                }
+            )
+            .execute()
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=400, detail=f"Could not create institution: {exc}")
+    tenant_id = created.data[0]["id"]
+
+    admin = None
+    if body.admin_email and body.admin_password:
+        try:
+            u = service.auth.admin.create_user(
+                {
+                    "email": body.admin_email.strip(),
+                    "password": body.admin_password,
+                    "email_confirm": True,
+                    "user_metadata": {
+                        "tenant_id": tenant_id,
+                        "role": "institution_admin",
+                        "full_name": (body.admin_full_name or "").strip(),
+                        "must_change_password": True,
+                    },
+                }
+            )
+            admin = {"id": u.user.id, "email": body.admin_email.strip()}
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(
+                status_code=400,
+                detail=f"Institution '{name}' was created, but its admin could not be: {exc}",
+            )
+
+    return {"id": tenant_id, "name": name, "subdomain": subdomain, "admin": admin}
+
+
+# ── Super-admin: global question bank (cross-tenant, grouped by course) ───────
+@router.get("/platform/question-bank")
+def platform_question_bank(
+    profile: CurrentProfile = Depends(get_current_profile),
+) -> dict:
+    """Every question on the platform, grouped by course. Real counts only."""
+    from collections import Counter, defaultdict
+
+    _require_super(profile)
+    service = get_service_client()
+
+    questions = (
+        service.table("questions")
+        .select("chapter_id, difficulty, type")
+        .execute()
+        .data
+        or []
+    )
+    chapters = {
+        c["id"]: c
+        for c in (service.table("chapters").select("id, subject_id").execute().data or [])
+    }
+    subjects = {
+        s["id"]: s
+        for s in (
+            service.table("subjects").select("id, course_id").execute().data or []
+        )
+    }
+    courses = {
+        c["id"]: c
+        for c in (
+            service.table("courses").select("id, name, tenant_id").execute().data or []
+        )
+    }
+    tenants = {
+        t["id"]: t["name"]
+        for t in (service.table("tenants").select("id, name").execute().data or [])
+    }
+
+    agg: dict = defaultdict(
+        lambda: {
+            "questions": 0,
+            "subjects": set(),
+            "chapters": set(),
+            "difficulty": Counter(),
+            "types": Counter(),
+        }
+    )
+    uncategorised = 0
+    for q in questions:
+        ch = chapters.get(q.get("chapter_id"))
+        sub = subjects.get(ch["subject_id"]) if ch else None
+        cid = sub.get("course_id") if sub else None
+        if not cid:
+            uncategorised += 1
+            continue
+        a = agg[cid]
+        a["questions"] += 1
+        a["subjects"].add(ch["subject_id"])
+        a["chapters"].add(ch["id"])
+        a["difficulty"][q.get("difficulty")] += 1
+        a["types"][q.get("type")] += 1
+
+    out = []
+    for cid, a in agg.items():
+        co = courses.get(cid)
+        out.append(
+            {
+                "course": co["name"] if co else "Course",
+                "tenant": tenants.get(co["tenant_id"]) if co else None,
+                "questions": a["questions"],
+                "subjects": len(a["subjects"]),
+                "chapters": len(a["chapters"]),
+                "difficulty": dict(a["difficulty"]),
+                "types": dict(a["types"]),
+            }
+        )
+    out.sort(key=lambda x: -x["questions"])
+    return {
+        "total": len(questions),
+        "courses": out,
+        "uncategorised": uncategorised,
+    }
+
+
+# ── Super-admin: Question Quality (AI quality intelligence) ──────────────────
+_TYPE_LABELS = {
+    "mcq_single": "Single-choice",
+    "mcq_multi": "Multiple-choice",
+    "true_false": "True/False",
+    "numerical": "Numerical",
+    "fill_blank": "Fill-in-the-blank",
+    "matching": "Matching",
+    "unknown": "Unknown",
+}
+_FIELD_LABELS = {
+    "question_text": "Question wording",
+    "options": "Options",
+    "correct_answer": "Correct answer",
+    "explanation": "Explanation",
+    "difficulty": "Difficulty",
+    "marks": "Marks",
+}
+# Concrete, per-field prompt advice — the "how to improve the AI" playbook.
+_FIELD_ADVICE = {
+    "correct_answer": "The AI often marks the wrong option as correct. Add an explicit "
+    'self-check step to the prompt ("re-verify the correct answer before finalising").',
+    "options": "Answer choices need work. Ask the prompt for plausible, distinct "
+    "distractors with no overlap or obvious giveaways.",
+    "explanation": "Explanations get rewritten a lot. Require a short step-by-step "
+    "justification for every answer.",
+    "question_text": "Question wording is edited often. Ask for clear, self-contained "
+    "stems that don't rely on seeing the source text.",
+    "difficulty": "Difficulty labels are off. Give the prompt a concrete rubric for "
+    "easy / medium / hard.",
+    "marks": "Marks are adjusted often. Standardise marks per question type in the prompt.",
+}
+
+
+def _type_label(t: str | None) -> str:
+    return _TYPE_LABELS.get(t or "", t or "Unknown")
+
+
+def _field_label(f: str) -> str:
+    return _FIELD_LABELS.get(f, f)
+
+
+def _build_findings(
+    *,
+    total_generated: int,
+    status: dict,
+    approval_rate: int,
+    types_out: list[dict],
+    signals: dict,
+    trend: dict,
+    failures_14d: int,
+) -> list[dict]:
+    """Turn the raw quality numbers into ranked, plain-language decisions.
+
+    Deterministic rules only — NO AI. This is the 'data-analyst' layer: it tells
+    a super admin what is wrong and exactly what to do about it. Severity drives
+    ordering/colour on the dashboard: critical > warn > good > info.
+    """
+    out: list[dict] = []
+    approved_n = signals["approved"]
+    keep_rate = signals["kept_as_is_rate"]
+    decided_qt = (
+        status.get("approved", 0)
+        + status.get("rejected", 0)
+        + status.get("needs_edit", 0)
+    )
+
+    if total_generated == 0:
+        out.append(
+            {
+                "severity": "info",
+                "title": "No AI questions generated yet",
+                "detail": "Once teachers generate quizzes from uploaded material, this "
+                "dashboard fills with real quality data.",
+                "action": "Generate a quiz to get started.",
+            }
+        )
+        return out
+
+    # 1) Headline verdict — prefer behavioural keep-rate, fall back to approval.
+    if approved_n > 0:
+        if keep_rate >= 80:
+            out.append(
+                {
+                    "severity": "good",
+                    "title": f"AI quality is strong — {keep_rate}% kept as-is",
+                    "detail": f"Teachers keep {keep_rate}% of approved questions exactly "
+                    "as the AI wrote them.",
+                    "action": "Keep the current prompts; focus on the weak spots below.",
+                }
+            )
+        elif keep_rate >= 60:
+            out.append(
+                {
+                    "severity": "warn",
+                    "title": f"AI quality is decent — {keep_rate}% kept as-is",
+                    "detail": f"Teachers still edit about {100 - keep_rate}% of approved "
+                    "questions before using them.",
+                    "action": "Target the most-edited field below to push past 80%.",
+                }
+            )
+        else:
+            out.append(
+                {
+                    "severity": "critical",
+                    "title": f"AI quality needs work — only {keep_rate}% kept as-is",
+                    "detail": f"Teachers rewrite most approved questions "
+                    f"({100 - keep_rate}%). The prompts need attention.",
+                    "action": "Start with the most-edited field and weakest type below.",
+                }
+            )
+    elif decided_qt == 0:
+        out.append(
+            {
+                "severity": "info",
+                "title": "No questions reviewed yet",
+                "detail": f"{total_generated} AI questions are waiting. Quality signal "
+                "appears once teachers approve, edit or reject them.",
+                "action": "Ask teachers to review the pending questions.",
+            }
+        )
+    else:
+        out.append(
+            {
+                "severity": "good" if approval_rate >= 70 else "warn",
+                "title": f"{approval_rate}% approval rate so far",
+                "detail": f"Of {decided_qt} reviewed questions, {approval_rate}% were "
+                "approved. 'Kept as-is' quality sharpens as more reviews come in.",
+                "action": "Encourage teachers to Edit (not reject+regenerate) so we "
+                "learn exactly what to fix.",
+            }
+        )
+
+    # 2) Weakest question type (needs a little volume to matter).
+    weak = [t for t in types_out if t["total"] >= 3]
+    if weak:
+        worst = min(weak, key=lambda t: t["approval"])
+        if worst["approval"] < 70:
+            out.append(
+                {
+                    "severity": "critical" if worst["approval"] < 50 else "warn",
+                    "title": f"{_type_label(worst['type'])} is the weakest type "
+                    f"({worst['approval']}% approved)",
+                    "detail": f"Only {worst['approved']} of {worst['total']} "
+                    f"{_type_label(worst['type'])} questions were approved — the biggest "
+                    "quality drag by type.",
+                    "action": f"Review the generation prompt specifically for "
+                    f"{_type_label(worst['type'])} questions.",
+                }
+            )
+
+    # 3) Most-edited field -> concrete prompt fix.
+    fields = signals["most_edited_fields"]
+    if fields:
+        top = fields[0]
+        out.append(
+            {
+                "severity": "warn",
+                "title": f"Teachers most often fix: {_field_label(top['field'])}",
+                "detail": f"{_field_label(top['field'])} was edited {top['count']} "
+                "time(s) — the clearest thing to improve in the prompt.",
+                "action": _FIELD_ADVICE.get(
+                    top["field"], "Tighten this part of the generation prompt."
+                ),
+            }
+        )
+
+    # 4) Week-over-week trend.
+    if trend["has_trend"] and (trend["approved_last7"] + trend["approved_prev7"]) >= 4:
+        d = trend["keep_rate_delta"]
+        if d >= 5:
+            out.append(
+                {
+                    "severity": "good",
+                    "title": f"Quality is improving (+{d} pts this week)",
+                    "detail": f"Kept-as-is rate rose from {trend['keep_rate_prev7']}% to "
+                    f"{trend['keep_rate_last7']}% week-over-week.",
+                    "action": "Whatever changed recently is working — keep going.",
+                }
+            )
+        elif d <= -5:
+            out.append(
+                {
+                    "severity": "critical",
+                    "title": f"Quality is slipping ({d} pts this week)",
+                    "detail": f"Kept-as-is rate fell from {trend['keep_rate_prev7']}% to "
+                    f"{trend['keep_rate_last7']}% week-over-week.",
+                    "action": "Check any recent prompt or model changes.",
+                }
+            )
+
+    # 5) Generation failures.
+    if failures_14d > 0:
+        out.append(
+            {
+                "severity": "critical",
+                "title": f"{failures_14d} generation failure(s) in 14 days",
+                "detail": "The AI failed to return usable questions on some runs — "
+                "teachers may have hit errors.",
+                "action": "Check the LLM API logs and the prompt's robustness / fallback.",
+            }
+        )
+
+    # 6) Review backlog.
+    pending = status.get("pending_review", 0)
+    if pending >= 10:
+        out.append(
+            {
+                "severity": "info",
+                "title": f"{pending} questions await review",
+                "detail": "A review backlog slows quiz publishing and blurs these numbers.",
+                "action": "Clear the review queue to sharpen the quality signal.",
+            }
+        )
+
+    # 7) Low-volume caveat.
+    if total_generated < 20:
+        out.append(
+            {
+                "severity": "info",
+                "title": "Early days — numbers will firm up",
+                "detail": f"Only {total_generated} AI questions so far. Treat percentages "
+                "as directional until volume grows.",
+                "action": "Revisit after more quizzes are generated and reviewed.",
+            }
+        )
+
+    return out
+
+
+# ── Super-admin: AI generation monitoring ────────────────────────────────────
+@router.get("/platform/ai-monitoring")
+def platform_ai_monitoring(
+    profile: CurrentProfile = Depends(get_current_profile),
+) -> dict:
+    """AI generation health across the platform: volume, quality by type, pipeline."""
+    from collections import Counter, defaultdict
+    from datetime import date, datetime, timedelta
+
+    _require_super(profile)
+    service = get_service_client()
+
+    rows = (
+        service.table("questions")
+        .select("type, difficulty, review_status, source, created_at")
+        .execute()
+        .data
+        or []
+    )
+    ai = [q for q in rows if q.get("source") == "ai_generated"]
+    status = Counter(q.get("review_status") for q in ai)
+    decided = (
+        status.get("approved", 0)
+        + status.get("rejected", 0)
+        + status.get("needs_edit", 0)
+    )
+    approval_rate = round(status.get("approved", 0) / decided * 100) if decided else 0
+
+    by_type: dict = defaultdict(lambda: {"total": 0, "approved": 0})
+    for q in ai:
+        bt = by_type[q.get("type")]
+        bt["total"] += 1
+        if q.get("review_status") == "approved":
+            bt["approved"] += 1
+    types_out = sorted(
+        [
+            {
+                "type": k,
+                "total": v["total"],
+                "approved": v["approved"],
+                "approval": round(v["approved"] / v["total"] * 100) if v["total"] else 0,
+            }
+            for k, v in by_type.items()
+        ],
+        key=lambda x: -x["total"],
+    )
+
+    today = date.today()
+    window = [(today - timedelta(days=i)) for i in range(13, -1, -1)]
+    dc = {d.isoformat(): 0 for d in window}
+    for q in ai:
+        ca = q.get("created_at")
+        if ca and ca[:10] in dc:
+            dc[ca[:10]] += 1
+    volume = [{"date": d.isoformat()[5:], "generated": dc[d.isoformat()]} for d in window]
+
+    # ---- Behavioral quality signals from the events ledger ----------------
+    # These are the TRUE "is the AI good enough?" numbers — especially
+    # kept-as-is (approved without any edit), which cannot be derived from the
+    # questions table. Empty until teachers act after instrumentation started.
+    from app.services.events import (
+        GENERATION_FAILED,
+        QUESTION_APPROVED,
+        QUESTION_EDITED,
+        QUESTION_GENERATED,
+        QUESTION_REGENERATED,
+        QUESTION_REJECTED,
+        QUIZ_PUBLISHED,
+    )
+
+    evs = (
+        service.table("events")
+        .select("event_type, subject_id, metadata, created_at")
+        .in_(
+            "event_type",
+            [
+                QUESTION_GENERATED,
+                QUESTION_EDITED,
+                QUESTION_APPROVED,
+                QUESTION_REJECTED,
+                QUESTION_REGENERATED,
+                QUIZ_PUBLISHED,
+                GENERATION_FAILED,
+            ],
+        )
+        .execute()
+        .data
+        or []
+    )
+    gen_type: dict = {}
+    edited_ids: set = set()
+    approved_ids: set = set()
+    approved_at: dict = {}
+    rejected_ids: set = set()
+    regenerated = 0
+    published_n = 0
+    failed_dates: list = []
+    edited_fields: Counter = Counter()
+    first_ev = None
+    for e in evs:
+        et, sid = e["event_type"], e.get("subject_id")
+        md = e.get("metadata") or {}
+        ca = e.get("created_at")
+        if ca and (first_ev is None or ca < first_ev):
+            first_ev = ca
+        if et == QUESTION_GENERATED and sid:
+            gen_type[sid] = md.get("type")
+        elif et == QUESTION_EDITED:
+            if sid:
+                edited_ids.add(sid)
+            for f in md.get("edited_fields") or []:
+                edited_fields[f] += 1
+        elif et == QUESTION_APPROVED and sid:
+            approved_ids.add(sid)
+            if ca:
+                approved_at[sid] = ca
+        elif et == QUESTION_REJECTED and sid:
+            rejected_ids.add(sid)
+        elif et == QUESTION_REGENERATED:
+            regenerated += 1
+        elif et == QUIZ_PUBLISHED:
+            published_n += 1
+        elif et == GENERATION_FAILED and ca:
+            failed_dates.append(ca)
+
+    approved_n, rejected_n = len(approved_ids), len(rejected_ids)
+    reviewed_n = approved_n + rejected_n
+    kept_as_is = len(approved_ids - edited_ids)
+    decided_ids = approved_ids | rejected_ids
+    pending_n = sum(1 for s in gen_type if s not in decided_ids)
+
+    sig_type: dict = defaultdict(lambda: {"generated": 0, "approved": 0, "kept": 0})
+    for sid, ty in gen_type.items():
+        bucket = sig_type[ty or "unknown"]
+        bucket["generated"] += 1
+        if sid in approved_ids:
+            bucket["approved"] += 1
+            if sid not in edited_ids:
+                bucket["kept"] += 1
+    sig_by_type = sorted(
+        [
+            {
+                "type": k,
+                "generated": v["generated"],
+                "approved": v["approved"],
+                "kept_as_is": v["kept"],
+                "kept_rate": round(v["kept"] / v["approved"] * 100) if v["approved"] else 0,
+            }
+            for k, v in sig_type.items()
+        ],
+        key=lambda x: -x["generated"],
+    )
+
+    signals = {
+        "measured_from": first_ev[:10] if first_ev else None,
+        "generated": len(gen_type),
+        "reviewed": reviewed_n,
+        "approved": approved_n,
+        "rejected": rejected_n,
+        "kept_as_is": kept_as_is,
+        "approved_after_edit": approved_n - kept_as_is,
+        "regenerated": regenerated,
+        "pending": pending_n,
+        "approval_rate": round(approved_n / reviewed_n * 100) if reviewed_n else 0,
+        "kept_as_is_rate": round(kept_as_is / approved_n * 100) if approved_n else 0,
+        "by_type": sig_by_type,
+        "most_edited_fields": [
+            {"field": f, "count": c} for f, c in edited_fields.most_common(6)
+        ],
+    }
+
+    # ---- Trend: last 7 days vs the 7 days before (from approval events) -----
+    iso7 = (today - timedelta(days=7)).isoformat()
+    iso14 = (today - timedelta(days=14)).isoformat()
+    last7 = {"approved": 0, "kept": 0}
+    prev7 = {"approved": 0, "kept": 0}
+    for sid, ca in approved_at.items():
+        day = ca[:10]
+        kept = 1 if sid not in edited_ids else 0
+        if day >= iso7:
+            last7["approved"] += 1
+            last7["kept"] += kept
+        elif day >= iso14:
+            prev7["approved"] += 1
+            prev7["kept"] += kept
+    keep_last = round(last7["kept"] / last7["approved"] * 100) if last7["approved"] else 0
+    keep_prev = round(prev7["kept"] / prev7["approved"] * 100) if prev7["approved"] else 0
+    trend = {
+        "keep_rate_last7": keep_last,
+        "keep_rate_prev7": keep_prev,
+        "keep_rate_delta": keep_last - keep_prev,
+        "approved_last7": last7["approved"],
+        "approved_prev7": prev7["approved"],
+        "has_trend": (last7["approved"] + prev7["approved"]) > 0,
+    }
+
+    # ---- AI generation failures (last 14 days) ------------------------------
+    failures_14d = sum(1 for d in failed_dates if d[:10] >= iso14)
+
+    # ---- Quality by difficulty (from the questions table) -------------------
+    diff_q: dict = defaultdict(lambda: {"total": 0, "approved": 0})
+    for q in ai:
+        b = diff_q[q.get("difficulty") or "unspecified"]
+        b["total"] += 1
+        if q.get("review_status") == "approved":
+            b["approved"] += 1
+    difficulty_quality = sorted(
+        [
+            {
+                "difficulty": k,
+                "total": v["total"],
+                "approved": v["approved"],
+                "approval": round(v["approved"] / v["total"] * 100) if v["total"] else 0,
+            }
+            for k, v in diff_q.items()
+        ],
+        key=lambda x: -x["total"],
+    )
+
+    # ---- Quality funnel (question lifecycle, questions table + events) ------
+    reviewed_qt = (
+        status.get("approved", 0)
+        + status.get("rejected", 0)
+        + status.get("needs_edit", 0)
+    )
+    funnel = [
+        {"stage": "Generated", "count": len(ai)},
+        {"stage": "Reviewed", "count": reviewed_qt},
+        {"stage": "Approved", "count": status.get("approved", 0)},
+        {"stage": "Kept as-is", "count": kept_as_is},
+    ]
+
+    # ---- Findings & recommendations (the decision layer — no AI) ------------
+    findings = _build_findings(
+        total_generated=len(ai),
+        status=status,
+        approval_rate=approval_rate,
+        types_out=types_out,
+        signals=signals,
+        trend=trend,
+        failures_14d=failures_14d,
+    )
+
+    return {
+        "updated_at": datetime.now().isoformat(timespec="seconds"),
+        "total_generated": len(ai),
+        "approval_rate": approval_rate,
+        "published_quizzes": published_n,
+        "failures_14d": failures_14d,
+        "pipeline": {
+            "pending_review": status.get("pending_review", 0),
+            "approved": status.get("approved", 0),
+            "rejected": status.get("rejected", 0),
+            "needs_edit": status.get("needs_edit", 0),
+        },
+        "by_type": types_out,
+        "by_difficulty": dict(Counter(q.get("difficulty") for q in ai)),
+        "difficulty_quality": difficulty_quality,
+        "volume": volume,
+        "trend": trend,
+        "funnel": funnel,
+        "findings": findings,
+        "signals": signals,
+    }
+
+
+# ── Institution admin: browse ALL quizzes (any course/subject) ───────────────
+@router.get("/admin/quiz-sets")
+def admin_quiz_sets(
+    profile: CurrentProfile = Depends(get_current_profile),
+) -> list[dict]:
+    """
+    Every quiz set in the institution, enriched with course/subject/teacher and a
+    question count — so an institution admin can browse and download any quiz's
+    question paper. (Question content is read via GET /quiz-sets/{id}.)
+    """
+    from collections import Counter
+
+    _require_admin(profile)
+    service = get_service_client()
+    t = profile.tenant_id
+
+    sets = (
+        service.table("quiz_sets")
+        .select("id, title, status, subject_id, created_by, created_at")
+        .eq("tenant_id", t)
+        .order("created_at", desc=True)
+        .execute()
+        .data
+        or []
+    )
+    if not sets:
+        return []
+
+    subject_ids = list({s["subject_id"] for s in sets if s.get("subject_id")})
+    subjects = (
+        {
+            s["id"]: s
+            for s in (
+                service.table("subjects").select("id, name, course_id").in_("id", subject_ids).execute().data
+                or []
+            )
+        }
+        if subject_ids
+        else {}
+    )
+    course_ids = list({s["course_id"] for s in subjects.values() if s.get("course_id")})
+    courses = (
+        {
+            c["id"]: c["name"]
+            for c in (service.table("courses").select("id, name").in_("id", course_ids).execute().data or [])
+        }
+        if course_ids
+        else {}
+    )
+    teacher_ids = list({s["created_by"] for s in sets if s.get("created_by")})
+    teachers = (
+        {
+            p["id"]: p.get("full_name")
+            for p in (service.table("profiles").select("id, full_name").in_("id", teacher_ids).execute().data or [])
+        }
+        if teacher_ids
+        else {}
+    )
+
+    set_ids = [s["id"] for s in sets]
+    variants = (
+        service.table("quiz_variants").select("id, quiz_set_id").in_("quiz_set_id", set_ids).execute().data
+        or []
+    )
+    var_to_set = {v["id"]: v["quiz_set_id"] for v in variants}
+    vq = (
+        service.table("quiz_variant_questions").select("variant_id").in_("variant_id", list(var_to_set)).execute().data
+        if var_to_set
+        else []
+    )
+    qcount = Counter(var_to_set[r["variant_id"]] for r in vq if r["variant_id"] in var_to_set)
+
+    out = []
+    for s in sets:
+        sub = subjects.get(s.get("subject_id"))
+        out.append(
+            {
+                "id": s["id"],
+                "title": s["title"],
+                "status": s["status"],
+                "subject": sub["name"] if sub else None,
+                "course": courses.get(sub["course_id"]) if sub else None,
+                "teacher": teachers.get(s.get("created_by")),
+                "questions": qcount.get(s["id"], 0),
+                "created_at": s.get("created_at"),
+            }
+        )
+    return out

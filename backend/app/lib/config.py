@@ -63,6 +63,15 @@ class Settings:
         )
         self.gemini_model: str = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 
+        # The blueprint quiz feature (topic extraction + blueprint generation)
+        # runs on the cheapest tier by default — Flash-Lite. Swappable to a
+        # stronger Flash model via env if quality needs a bump, no code change.
+        # NOTE: gemini-2.5-flash-lite is restricted for new API projects, so we
+        # default to the current cheapest tier, gemini-3.5-flash-lite.
+        self.gemini_blueprint_model: str = os.getenv(
+            "GEMINI_BLUEPRINT_MODEL", "gemini-3.5-flash-lite"
+        )
+
         # How much document text to feed the model per generation. Larger =
         # broader coverage (esp. with big-context models like Gemini) but more
         # tokens/cost. Tunable without a code change.

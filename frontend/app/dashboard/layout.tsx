@@ -16,12 +16,14 @@ export default function DashboardLayout({
 }) {
   const [role, setRole] = useState<string | null>(null);
   const [email, setEmail] = useState("");
+  const [mustChangePassword, setMustChangePassword] = useState(false);
 
   useEffect(() => {
     const supabase = createClient();
     supabase.auth.getUser().then(async ({ data: { user } }) => {
       if (!user) return;
       setEmail(user.email ?? "");
+      setMustChangePassword(Boolean(user.user_metadata?.must_change_password));
       const { data } = await supabase
         .from("profiles")
         .select("role")
@@ -32,7 +34,11 @@ export default function DashboardLayout({
   }, []);
 
   return (
-    <DashboardShell role={role} email={email}>
+    <DashboardShell
+      role={role}
+      email={email}
+      mustChangePassword={mustChangePassword}
+    >
       {children}
     </DashboardShell>
   );

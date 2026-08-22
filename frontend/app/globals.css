@@ -4,49 +4,51 @@
 
 @layer base {
   /* ArivuPro brand palette (green identity, warm-slate surfaces). */
+  /* ArivuPro reference palette — brand green #2E8857 + pale-mint neutrals. */
   :root {
-    --background: 0 0% 96%;
-    --foreground: 60 18% 9%;
+    --background: 153 38% 96%;        /* #F2F9F6 pale mint page bg */
+    --foreground: 156 22% 9%;         /* near-black green ink */
     --card: 0 0% 100%;
-    --card-foreground: 60 18% 9%;
+    --card-foreground: 156 22% 9%;
     --popover: 0 0% 100%;
-    --popover-foreground: 60 18% 9%;
-    --primary: 152 64% 23%;
+    --popover-foreground: 156 22% 9%;
+    --primary: 147 49% 36%;           /* #2E8857 brand green */
     --primary-foreground: 0 0% 100%;
-    --secondary: 90 8% 95%;
-    --secondary-foreground: 60 18% 9%;
-    --muted: 90 8% 95%;
-    --muted-foreground: 60 3% 41%;
-    --accent: 162 50% 96%;
-    --accent-foreground: 153 66% 21%;
-    --destructive: 350 89% 60%;
+    --secondary: 152 38% 95%;
+    --secondary-foreground: 156 22% 9%;
+    --muted: 152 30% 94%;
+    --muted-foreground: 150 6% 35%;   /* #4C4C4C-ish */
+    --accent: 159 57% 90%;            /* #D7F4EA mint (active nav / success chip) */
+    --accent-foreground: 147 49% 30%;
+    --destructive: 358 93% 67%;       /* #F95E64 */
     --destructive-foreground: 0 0% 100%;
-    --border: 80 6% 91%;
-    --input: 80 6% 91%;
-    --ring: 150 60% 26%;
-    --radius: 1rem;
+    --border: 159 52% 90%;            /* green-tinted mint borders */
+    --input: 159 52% 90%;
+    --ring: 147 49% 40%;
+    --radius: 0.75rem;
   }
 
+  /* Dark theme — reference deep-green surfaces (#101713 / #17211B / #293B31). */
   .dark {
-    --background: 0 0% 3.9%;
-    --foreground: 0 0% 98%;
-    --card: 0 0% 3.9%;
-    --card-foreground: 0 0% 98%;
-    --popover: 0 0% 3.9%;
-    --popover-foreground: 0 0% 98%;
-    --primary: 0 0% 98%;
-    --primary-foreground: 0 0% 9%;
-    --secondary: 0 0% 14.9%;
-    --secondary-foreground: 0 0% 98%;
-    --muted: 0 0% 14.9%;
-    --muted-foreground: 0 0% 63.9%;
-    --accent: 0 0% 14.9%;
-    --accent-foreground: 0 0% 98%;
-    --destructive: 0 62.8% 30.6%;
-    --destructive-foreground: 0 0% 98%;
-    --border: 0 0% 14.9%;
-    --input: 0 0% 14.9%;
-    --ring: 0 0% 83.1%;
+    --background: 150 18% 8%;
+    --foreground: 150 40% 97%;
+    --card: 150 15% 11%;
+    --card-foreground: 150 40% 97%;
+    --popover: 150 15% 11%;
+    --popover-foreground: 150 40% 97%;
+    --primary: 147 45% 45%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 150 18% 16%;
+    --secondary-foreground: 150 40% 97%;
+    --muted: 150 18% 16%;
+    --muted-foreground: 150 8% 62%;
+    --accent: 150 22% 18%;
+    --accent-foreground: 147 50% 72%;
+    --destructive: 358 65% 58%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 150 19% 20%;
+    --input: 150 19% 22%;
+    --ring: 147 45% 50%;
   }
 }
 
@@ -56,5 +58,60 @@
   }
   body {
     @apply bg-background text-foreground;
+  }
+}
+
+/* Gentle entrance — content rises + fades in (design-system motion). */
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.animate-rise {
+  animation: rise 0.45s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+@media (prefers-reduced-motion: reduce) {
+  .animate-rise {
+    animation: none;
+  }
+}
+
+/* Glossy sheen sweeping across a button to draw the eye. */
+@keyframes shine {
+  0% {
+    transform: translateX(-130%) skewX(-18deg);
+  }
+  60%,
+  100% {
+    transform: translateX(130%) skewX(-18deg);
+  }
+}
+.animate-shine {
+  animation: shine 2.8s ease-in-out infinite;
+}
+
+/* Soft pulsing glow — a gentle "attend me" heartbeat around the CTA. */
+@keyframes cta-glow {
+  0%,
+  100% {
+    box-shadow: 0 6px 18px rgba(21, 96, 61, 0.35);
+  }
+  50% {
+    box-shadow: 0 8px 26px rgba(21, 96, 61, 0.6);
+  }
+}
+.animate-cta-glow {
+  animation: cta-glow 2.4s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-shine,
+  .animate-cta-glow {
+    animation: none;
   }
 }

@@ -1,13 +1,12 @@
-import { DocumentUpload } from "@/components/document-upload";
-import { QuizGenerator } from "@/components/quiz-generator";
-import { QuizSetList } from "@/components/quiz-set-list";
+import { ClassAnalytics } from "@/components/class-analytics";
+import { TeacherStats } from "@/components/teacher-stats";
 
-export default function TeacherDashboard() {
+// Class overview — the teacher's at-a-glance workspace + class performance.
+export default function TeacherClassOverview() {
   return (
-    <div className="mx-auto flex max-w-4xl flex-col gap-6">
-      <DocumentUpload />
-      <QuizGenerator />
-      <QuizSetList />
+    <div className="mx-auto flex max-w-5xl flex-col gap-6">
+      <TeacherStats />
+      <ClassAnalytics />
     </div>
   );
 }
