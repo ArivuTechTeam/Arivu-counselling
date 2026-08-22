@@ -35,6 +35,33 @@ def _require_student(profile: CurrentProfile) -> None:
         )
 
 
+# Sensible default exam pattern; a per-institution value in tenants.exam_config
+# overrides any of these keys.
+DEFAULT_EXAM = {"questions": 50, "duration_minutes": 60, "negative_marking": 0.25}
+
+
+def _exam_config(service, tenant_id: str) -> dict:
+    """This institution's exam pattern, falling back to the app default."""
+    row = (
+        service.table("tenants")
+        .select("exam_config")
+        .eq("id", tenant_id)
+        .maybe_single()
+        .execute()
+    )
+    cfg = (row.data or {}).get("exam_config") if row and row.data else None
+    return {**DEFAULT_EXAM, **(cfg or {})}
+
+
+def _answered(v: Any) -> bool:
+    """Did the student actually answer? (blank ≠ wrong, so no negative mark.)"""
+    if v is None or v == "":
+        return False
+    if isinstance(v, list):
+        return len(v) > 0
+    return True
+
+
 def _strip(q: dict) -> dict:
     """What a student may SEE while taking — no correct_answer/explanation."""
     return {
@@ -153,10 +180,14 @@ def get_practice(
     questions = _load_questions(service, s["question_ids"], profile.tenant_id)
 
     if s["status"] == "in_progress":
+        cfg = s.get("config") or {}
         return {
             "attempt_id": session_id,
             "status": "in_progress",
             "questions": [_strip(q) for q in questions],
+            # Present only for timed modes (exam) — drives the countdown + auto-submit.
+            "time_limit_minutes": cfg.get("duration_minutes"),
+            "started_at": s.get("started_at"),
         }
 
     answers = (
@@ -219,6 +250,9 @@ def submit_practice(
 
     questions = _load_questions(service, s["question_ids"], profile.tenant_id)
     submitted = {a.question_id: a.student_answer for a in body.answers}
+    # Negative marking is frozen into the session's config (exam mode). A wrong,
+    # ANSWERED question loses marks; a blank one scores 0 (never negative).
+    neg = float((s.get("config") or {}).get("negative_marking") or 0)
 
     total = 0.0
     max_score = 0.0
@@ -226,6 +260,8 @@ def submit_practice(
     for q in questions:
         student_answer = submitted.get(q["id"])
         is_correct, awarded = grade_answer(q, student_answer)
+        if not is_correct and neg > 0 and _answered(student_answer):
+            awarded = -neg
         total += awarded
         max_score += float(q.get("marks") or 1)
         service.table("practice_answers").insert(
@@ -252,6 +288,9 @@ def submit_practice(
                 "marks_awarded": awarded,
             }
         )
+
+    if neg > 0:
+        total = max(0.0, total)  # an exam total never drops below zero
 
     service.table("practice_sessions").update(
         {
@@ -466,3 +505,227 @@ def start_daily(profile: CurrentProfile = Depends(get_current_profile)) -> dict:
         .data[0]
     )
     return {"session_id": sess["id"]}
+
+
+# ── Exam Simulator (timed, negative marking, per-institution pattern) ─────────
+@router.get("/exam/config")
+def exam_config(profile: CurrentProfile = Depends(get_current_profile)) -> dict:
+    """The institution's exam pattern — for the pre-exam briefing screen."""
+    _require_student(profile)
+    service = get_service_client()
+    cfg = _exam_config(service, profile.tenant_id)
+    return {
+        "questions": int(cfg["questions"]),
+        "duration_minutes": int(cfg["duration_minutes"]),
+        "negative_marking": float(cfg["negative_marking"]),
+    }
+
+
+@router.post("/exam/start")
+def start_exam(profile: CurrentProfile = Depends(get_current_profile)) -> dict:
+    """Begin a full, timed exam. The pattern (count, duration, negative marking)
+    is frozen into the session so mid-exam config changes can't affect it."""
+    _require_student(profile)
+    service = get_service_client()
+    cfg = _exam_config(service, profile.tenant_id)
+    ids = select_question_ids(
+        service, profile, mode="exam", count=int(cfg["questions"])
+    )
+    if not ids:
+        raise HTTPException(
+            status_code=400,
+            detail="Not enough approved questions to run an exam yet.",
+        )
+    sess = (
+        service.table("practice_sessions")
+        .insert(
+            {
+                "tenant_id": profile.tenant_id,
+                "student_id": profile.user_id,
+                "mode": "exam",
+                "config": {
+                    "count": len(ids),
+                    "negative_marking": float(cfg["negative_marking"]),
+                    "duration_minutes": int(cfg["duration_minutes"]),
+                },
+                "question_ids": ids,
+                "status": "in_progress",
+            }
+        )
+        .execute()
+        .data[0]
+    )
+    return {
+        "session_id": sess["id"],
+        "questions": len(ids),
+        "duration_minutes": int(cfg["duration_minutes"]),
+    }
+
+
+# ── Leaderboard (course-scoped, within the institution) ──────────────────────
+@router.get("/leaderboard")
+def leaderboard(
+    course_id: str | None = None,
+    profile: CurrentProfile = Depends(get_current_profile),
+) -> dict:
+    """Rank students in the SAME COURSE as the caller — a college has many
+    departments/courses, so a global ranking would mix unrelated students. Ranked
+    by total marks earned across all graded work, with accuracy. Also returns the
+    caller's course list so the UI can switch between courses."""
+    _require_student(profile)
+    from collections import defaultdict
+
+    service = get_service_client()
+    t = profile.tenant_id
+
+    # Which courses is the caller in? Default to the first; honour ?course_id=.
+    my_course_ids = list(
+        {
+            e["course_id"]
+            for e in (
+                service.table("enrollments")
+                .select("course_id")
+                .eq("profile_id", profile.user_id)
+                .eq("tenant_id", t)
+                .execute()
+                .data
+                or []
+            )
+        }
+    )
+    empty = {
+        "course_id": None,
+        "course_name": None,
+        "courses": [],
+        "top": [],
+        "me": None,
+        "total": 0,
+    }
+    if not my_course_ids:
+        return empty
+    courses = (
+        service.table("courses")
+        .select("id, name")
+        .in_("id", my_course_ids)
+        .eq("tenant_id", t)
+        .order("name")
+        .execute()
+        .data
+        or []
+    )
+    if not courses:
+        return empty
+    valid = {c["id"]: c["name"] for c in courses}
+    selected = course_id if course_id in valid else courses[0]["id"]
+    base = {
+        "course_id": selected,
+        "course_name": valid[selected],
+        "courses": [{"id": c["id"], "name": c["name"]} for c in courses],
+    }
+
+    # Everyone enrolled in the selected course (teachers are filtered out later).
+    course_students = list(
+        {
+            e["profile_id"]
+            for e in (
+                service.table("enrollments")
+                .select("profile_id")
+                .eq("course_id", selected)
+                .eq("tenant_id", t)
+                .execute()
+                .data
+                or []
+            )
+        }
+    )
+    if not course_students:
+        return {**base, "top": [], "me": None, "total": 0}
+
+    attempts = (
+        service.table("quiz_attempts")
+        .select("student_id, total_score, variant_id")
+        .eq("tenant_id", t)
+        .eq("status", "graded")
+        .in_("student_id", course_students)
+        .execute()
+        .data
+        or []
+    )
+    variant_ids = list({a["variant_id"] for a in attempts if a.get("variant_id")})
+    vmarks: dict = {}
+    if variant_ids:
+        for v in (
+            service.table("quiz_variants")
+            .select("id, total_marks")
+            .in_("id", variant_ids)
+            .execute()
+            .data
+            or []
+        ):
+            vmarks[v["id"]] = v.get("total_marks")
+
+    sessions = (
+        service.table("practice_sessions")
+        .select("student_id, total_score, max_score")
+        .eq("tenant_id", t)
+        .eq("status", "graded")
+        .in_("student_id", course_students)
+        .execute()
+        .data
+        or []
+    )
+
+    agg: dict = defaultdict(lambda: {"points": 0.0, "max": 0.0, "n": 0})
+    for a in attempts:
+        d = agg[a["student_id"]]
+        d["points"] += float(a.get("total_score") or 0)
+        d["max"] += float(vmarks.get(a["variant_id"]) or 0)
+        d["n"] += 1
+    for s in sessions:
+        d = agg[s["student_id"]]
+        d["points"] += float(s.get("total_score") or 0)
+        d["max"] += float(s.get("max_score") or 0)
+        d["n"] += 1
+
+    # Names — and this also filters to actual students (not staff test accounts).
+    names: dict = {}
+    if agg:
+        for p in (
+            service.table("profiles")
+            .select("id, full_name, role")
+            .in_("id", list(agg.keys()))
+            .execute()
+            .data
+            or []
+        ):
+            if p.get("role") == "student":
+                names[p["id"]] = p.get("full_name") or "Student"
+
+    rows = []
+    for sid, d in agg.items():
+        if sid not in names:
+            continue
+        rows.append(
+            {
+                "student_id": sid,
+                "name": names[sid],
+                "points": round(d["points"]),
+                "accuracy": round(d["points"] / d["max"] * 100) if d["max"] else 0,
+                "quizzes": d["n"],
+            }
+        )
+    rows.sort(key=lambda r: (-r["points"], -r["accuracy"]))
+    for i, r in enumerate(rows):
+        r["rank"] = i + 1
+        r["is_you"] = r["student_id"] == profile.user_id
+
+    def _clean(r: dict) -> dict:
+        return {k: v for k, v in r.items() if k != "student_id"}
+
+    me = next((r for r in rows if r["is_you"]), None)
+    return {
+        **base,
+        "top": [_clean(r) for r in rows[:20]],
+        "me": _clean(me) if me else None,
+        "total": len(rows),
+    }

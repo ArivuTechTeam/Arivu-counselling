@@ -260,6 +260,8 @@ export type AttemptInProgress = {
   attempt_id: string;
   status: "in_progress";
   questions: TakingQuestion[];
+  time_limit_minutes?: number | null; // set for timed modes (exam)
+  started_at?: string | null;
 };
 
 export type AttemptResult = {
@@ -451,6 +453,44 @@ export type DailyInfo = {
 export const getDaily = () => jsonRequest<DailyInfo>("/api/v1/daily", "GET");
 export const startDaily = () =>
   jsonRequest<{ session_id: string }>("/api/v1/daily/start", "POST", {});
+
+// --- Exam Simulator (timed, negative marking, per-institution pattern) ---
+export type ExamConfig = {
+  questions: number;
+  duration_minutes: number;
+  negative_marking: number;
+};
+export const getExamConfig = () =>
+  jsonRequest<ExamConfig>("/api/v1/exam/config", "GET");
+export const startExam = () =>
+  jsonRequest<{ session_id: string; questions: number; duration_minutes: number }>(
+    "/api/v1/exam/start",
+    "POST",
+    {},
+  );
+
+// --- Leaderboard (institution-scoped) ---
+export type LeaderRow = {
+  rank: number;
+  name: string;
+  points: number;
+  accuracy: number;
+  quizzes: number;
+  is_you: boolean;
+};
+export type Leaderboard = {
+  course_id: string | null;
+  course_name: string | null;
+  courses: { id: string; name: string }[];
+  top: LeaderRow[];
+  me: LeaderRow | null;
+  total: number;
+};
+export const getLeaderboard = (courseId?: string) =>
+  jsonRequest<Leaderboard>(
+    `/api/v1/leaderboard${courseId ? `?course_id=${encodeURIComponent(courseId)}` : ""}`,
+    "GET",
+  );
 
 // ---------------------------------------------------------------------------
 // Academics (courses / subjects) — for the teacher's quiz targeting

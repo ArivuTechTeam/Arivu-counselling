@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 
 import { AiTutor } from "@/components/ai-tutor";
@@ -9,6 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
+  AttemptInProgress,
   AttemptResult,
   AttemptState,
   ResultQuestion,
@@ -24,6 +25,11 @@ function isAnswered(v: unknown): boolean {
   if (v === undefined || v === null || v === "") return false;
   if (Array.isArray(v)) return v.length > 0;
   return true;
+}
+
+function fmtTime(ms: number): string {
+  const s = Math.max(0, Math.floor(ms / 1000));
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
 }
 
 export function QuizAttempt({
@@ -46,6 +52,31 @@ export function QuizAttempt({
       .then(setState)
       .catch((e) => setError(e.message));
   }, [attemptId, source]);
+
+  // Countdown for timed modes (exam). submitRef always points at the latest
+  // handleSubmit so the timer auto-submits exactly once when the clock hits zero.
+  const [remainingMs, setRemainingMs] = useState<number | null>(null);
+  const submitRef = useRef<() => void>(() => {});
+  const autoFiredRef = useRef(false);
+  useEffect(() => {
+    if (!state || state.status !== "in_progress") return;
+    const s = state as AttemptInProgress;
+    const lim = s.time_limit_minutes;
+    const startedAt = s.started_at;
+    if (!lim || !startedAt) return;
+    const deadline = new Date(startedAt).getTime() + lim * 60_000;
+    const tick = () => {
+      const ms = deadline - Date.now();
+      setRemainingMs(Math.max(0, ms));
+      if (ms <= 0 && !autoFiredRef.current) {
+        autoFiredRef.current = true;
+        submitRef.current();
+      }
+    };
+    tick();
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, [state]);
 
   if (error) return <p className="text-red-600">{error}</p>;
   if (!state) return <p className="text-muted-foreground">Loading…</p>;
@@ -101,18 +132,35 @@ export function QuizAttempt({
     }
   }
 
+  submitRef.current = handleSubmit; // keep the timer's submit reference fresh
+
   const atLast = current === questions.length - 1;
 
   return (
     <div className="flex flex-col gap-5 lg:flex-row lg:items-start">
       {/* Question panel — one at a time */}
       <div className="flex min-w-0 flex-1 flex-col gap-4">
-        <div className="flex items-center justify-between text-sm">
+        <div className="flex items-center justify-between gap-3 text-sm">
           <span className="font-medium text-foreground">
             Question {current + 1}
             <span className="text-muted-foreground"> of {questions.length}</span>
           </span>
-          <span className="text-muted-foreground">{answeredCount} answered</span>
+          <div className="flex items-center gap-3">
+            {remainingMs !== null && (
+              <span
+                className={`rounded-md border px-2.5 py-1 font-semibold tabular-nums ${
+                  remainingMs <= 60_000
+                    ? "border-rose-300 bg-rose-50 text-rose-700"
+                    : remainingMs <= 300_000
+                      ? "border-amber-300 bg-amber-50 text-amber-700"
+                      : "border-input bg-muted text-foreground"
+                }`}
+              >
+                {fmtTime(remainingMs)}
+              </span>
+            )}
+            <span className="text-muted-foreground">{answeredCount} answered</span>
+          </div>
         </div>
 
         <div className="rounded-lg border bg-card p-5 shadow-sm">

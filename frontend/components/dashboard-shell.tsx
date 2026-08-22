@@ -41,8 +41,9 @@ const NAV: Record<string, NavItem[]> = {
     { label: "Revision", href: "/dashboard/student/revision" },
     { label: "Daily Challenge", href: "/dashboard/student/daily" },
     { label: "Challenge a Friend", href: "/dashboard/student/challenge" },
+    { label: "Exam Simulator", href: "/dashboard/student/exam" },
+    { label: "Leaderboard", href: "/dashboard/student/leaderboard" },
     { label: "Test history", href: "/dashboard/student/history" },
-    { label: "Exam Simulator", soon: true },
   ],
 };
 
