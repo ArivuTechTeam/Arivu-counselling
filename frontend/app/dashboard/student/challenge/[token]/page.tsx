@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 
 import {
   Card,
@@ -11,7 +12,10 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { PageHeader } from "@/components/ui/page-header";
+import { ErrorCard } from "@/components/ui/error-card";
+import { Skeleton, SkeletonList } from "@/components/ui/skeleton";
 import { ChallengeInfo, acceptChallenge, getChallenge } from "@/lib/api";
+import { downloadCardImage } from "@/lib/share-card";
 
 const MEDAL = ["#e8b923", "#9aa4ad", "#c17d4a"]; // gold / silver / bronze
 
@@ -25,12 +29,16 @@ export default function ChallengeHubPage({
   const [info, setInfo] = useState<ChallengeInfo | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const cardRef = useRef<HTMLDivElement>(null);
 
-  useEffect(() => {
+  function load() {
+    setError(null);
+    setInfo(null);
     getChallenge(token)
       .then(setInfo)
       .catch((e) => setError(e.message));
-  }, [token]);
+  }
+  useEffect(load, [token]);
 
   async function accept() {
     setBusy(true);
@@ -44,8 +52,48 @@ export default function ChallengeHubPage({
     }
   }
 
-  if (error) return <p className="text-red-600">{error}</p>;
-  if (!info) return <p className="text-sm text-muted-foreground">Loading…</p>;
+  if (error) {
+    return (
+      <div className="flex flex-col gap-4">
+        <PageHeader
+          title="Challenge"
+          description="Take on a quiz shared by a classmate."
+        />
+        <ErrorCard
+          title="Challenge unavailable"
+          message={error}
+          onRetry={load}
+        />
+        <Link
+          href="/dashboard/student/challenge"
+          className="mx-auto text-sm font-medium text-primary hover:underline"
+        >
+          ← Back to challenges
+        </Link>
+      </div>
+    );
+  }
+
+  if (!info) {
+    return (
+      <div className="flex flex-col gap-6">
+        <PageHeader
+          title="Challenge"
+          description="Take on a quiz shared by a classmate."
+        />
+        <Skeleton className="h-56 w-full rounded-2xl" />
+        <Card>
+          <CardHeader>
+            <CardTitle>Leaderboard</CardTitle>
+            <CardDescription>Loading the scores…</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <SkeletonList rows={4} />
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
 
   const shareUrl = typeof window !== "undefined" ? window.location.href : "";
   const shareText = `Can you beat me? Take my ${info.questions}-question quiz on ArivuPro:`;
@@ -82,8 +130,11 @@ export default function ChallengeHubPage({
                   : accept()
               }
               disabled={busy}
-              className="mt-6 rounded-lg bg-white px-6 py-2.5 text-sm font-bold text-[#15603d] shadow-md transition-transform hover:-translate-y-0.5 disabled:opacity-70"
+              className="mt-6 inline-flex items-center gap-2 rounded-lg bg-white px-6 py-2.5 text-sm font-bold text-[#15603d] shadow-md transition-transform hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-70"
             >
+              {busy && (
+                <span className="h-4 w-4 animate-spin rounded-full border-2 border-[#15603d]/30 border-t-[#15603d]" />
+              )}
               {busy
                 ? "Loading…"
                 : info.my_status === "in_progress"
@@ -94,23 +145,64 @@ export default function ChallengeHubPage({
         </div>
       )}
 
-      {/* Done → your result + share */}
+      {/* Done → a shareable "beat my score" invite card */}
       {info.my_status === "done" && (
-        <div className="animate-rise flex flex-wrap items-center justify-between gap-4 rounded-2xl border bg-card p-6 shadow-sm">
-          <div>
-            <div className="text-[11px] font-semibold uppercase tracking-widest text-muted-foreground">
-              Your score
-            </div>
-            <div className="mt-1 text-4xl font-bold text-primary">{info.my_pct}%</div>
-          </div>
-          <a
-            href={waHref}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="inline-flex items-center gap-2 rounded-lg bg-[#25D366] px-5 py-2.5 text-sm font-semibold text-white transition-transform hover:-translate-y-0.5"
+        <div className="flex animate-rise flex-col items-center gap-3">
+          {/* Captured as the shareable image */}
+          <div
+            ref={cardRef}
+            className="w-[340px] max-w-full overflow-hidden rounded-3xl p-7 text-center text-white shadow-2xl"
+            style={{ background: "linear-gradient(150deg,#0f1f17,#17402a 55%,#0f1f17)" }}
           >
-            Challenge friends on WhatsApp
-          </a>
+            <div className="text-sm font-black tracking-tight">
+              Arivu<span style={{ color: "#7ae582" }}>PRO</span>
+            </div>
+            <div className="mt-1 text-[11px] uppercase tracking-widest text-white/40">
+              Challenge
+            </div>
+            <div
+              className="mx-auto mt-4 flex h-28 w-28 flex-col items-center justify-center rounded-full text-[34px] font-extrabold"
+              style={{
+                border: `4px solid ${(info.my_pct ?? 0) >= 60 ? "#7ae582" : (info.my_pct ?? 0) >= 40 ? "#e6a817" : "#60a5fa"}`,
+                color: (info.my_pct ?? 0) >= 60 ? "#7ae582" : (info.my_pct ?? 0) >= 40 ? "#e6a817" : "#60a5fa",
+              }}
+            >
+              {info.my_pct}%
+            </div>
+            <div className="mt-4 text-xl font-extrabold">I scored {info.my_pct}%</div>
+            <div className="mt-1 text-sm text-white/70">Think you can beat me?</div>
+            <div className="mt-4 flex items-center justify-center gap-3 text-[11px] text-white/50">
+              <span>{info.questions} questions</span>
+              <span>·</span>
+              <span>
+                {info.leaderboard.length} played
+              </span>
+            </div>
+            <div className="mt-5 text-[10px] tracking-wide text-white/30">
+              arivupro.com · take the challenge
+            </div>
+          </div>
+
+          {/* Actions — outside the captured card */}
+          <div className="flex w-[340px] max-w-full gap-2">
+            <button
+              onClick={() =>
+                cardRef.current &&
+                downloadCardImage(cardRef.current, `arivupro-challenge-${info.my_pct}.png`)
+              }
+              className="flex-1 rounded-lg border border-input bg-card px-3 py-2.5 text-sm font-semibold text-foreground shadow-sm transition-colors hover:bg-accent"
+            >
+              Download
+            </button>
+            <a
+              href={waHref}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex-1 rounded-lg bg-[#25D366] px-3 py-2.5 text-center text-sm font-semibold text-white transition-transform hover:-translate-y-0.5"
+            >
+              Share on WhatsApp
+            </a>
+          </div>
         </div>
       )}
 
@@ -129,7 +221,7 @@ export default function ChallengeHubPage({
             {info.leaderboard.map((r, i) => (
               <div
                 key={i}
-                className={`flex items-center gap-3 rounded-lg border p-3 ${
+                className={`flex items-center gap-3 rounded-lg border p-3 transition-colors hover:bg-accent ${
                   r.is_you ? "border-primary/40 bg-primary/5" : ""
                 }`}
               >

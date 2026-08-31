@@ -5,6 +5,7 @@ import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { formatAnswerValue, statusLabel, typeLabel } from "@/lib/format";
 import {
   QuestionPatch,
   ReviewQuestion,
@@ -16,6 +17,11 @@ import {
 
 const CHOICE_TYPES = ["mcq_single", "mcq_multi", "true_false"];
 
+// Shared textarea styling so edit fields match the read-view inputs, with a
+// proper brand focus ring.
+const TEXTAREA_CLASS =
+  "w-full rounded-md border border-input bg-background p-2.5 text-sm shadow-sm transition-colors focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20";
+
 function correctIds(q: ReviewQuestion): string[] {
   const a = q.correct_answer;
   if (Array.isArray(a)) return a.map(String);
@@ -23,21 +29,9 @@ function correctIds(q: ReviewQuestion): string[] {
   return [];
 }
 
-function formatAnswer(q: ReviewQuestion): string {
-  const a = q.correct_answer;
-  if (Array.isArray(a)) return a.join(", ");
-  if (a && typeof a === "object") {
-    const o = a as Record<string, unknown>;
-    if ("value" in o) return `${o.value}${o.tolerance ? ` (±${o.tolerance})` : ""}`;
-    if ("answers" in o) return (o.answers as string[]).join(" / ");
-    return JSON.stringify(o);
-  }
-  return String(a);
-}
-
 // Status tones from the design system: emerald = approved, rose = rejected,
-// amber = needs_edit, warm-neutral = pending. Strings render exactly as the API
-// returns them (lowercase, snake_cased) — no prettifying.
+// amber = needs_edit, warm-neutral = pending. The tone is keyed off the raw
+// token; the label users see goes through statusLabel().
 const STATUS_TONE: Record<string, string> = {
   approved: "bg-emerald-100 text-emerald-700",
   rejected: "bg-rose-100 text-rose-700",
@@ -49,7 +43,7 @@ function StatusBadge({ status }: { status: string }) {
   const tone = STATUS_TONE[status] ?? "bg-muted text-muted-foreground";
   return (
     <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${tone}`}>
-      {status}
+      {statusLabel(status)}
     </span>
   );
 }
@@ -67,16 +61,6 @@ const DIFFICULTY_TONE: Record<string, string> = {
   easy: "border-emerald-200 bg-emerald-50 text-emerald-700",
   medium: "border-amber-200 bg-amber-50 text-amber-700",
   hard: "border-rose-200 bg-rose-50 text-rose-700",
-};
-
-// Friendly labels for the snake_cased question types (display only).
-const TYPE_LABEL: Record<string, string> = {
-  mcq_single: "Single choice",
-  mcq_multi: "Multiple choice",
-  true_false: "True / False",
-  numerical: "Numerical",
-  fill_blank: "Fill in the blank",
-  matching: "Matching",
 };
 
 function CheckIcon({ className }: { className?: string }) {
@@ -139,7 +123,7 @@ export function QuestionReviewCard({
           {index + 1}
         </span>
         <span className="rounded-full border border-border bg-muted px-2.5 py-0.5 text-xs font-medium text-muted-foreground">
-          {TYPE_LABEL[question.type] ?? question.type}
+          {typeLabel(question.type)}
         </span>
         {question.difficulty && (
           <span
@@ -207,7 +191,7 @@ export function QuestionReviewCard({
             </div>
           )}
           <p className="font-medium text-emerald-700">
-            Answer: {formatAnswer(question)}
+            Answer: {formatAnswerValue(question.correct_answer)}
           </p>
           {question.explanation && (
             <p className="mt-1 text-muted-foreground">Why: {question.explanation}</p>
@@ -251,7 +235,7 @@ export function QuestionReviewCard({
         </>
       )}
 
-      {error && <p className="mt-2 text-red-600">{error}</p>}
+      {error && <p className="mt-2 text-destructive">{error}</p>}
     </div>
   );
 }
@@ -335,7 +319,7 @@ function EditForm({
       <div className="flex flex-col gap-1">
         <Label>Question text</Label>
         <textarea
-          className="min-h-16 rounded-md border p-2 text-sm"
+          className={`min-h-16 ${TEXTAREA_CLASS}`}
           value={text}
           onChange={(e) => setText(e.target.value)}
         />
@@ -393,13 +377,13 @@ function EditForm({
       <div className="flex flex-col gap-1">
         <Label>Explanation</Label>
         <textarea
-          className="min-h-12 rounded-md border p-2 text-sm"
+          className={`min-h-12 ${TEXTAREA_CLASS}`}
           value={explanation}
           onChange={(e) => setExplanation(e.target.value)}
         />
       </div>
 
-      {error && <p className="text-red-600">{error}</p>}
+      {error && <p className="text-sm text-destructive">{error}</p>}
 
       <div className="flex gap-2">
         <Button size="sm" onClick={save} disabled={busy}>

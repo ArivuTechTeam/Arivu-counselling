@@ -17,6 +17,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { ErrorCard } from "@/components/ui/error-card";
 import {
   InstitutionAnalytics,
   QualityFinding,
@@ -120,7 +121,7 @@ export default function InstitutionAnalyticsPage() {
   }
   useEffect(load, []);
 
-  if (error) return <p className="text-red-600">{error}</p>;
+  if (error) return <ErrorCard message={error} onRetry={load} />;
 
   const sm = d?.summary;
   const trend = d?.trend;

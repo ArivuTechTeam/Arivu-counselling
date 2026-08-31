@@ -11,6 +11,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { PageHeader } from "@/components/ui/page-header";
+import { Skeleton } from "@/components/ui/skeleton";
 import { StudentQuiz, createChallenge, listStudentQuizzes } from "@/lib/api";
 
 const COUNTS = [5, 10, 15];
@@ -24,11 +25,15 @@ export default function ChallengePage() {
   const [count, setCount] = useState(10);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [subjectsError, setSubjectsError] = useState(false);
 
   useEffect(() => {
     listStudentQuizzes()
       .then(setQuizzes)
-      .catch(() => setQuizzes([]));
+      .catch(() => {
+        setSubjectsError(true);
+        setQuizzes([]);
+      });
   }, []);
 
   const subjects = useMemo(() => {
@@ -97,18 +102,29 @@ export default function ChallengePage() {
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <label className="flex flex-col gap-1.5 text-sm font-medium">
               Subject
-              <select
-                className={fieldClass}
-                value={subjectId}
-                onChange={(e) => setSubjectId(e.target.value)}
-              >
-                <option value="">All my subjects</option>
-                {subjects.map((s) => (
-                  <option key={s.id} value={s.id}>
-                    {s.name}
-                  </option>
-                ))}
-              </select>
+              {quizzes === null ? (
+                <Skeleton className="h-10 w-full rounded-md" />
+              ) : (
+                <select
+                  className={fieldClass}
+                  value={subjectId}
+                  onChange={(e) => setSubjectId(e.target.value)}
+                  disabled={subjectsError}
+                >
+                  <option value="">All my subjects</option>
+                  {subjects.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.name}
+                    </option>
+                  ))}
+                </select>
+              )}
+              {subjectsError && (
+                <span className="text-xs font-normal text-destructive">
+                  Couldn&apos;t load subjects — you can still play across all of
+                  them.
+                </span>
+              )}
             </label>
             <label className="flex flex-col gap-1.5 text-sm font-medium">
               Questions
@@ -126,7 +142,11 @@ export default function ChallengePage() {
             </label>
           </div>
 
-          {error && <p className="text-sm text-red-600">{error}</p>}
+          {error && (
+            <p className="rounded-lg border border-destructive/20 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+              {error}
+            </p>
+          )}
 
           <div>
             <button

@@ -10,7 +10,9 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { StudentReportButton } from "@/components/pdf-buttons";
+import { ErrorCard } from "@/components/ui/error-card";
 import { PageHeader } from "@/components/ui/page-header";
+import { SkeletonList, SkeletonStats } from "@/components/ui/skeleton";
 import { ClassMonitor, ClassMonitorStudent, getClassMonitor } from "@/lib/api";
 
 const STATUS: Record<string, { label: string; tone: string; color: string }> = {
@@ -47,10 +49,15 @@ export default function ClassMonitorPage() {
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<"all" | "at_risk" | "not_started">("all");
 
-  useEffect(() => {
+  function load() {
+    setError(null);
     getClassMonitor()
       .then(setData)
       .catch((e) => setError(e.message));
+  }
+
+  useEffect(() => {
+    load();
   }, []);
 
   const rows: ClassMonitorStudent[] = useMemo(() => {
@@ -60,7 +67,7 @@ export default function ClassMonitorPage() {
     return all;
   }, [data, tab]);
 
-  if (error) return <p className="text-red-600">{error}</p>;
+  const loading = data === null && !error;
   const sm = data?.summary;
 
   const tabs: { key: typeof tab; label: string; count: number }[] = [
@@ -76,6 +83,15 @@ export default function ClassMonitorPage() {
         description="Your class roster and how each student is engaging with your quizzes."
       />
 
+      {error ? (
+        <ErrorCard message={error} onRetry={load} />
+      ) : loading ? (
+        <>
+          <SkeletonStats />
+          <SkeletonList rows={6} />
+        </>
+      ) : (
+        <>
       {/* Summary tiles */}
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
         <Stat value={sm?.students ?? 0} label="Students" />
@@ -92,8 +108,8 @@ export default function ClassMonitorPage() {
         <CardHeader>
           <CardTitle>Roster</CardTitle>
           <CardDescription>
-            Live view (who&apos;s taking a quiz right now) is coming soon — this shows
-            each student&apos;s activity to date.
+            Each student&apos;s activity to date — quizzes taken, accuracy, best
+            score, and when they were last active.
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -114,11 +130,9 @@ export default function ClassMonitorPage() {
             ))}
           </div>
 
-          {data === null ? (
-            <p className="text-sm text-muted-foreground">Loading…</p>
-          ) : rows.length === 0 ? (
+          {rows.length === 0 ? (
             <p className="text-sm text-muted-foreground">
-              {(data.students.length ?? 0) === 0
+              {(data?.students.length ?? 0) === 0
                 ? "No students in your courses yet — once students are enrolled and take your quizzes, they'll appear here."
                 : "No students in this view."}
             </p>
@@ -187,6 +201,8 @@ export default function ClassMonitorPage() {
           )}
         </CardContent>
       </Card>
+        </>
+      )}
     </div>
   );
 }

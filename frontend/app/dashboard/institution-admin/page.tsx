@@ -29,6 +29,8 @@ import {
   UsersIcon,
   useCountUp,
 } from "@/components/dashboard-kit";
+import { EmptyState } from "@/components/ui/empty-state";
+import { ErrorCard } from "@/components/ui/error-card";
 import { InstitutionOverview, getInstitutionOverview } from "@/lib/api";
 
 const BRAND = "#15603d";
@@ -52,11 +54,13 @@ export default function InstitutionOverviewPage() {
   const [s, setS] = useState<InstitutionOverview | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
+  function load() {
+    setError(null);
     getInstitutionOverview()
       .then(setS)
       .catch((e) => setError(e.message));
-  }, []);
+  }
+  useEffect(load, []);
 
   const ready = s !== null;
   const teachers = useCountUp(s?.teachers ?? 0, ready);
@@ -65,7 +69,7 @@ export default function InstitutionOverviewPage() {
   const attempts = useCountUp(s?.attempts ?? 0, ready);
   const accuracy = useCountUp(s?.accuracy ?? 0, ready);
 
-  if (error) return <p className="text-red-600">{error}</p>;
+  if (error) return <ErrorCard message={error} onRetry={load} />;
 
   if (s === null) {
     return (
@@ -192,7 +196,10 @@ export default function InstitutionOverviewPage() {
           </CardHeader>
           <CardContent>
             {people === 0 ? (
-              <p className="text-sm text-muted-foreground">No users yet.</p>
+              <EmptyState
+                title="No users yet"
+                message="Add teachers and students to see how your institution is made up."
+              />
             ) : (
               <div className="flex items-center gap-4">
                 <div className="h-36 w-36 shrink-0">
@@ -244,7 +251,10 @@ export default function InstitutionOverviewPage() {
           </CardHeader>
           <CardContent className="flex flex-col gap-2">
             {recent.length === 0 ? (
-              <p className="text-sm text-muted-foreground">No quiz sets yet.</p>
+              <EmptyState
+                title="No quiz sets yet"
+                message="Once your teachers create content, the newest quiz sets will show up here."
+              />
             ) : (
               recent.map((q, i) => (
                 <div
@@ -279,7 +289,10 @@ export default function InstitutionOverviewPage() {
           </CardHeader>
           <CardContent className="flex flex-col gap-3">
             {topCourses.length === 0 ? (
-              <p className="text-sm text-muted-foreground">No enrolments yet.</p>
+              <EmptyState
+                title="No enrolments yet"
+                message="As students enrol, your most popular courses will appear here."
+              />
             ) : (
               topCourses.map((c) => (
                 <div key={c.name} className="flex flex-col gap-1">

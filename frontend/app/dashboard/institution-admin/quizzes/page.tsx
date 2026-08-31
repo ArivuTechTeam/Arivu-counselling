@@ -10,7 +10,11 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { EmptyState } from "@/components/ui/empty-state";
+import { ErrorCard } from "@/components/ui/error-card";
+import { Inbox } from "@/components/ui/icons";
 import { PageHeader } from "@/components/ui/page-header";
+import { SkeletonList } from "@/components/ui/skeleton";
 import { AdminQuizSet, getAdminQuizSets } from "@/lib/api";
 
 const STATUS_TONE: Record<string, string> = {
@@ -23,11 +27,13 @@ export default function AdminQuizzesPage() {
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
 
-  useEffect(() => {
+  function load() {
+    setError(null);
     getAdminQuizSets()
       .then(setRows)
       .catch((e) => setError(e.message));
-  }, []);
+  }
+  useEffect(load, []);
 
   const filtered = useMemo(() => {
     const list = rows ?? [];
@@ -47,7 +53,7 @@ export default function AdminQuizzesPage() {
         description="Browse every quiz in your institution and download any as a question paper."
       />
 
-      {error && <p className="text-sm text-red-600">{error}</p>}
+      {error && <ErrorCard message={error} onRetry={load} />}
 
       <input
         value={query}
@@ -57,13 +63,17 @@ export default function AdminQuizzesPage() {
       />
 
       {rows === null ? (
-        <p className="text-sm text-muted-foreground">Loading…</p>
+        <SkeletonList />
       ) : filtered.length === 0 ? (
-        <p className="text-sm text-muted-foreground">
-          {rows.length === 0
-            ? "No quizzes in your institution yet."
-            : "No quizzes match your search."}
-        </p>
+        <EmptyState
+          icon={<Inbox />}
+          title={rows.length === 0 ? "No quizzes yet" : "No matches"}
+          message={
+            rows.length === 0
+              ? "Quizzes created across your institution will appear here."
+              : "No quizzes match your search — try a different title, course, subject or teacher."
+          }
+        />
       ) : (
         <div className="flex flex-col gap-3">
           {filtered.map((q) => (

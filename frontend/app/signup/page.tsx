@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 
 import { SplitText } from "@/components/split-text";
+import { Brand } from "@/components/ui/brand";
 import { listPublicCourses } from "@/lib/api";
 import { initAuthFx } from "@/lib/auth-fx";
 import { createClient } from "@/lib/supabase";
@@ -70,7 +71,9 @@ export default function SignupPage() {
     if (tenantId) {
       listPublicCourses(tenantId)
         .then(setCourses)
-        .catch(() => {});
+        .catch(() =>
+          setError("Couldn't load courses — please refresh the page."),
+        );
     }
   }, [tenantId]);
 
@@ -243,8 +246,7 @@ export default function SignupPage() {
           <div className="card">
             <div className="card-head">
               <div className="card-logo">
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src="/arivu-logo.png" alt="ArivuPro Academy" style={{ height: 26, display: "block" }} />
+                <Brand height={36} />
               </div>
               <div className="card-title">Create your account</div>
               <div className="card-sub">Enrol &amp; get started</div>
@@ -258,7 +260,7 @@ export default function SignupPage() {
                 <div className="field-label">Full name <span className="req">*</span></div>
                 <div className="field-box">
                   <span className="field-icon"><UserIcon /></span>
-                  <input className="field-input" value={fullName} onChange={(e) => setFullName(e.target.value)} placeholder="Your full name" />
+                  <input className="field-input" value={fullName} onChange={(e) => setFullName(e.target.value)} placeholder="Your full name" autoComplete="name" required />
                 </div>
               </div>
 
@@ -266,7 +268,7 @@ export default function SignupPage() {
                 <div className="field-label">Email address <span className="req">*</span></div>
                 <div className="field-box">
                   <span className="field-icon"><MailIcon /></span>
-                  <input className="field-input" type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@email.com" />
+                  <input className="field-input" type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@email.com" autoComplete="email" required />
                 </div>
               </div>
 
@@ -274,7 +276,7 @@ export default function SignupPage() {
                 <div className="field-label">Password <span className="req">*</span></div>
                 <div className="field-box">
                   <span className="field-icon"><LockIcon /></span>
-                  <input className="field-input" type={showPw ? "text" : "password"} value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Create a password" minLength={6} />
+                  <input className="field-input" type={showPw ? "text" : "password"} value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Create a password" minLength={6} autoComplete="new-password" required />
                   <button type="button" className="pw-eye" onClick={() => setShowPw((s) => !s)}>{showPw ? "Hide" : "Show"}</button>
                 </div>
               </div>

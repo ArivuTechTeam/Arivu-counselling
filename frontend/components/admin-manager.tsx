@@ -13,6 +13,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { PageHeader } from "@/components/ui/page-header";
 import { EmptyState } from "@/components/ui/empty-state";
+import { SkeletonList } from "@/components/ui/skeleton";
+import { AlertTriangle, Trash, X } from "@/components/ui/icons";
 import {
   InstitutionAdmin,
   TenantOption,
@@ -33,6 +35,7 @@ export function AdminManager({ embedded = false }: { embedded?: boolean }) {
   });
   const [busy, setBusy] = useState(false);
   const [removing, setRemoving] = useState<string | null>(null);
+  const [confirmTarget, setConfirmTarget] = useState<InstitutionAdmin | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
@@ -73,13 +76,10 @@ export function AdminManager({ embedded = false }: { embedded?: boolean }) {
     }
   }
 
-  async function remove(a: InstitutionAdmin) {
-    if (
-      !window.confirm(
-        `Remove admin ${a.email ?? a.full_name}? They lose access to ${a.institution} immediately.`,
-      )
-    )
-      return;
+  async function confirmRemove() {
+    const a = confirmTarget;
+    if (!a) return;
+    setConfirmTarget(null);
     setRemoving(a.id);
     setError(null);
     setNotice(null);
@@ -162,8 +162,17 @@ export function AdminManager({ embedded = false }: { embedded?: boolean }) {
                 />
               </label>
             </div>
-            {error && <p className="text-sm text-red-600">{error}</p>}
-            {notice && <p className="text-sm text-emerald-700">{notice}</p>}
+            {error && (
+              <div className="flex items-start gap-2 rounded-lg border border-destructive/20 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+                <AlertTriangle size={16} className="mt-0.5 shrink-0" />
+                <span>{error}</span>
+              </div>
+            )}
+            {notice && (
+              <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700">
+                {notice}
+              </div>
+            )}
             <div>
               <Button type="submit" disabled={busy}>
                 {busy ? "Creating…" : "Create admin"}
@@ -180,7 +189,7 @@ export function AdminManager({ embedded = false }: { embedded?: boolean }) {
         </CardHeader>
         <CardContent className="flex flex-col gap-3">
           {admins === null ? (
-            <p className="text-sm text-muted-foreground">Loading…</p>
+            <SkeletonList />
           ) : admins.length === 0 ? (
             <EmptyState message="No institution admins yet." />
           ) : (
@@ -200,10 +209,11 @@ export function AdminManager({ embedded = false }: { embedded?: boolean }) {
                     {a.institution}
                   </span>
                   <button
-                    onClick={() => remove(a)}
+                    onClick={() => setConfirmTarget(a)}
                     disabled={removing === a.id}
-                    className="text-xs font-medium text-red-600 transition-colors hover:underline disabled:opacity-50"
+                    className="inline-flex items-center gap-1 text-xs font-medium text-red-600 transition-colors hover:underline disabled:opacity-50"
                   >
+                    <Trash size={13} />
                     {removing === a.id ? "Removing…" : "Remove"}
                   </button>
                 </div>
@@ -212,6 +222,55 @@ export function AdminManager({ embedded = false }: { embedded?: boolean }) {
           )}
         </CardContent>
       </Card>
+
+      {confirmTarget && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+          onClick={() => setConfirmTarget(null)}
+        >
+          <div
+            className="w-full max-w-md rounded-2xl border bg-card p-6 shadow-xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-start justify-between gap-4">
+              <div className="flex items-center gap-3">
+                <span className="flex h-10 w-10 items-center justify-center rounded-full bg-destructive/10 text-destructive">
+                  <Trash size={18} />
+                </span>
+                <h2 className="text-base font-semibold text-foreground">
+                  Remove admin
+                </h2>
+              </div>
+              <button
+                onClick={() => setConfirmTarget(null)}
+                className="rounded-md p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                aria-label="Close"
+              >
+                <X size={18} />
+              </button>
+            </div>
+            <p className="mt-4 text-sm text-muted-foreground">
+              Remove{" "}
+              <span className="font-medium text-foreground">
+                {confirmTarget.full_name ?? confirmTarget.email}
+              </span>
+              ? They lose access to {confirmTarget.institution} immediately.
+            </p>
+            <div className="mt-6 flex justify-end gap-3">
+              <Button variant="outline" onClick={() => setConfirmTarget(null)}>
+                Cancel
+              </Button>
+              <button
+                onClick={confirmRemove}
+                className="inline-flex items-center gap-1.5 rounded-md bg-destructive px-4 py-2 text-sm font-medium text-destructive-foreground shadow-sm transition-colors hover:bg-destructive/90"
+              >
+                <Trash size={15} />
+                Remove
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

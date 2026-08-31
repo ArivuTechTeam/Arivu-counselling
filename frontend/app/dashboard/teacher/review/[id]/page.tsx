@@ -4,8 +4,11 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 
 import { Button } from "@/components/ui/button";
+import { ErrorCard } from "@/components/ui/error-card";
+import { Skeleton, SkeletonCards } from "@/components/ui/skeleton";
 import { QuestionPaperButtons } from "@/components/pdf-buttons";
 import { QuestionReviewCard } from "@/components/question-review-card";
+import { statusLabel } from "@/lib/format";
 import {
   QuizSetDetail,
   ReviewQuestion,
@@ -31,10 +34,16 @@ export default function ReviewDetailPage({ params }: { params: { id: string } })
   const [publishing, setPublishing] = useState(false);
   const [approving, setApproving] = useState(false);
 
-  useEffect(() => {
+  function load() {
+    setError(null);
     getQuizSet(params.id)
       .then(setDetail)
       .catch((e) => setError(e.message));
+  }
+
+  useEffect(() => {
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [params.id]);
 
   function updateQuestion(updated: ReviewQuestion) {
@@ -79,8 +88,20 @@ export default function ReviewDetailPage({ params }: { params: { id: string } })
     }
   }
 
-  if (error) return <p className="text-red-600">{error}</p>;
-  if (!detail) return <p className="text-sm text-muted-foreground">Loading…</p>;
+  if (error && !detail)
+    return (
+      <div className="mx-auto flex max-w-4xl flex-col gap-6">
+        <ErrorCard message={error} onRetry={load} />
+      </div>
+    );
+  if (!detail)
+    return (
+      <div className="mx-auto flex max-w-4xl flex-col gap-6">
+        <Skeleton className="h-5 w-40 rounded-md" />
+        <Skeleton className="h-24 w-full rounded-2xl" />
+        <SkeletonCards count={3} />
+      </div>
+    );
 
   const all = detail.variants.flatMap((v) => v.questions);
   const pending = all.filter((q) => q.review_status === "pending_review").length;
@@ -99,8 +120,8 @@ export default function ReviewDetailPage({ params }: { params: { id: string } })
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">{detail.title}</h1>
-          <p className="mt-1 text-sm capitalize text-muted-foreground">
-            Status: {detail.status}
+          <p className="mt-1 text-sm text-muted-foreground">
+            Status: {statusLabel(detail.status)}
           </p>
         </div>
         <QuestionPaperButtons quizSetId={params.id} title={detail.title} />
@@ -136,10 +157,14 @@ export default function ReviewDetailPage({ params }: { params: { id: string } })
         </div>
       </div>
 
+      {error && (
+        <p className="text-sm text-destructive">{error}</p>
+      )}
+
       {detail.variants.map((v) => (
         <section key={v.id} className="flex flex-col gap-4">
           <h2 className="text-[11px] font-semibold uppercase tracking-widest text-muted-foreground">
-            {v.variant_type} variant
+            {statusLabel(v.variant_type)} variant
           </h2>
           {v.questions.map((q, i) => (
             <QuestionReviewCard

@@ -9,7 +9,11 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { EmptyState } from "@/components/ui/empty-state";
+import { ErrorCard } from "@/components/ui/error-card";
+import { AlertTriangle, BookOpen, Check } from "@/components/ui/icons";
 import { PageHeader } from "@/components/ui/page-header";
+import { Skeleton, SkeletonCards, SkeletonList } from "@/components/ui/skeleton";
 import {
   Chapter,
   Course,
@@ -26,10 +30,15 @@ export default function TeacherSubjectsPage() {
   const [error, setError] = useState<string | null>(null);
   const [active, setActive] = useState<SubjectRow | null>(null);
 
-  useEffect(() => {
+  function load() {
+    setError(null);
     listCourses()
       .then(setCourses)
       .catch((e) => setError(e.message));
+  }
+
+  useEffect(() => {
+    load();
   }, []);
 
   const subjects: SubjectRow[] = useMemo(() => {
@@ -39,8 +48,6 @@ export default function TeacherSubjectsPage() {
     }
     return out;
   }, [courses]);
-
-  if (error) return <p className="text-red-600">{error}</p>;
 
   if (active) {
     return (
@@ -55,15 +62,16 @@ export default function TeacherSubjectsPage() {
         description="Your subjects. Open one to add or remove its chapters — chapters show up when you generate a quiz and in your students' subject view."
       />
 
-      {courses === null ? (
-        <p className="text-sm text-muted-foreground">Loading…</p>
+      {error ? (
+        <ErrorCard message={error} onRetry={load} />
+      ) : courses === null ? (
+        <SkeletonCards count={3} />
       ) : subjects.length === 0 ? (
-        <Card className="animate-rise">
-          <CardContent className="p-8 text-center text-sm text-muted-foreground">
-            You&apos;re not mapped to any subjects yet. Ask your institution admin to
-            add you to a course.
-          </CardContent>
-        </Card>
+        <EmptyState
+          icon={<BookOpen />}
+          title="No subjects yet"
+          message="You're not mapped to any subjects yet. Ask your institution admin to add you to a course."
+        />
       ) : (
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {subjects.map((s) => (
@@ -176,8 +184,18 @@ function ChapterManager({
               {busy ? "Adding…" : "Add chapter"}
             </button>
           </form>
-          {error && <p className="mt-3 text-sm text-red-600">{error}</p>}
-          {notice && <p className="mt-3 text-sm text-emerald-700">{notice}</p>}
+          {error && (
+            <div className="mt-3 flex items-start gap-2 rounded-lg border border-destructive/20 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+              <AlertTriangle size={16} className="mt-0.5 shrink-0" />
+              <span>{error}</span>
+            </div>
+          )}
+          {notice && (
+            <div className="mt-3 flex items-start gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700">
+              <Check size={16} className="mt-0.5 shrink-0" />
+              <span>{notice}</span>
+            </div>
+          )}
         </CardContent>
       </Card>
 
@@ -185,18 +203,22 @@ function ChapterManager({
         <CardHeader>
           <CardTitle>Chapters</CardTitle>
           <CardDescription>
-            {chapters === null
-              ? "Loading…"
-              : `${chapters.length} chapter${chapters.length === 1 ? "" : "s"} in this subject.`}
+            {chapters === null ? (
+              <Skeleton className="h-4 w-40" />
+            ) : (
+              `${chapters.length} chapter${chapters.length === 1 ? "" : "s"} in this subject.`
+            )}
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-2">
           {chapters === null ? (
-            <p className="text-sm text-muted-foreground">Loading…</p>
+            <SkeletonList rows={3} />
           ) : chapters.length === 0 ? (
-            <p className="text-sm text-muted-foreground">
-              No chapters yet — add your first one above.
-            </p>
+            <EmptyState
+              icon={<BookOpen />}
+              title="No chapters yet"
+              message="Add your first chapter above to start organising this subject."
+            />
           ) : (
             chapters.map((c) => (
               <div

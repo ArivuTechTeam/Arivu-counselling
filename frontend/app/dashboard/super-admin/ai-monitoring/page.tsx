@@ -17,6 +17,8 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { ErrorCard } from "@/components/ui/error-card";
+import { Skeleton, SkeletonStats } from "@/components/ui/skeleton";
 import { AiMonitoring, QualityFinding, getAiMonitoring } from "@/lib/api";
 
 const BRAND = "#15603d";
@@ -125,7 +127,25 @@ export default function QuestionQualityPage() {
   }
   useEffect(load, []);
 
-  if (error) return <p className="text-red-600">{error}</p>;
+  if (error) return <ErrorCard message={error} onRetry={load} />;
+
+  // First load: one coherent skeleton instead of real-looking 0/0% tiles.
+  if (d === null) {
+    return (
+      <div className="flex flex-col gap-6">
+        <div className="flex flex-wrap items-end justify-between gap-3">
+          <div className="flex flex-col gap-2">
+            <Skeleton className="h-8 w-64" />
+            <Skeleton className="h-4 w-96 max-w-full" />
+          </div>
+          <Skeleton className="h-9 w-28 rounded-lg" />
+        </div>
+        <Skeleton className="h-40 w-full rounded-2xl" />
+        <SkeletonStats />
+        <Skeleton className="h-56 w-full rounded-2xl" />
+      </div>
+    );
+  }
 
   const sig = d?.signals;
   const hasApproved = (sig?.approved ?? 0) > 0;
@@ -277,9 +297,7 @@ export default function QuestionQualityPage() {
           </CardDescription>
         </CardHeader>
         <CardContent>
-          {d === null ? (
-            <p className="text-sm text-muted-foreground">Analysing…</p>
-          ) : findings.length === 0 ? (
+          {findings.length === 0 ? (
             <p className="text-sm text-muted-foreground">
               Nothing to flag yet — generate and review some AI questions and the
               findings will appear here.

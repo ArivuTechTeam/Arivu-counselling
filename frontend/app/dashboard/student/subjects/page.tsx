@@ -11,6 +11,10 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { PageHeader } from "@/components/ui/page-header";
+import { ErrorCard } from "@/components/ui/error-card";
+import { SkeletonCards } from "@/components/ui/skeleton";
+import { EmptyState } from "@/components/ui/empty-state";
+import { BookOpen } from "@/components/ui/icons";
 import { StudentQuiz, listStudentQuizzes, startAttempt } from "@/lib/api";
 
 type TakeItem = {
@@ -59,10 +63,15 @@ export default function StudentSubjectsPage() {
   const [starting, setStarting] = useState<string | null>(null);
   const [active, setActive] = useState<string | null>(null);
 
-  useEffect(() => {
+  function load() {
+    setError(null);
     listStudentQuizzes()
       .then(setQuizzes)
       .catch((e) => setError(e.message));
+  }
+
+  useEffect(() => {
+    load();
   }, []);
 
   const tree = useMemo(() => (quizzes ? buildTree(quizzes) : {}), [quizzes]);
@@ -80,7 +89,16 @@ export default function StudentSubjectsPage() {
     }
   }
 
-  if (error) return <p className="text-red-600">{error}</p>;
+  if (error)
+    return (
+      <div className="flex flex-col gap-6">
+        <PageHeader
+          title="Subjects"
+          description="Browse your subjects and their chapters, then take a quiz."
+        />
+        <ErrorCard message={error} onRetry={load} />
+      </div>
+    );
 
   // ---- Chapter view for one subject ----
   if (active && tree[active]) {
@@ -156,14 +174,21 @@ export default function StudentSubjectsPage() {
       />
 
       {quizzes === null ? (
-        <p className="text-sm text-muted-foreground">Loading…</p>
+        <SkeletonCards />
       ) : subjects.length === 0 ? (
-        <Card className="animate-rise">
-          <CardContent className="p-8 text-center text-sm text-muted-foreground">
-            No quizzes available yet — they&apos;ll appear here once your teacher
-            publishes one for your course.
-          </CardContent>
-        </Card>
+        <EmptyState
+          icon={<BookOpen />}
+          title="No subjects yet"
+          message="Quizzes will appear here once your teacher publishes one for your course. In the meantime, you can practise any time with a Smart Quiz."
+          action={
+            <button
+              onClick={() => router.push("/dashboard/student/smart-quiz")}
+              className="rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground shadow-sm transition-colors hover:bg-primary/90"
+            >
+              Try a Smart Quiz
+            </button>
+          }
+        />
       ) : (
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {subjects.map((s) => {

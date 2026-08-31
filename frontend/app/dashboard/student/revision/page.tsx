@@ -10,6 +10,11 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { PageHeader } from "@/components/ui/page-header";
+import { EmptyState } from "@/components/ui/empty-state";
+import { ErrorCard } from "@/components/ui/error-card";
+import { SkeletonList } from "@/components/ui/skeleton";
+import { Inbox, Trophy } from "@/components/ui/icons";
+import { formatAnswerValue } from "@/lib/format";
 import {
   BookmarkedQuestion,
   RevisionTopic,
@@ -23,18 +28,6 @@ type Tab = "questions" | "topics";
 
 function topicTone(pct: number) {
   return pct < 40 ? "#ff6b7a" : "#f5a623";
-}
-
-function formatAnswer(q: BookmarkedQuestion): string {
-  const a = q.correct_answer;
-  if (Array.isArray(a)) return a.join(", ");
-  if (a && typeof a === "object") {
-    const o = a as Record<string, unknown>;
-    if ("value" in o) return `${o.value}${o.tolerance ? ` (±${o.tolerance})` : ""}`;
-    if ("answers" in o) return (o.answers as string[]).join(" / ");
-    return JSON.stringify(o);
-  }
-  return String(a);
 }
 
 function TabButton({
@@ -83,8 +76,12 @@ export default function RevisionPage() {
   const [items, setItems] = useState<BookmarkedQuestion[] | null>(null);
   const [topics, setTopics] = useState<RevisionTopic[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
 
   function load() {
+    setError(null);
+    setItems(null);
+    setTopics(null);
     listBookmarks()
       .then(setItems)
       .catch((e) => setError(e.message));
@@ -95,24 +92,38 @@ export default function RevisionPage() {
   useEffect(load, []);
 
   async function remove(id: string) {
+    setActionError(null);
     setItems((prev) => (prev ? prev.filter((q) => q.id !== id) : prev));
     try {
       await removeBookmark(id);
     } catch {
+      setActionError("Couldn't remove that question — please try again.");
       load();
     }
   }
 
   async function markRevised(key: string) {
+    setActionError(null);
     setTopics((prev) => (prev ? prev.filter((t) => t.key !== key) : prev));
     try {
       await markTopicRevised(key);
     } catch {
+      setActionError("Couldn't mark that topic revised — please try again.");
       load();
     }
   }
 
-  if (error) return <p className="text-red-600">{error}</p>;
+  if (error) {
+    return (
+      <div className="flex flex-col gap-6">
+        <PageHeader
+          title="Revision"
+          description="Master your weak topics and revisit the questions you saved — clear each one as you go."
+        />
+        <ErrorCard message={error} onRetry={load} />
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-col gap-6">
@@ -139,23 +150,23 @@ export default function RevisionPage() {
         />
       </div>
 
+      {actionError && (
+        <p className="rounded-lg border border-destructive/20 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+          {actionError}
+        </p>
+      )}
+
       {/* --- Questions tab --- */}
       {tab === "questions" &&
         (items === null ? (
-          <p className="text-sm text-muted-foreground">Loading…</p>
+          <SkeletonList rows={4} />
         ) : items.length === 0 ? (
-          <Card className="animate-rise">
-            <CardContent className="p-10 text-center">
-              <p className="text-sm font-medium text-foreground">
-                No saved questions yet
-              </p>
-              <p className="mx-auto mt-1 max-w-sm text-sm text-muted-foreground">
-                While reviewing a quiz result, tap{" "}
-                <span className="font-medium text-primary">☆ Revise</span> on any
-                tricky question and it lands here for later.
-              </p>
-            </CardContent>
-          </Card>
+          <EmptyState
+            icon={<Inbox size={22} />}
+            title="No saved questions yet"
+            message="While reviewing a quiz result, tap ☆ Revise on any tricky question and it lands here for later."
+            className="animate-rise"
+          />
         ) : (
           <div className="flex flex-col gap-3">
             {items.map((q, i) => (
@@ -189,7 +200,7 @@ export default function RevisionPage() {
                     </ul>
                   )}
                   <p className="font-medium text-emerald-700">
-                    Answer: {formatAnswer(q)}
+                    Answer: {formatAnswerValue(q.correct_answer)}
                   </p>
                   {q.explanation && (
                     <p className="text-muted-foreground">Why: {q.explanation}</p>
@@ -203,19 +214,14 @@ export default function RevisionPage() {
       {/* --- Topics tab --- */}
       {tab === "topics" &&
         (topics === null ? (
-          <p className="text-sm text-muted-foreground">Loading…</p>
+          <SkeletonList rows={4} />
         ) : topics.length === 0 ? (
-          <Card className="animate-rise">
-            <CardContent className="p-10 text-center">
-              <p className="text-sm font-medium text-foreground">
-                No weak topics to revise
-              </p>
-              <p className="mx-auto mt-1 max-w-sm text-sm text-muted-foreground">
-                Nice work — you&apos;re scoring well across your topics. Take more
-                quizzes and any weak spots will show up here to revise.
-              </p>
-            </CardContent>
-          </Card>
+          <EmptyState
+            icon={<Trophy size={22} />}
+            title="No weak topics to revise"
+            message="Nice work — you're scoring well across your topics. Take more quizzes and any weak spots will show up here to revise."
+            className="animate-rise"
+          />
         ) : (
           <Card className="animate-rise">
             <CardHeader>

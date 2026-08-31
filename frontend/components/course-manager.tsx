@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 
+import { AlertTriangle, BookOpen, Inbox, Trash, X } from "@/components/ui/icons";
 import {
   Course,
   createCourse,
@@ -54,19 +55,31 @@ function Spinner() {
 }
 
 function EmptyState({
-  emoji,
+  icon,
   title,
   action,
 }: {
-  emoji: string;
+  icon: ReactNode;
   title: string;
   action?: ReactNode;
 }) {
   return (
     <div className="flex flex-col items-center gap-3 rounded-2xl border border-border bg-card p-12 text-center">
-      <div className="text-4xl">{emoji}</div>
+      <span className="flex h-12 w-12 items-center justify-center rounded-full bg-muted text-muted-foreground">
+        {icon}
+      </span>
       <p className="max-w-xs text-sm text-muted-foreground">{title}</p>
       {action}
+    </div>
+  );
+}
+
+/** Styled inline error row — tinted bg + warning icon. */
+function ErrorRow({ message }: { message: string }) {
+  return (
+    <div className="flex items-start gap-2 rounded-lg border border-destructive/20 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+      <AlertTriangle size={16} className="mt-0.5 shrink-0" />
+      <span>{message}</span>
     </div>
   );
 }
@@ -94,10 +107,10 @@ function Modal({
           <h3 className="text-lg font-extrabold text-foreground">{title}</h3>
           <button
             onClick={onClose}
-            className="text-xl leading-none text-muted-foreground transition hover:text-foreground"
+            className="leading-none text-muted-foreground transition hover:text-foreground"
             aria-label="Close"
           >
-            ✕
+            <X size={20} />
           </button>
         </div>
         {children}
@@ -214,11 +227,11 @@ function DeleteModal({
   return (
     <Modal title="" onClose={onCancel} maxW="max-w-sm">
       <div className="flex flex-col items-center gap-3 text-center">
-        <div className="flex h-14 w-14 items-center justify-center rounded-full bg-destructive/10 text-2xl">
-          🗑️
+        <div className="flex h-14 w-14 items-center justify-center rounded-full bg-destructive/10 text-destructive">
+          <Trash size={24} />
         </div>
         <h3 className="text-base font-extrabold text-foreground">
-          Delete {target.kind} “{target.name}”?
+          Delete {target.kind} &ldquo;{target.name}&rdquo;?
         </h3>
         <p className="text-sm text-muted-foreground">
           {target.kind === "course" ? "This removes the course and its subjects. " : ""}
@@ -231,8 +244,9 @@ function DeleteModal({
           <button
             onClick={onConfirm}
             disabled={busy}
-            className="inline-flex items-center gap-1.5 rounded-lg bg-gradient-to-b from-[#dc2626] to-[#b91c1c] px-4 py-2 text-sm font-bold text-white transition hover:opacity-90 disabled:opacity-50"
+            className="inline-flex items-center gap-1.5 rounded-lg bg-destructive px-4 py-2 text-sm font-bold text-destructive-foreground transition hover:opacity-90 disabled:opacity-50"
           >
+            <Trash size={15} />
             {busy ? "Deleting…" : "Delete"}
           </button>
         </div>
@@ -351,11 +365,11 @@ export function CourseManager() {
           </button>
         </div>
 
-        {error && <p className="text-sm text-destructive">{error}</p>}
+        {error && <ErrorRow message={error} />}
 
         {subs.length === 0 ? (
           <EmptyState
-            emoji="📝"
+            icon={<BookOpen size={22} />}
             title="No subjects yet — add the first subject for this course."
             action={
               <button
@@ -439,13 +453,13 @@ export function CourseManager() {
         </button>
       </div>
 
-      {error && <p className="text-sm text-destructive">{error}</p>}
+      {error && <ErrorRow message={error} />}
 
       {courses === null ? (
         <Spinner />
       ) : courses.length === 0 ? (
         <EmptyState
-          emoji="📋"
+          icon={<Inbox size={22} />}
           title="No courses yet — add the courses your institution offers (e.g. CA Foundation)."
           action={
             <button

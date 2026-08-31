@@ -5,14 +5,18 @@ import Link from "next/link";
 
 import { AiTutor } from "@/components/ai-tutor";
 import { StudentDownloads } from "@/components/pdf-buttons";
+import { downloadCardImage } from "@/lib/share-card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { ErrorCard } from "@/components/ui/error-card";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Check, X } from "@/components/ui/icons";
+import { formatAnswerValue } from "@/lib/format";
 import {
   AttemptInProgress,
   AttemptResult,
   AttemptState,
-  ResultQuestion,
   TakingQuestion,
   addBookmark,
   getAttempt,
@@ -46,11 +50,17 @@ export function QuizAttempt({
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
-  useEffect(() => {
-    const load = source === "practice" ? getPracticeSession : getAttempt;
-    load(attemptId)
+  function load() {
+    setError(null);
+    const fetcher = source === "practice" ? getPracticeSession : getAttempt;
+    fetcher(attemptId)
       .then(setState)
       .catch((e) => setError(e.message));
+  }
+
+  useEffect(() => {
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [attemptId, source]);
 
   // Countdown for timed modes (exam). submitRef always points at the latest
@@ -78,8 +88,8 @@ export function QuizAttempt({
     return () => clearInterval(id);
   }, [state]);
 
-  if (error) return <p className="text-red-600">{error}</p>;
-  if (!state) return <p className="text-muted-foreground">Loading…</p>;
+  if (error && !state) return <ErrorCard message={error} onRetry={load} />;
+  if (!state) return <QuestionPanelSkeleton />;
   if (state.status === "graded") {
     return <Results result={state as AttemptResult} />;
   }
@@ -268,6 +278,39 @@ export function QuizAttempt({
   );
 }
 
+/** First-paint placeholder mirroring the question panel + palette layout. */
+function QuestionPanelSkeleton() {
+  return (
+    <div className="flex flex-col gap-5 lg:flex-row lg:items-start">
+      <div className="flex min-w-0 flex-1 flex-col gap-4">
+        <div className="flex items-center justify-between">
+          <Skeleton className="h-5 w-32" />
+          <Skeleton className="h-5 w-24" />
+        </div>
+        <div className="rounded-lg border bg-card p-5 shadow-sm">
+          <div className="mb-3 flex items-center justify-between">
+            <Skeleton className="h-5 w-10" />
+            <Skeleton className="h-5 w-20 rounded-full" />
+          </div>
+          <Skeleton className="mb-4 h-5 w-3/4" />
+          <div className="flex flex-col gap-2">
+            {Array.from({ length: 4 }).map((_, i) => (
+              <Skeleton key={i} className="h-11 w-full rounded-md" />
+            ))}
+          </div>
+          <div className="mt-6 flex items-center gap-2 border-t pt-4">
+            <Skeleton className="h-8 w-24" />
+            <Skeleton className="ml-auto h-8 w-24" />
+          </div>
+        </div>
+      </div>
+      <aside className="w-full shrink-0 lg:w-64">
+        <Skeleton className="h-64 w-full rounded-lg" />
+      </aside>
+    </div>
+  );
+}
+
 function Legend({ cls, label }: { cls: string; label: string }) {
   return (
     <div className="flex items-center gap-2">
@@ -431,6 +474,8 @@ function Results({ result }: { result: AttemptResult }) {
           pct={pct}
           correct={correct}
           total={result.results.length}
+          score={result.total_score}
+          maxScore={result.max_score}
           onClose={() => setShowCard(false)}
         />
       )}
@@ -447,28 +492,47 @@ function Results({ result }: { result: AttemptResult }) {
             <div className="flex items-center gap-2">
               <BookmarkButton questionId={q.id} />
               <span
-                className={`rounded-full px-2 py-0.5 text-xs font-medium ${
+                className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium ${
                   q.is_correct
                     ? "bg-emerald-100 text-emerald-700"
                     : "bg-rose-100 text-rose-700"
                 }`}
               >
-                {q.is_correct ? "✓ Correct" : "✗ Incorrect"}
+                {q.is_correct ? <Check size={13} /> : <X size={13} />}
+                {q.is_correct ? "Correct" : "Incorrect"}
               </span>
             </div>
           </div>
-          <p className="mb-1">{q.question_text}</p>
-          <p className="text-muted-foreground">
-            Your answer: {formatVal(q.student_answer)}
-          </p>
-          {!q.is_correct && (
-            <p className="font-medium text-emerald-700">
-              Correct: {formatAnswer(q)}
-            </p>
-          )}
-          {q.explanation && (
-            <p className="mt-1 text-muted-foreground">Why: {q.explanation}</p>
-          )}
+          <p className="mb-3">{q.question_text}</p>
+
+          <div className="flex flex-col divide-y divide-border rounded-md border bg-muted/30">
+            <div className="flex flex-wrap gap-x-2 px-3 py-2">
+              <span className="shrink-0 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                Your answer
+              </span>
+              <span className="text-foreground">
+                {formatAnswerValue(q.student_answer)}
+              </span>
+            </div>
+            {!q.is_correct && (
+              <div className="flex flex-wrap gap-x-2 px-3 py-2">
+                <span className="shrink-0 text-xs font-semibold uppercase tracking-wide text-emerald-600">
+                  Correct answer
+                </span>
+                <span className="font-medium text-emerald-700">
+                  {formatAnswerValue(q.correct_answer)}
+                </span>
+              </div>
+            )}
+            {q.explanation && (
+              <div className="flex flex-wrap gap-x-2 px-3 py-2">
+                <span className="shrink-0 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                  Why
+                </span>
+                <span className="text-muted-foreground">{q.explanation}</span>
+              </div>
+            )}
+          </div>
           <AiTutor questionId={q.id} />
         </div>
       ))}
@@ -507,22 +571,90 @@ function BookmarkButton({ questionId }: { questionId: string }) {
   );
 }
 
-/** Branded, shareable score card with a WhatsApp share link. */
+/** Score → a verdict word + accent colour (tuned to how well they did). */
+function verdict(pct: number): { word: string; tone: string } {
+  if (pct >= 90) return { word: "Outstanding!", tone: "#34d399" };
+  if (pct >= 75) return { word: "Excellent!", tone: "#34d399" };
+  if (pct >= 60) return { word: "Great job!", tone: "#7ae582" };
+  if (pct >= 40) return { word: "Good effort", tone: "#e6a817" };
+  return { word: "Keep practising", tone: "#60a5fa" };
+}
+
+/** Animated SVG progress ring with the percentage in the centre. */
+function ScoreRing({ pct, tone }: { pct: number; tone: string }) {
+  const r = 60;
+  const circ = 2 * Math.PI * r;
+  return (
+    <div className="relative mx-auto h-[140px] w-[140px]">
+      <svg width="140" height="140" viewBox="0 0 140 140">
+        <circle
+          cx="70"
+          cy="70"
+          r={r}
+          fill="none"
+          stroke="rgba(255,255,255,0.12)"
+          strokeWidth="12"
+        />
+        <circle
+          cx="70"
+          cy="70"
+          r={r}
+          fill="none"
+          stroke={tone}
+          strokeWidth="12"
+          strokeLinecap="round"
+          strokeDasharray={circ}
+          strokeDashoffset={circ * (1 - Math.min(100, Math.max(0, pct)) / 100)}
+          transform="rotate(-90 70 70)"
+        />
+      </svg>
+      <div className="absolute inset-0 flex flex-col items-center justify-center">
+        <span className="text-[40px] font-extrabold leading-none" style={{ color: tone }}>
+          {pct}%
+        </span>
+        <span className="mt-1 text-[10px] uppercase tracking-widest text-white/40">
+          score
+        </span>
+      </div>
+    </div>
+  );
+}
+
+function StatTile({ label, value, color }: { label: string; value: string; color?: string }) {
+  return (
+    <div className="rounded-xl bg-white/[0.06] px-3 py-2 text-center">
+      <div className="text-lg font-bold" style={{ color: color ?? "#ffffff" }}>
+        {value}
+      </div>
+      <div className="text-[9px] font-semibold uppercase tracking-widest text-white/40">
+        {label}
+      </div>
+    </div>
+  );
+}
+
+/** Branded, detailed, downloadable score card + WhatsApp share. */
 function ScoreCard({
   title,
   pct,
   correct,
   total,
+  score,
+  maxScore,
   onClose,
 }: {
   title: string;
   pct: number;
   correct: number;
   total: number;
+  score: number;
+  maxScore: number;
   onClose: () => void;
 }) {
-  const tone = pct >= 70 ? "#34d399" : pct >= 40 ? "#e6a817" : "#60a5fa";
-  const shareText = `I scored ${pct}% (${correct}/${total}) on "${title}" with ArivuPro! Practice for your exam here:`;
+  const cardRef = useRef<HTMLDivElement>(null);
+  const v = verdict(pct);
+  const wrong = Math.max(0, total - correct);
+  const shareText = `I scored ${pct}% on "${title}" with ArivuPro — can you beat me?`;
   const waHref = `https://wa.me/?text=${encodeURIComponent(shareText + " " + (typeof window !== "undefined" ? window.location.origin : ""))}`;
 
   return (
@@ -531,66 +663,66 @@ function ScoreCard({
       onClick={onClose}
     >
       <div
-        className="animate-rise w-[360px] max-w-full rounded-2xl bg-gradient-to-br from-[#0f1f17] to-[#1a3a25] p-8 text-center text-white shadow-2xl"
+        className="flex max-h-full animate-rise flex-col items-center gap-3 overflow-y-auto"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="text-[11px] uppercase tracking-widest text-white/50">
-          {title}
-        </div>
+        {/* The card that gets captured as the shareable image */}
         <div
-          className="mx-auto mt-4 flex h-28 w-28 flex-col items-center justify-center rounded-full text-4xl font-extrabold"
-          style={{ border: `4px solid ${tone}`, color: tone }}
+          ref={cardRef}
+          className="w-[340px] max-w-full overflow-hidden rounded-3xl p-7 text-center text-white shadow-2xl"
+          style={{ background: "linear-gradient(150deg,#0f1f17,#17402a 55%,#0f1f17)" }}
         >
-          {pct}%
-        </div>
-        <div className="mt-5 flex justify-center gap-8">
-          <div>
-            <div className="text-lg font-bold">{correct}</div>
-            <div className="text-[10px] uppercase tracking-wide text-white/40">
-              Correct
-            </div>
+          <div className="text-sm font-black tracking-tight">
+            Arivu<span style={{ color: "#7ae582" }}>PRO</span>
           </div>
-          <div>
-            <div className="text-lg font-bold">{total}</div>
-            <div className="text-[10px] uppercase tracking-wide text-white/40">
-              Questions
-            </div>
+          <div className="mt-1 truncate text-[11px] uppercase tracking-widest text-white/40">
+            {title}
+          </div>
+
+          <div className="mt-4">
+            <ScoreRing pct={pct} tone={v.tone} />
+          </div>
+
+          <div className="mt-3 text-xl font-extrabold" style={{ color: v.tone }}>
+            {v.word}
+          </div>
+
+          <div className="mt-5 grid grid-cols-2 gap-2">
+            <StatTile label="Correct" value={String(correct)} color="#7ae582" />
+            <StatTile label="Wrong" value={String(wrong)} color="#ff8a94" />
+            <StatTile label="Score" value={`${score}/${maxScore}`} />
+            <StatTile label="Accuracy" value={`${pct}%`} />
+          </div>
+
+          <div className="mt-5 text-[10px] tracking-wide text-white/30">
+            arivupro.com · practise smarter
           </div>
         </div>
-        <a
-          href={waHref}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="mt-6 inline-flex w-full items-center justify-center gap-2 rounded-lg bg-[#25D366] px-4 py-2.5 text-sm font-semibold text-white transition-transform hover:-translate-y-0.5"
-        >
-          Share on WhatsApp
-        </a>
-        <button
-          onClick={onClose}
-          className="mt-3 text-xs text-white/50 hover:text-white/80"
-        >
+
+        {/* Actions — outside the captured card */}
+        <div className="flex w-[340px] max-w-full gap-2">
+          <button
+            onClick={() =>
+              cardRef.current &&
+              downloadCardImage(cardRef.current, `arivupro-score-${pct}.png`)
+            }
+            className="flex-1 rounded-lg bg-white/10 px-3 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-white/20"
+          >
+            Download
+          </button>
+          <a
+            href={waHref}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex-1 rounded-lg bg-[#25D366] px-3 py-2.5 text-center text-sm font-semibold text-white transition-transform hover:-translate-y-0.5"
+          >
+            WhatsApp
+          </a>
+        </div>
+        <button onClick={onClose} className="text-xs text-white/50 hover:text-white/80">
           Close
         </button>
       </div>
     </div>
   );
-}
-
-function formatVal(v: unknown): string {
-  if (v === null || v === undefined || v === "") return "(no answer)";
-  if (Array.isArray(v)) return v.join(", ");
-  if (typeof v === "object") return JSON.stringify(v);
-  return String(v);
-}
-
-function formatAnswer(q: ResultQuestion): string {
-  const a = q.correct_answer;
-  if (Array.isArray(a)) return a.join(", ");
-  if (a && typeof a === "object") {
-    const o = a as Record<string, unknown>;
-    if ("value" in o) return `${o.value}${o.tolerance ? ` (±${o.tolerance})` : ""}`;
-    if ("answers" in o) return (o.answers as string[]).join(" / ");
-    return JSON.stringify(o);
-  }
-  return String(a);
 }

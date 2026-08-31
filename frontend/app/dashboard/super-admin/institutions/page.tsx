@@ -12,6 +12,10 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { PageHeader } from "@/components/ui/page-header";
+import { ErrorCard } from "@/components/ui/error-card";
+import { EmptyState } from "@/components/ui/empty-state";
+import { SkeletonList } from "@/components/ui/skeleton";
+import { AlertTriangle, Eye, EyeOff } from "@/components/ui/icons";
 import {
   InstitutionRow,
   getPlatformOverview,
@@ -28,6 +32,7 @@ function OnboardForm({ onDone }: { onDone: () => void }) {
   const [adminName, setAdminName] = useState("");
   const [adminEmail, setAdminEmail] = useState("");
   const [adminPassword, setAdminPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [ok, setOk] = useState<string | null>(null);
@@ -131,19 +136,38 @@ function OnboardForm({ onDone }: { onDone: () => void }) {
               </label>
               <label className="flex flex-col gap-1.5 text-sm font-medium">
                 Temporary password
-                <input
-                  className={field}
-                  type="text"
-                  value={adminPassword}
-                  onChange={(e) => setAdminPassword(e.target.value)}
-                  placeholder="Share securely"
-                />
+                <div className="relative">
+                  <input
+                    className={`${field} pr-10`}
+                    type={showPassword ? "text" : "password"}
+                    value={adminPassword}
+                    onChange={(e) => setAdminPassword(e.target.value)}
+                    placeholder="Share securely"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword((v) => !v)}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 rounded-md p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                    aria-label={showPassword ? "Hide password" : "Show password"}
+                  >
+                    {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                  </button>
+                </div>
               </label>
             </div>
           </div>
 
-          {error && <p className="text-sm text-red-600">{error}</p>}
-          {ok && <p className="text-sm text-emerald-700">{ok}</p>}
+          {error && (
+            <div className="flex items-start gap-2 rounded-lg border border-destructive/20 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+              <AlertTriangle size={16} className="mt-0.5 shrink-0" />
+              <span>{error}</span>
+            </div>
+          )}
+          {ok && (
+            <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700">
+              {ok}
+            </div>
+          )}
 
           <div>
             <Button type="submit" disabled={busy}>
@@ -157,10 +181,11 @@ function OnboardForm({ onDone }: { onDone: () => void }) {
 }
 
 export default function InstitutionsPage() {
-  const [rows, setRows] = useState<InstitutionRow[]>([]);
+  const [rows, setRows] = useState<InstitutionRow[] | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   function load() {
+    setError(null);
     getPlatformOverview()
       .then((d) => setRows(d.institutions_table))
       .catch((e) => setError(e.message));
@@ -179,12 +204,20 @@ export default function InstitutionsPage() {
       <Card className="animate-rise">
         <CardHeader>
           <CardTitle>All institutions</CardTitle>
-          <CardDescription>{rows.length} on the platform.</CardDescription>
+          <CardDescription>
+            {rows === null ? "Loading…" : `${rows.length} on the platform.`}
+          </CardDescription>
         </CardHeader>
         <CardContent>
-          {error && <p className="text-sm text-red-600">{error}</p>}
-          {rows.length === 0 ? (
-            <p className="text-sm text-muted-foreground">No institutions yet.</p>
+          {error ? (
+            <ErrorCard message={error} onRetry={load} />
+          ) : rows === null ? (
+            <SkeletonList />
+          ) : rows.length === 0 ? (
+            <EmptyState
+              title="No institutions yet"
+              message="Use the form above to onboard your first institution."
+            />
           ) : (
             <div className="overflow-x-auto">
               <table className="w-full text-sm">

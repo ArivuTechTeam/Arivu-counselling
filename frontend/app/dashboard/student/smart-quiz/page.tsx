@@ -11,6 +11,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { PageHeader } from "@/components/ui/page-header";
+import { ErrorCard } from "@/components/ui/error-card";
 import { StudentQuiz, listStudentQuizzes, startPracticeSession } from "@/lib/api";
 
 const COUNTS = [10, 15, 20, 30];
@@ -47,6 +48,8 @@ export default function SmartQuizPage() {
     }
     return Array.from(map, ([id, name]) => ({ id, name }));
   }, [quizzes]);
+
+  const loadingSubjects = quizzes === null;
 
   async function start() {
     setStarting(true);
@@ -88,8 +91,11 @@ export default function SmartQuizPage() {
                 className={fieldClass}
                 value={subjectId}
                 onChange={(e) => setSubjectId(e.target.value)}
+                disabled={loadingSubjects}
               >
-                <option value="">All my subjects</option>
+                <option value="">
+                  {loadingSubjects ? "Loading subjects…" : "All my subjects"}
+                </option>
                 {subjects.map((s) => (
                   <option key={s.id} value={s.id}>
                     {s.name}
@@ -127,13 +133,13 @@ export default function SmartQuizPage() {
             </label>
           </div>
 
-          {error && <p className="text-sm text-red-600">{error}</p>}
+          {error && <ErrorCard message={error} className="text-left" />}
 
           <div>
             <button
               onClick={start}
               disabled={starting}
-              className="rounded-lg bg-gradient-to-b from-[#219256] to-[#15603d] px-6 py-2.5 text-sm font-semibold text-white shadow-sm transition-transform hover:-translate-y-0.5 disabled:opacity-60"
+              className="rounded-lg bg-primary px-6 py-2.5 text-sm font-semibold text-primary-foreground shadow-sm transition-colors hover:bg-primary/90 disabled:opacity-60"
             >
               {starting ? "Starting…" : "Start Smart Quiz →"}
             </button>
