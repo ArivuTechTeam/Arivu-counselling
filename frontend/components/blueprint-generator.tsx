@@ -11,6 +11,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { AlertTriangle, Check, Sparkles, Zap } from "@/components/ui/icons";
 import {
   Chapter,
   Course,
@@ -50,6 +51,16 @@ function Spinner() {
   );
 }
 
+// Inline, tinted error row — replaces bare `text-red-600` paragraphs.
+function InlineError({ message }: { message: string }) {
+  return (
+    <div className="flex items-start gap-2 rounded-lg border border-destructive/20 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+      <AlertTriangle size={16} className="mt-0.5 shrink-0" />
+      <span>{message}</span>
+    </div>
+  );
+}
+
 function StepBar({ step }: { step: number }) {
   const steps = ["Generate", "Topics", "Review"];
   return (
@@ -69,7 +80,7 @@ function StepBar({ step }: { step: number }) {
                     : "bg-muted text-muted-foreground"
               }`}
             >
-              {done ? "✓" : n}
+              {done ? <Check size={14} /> : n}
             </div>
             <span
               className={`text-sm transition-colors ${
@@ -287,18 +298,27 @@ export function BlueprintGenerator() {
               <span className="flex h-14 w-14 items-center justify-center rounded-full bg-primary/10 text-2xl font-light text-primary">
                 {uploading ? <Spinner /> : "+"}
               </span>
-              <span className="text-sm font-medium text-foreground">
-                {uploading
-                  ? "Uploading & extracting text…"
-                  : uploadedName
-                    ? `✓ ${uploadedName}`
-                    : "Upload a document"}
+              <span className="flex items-center gap-1.5 text-sm font-medium text-foreground">
+                {uploading ? (
+                  "Uploading & extracting text…"
+                ) : uploadedName ? (
+                  <>
+                    <Check size={15} className="text-emerald-600" />
+                    {uploadedName}
+                  </>
+                ) : (
+                  "Upload a document"
+                )}
               </span>
               <span className="text-xs text-muted-foreground">
                 PDF or DOCX · click to browse from your computer
               </span>
             </label>
-            {uploadError && <p className="mt-2 text-sm text-red-600">{uploadError}</p>}
+            {uploadError && (
+              <div className="mt-2">
+                <InlineError message={uploadError} />
+              </div>
+            )}
             {documents.length > 0 && (
               <div className="mt-3 flex flex-col gap-1.5">
                 <span className="text-xs text-muted-foreground">
@@ -391,11 +411,13 @@ export function BlueprintGenerator() {
                   <Spinner /> Extracting topics… (5–15s)
                 </span>
               ) : (
-                "✨ Extract topics"
+                <span className="flex items-center gap-2">
+                  <Sparkles size={16} /> Extract topics
+                </span>
               )}
             </Button>
           </div>
-          {error && <p className="text-sm text-red-600">{error}</p>}
+          {error && <InlineError message={error} />}
         </CardContent>
       </Card>
 
@@ -436,7 +458,7 @@ export function BlueprintGenerator() {
                           : "border-input"
                       }`}
                     >
-                      {selected ? "✓" : ""}
+                      {selected && <Check size={11} />}
                     </span>
                     {name}
                   </button>
@@ -572,11 +594,13 @@ export function BlueprintGenerator() {
                     <Spinner /> Generating… (20–40s)
                   </span>
                 ) : (
-                  "⚡ Generate quiz →"
+                  <span className="flex items-center gap-2">
+                    <Zap size={16} /> Generate quiz →
+                  </span>
                 )}
               </Button>
             </div>
-            {genError && <p className="text-sm text-red-600">{genError}</p>}
+            {genError && <InlineError message={genError} />}
           </CardContent>
         </Card>
       )}

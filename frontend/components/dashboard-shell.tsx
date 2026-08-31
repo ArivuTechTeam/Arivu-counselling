@@ -89,9 +89,21 @@ export function DashboardShell({
     <div className="flex h-screen overflow-hidden bg-background">
       {/* Sidebar — the ArivuPro green gradient rail (fixed; never scrolls) */}
       <aside className="hidden w-64 shrink-0 flex-col overflow-y-auto bg-gradient-to-b from-[#2E8857] to-[#245a41] p-4 text-white md:flex">
-        <div className="mb-6 inline-flex w-fit rounded-xl bg-white px-3 py-2">
+        <div className="mb-6 flex w-full items-center justify-between gap-2 rounded-xl bg-white px-3 py-2.5 shadow-sm">
           {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src="/arivu-logo.png" alt="ArivuPro Academy" className="h-6 w-auto" />
+          <img
+            src="/arivu-logo.png"
+            alt="ArivuPro Academy"
+            className="h-[26px] w-auto shrink-0"
+          />
+          <span className="flex shrink-0 flex-col items-end leading-none">
+            <span className="text-[13px] font-extrabold tracking-tight text-[#2E8857]">
+              Quiz
+            </span>
+            <span className="mt-0.5 text-[8px] font-bold uppercase tracking-[0.16em] text-[#245a41]/70">
+              Platform
+            </span>
+          </span>
         </div>
         <div className="mb-2 px-2 text-[10px] font-semibold uppercase tracking-widest text-white/60">
           Workspace
@@ -175,7 +187,7 @@ export function DashboardShell({
                   </button>
                   <button
                     onClick={signOut}
-                    className="w-full px-4 py-2.5 text-left text-sm font-medium text-red-600 hover:bg-accent"
+                    className="w-full px-4 py-2.5 text-left text-sm font-medium text-destructive hover:bg-accent"
                   >
                     Sign out
                   </button>

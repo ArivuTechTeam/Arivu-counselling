@@ -10,6 +10,11 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { EmptyState } from "@/components/ui/empty-state";
+import { ErrorCard } from "@/components/ui/error-card";
+import { Inbox } from "@/components/ui/icons";
+import { SkeletonList } from "@/components/ui/skeleton";
+import { statusLabel } from "@/lib/format";
 import { QuizSetSummary, listQuizSets } from "@/lib/api";
 
 const SET_TONE: Record<string, string> = {
@@ -19,13 +24,18 @@ const SET_TONE: Record<string, string> = {
 };
 
 export function QuizSetList() {
-  const [sets, setSets] = useState<QuizSetSummary[]>([]);
+  const [sets, setSets] = useState<QuizSetSummary[] | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
+  function load() {
+    setError(null);
     listQuizSets()
       .then(setSets)
       .catch((e) => setError(e.message));
+  }
+
+  useEffect(() => {
+    load();
   }, []);
 
   return (
@@ -35,9 +45,24 @@ export function QuizSetList() {
         <CardDescription>Review and publish generated quiz sets.</CardDescription>
       </CardHeader>
       <CardContent>
-        {error && <p className="text-sm text-red-600">{error}</p>}
-        {sets.length === 0 ? (
-          <p className="text-sm text-muted-foreground">No quiz sets yet.</p>
+        {error ? (
+          <ErrorCard message={error} onRetry={load} />
+        ) : sets === null ? (
+          <SkeletonList />
+        ) : sets.length === 0 ? (
+          <EmptyState
+            icon={<Inbox />}
+            title="No quiz sets yet"
+            message="Generate your first quiz to get started."
+            action={
+              <Link
+                href="/dashboard/teacher/generate"
+                className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground shadow-sm transition-colors hover:bg-primary/90"
+              >
+                Create a quiz
+              </Link>
+            }
+          />
         ) : (
           <div className="flex flex-col gap-3">
             {sets.map((s) => (
@@ -58,7 +83,7 @@ export function QuizSetList() {
                       SET_TONE[s.status] ?? "bg-muted text-muted-foreground"
                     }`}
                   >
-                    {s.status}
+                    {statusLabel(s.status)}
                   </span>
                   <span className="text-muted-foreground">→</span>
                 </span>

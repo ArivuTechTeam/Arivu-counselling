@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 
 import { SplitText } from "@/components/split-text";
+import { Brand } from "@/components/ui/brand";
 import { initAuthFx } from "@/lib/auth-fx";
 import { createClient } from "@/lib/supabase";
 import "./login.css";
@@ -222,8 +223,7 @@ export default function LoginPage() {
           <div className="card">
             <div className="card-head">
               <div className="card-logo">
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src="/arivu-logo.png" alt="ArivuPro Academy" style={{ height: 26, display: "block" }} />
+                <Brand height={36} />
               </div>
               <div className="card-title">Welcome Back</div>
               <div className="card-sub">Sign in to continue</div>
@@ -249,6 +249,8 @@ export default function LoginPage() {
                     placeholder="you@email.com"
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
+                    autoComplete="email"
+                    required
                   />
                 </div>
               </div>
@@ -265,6 +267,8 @@ export default function LoginPage() {
                     placeholder="Enter your password"
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
+                    autoComplete="current-password"
+                    required
                   />
                   <button
                     type="button"
@@ -277,9 +281,9 @@ export default function LoginPage() {
               </div>
 
               <div className="forgot-row">
-                <a href="#" className="forgot-link" onClick={(e) => e.preventDefault()}>
-                  Forgot password?
-                </a>
+                <span className="forgot-link" style={{ cursor: "default", opacity: 0.7 }}>
+                  Forgot password? Contact your admin to reset.
+                </span>
               </div>
 
               <button className="btn-signin" type="submit" disabled={loading}>
@@ -295,7 +299,7 @@ export default function LoginPage() {
               <Link className="btn-register" href="/signup">
                 <div className="reg-icon">✎</div>
                 <div className="reg-text">
-                  <div className="reg-title">Create a student account</div>
+                  <div className="reg-title"> New User? Create an account</div>
                   <div className="reg-sub">Free registration · Takes 2 minutes</div>
                 </div>
                 <div className="reg-arrow">→</div>
@@ -303,8 +307,8 @@ export default function LoginPage() {
             </form>
 
             <div className="card-foot">
-              By signing in you agree to our <a href="#">Terms of Service</a>{" "}
-              &amp; <a href="#">Privacy Policy</a>
+              By signing in you agree to our Terms of Service &amp; Privacy
+              Policy
             </div>
           </div>
         </div>

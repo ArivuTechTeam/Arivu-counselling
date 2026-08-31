@@ -3,6 +3,7 @@
 import { useState } from "react";
 
 import { Button } from "@/components/ui/button";
+import { AlertTriangle } from "@/components/ui/icons";
 import { createClient } from "@/lib/supabase";
 
 /**
@@ -106,7 +107,12 @@ export function ChangePasswordModal({
             />
           </label>
 
-          {error && <p className="text-sm text-red-600">{error}</p>}
+          {error && (
+            <div className="flex items-center gap-2 rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">
+              <AlertTriangle size={14} />
+              <span>{error}</span>
+            </div>
+          )}
 
           <div className="mt-2 flex justify-end gap-2">
             <Button type="button" variant="outline" onClick={onClose} disabled={busy}>

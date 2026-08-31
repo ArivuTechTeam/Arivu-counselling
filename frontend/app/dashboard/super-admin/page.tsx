@@ -27,6 +27,9 @@ import {
   UsersIcon,
   useCountUp,
 } from "@/components/dashboard-kit";
+import { ErrorCard } from "@/components/ui/error-card";
+import { Skeleton, SkeletonStats } from "@/components/ui/skeleton";
+import { EmptyState } from "@/components/ui/empty-state";
 import { PlatformOverview, getPlatformOverview } from "@/lib/api";
 
 const BRAND = "#15603d";
@@ -56,11 +59,14 @@ export default function PlatformOverviewPage() {
   const [s, setS] = useState<PlatformOverview | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
+  function load() {
+    setError(null);
     getPlatformOverview()
       .then(setS)
       .catch((e) => setError(e.message));
-  }, []);
+  }
+
+  useEffect(load, []);
 
   const ready = s !== null;
   const inst = useCountUp(s?.institutions ?? 0, ready);
@@ -69,7 +75,16 @@ export default function PlatformOverviewPage() {
   const quizSets = useCountUp(s?.quiz_sets ?? 0, ready);
   const approval = useCountUp(s?.approval_rate ?? 0, ready);
 
-  if (error) return <p className="text-red-600">{error}</p>;
+  if (error) return <ErrorCard message={error} onRetry={load} />;
+
+  if (!ready) {
+    return (
+      <div className="flex flex-col gap-6">
+        <Skeleton className="h-40 w-full rounded-2xl" />
+        <SkeletonStats />
+      </div>
+    );
+  }
 
   const rows = s?.institutions_table ?? [];
   const pipe = s?.pipeline ?? {
@@ -209,7 +224,18 @@ export default function PlatformOverviewPage() {
         </CardHeader>
         <CardContent>
           {rows.length === 0 ? (
-            <p className="text-sm text-muted-foreground">No institutions yet.</p>
+            <EmptyState
+              title="No institutions yet"
+              message="Onboard your first institution to get started."
+              action={
+                <Link
+                  href="/dashboard/super-admin/institutions"
+                  className="inline-flex items-center gap-1 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground shadow-sm transition-colors hover:bg-primary/90"
+                >
+                  Onboard an institution
+                </Link>
+              }
+            />
           ) : (
             <div className="overflow-x-auto">
               <table className="w-full text-sm">

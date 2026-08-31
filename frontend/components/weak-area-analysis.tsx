@@ -10,6 +10,10 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { ErrorCard } from "@/components/ui/error-card";
+import { SkeletonList } from "@/components/ui/skeleton";
+import { EmptyState } from "@/components/ui/empty-state";
+import { BookOpen, Check } from "@/components/ui/icons";
 import {
   WeakAnalysis,
   WeakChapterNode,
@@ -84,10 +88,12 @@ const ckey = (s: string, c: string) => `${s}::${c}`;
 
 export function WeakAreaAnalysis() {
   const [data, setData] = useState<WeakAnalysis | null>(null);
+  const [error, setError] = useState<string | null>(null);
   const [openS, setOpenS] = useState<Set<string>>(new Set());
   const [openC, setOpenC] = useState<Set<string>>(new Set());
 
-  useEffect(() => {
+  function load() {
+    setError(null);
     getWeakAnalysis()
       .then((d) => {
         setData(d);
@@ -100,7 +106,13 @@ export function WeakAreaAnalysis() {
           if (c0) setOpenC(new Set([ckey(s0.subject, c0.chapter)]));
         }
       })
-      .catch(() => {});
+      .catch((e) =>
+        setError(e instanceof Error ? e.message : "Could not load your analysis."),
+      );
+  }
+
+  useEffect(() => {
+    load();
   }, []);
 
   function toggleS(s: string) {
@@ -120,20 +132,21 @@ export function WeakAreaAnalysis() {
     });
   }
 
+  if (error) {
+    return <ErrorCard message={error} onRetry={load} />;
+  }
+
   if (data === null) {
-    return <p className="text-sm text-muted-foreground">Loading analysis…</p>;
+    return <SkeletonList rows={4} />;
   }
 
   if (data.subjects.length === 0) {
     return (
-      <Card>
-        <CardContent className="p-8 text-center">
-          <p className="text-sm text-muted-foreground">
-            Take a quiz to unlock your weak-area analysis — once you have graded
-            attempts, your subjects, chapters, and topics break down here.
-          </p>
-        </CardContent>
-      </Card>
+      <EmptyState
+        icon={<BookOpen />}
+        title="No analysis yet"
+        message="Take a quiz to unlock your weak-area analysis — once you have graded attempts, your subjects, chapters, and topics break down here."
+      />
     );
   }
 
@@ -191,12 +204,12 @@ export function WeakAreaAnalysis() {
 
       {/* Weak subject -> chapter -> topic drill-down (weak only) */}
       {weakSubjects.length === 0 ? (
-        <Card className="animate-rise">
-          <CardContent className="p-8 text-center text-sm text-muted-foreground">
-            No weak areas right now — you&apos;re scoring {WEAK}% or higher on every
-            topic. Keep practising to stay sharp.
-          </CardContent>
-        </Card>
+        <EmptyState
+          className="animate-rise"
+          icon={<Check />}
+          title="No weak areas right now"
+          message={`You're scoring ${WEAK}% or higher on every topic. Keep practising to stay sharp.`}
+        />
       ) : (
       <div className="flex flex-col gap-3">
         {weakSubjects.map((s) => {

@@ -11,6 +11,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
+import { Skeleton, SkeletonCards } from "@/components/ui/skeleton";
 import {
   AttentionStudent,
   TeacherClassOverview,
@@ -90,6 +91,19 @@ export function ClassAnalytics() {
   const accA = useCountUp(classAccuracy, loaded);
   const hasData = attempts > 0;
 
+  if (!loaded) {
+    return (
+      <div className="flex flex-col gap-6">
+        <Skeleton className="h-32 w-full rounded-2xl" />
+        <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
+          <Skeleton className="h-64 w-full rounded-2xl lg:col-span-2" />
+          <Skeleton className="h-64 w-full rounded-2xl" />
+        </div>
+        <SkeletonCards count={2} />
+      </div>
+    );
+  }
+
   return (
     <div className="flex flex-col gap-6">
       {/* Class performance summary */}
@@ -165,13 +179,7 @@ export function ClassAnalytics() {
           </CardHeader>
           <CardContent className="flex flex-col gap-3">
             {quizzes.length === 0 ? (
-              <EmptyState
-                message={
-                  loaded
-                    ? "No attempts yet — once students take your published quizzes, their scores appear here."
-                    : "Loading…"
-                }
-              />
+              <EmptyState message="No attempts yet — once students take your published quizzes, their scores appear here." />
             ) : (
               quizzes.map((q) => (
                 <button
@@ -250,9 +258,7 @@ export function ClassAnalytics() {
           </CardHeader>
           <CardContent className="flex flex-col gap-2">
             {attention.length === 0 ? (
-              <EmptyState
-                message={loaded ? "No students flagged — nice work." : "Loading…"}
-              />
+              <EmptyState message="No students flagged — nice work." />
             ) : (
               attention.map((s, i) => <StudentRow key={i} s={s} />)
             )}
@@ -266,11 +272,7 @@ export function ClassAnalytics() {
           </CardHeader>
           <CardContent className="flex flex-col gap-2">
             {performers.length === 0 ? (
-              <EmptyState
-                message={
-                  loaded ? "No graded attempts yet." : "Loading…"
-                }
-              />
+              <EmptyState message="No graded attempts yet." />
             ) : (
               performers.map((s, i) => <StudentRow key={i} s={s} />)
             )}

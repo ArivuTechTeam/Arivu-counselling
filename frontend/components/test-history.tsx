@@ -5,6 +5,9 @@ import { useEffect, useState } from "react";
 
 import { PageHeader } from "@/components/ui/page-header";
 import { EmptyState } from "@/components/ui/empty-state";
+import { ErrorCard } from "@/components/ui/error-card";
+import { SkeletonList } from "@/components/ui/skeleton";
+import { Inbox } from "@/components/ui/icons";
 import { AttemptHistoryItem, listStudentAttempts } from "@/lib/api";
 
 function hexFor(pct: number) {
@@ -16,10 +19,15 @@ export function TestHistory() {
   const [error, setError] = useState<string | null>(null);
   const [mounted, setMounted] = useState(false);
 
-  useEffect(() => {
+  function load() {
+    setError(null);
     listStudentAttempts()
       .then(setItems)
       .catch((e) => setError(e.message));
+  }
+
+  useEffect(() => {
+    load();
   }, []);
 
   // Let the bars/rings animate from 0 once the list is in.
@@ -37,12 +45,16 @@ export function TestHistory() {
         description="Every attempt you've made, newest first — tap a card to review it."
       />
 
-      {error && <p className="text-sm text-red-600">{error}</p>}
-
-      {items === null ? (
-        <p className="text-sm text-muted-foreground">Loading…</p>
+      {error ? (
+        <ErrorCard message={error} onRetry={load} />
+      ) : items === null ? (
+        <SkeletonList />
       ) : items.length === 0 ? (
-        <EmptyState message="No attempts yet — take a quiz to build your history." />
+        <EmptyState
+          icon={<Inbox />}
+          title="No attempts yet"
+          message="Take a quiz to build your history — every attempt you make will show up here for you to review."
+        />
       ) : (
         <div className="flex flex-col gap-4">
           {items.map((a, i) => {

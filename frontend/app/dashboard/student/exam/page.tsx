@@ -11,6 +11,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { PageHeader } from "@/components/ui/page-header";
+import { Skeleton } from "@/components/ui/skeleton";
 import { ExamConfig, getExamConfig, startExam } from "@/lib/api";
 
 function Stat({ value, label }: { value: string; label: string }) {
@@ -62,15 +63,19 @@ export default function ExamPage() {
           Today&apos;s exam pattern
         </p>
         <div className="relative mt-3 grid grid-cols-3 gap-3">
-          <Stat value={cfg ? String(cfg.questions) : "—"} label="Questions" />
-          <Stat
-            value={cfg ? `${cfg.duration_minutes}m` : "—"}
-            label="Time limit"
-          />
-          <Stat
-            value={cfg ? `−${cfg.negative_marking}` : "—"}
-            label="Per wrong"
-          />
+          {cfg ? (
+            <>
+              <Stat value={String(cfg.questions)} label="Questions" />
+              <Stat value={`${cfg.duration_minutes}m`} label="Time limit" />
+              <Stat value={`−${cfg.negative_marking}`} label="Per wrong" />
+            </>
+          ) : (
+            <>
+              <Skeleton className="h-[86px] w-full rounded-xl bg-white/10" />
+              <Skeleton className="h-[86px] w-full rounded-xl bg-white/10" />
+              <Skeleton className="h-[86px] w-full rounded-xl bg-white/10" />
+            </>
+          )}
         </div>
       </div>
 
@@ -81,21 +86,33 @@ export default function ExamPage() {
           <CardDescription>Read these — the exam runs under real rules.</CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-2 text-sm">
-          {[
-            ["Timed", "The clock starts the moment you begin and the exam auto-submits when it runs out."],
-            ["Negative marking", `Each wrong answer costs you ${cfg ? cfg.negative_marking : "—"} marks. Leave a question blank to score zero on it instead.`],
-            ["No pausing", "Once you start you can't pause — set aside the full time and find a quiet spot."],
-          ].map(([t, d]) => (
-            <div key={t} className="flex gap-3 rounded-lg border p-3">
-              <span className="mt-0.5 h-2 w-2 shrink-0 rounded-full bg-primary" />
-              <p>
-                <span className="font-semibold text-foreground">{t}.</span>{" "}
-                <span className="text-muted-foreground">{d}</span>
-              </p>
+          {cfg ? (
+            [
+              ["Timed", "The clock starts the moment you begin and the exam auto-submits when it runs out."],
+              ["Negative marking", `Each wrong answer costs you ${cfg.negative_marking} marks. Leave a question blank to score zero on it instead.`],
+              ["No pausing", "Once you start you can't pause — set aside the full time and find a quiet spot."],
+            ].map(([t, d]) => (
+              <div key={t} className="flex gap-3 rounded-lg border p-3">
+                <span className="mt-0.5 h-2 w-2 shrink-0 rounded-full bg-primary" />
+                <p>
+                  <span className="font-semibold text-foreground">{t}.</span>{" "}
+                  <span className="text-muted-foreground">{d}</span>
+                </p>
+              </div>
+            ))
+          ) : (
+            <div className="flex flex-col gap-2">
+              <Skeleton className="h-14 w-full rounded-lg" />
+              <Skeleton className="h-14 w-full rounded-lg" />
+              <Skeleton className="h-14 w-full rounded-lg" />
             </div>
-          ))}
+          )}
 
-          {error && <p className="text-sm text-red-600">{error}</p>}
+          {error && (
+            <p className="rounded-lg border border-destructive/20 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+              {error}
+            </p>
+          )}
 
           <div className="mt-2">
             <button

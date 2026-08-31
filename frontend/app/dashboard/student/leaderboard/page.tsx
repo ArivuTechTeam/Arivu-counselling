@@ -10,6 +10,8 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { PageHeader } from "@/components/ui/page-header";
+import { ErrorCard } from "@/components/ui/error-card";
+import { SkeletonList } from "@/components/ui/skeleton";
 import { Leaderboard, LeaderRow, getLeaderboard } from "@/lib/api";
 
 const MEDAL = ["#e8b923", "#9aa4ad", "#c17d4a"]; // gold / silver / bronze
@@ -17,7 +19,7 @@ const MEDAL = ["#e8b923", "#9aa4ad", "#c17d4a"]; // gold / silver / bronze
 function Row({ r }: { r: LeaderRow }) {
   return (
     <div
-      className={`flex items-center gap-3 rounded-lg border p-3 ${
+      className={`flex items-center gap-3 rounded-lg border p-3 transition-colors hover:bg-accent ${
         r.is_you ? "border-primary/40 bg-primary/5" : ""
       }`}
     >
@@ -54,6 +56,7 @@ export default function LeaderboardPage() {
 
   function load(courseId?: string) {
     setLoading(true);
+    setError(null);
     getLeaderboard(courseId)
       .then(setData)
       .catch((e) => setError(e.message))
@@ -61,7 +64,17 @@ export default function LeaderboardPage() {
   }
   useEffect(() => load(), []);
 
-  if (error) return <p className="text-red-600">{error}</p>;
+  if (error) {
+    return (
+      <div className="mx-auto flex max-w-2xl flex-col gap-6">
+        <PageHeader
+          title="Leaderboard"
+          description="How you rank among students in your course."
+        />
+        <ErrorCard message={error} onRetry={() => load()} />
+      </div>
+    );
+  }
 
   const inTop = data?.me && data.top.some((r) => r.is_you);
 
@@ -124,12 +137,17 @@ export default function LeaderboardPage() {
           </CardTitle>
           <CardDescription>
             {data === null
-              ? "Loading…"
+              ? "Fetching the latest scores…"
               : data.top.length === 0
                 ? "No graded activity in this course yet — take a quiz to get on the board."
                 : "Points are the total marks earned. Keep practising to climb."}
           </CardDescription>
         </CardHeader>
+        {data === null && (
+          <CardContent>
+            <SkeletonList rows={6} />
+          </CardContent>
+        )}
         {data && data.top.length > 0 && (
           <CardContent className="flex flex-col gap-2">
             {data.top.map((r) => (
@@ -138,8 +156,11 @@ export default function LeaderboardPage() {
             {/* If you're outside the top 20, pin your own row below. */}
             {data.me && !inTop && (
               <>
-                <div className="py-1 text-center text-xs text-muted-foreground">
-                  ···
+                <div className="relative py-3 text-center">
+                  <span className="absolute inset-x-0 top-1/2 border-t border-dashed border-input" />
+                  <span className="relative bg-card px-2 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+                    Your position
+                  </span>
                 </div>
                 <Row r={data.me} />
               </>

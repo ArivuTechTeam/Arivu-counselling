@@ -22,6 +22,8 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { StudentQuizzes } from "@/components/student-quizzes";
+import { ErrorCard } from "@/components/ui/error-card";
+import { Skeleton } from "@/components/ui/skeleton";
 import {
   AttemptHistoryItem,
   StudentStats,
@@ -308,14 +310,22 @@ export function StudentDashboard() {
   const router = useRouter();
   const [stats, setStats] = useState<StudentStats | null>(null);
   const [attempts, setAttempts] = useState<AttemptHistoryItem[]>([]);
+  const [error, setError] = useState<string | null>(null);
+
+  function load() {
+    setError(null);
+    Promise.all([getStudentStats(), listStudentAttempts()])
+      .then(([s, a]) => {
+        setStats(s);
+        setAttempts(a);
+      })
+      .catch((e) =>
+        setError(e instanceof Error ? e.message : "Could not load your dashboard."),
+      );
+  }
 
   useEffect(() => {
-    getStudentStats()
-      .then(setStats)
-      .catch(() => {});
-    listStudentAttempts()
-      .then(setAttempts)
-      .catch(() => {});
+    load();
   }, []);
 
   const ready = stats !== null;
@@ -355,6 +365,26 @@ export function StudentDashboard() {
   const solvedA = useCountUp(solved, ready);
   const quizzesA = useCountUp(quizzes, ready);
   const bestA = useCountUp(best, ready && attempts.length > 0);
+
+  // Both fetches failed — show a retryable error instead of a zeroed dashboard.
+  if (error) {
+    return <ErrorCard message={error} onRetry={load} />;
+  }
+
+  // First paint before stats arrive — skeleton the hero + tile grid.
+  if (!ready) {
+    return (
+      <div className="flex flex-col gap-6">
+        <Skeleton className="h-44 w-full rounded-2xl sm:h-48" />
+        <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+          {Array.from({ length: 4 }).map((_, i) => (
+            <Skeleton key={i} className="h-28 w-full rounded-2xl" />
+          ))}
+        </div>
+        <Skeleton className="h-64 w-full rounded-2xl" />
+      </div>
+    );
+  }
 
   // New students: onboard them straight into taking their first quiz.
   if (ready && quizzes === 0) {
@@ -522,7 +552,14 @@ export function StudentDashboard() {
                   <CartesianGrid strokeDasharray="3 3" stroke="#eee" />
                   <XAxis dataKey="name" tick={{ fontSize: 12, fill: "#8b8b85" }} />
                   <YAxis domain={[0, 100]} tick={{ fontSize: 12, fill: "#8b8b85" }} />
-                  <Tooltip />
+                  <Tooltip
+                    contentStyle={{
+                      borderRadius: 12,
+                      border: "1px solid #e5e7eb",
+                      boxShadow: "0 4px 16px rgba(0,0,0,0.08)",
+                      fontSize: 12,
+                    }}
+                  />
                   <Area
                     type="monotone"
                     dataKey="score"

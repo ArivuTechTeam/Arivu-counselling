@@ -4,6 +4,7 @@ import * as React from "react";
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 
+import { Skeleton, SkeletonStats } from "@/components/ui/skeleton";
 import { listDocuments, listQuizSets } from "@/lib/api";
 
 function useCountUp(target: number, on: boolean, ms = 900) {
@@ -135,6 +136,15 @@ export function TeacherStats() {
   const pubA = useCountUp(published ?? 0, ready);
   const draftsA = useCountUp(drafts, ready);
 
+  if (!ready) {
+    return (
+      <div className="flex flex-col gap-6">
+        <Skeleton className="h-40 w-full rounded-2xl sm:h-44" />
+        <SkeletonStats />
+      </div>
+    );
+  }
+
   return (
     <div className="flex flex-col gap-6">
       {/* Hero */}
@@ -165,7 +175,7 @@ export function TeacherStats() {
           <div
             className="relative flex h-28 w-28 shrink-0 items-center justify-center rounded-full transition-all duration-700 ease-out"
             style={{
-              background: `conic-gradient(#7ae582 ${(ready ? pubPct : 0) * 3.6}deg, rgba(255,255,255,0.16) 0deg)`,
+              background: `conic-gradient(#7ae582 ${pubPct * 3.6}deg, rgba(255,255,255,0.16) 0deg)`,
             }}
           >
             <div className="flex h-[94px] w-[94px] flex-col items-center justify-center rounded-full bg-[#15603d]">
@@ -182,7 +192,7 @@ export function TeacherStats() {
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
         <MetricTile
           label="Documents"
-          value={ready ? docsA : "—"}
+          value={docsA}
           gradient="from-card to-blue-50/70"
           chip="bg-blue-500/10 text-blue-600"
           icon={<DocIcon />}
@@ -190,7 +200,7 @@ export function TeacherStats() {
         />
         <MetricTile
           label="Quiz sets"
-          value={ready ? setsA : "—"}
+          value={setsA}
           gradient="from-card to-brand-50/70"
           chip="bg-brand-500/10 text-brand-600"
           icon={<LayersIcon />}
@@ -198,7 +208,7 @@ export function TeacherStats() {
         />
         <MetricTile
           label="Published"
-          value={ready ? pubA : "—"}
+          value={pubA}
           gradient="from-card to-emerald-50/70"
           chip="bg-emerald-500/10 text-emerald-600"
           icon={<CheckIcon />}
@@ -206,7 +216,7 @@ export function TeacherStats() {
         />
         <MetricTile
           label="In draft"
-          value={ready ? draftsA : "—"}
+          value={draftsA}
           gradient="from-card to-amber-50/70"
           chip="bg-amber-500/10 text-amber-600"
           icon={<PencilIcon />}
