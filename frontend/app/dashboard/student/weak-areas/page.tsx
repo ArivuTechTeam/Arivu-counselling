@@ -1,7 +1,7 @@
 import Link from "next/link";
 
 import { PageHeader } from "@/components/ui/page-header";
-import { WeakAreaAnalysis } from "@/components/weak-area-analysis";
+import { WeakAreaAnalysis } from "@/components/student/weak-area-analysis";
 
 export default function WeakAreasPage() {
   return (

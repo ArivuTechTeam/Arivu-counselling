@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 
-import { SplitText } from "@/components/split-text";
+import { SplitText } from "@/components/shared/split-text";
 import { Brand } from "@/components/ui/brand";
 import { listPublicCourses } from "@/lib/api";
 import { initAuthFx } from "@/lib/auth-fx";

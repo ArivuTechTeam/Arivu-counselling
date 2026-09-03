@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 
-import { DashboardShell } from "@/components/dashboard-shell";
+import { DashboardShell } from "@/components/shared/dashboard-shell";
 import { Brand } from "@/components/ui/brand";
 import { Skeleton } from "@/components/ui/skeleton";
 import { createClient } from "@/lib/supabase";

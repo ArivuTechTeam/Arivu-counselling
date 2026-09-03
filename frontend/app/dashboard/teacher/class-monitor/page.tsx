@@ -9,7 +9,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { StudentReportButton } from "@/components/pdf-buttons";
+import { StudentReportButton } from "@/components/shared/pdf-buttons";
 import { ErrorCard } from "@/components/ui/error-card";
 import { PageHeader } from "@/components/ui/page-header";
 import { SkeletonList, SkeletonStats } from "@/components/ui/skeleton";

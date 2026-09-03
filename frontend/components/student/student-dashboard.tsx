@@ -21,7 +21,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { StudentQuizzes } from "@/components/student-quizzes";
+import { StudentQuizzes } from "@/components/student/student-quizzes";
 import { ErrorCard } from "@/components/ui/error-card";
 import { Skeleton } from "@/components/ui/skeleton";
 import {

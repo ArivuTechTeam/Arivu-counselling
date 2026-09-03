@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import { Inter } from "next/font/google";
 import "./globals.css";
 import { cn } from "@/lib/utils";
-import { ThemeProvider } from "@/components/theme-provider";
+import { ThemeProvider } from "@/components/shared/theme-provider";
 
 // Inter is the ArivuPro reference typeface — its heavy weights drive the type
 // hierarchy. Exposed as `--font-sans`, which the Tailwind config reads.

@@ -1,4 +1,4 @@
-import { CourseManager } from "@/components/course-manager";
+import { CourseManager } from "@/components/admin/course-manager";
 
 export default function CoursesPage() {
   return (

@@ -28,7 +28,7 @@ import {
   MetricTile,
   UsersIcon,
   useCountUp,
-} from "@/components/dashboard-kit";
+} from "@/components/admin/dashboard-kit";
 import { EmptyState } from "@/components/ui/empty-state";
 import { ErrorCard } from "@/components/ui/error-card";
 import { InstitutionOverview, getInstitutionOverview } from "@/lib/api";

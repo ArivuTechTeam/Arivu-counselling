@@ -1,5 +1,5 @@
 import { PageHeader } from "@/components/ui/page-header";
-import { QuizSetList } from "@/components/quiz-set-list";
+import { QuizSetList } from "@/components/teacher/quiz-set-list";
 
 export default function ReviewQueuePage() {
   return (
