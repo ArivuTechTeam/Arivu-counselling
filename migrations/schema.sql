@@ -375,8 +375,9 @@ create trigger on_auth_user_created
 
 -- ============================================================================
 -- STEP 13: ROW LEVEL SECURITY
--- plan_limits is deliberately left WITHOUT rls — it's global, non-sensitive
--- config, same for every tenant. Every other table below is tenant-scoped.
+-- plan_limits is global, non-tenant-scoped config — read-only for every
+-- client via a permissive select policy; only service_role can write it.
+-- Every other table below is tenant-scoped via current_tenant_id().
 -- ============================================================================
 
 alter table tenants enable row level security;
@@ -395,6 +396,7 @@ alter table quiz_attempts enable row level security;
 alter table attempt_answers enable row level security;
 alter table ai_explanations enable row level security;
 alter table tenant_usage enable row level security;
+alter table plan_limits enable row level security;
 
 -- ---------- tenants ----------
 create policy "tenant self or super admin - select" on tenants
@@ -542,6 +544,11 @@ create policy "admins view own tenant usage" on tenant_usage
     and (current_role_name() = 'institution_admin' or is_super_admin())
   );
 -- No client-facing write policy — only the backend (service_role) increments this.
+
+create policy "anyone can read plan limits" on plan_limits
+  for select using (true);
+-- No client-facing write policy — pricing/quota tiers change via a new
+-- migration (service_role), never from an anon/authenticated client.
 
 
 -- ============================================================================
