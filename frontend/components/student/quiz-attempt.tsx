@@ -3,8 +3,8 @@
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 
-import { AiTutor } from "@/components/ai-tutor";
-import { StudentDownloads } from "@/components/pdf-buttons";
+import { AiTutor } from "@/components/student/ai-tutor";
+import { StudentDownloads } from "@/components/shared/pdf-buttons";
 import { downloadCardImage } from "@/lib/share-card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";

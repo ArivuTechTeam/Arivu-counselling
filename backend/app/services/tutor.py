@@ -79,12 +79,14 @@ def explain_question(question_id: str, tenant_id: str) -> dict:
             "cached": True,
         }
 
-    # 2) Fetch the question (tenant-scoped).
+    # 2) Fetch the question (tenant-scoped, and only if a teacher has approved it —
+    #    students must never get an AI explanation for an unreviewed question).
     qrow = (
         service.table("questions")
         .select("*")
         .eq("id", question_id)
         .eq("tenant_id", tenant_id)
+        .eq("review_status", "approved")
         .limit(1)
         .execute()
         .data

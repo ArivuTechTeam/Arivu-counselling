@@ -27,13 +27,21 @@ type DevAccount = {
   password: string;
 };
 
-// Edit this list to match your test accounts.
-const ACCOUNTS: DevAccount[] = [
-  { label: "Super admin", role: "super_admin", email: "tech@arivupro.com", password: "ArivuTech@2026" },
-  { label: "Institution admin", role: "institution_admin", email: "admin@arivupro.com", password: "ArivuAdmin@2026" },
-  { label: "Teacher", role: "teacher", email: "deepi@gmail.com", password: "Hello@123" },
-  { label: "Student", role: "student", email: "sri@gmail.com", password: "Hello@123" },
-];
+// Populate NEXT_PUBLIC_DEV_ACCOUNTS_JSON in .env.local (gitignored) to use this
+// switcher locally — see frontend/.env.local.example. Never commit real
+// credentials here; this array must stay empty in the checked-in source.
+function readDevAccounts(): DevAccount[] {
+  const raw = process.env.NEXT_PUBLIC_DEV_ACCOUNTS_JSON;
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+const ACCOUNTS: DevAccount[] = readDevAccounts();
 
 function BeakerIcon() {
   return (

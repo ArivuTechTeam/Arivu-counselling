@@ -16,6 +16,7 @@ import uuid
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from pydantic import BaseModel
+from starlette.concurrency import run_in_threadpool
 
 from app.lib.auth import CurrentProfile, get_current_profile
 from app.lib.storage import upload_bytes
@@ -117,16 +118,19 @@ async def upload_document(
     row = inserted.data[0]
     doc_id = row["id"]
 
-    # 3) Extract text and mark the row completed/failed.
+    # 3) Extract text and mark the row completed/failed. pdfplumber/python-docx are
+    #    synchronous and CPU-bound, so run them off the event loop or they'd block
+    #    every other request this worker is handling.
     try:
-        text = extract_text(content, ext)
+        text = await run_in_threadpool(extract_text, content, ext)
     except Exception as exc:  # noqa: BLE001 - surface any parse failure to the row
         service.table("documents").update(
             {"status": "failed", "error_message": str(exc)}
         ).eq("id", doc_id).execute()
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=f"Could not extract text: {exc}",
+            detail="Could not extract text from this file. It may be corrupted, "
+            "password-protected, or in an unsupported format.",
         )
 
     service.table("documents").update({"status": "completed"}).eq(

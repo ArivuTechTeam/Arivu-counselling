@@ -1,4 +1,4 @@
-import { QuizAttempt } from "@/components/quiz-attempt";
+import { QuizAttempt } from "@/components/student/quiz-attempt";
 
 export default function PracticePage({ params }: { params: { id: string } }) {
   return (

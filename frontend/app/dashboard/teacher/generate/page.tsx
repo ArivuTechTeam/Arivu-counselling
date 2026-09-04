@@ -1,4 +1,4 @@
-import { BlueprintGenerator } from "@/components/blueprint-generator";
+import { BlueprintGenerator } from "@/components/teacher/blueprint-generator";
 
 export default function GeneratePage() {
   return (

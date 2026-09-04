@@ -6,8 +6,8 @@ import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { ErrorCard } from "@/components/ui/error-card";
 import { Skeleton, SkeletonCards } from "@/components/ui/skeleton";
-import { QuestionPaperButtons } from "@/components/pdf-buttons";
-import { QuestionReviewCard } from "@/components/question-review-card";
+import { QuestionPaperButtons } from "@/components/shared/pdf-buttons";
+import { QuestionReviewCard } from "@/components/teacher/question-review-card";
 import { statusLabel } from "@/lib/format";
 import {
   QuizSetDetail,

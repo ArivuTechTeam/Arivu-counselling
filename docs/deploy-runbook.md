@@ -5,8 +5,13 @@ A practical, repeatable guide to getting this app live. Two deployables:
 uvicorn)**, both talking to one **Supabase** project.
 
 > Backend note: there is no `vercel.json`, so the FastAPI backend is **not**
-> set up for Vercel serverless. Deploy it to **Render** or **Railway** (they run
-> `uvicorn` directly, zero adapter work). The frontend goes on Vercel.
+> set up for Vercel serverless. It runs on a host that runs `uvicorn` directly
+> (zero adapter work) — **Render** and **Railway** both work; **confirmed live
+> on Railway as of 2026-09-04** (verified in the Railway dashboard: service
+> `quiz-generator`, project `ExamApp`, environment `production`, domain
+> `quiz-generator-production-7461.up.railway.app`). Render remains a valid
+> alternative if you're setting this up fresh, but isn't what's deployed today.
+> The frontend goes on Vercel.
 
 ---
 
@@ -19,8 +24,9 @@ before deploying (see the consolidation note — recent phases must be pushed).
 
 ## 1. Database (Supabase SQL Editor)
 
-Run these **once, in order**, top-to-bottom (skip any already applied). Note
-there is **no migration 03** — the seed library was removed; `04` drops it.
+These files live in `migrations/` at the project root. Run these **once, in
+order**, top-to-bottom (skip any already applied). Note there is **no
+migration 03** — the seed library was removed; `04` drops it.
 
 ```
 schema.sql
@@ -37,7 +43,7 @@ migration-08-exam-config.sql
 
 ---
 
-## 2. Backend → Render (or Railway)
+## 2. Backend → Railway (confirmed) or Render (also supported)
 
 - **Root directory:** `backend`
 - **Build command:** `pip install -r requirements.txt`
@@ -110,3 +116,8 @@ If a page 500s, check the backend logs and that all env vars are set + migration
   and chart bundles.
 - **Free-tier note:** Render/Railway free tiers sleep on idle (first request is
   slow to wake) — acceptable for a demo, upgrade for real usage.
+- **Live backend URL:** `https://quiz-generator-production-7461.up.railway.app`
+  (Railway dashboard, verified 2026-09-04). This is where Vercel's
+  `NEXT_PUBLIC_API_BASE_URL` should point in production — check the Vercel
+  dashboard's env vars, not `frontend/.env.local`, to confirm what's actually
+  configured there.

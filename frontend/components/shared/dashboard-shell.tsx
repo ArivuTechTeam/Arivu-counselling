@@ -4,9 +4,9 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 
-import { ChangePasswordModal } from "@/components/change-password-modal";
-import { DevAccountSwitcher } from "@/components/dev-account-switcher";
-import { ThemeToggle } from "@/components/theme-provider";
+import { ChangePasswordModal } from "@/components/shared/change-password-modal";
+import { DevAccountSwitcher } from "@/components/shared/dev-account-switcher";
+import { ThemeToggle } from "@/components/shared/theme-provider";
 import { createClient } from "@/lib/supabase";
 
 type NavItem = { label: string; href?: string; soon?: boolean };

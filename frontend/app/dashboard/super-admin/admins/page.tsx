@@ -1,4 +1,4 @@
-import { AdminManager } from "@/components/admin-manager";
+import { AdminManager } from "@/components/admin/admin-manager";
 
 export default function SuperAdminAdminsPage() {
   return (

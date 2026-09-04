@@ -1,7 +1,17 @@
-# Environment variables — NEVER commit these
+# Environment variables — NEVER commit these (but allow .example templates)
 .env
-.env.local
-.env*.local
+.env.*
+!.env.example
+!.env.*.example
+
+# Secrets & credentials
+*.pem
+*.key
+*.p12
+*.pfx
+*credentials*.json
+service-account*.json
+secrets.*
 
 # Python
 backend/venv/
@@ -25,6 +35,8 @@ Thumbs.db
 
 # Claude Code agent tooling / skills (local, not product source)
 .claude/
+CLAUDE.md
+.tokensave/
 
 # Local scratch scripts
 /_co.py

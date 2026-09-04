@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 
-import { AdminManager } from "@/components/admin-manager";
+import { AdminManager } from "@/components/admin/admin-manager";
 import { Button } from "@/components/ui/button";
 import {
   Card,

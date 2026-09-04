@@ -26,7 +26,7 @@ import {
   MetricTile,
   UsersIcon,
   useCountUp,
-} from "@/components/dashboard-kit";
+} from "@/components/admin/dashboard-kit";
 import { ErrorCard } from "@/components/ui/error-card";
 import { Skeleton, SkeletonStats } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/ui/empty-state";

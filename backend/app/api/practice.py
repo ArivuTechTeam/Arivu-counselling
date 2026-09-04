@@ -356,6 +356,19 @@ def add_bookmark(
 ) -> dict:
     _require_student(profile)
     service = get_service_client()
+    # A student may only bookmark a real, approved question in their own tenant —
+    # otherwise this would let them probe for/insert arbitrary question ids.
+    qrow = (
+        service.table("questions")
+        .select("id")
+        .eq("id", body.question_id)
+        .eq("tenant_id", profile.tenant_id)
+        .eq("review_status", "approved")
+        .maybe_single()
+        .execute()
+    )
+    if qrow is None or not qrow.data:
+        raise HTTPException(status_code=404, detail="Question not found.")
     # Idempotent: unique(student_id, question_id) means re-adding is a no-op.
     service.table("bookmarks").upsert(
         {
