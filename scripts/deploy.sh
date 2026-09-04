@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Deploys the backend to Railway. Only runs from the akbar branch (testing) —
-# update REQUIRED_BRANCH to main once akbar is merged and testing is done.
+# Deploys the backend to Railway. Only runs from main — this is a production
+# deploy, not a way to preview branch work.
 set -euo pipefail
 
-REQUIRED_BRANCH="akbar"
+REQUIRED_BRANCH="main"
 current_branch="$(git branch --show-current)"
 
 if [[ "$current_branch" != "$REQUIRED_BRANCH" ]]; then
