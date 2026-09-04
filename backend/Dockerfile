@@ -14,4 +14,6 @@ COPY . .
 # not here.
 EXPOSE 8000
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Shell form (not exec/JSON-array form) so $PORT is expanded by the shell —
+# Railway injects PORT at runtime and the container must bind to it.
+CMD uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}
