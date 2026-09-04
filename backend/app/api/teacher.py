@@ -376,7 +376,12 @@ def student_report(
     service = get_service_client()
     tid, uid = profile.tenant_id, profile.user_id
     name_row = (
-        service.table("profiles").select("full_name").eq("id", student_id).maybe_single().execute()
+        service.table("profiles")
+        .select("full_name")
+        .eq("id", student_id)
+        .eq("tenant_id", tid)
+        .maybe_single()
+        .execute()
     )
     sname = (name_row.data or {}).get("full_name") if name_row else None
     student = {"name": sname or "Student", "initials": _initials(sname)}
