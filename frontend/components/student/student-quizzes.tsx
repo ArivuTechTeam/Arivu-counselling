@@ -12,6 +12,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { StudentQuiz, listStudentQuizzes, startAttempt } from "@/lib/api";
+import { variantLabel } from "@/lib/format";
 
 // One takeable quiz = a variant plus the title of the set it belongs to.
 type QuizItem = {
@@ -82,7 +83,7 @@ export function StudentQuizzes() {
       {/* Quizzes to attend — the first thing a student should see */}
       <Card className="animate-rise">
         <CardHeader>
-          <CardTitle>Quizzes to attend</CardTitle>
+          <CardTitle>Quizzes to take</CardTitle>
           <CardDescription>
             {toAttend.length > 0
               ? `You have ${toAttend.length} quiz${
@@ -100,7 +101,7 @@ export function StudentQuizzes() {
             </p>
           ) : toAttend.length === 0 ? (
             <p className="text-sm text-muted-foreground">
-              You&apos;re all caught up — no new quizzes to attend right now.
+              You&apos;re all caught up — no new quizzes to take right now.
             </p>
           ) : (
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
@@ -111,7 +112,7 @@ export function StudentQuizzes() {
                 >
                   <div>
                     <span className="inline-block rounded-full bg-primary/10 px-2.5 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-primary">
-                      {i.variantType}
+                      {variantLabel(i.variantType)}
                     </span>
                     <p className="mt-2 font-semibold leading-snug text-foreground">
                       {i.title}
@@ -165,8 +166,8 @@ export function StudentQuizzes() {
                   <p className="truncate text-sm font-medium text-foreground">
                     {i.title}
                   </p>
-                  <p className="text-xs capitalize text-muted-foreground">
-                    {i.variantType}
+                  <p className="text-xs text-muted-foreground">
+                    {variantLabel(i.variantType)}
                     {i.bestPct != null ? ` · best ${i.bestPct}%` : ""}
                   </p>
                 </div>

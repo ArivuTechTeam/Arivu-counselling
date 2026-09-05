@@ -62,12 +62,12 @@ export default function ExamPage() {
         <p className="relative text-[11px] font-semibold uppercase tracking-widest text-white/70">
           Today&apos;s exam pattern
         </p>
-        <div className="relative mt-3 grid grid-cols-3 gap-3">
+        <div className="relative mt-3 grid grid-cols-1 gap-3 sm:grid-cols-3">
           {cfg ? (
             <>
               <Stat value={String(cfg.questions)} label="Questions" />
               <Stat value={`${cfg.duration_minutes}m`} label="Time limit" />
-              <Stat value={`−${cfg.negative_marking}`} label="Per wrong" />
+              <Stat value={`−${cfg.negative_marking}`} label="Penalty per wrong" />
             </>
           ) : (
             <>

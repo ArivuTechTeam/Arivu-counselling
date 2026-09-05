@@ -63,7 +63,7 @@ export default function ChallengePage() {
     <div className="flex flex-col gap-6">
       <PageHeader
         title="Challenge a Friend"
-        description="Pick a quiz, play it, then share the link. Whoever from your class scores highest tops the leaderboard."
+        description="Build a random quiz, play it, then share the link with classmates. Highest score tops the leaderboard."
       />
 
       {/* Hero */}

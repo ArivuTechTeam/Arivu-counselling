@@ -144,7 +144,7 @@ export default function ClassMonitorPage() {
                     <th className="px-2 py-2 font-medium">Student</th>
                     <th className="px-2 py-2 text-right font-medium">Quizzes</th>
                     <th className="px-2 py-2 text-right font-medium">Accuracy</th>
-                    <th className="px-2 py-2 text-right font-medium">Best</th>
+                    <th className="px-2 py-2 text-right font-medium">Best score</th>
                     <th className="px-2 py-2 text-right font-medium">Last active</th>
                     <th className="px-2 py-2 text-right font-medium">Status</th>
                     <th className="px-2 py-2 text-right font-medium">Report</th>

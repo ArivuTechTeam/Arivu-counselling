@@ -58,6 +58,9 @@
   }
   body {
     @apply bg-background text-foreground;
+    /* Safety net: nothing should cause horizontal page scroll on narrow
+       screens, but this catches it if a grid/flex child ever does. */
+    overflow-x: hidden;
   }
 }
 

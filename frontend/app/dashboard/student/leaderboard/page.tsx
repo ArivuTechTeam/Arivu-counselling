@@ -139,8 +139,8 @@ export default function LeaderboardPage() {
             {data === null
               ? "Fetching the latest scores…"
               : data.top.length === 0
-                ? "No graded activity in this course yet — take a quiz to get on the board."
-                : "Points are the total marks earned. Keep practising to climb."}
+                ? "No quiz results yet for this course — take a quiz to get on the board."
+                : "Points are based on your total score across quizzes. Keep practising to climb."}
           </CardDescription>
         </CardHeader>
         {data === null && (

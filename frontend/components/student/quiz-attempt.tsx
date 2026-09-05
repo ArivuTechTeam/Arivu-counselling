@@ -12,7 +12,7 @@ import { Input } from "@/components/ui/input";
 import { ErrorCard } from "@/components/ui/error-card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Check, X } from "@/components/ui/icons";
-import { formatAnswerValue } from "@/lib/format";
+import { formatAnswerValue, typeLabel } from "@/lib/format";
 import {
   AttemptInProgress,
   AttemptResult,
@@ -176,7 +176,7 @@ export function QuizAttempt({
         <div className="rounded-lg border bg-card p-5 shadow-sm">
           <div className="mb-3 flex items-center justify-between">
             <span className="font-semibold">Q{current + 1}</span>
-            <Badge tone="type">{q.type}</Badge>
+            <Badge tone="type">{typeLabel(q.type)}</Badge>
           </div>
           <p className="mb-4 text-[15px] text-foreground">{q.question_text}</p>
           <QuestionInput

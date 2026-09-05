@@ -1,20 +1,21 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+This is the frontend for quiz-generator (Next.js 14, App Router), bootstrapped
+with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
 
 ## Getting Started
 
-First, run the development server:
+**Port:** this project runs on **3001**, not Next's default 3000 — port 3000
+is used locally by a different project (`arivupro_examapp`) on this machine.
+`pnpm dev` (see `scripts.dev` in `package.json`) already passes `-p 3001`, so
+just run:
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
 pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open [http://localhost:3001](http://localhost:3001) with your browser to see
+the result. The backend (FastAPI) runs on **8001** locally for the same
+reason — see `backend/.env.example` / `NEXT_PUBLIC_API_BASE_URL` in
+`.env.local`.
 
 You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
 

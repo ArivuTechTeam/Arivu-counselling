@@ -55,7 +55,7 @@ export default function DashboardLayout({
       <main className="flex min-h-screen flex-col items-center justify-center gap-6 p-4">
         <Brand height={40} />
         <Skeleton className="h-2 w-40 rounded-full" />
-        <p className="text-sm text-muted-foreground">Loading your workspace…</p>
+        <p className="text-sm text-muted-foreground">Loading your dashboard…</p>
       </main>
     );
   }

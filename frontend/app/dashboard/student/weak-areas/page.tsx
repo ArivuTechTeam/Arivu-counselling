@@ -13,8 +13,8 @@ export default function WeakAreasPage() {
         ← Back to dashboard
       </Link>
       <PageHeader
-        title="Weak-area analysis"
-        description="Drill from subject to chapter to topic to see exactly where to focus."
+        title="Weak Areas"
+        description="Go from subject to chapter to topic to see exactly where to focus."
       />
       <WeakAreaAnalysis />
     </div>
