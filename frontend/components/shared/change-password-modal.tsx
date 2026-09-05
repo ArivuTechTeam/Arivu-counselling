@@ -103,7 +103,7 @@ export function ChangePasswordModal({
               type={show ? "text" : "password"}
               value={confirm}
               onChange={(e) => setConfirm(e.target.value)}
-              placeholder="Re-type the password"
+              placeholder="Enter the password again"
             />
           </label>
 
@@ -119,7 +119,7 @@ export function ChangePasswordModal({
               {forced ? "Later" : "Cancel"}
             </Button>
             <Button type="submit" disabled={busy}>
-              {busy ? "Saving…" : "Set password"}
+              {busy ? "Saving…" : "Change password"}
             </Button>
           </div>
         </form>

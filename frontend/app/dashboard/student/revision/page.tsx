@@ -137,7 +137,7 @@ export default function RevisionPage() {
         <TabButton
           active={tab === "questions"}
           onClick={() => setTab("questions")}
-          title="Questions revision"
+          title="Saved questions"
           count={items?.length ?? null}
           hint="Questions you bookmarked"
         />

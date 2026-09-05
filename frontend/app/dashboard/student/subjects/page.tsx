@@ -16,6 +16,7 @@ import { SkeletonCards } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/ui/empty-state";
 import { BookOpen } from "@/components/ui/icons";
 import { StudentQuiz, listStudentQuizzes, startAttempt } from "@/lib/api";
+import { variantLabel } from "@/lib/format";
 
 type TakeItem = {
   setId: string;
@@ -133,7 +134,7 @@ export default function StudentSubjectsPage() {
                 >
                   <div>
                     <span className="inline-block rounded-full bg-primary/10 px-2.5 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-primary">
-                      {i.variantType}
+                      {variantLabel(i.variantType)}
                     </span>
                     <p className="mt-2 font-semibold leading-snug text-foreground">
                       {i.title}

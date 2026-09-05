@@ -361,7 +361,7 @@ function EditForm({
             <Input value={numValue} onChange={(e) => setNumValue(e.target.value)} />
           </div>
           <div className="flex flex-col gap-1">
-            <Label>Tolerance (±)</Label>
+            <Label>Allowed margin of error (±)</Label>
             <Input value={numTol} onChange={(e) => setNumTol(e.target.value)} />
           </div>
         </div>

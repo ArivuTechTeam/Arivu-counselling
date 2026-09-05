@@ -157,7 +157,7 @@ export function TeacherStats() {
               Teaching workspace
             </p>
             <h2 className="mt-2 text-2xl font-bold leading-tight sm:text-[28px]">
-              <span className="text-[#9ff0a6]">{setsA}</span> quiz sets from{" "}
+              <span className="text-[#9ff0a6]">{setsA}</span> quizzes from{" "}
               <span className="text-[#9ff0a6]">{docsA}</span> documents.
             </h2>
             <p className="mt-2 text-sm text-white/80">
@@ -199,7 +199,7 @@ export function TeacherStats() {
           delay={0}
         />
         <MetricTile
-          label="Quiz sets"
+          label="Quizzes"
           value={setsA}
           gradient="from-card to-brand-50/70"
           chip="bg-brand-500/10 text-brand-600"

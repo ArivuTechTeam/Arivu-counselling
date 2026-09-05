@@ -6,7 +6,7 @@ export default function ReviewQueuePage() {
     <div className="mx-auto flex max-w-4xl flex-col gap-6">
       <PageHeader
         title="Review queue"
-        description="Generated quiz sets waiting for your review and publish."
+        description="Quizzes waiting for you to review and publish."
       />
       <QuizSetList />
     </div>

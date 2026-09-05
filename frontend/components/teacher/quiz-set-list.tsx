@@ -42,7 +42,7 @@ export function QuizSetList() {
     <Card>
       <CardHeader>
         <CardTitle>Your quizzes</CardTitle>
-        <CardDescription>Review and publish generated quiz sets.</CardDescription>
+        <CardDescription>Review and publish generated quizzes.</CardDescription>
       </CardHeader>
       <CardContent>
         {error ? (
@@ -52,7 +52,7 @@ export function QuizSetList() {
         ) : sets.length === 0 ? (
           <EmptyState
             icon={<Inbox />}
-            title="No quiz sets yet"
+            title="No quizzes yet"
             message="Generate your first quiz to get started."
             action={
               <Link

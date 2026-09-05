@@ -3,12 +3,6 @@
 import { useState } from "react";
 
 import { getQuizSet, getStudentReport } from "@/lib/api";
-import {
-  QuestionPaperDoc,
-  ReportCardDoc,
-  StudentReportDoc,
-} from "@/lib/pdf/documents";
-import { downloadPdf, slug } from "@/lib/pdf/download";
 
 const btn =
   "inline-flex items-center gap-1 rounded-md border border-input px-3 py-1.5 text-xs font-medium text-foreground transition-colors hover:border-primary/50 hover:text-primary disabled:opacity-50";
@@ -32,6 +26,13 @@ export function QuestionPaperButtons({
     setBusy(withAnswers ? "a" : "q");
     setError(null);
     try {
+      // Deferred: @react-pdf/renderer is a heavy library only needed once a
+      // download is actually clicked, so it shouldn't ship in this page's
+      // initial JS bundle.
+      const [{ downloadPdf, slug }, { QuestionPaperDoc }] = await Promise.all([
+        import("@/lib/pdf/download"),
+        import("@/lib/pdf/documents"),
+      ]);
       const detail = await getQuizSet(quizSetId);
       const questions = detail.variants?.[0]?.questions ?? [];
       await downloadPdf(
@@ -53,10 +54,10 @@ export function QuestionPaperButtons({
   return (
     <div className="flex flex-wrap items-center gap-2">
       <button className={btn} disabled={!!busy} onClick={() => go(false)}>
-        {busy === "q" ? "Preparing…" : compact ? "Paper" : "Download question paper"}
+        {busy === "q" ? "Preparing…" : compact ? "Question paper" : "Download question paper"}
       </button>
       <button className={btn} disabled={!!busy} onClick={() => go(true)}>
-        {busy === "a" ? "Preparing…" : "With answers"}
+        {busy === "a" ? "Preparing…" : "Download with answers"}
       </button>
       {error && <span className="text-xs text-red-600">{error}</span>}
     </div>
@@ -90,6 +91,10 @@ export function StudentDownloads({
   async function report() {
     setBusy("r");
     try {
+      const [{ downloadPdf, slug }, { ReportCardDoc }] = await Promise.all([
+        import("@/lib/pdf/download"),
+        import("@/lib/pdf/documents"),
+      ]);
       await downloadPdf(
         <ReportCardDoc
           quizTitle={quizTitle}
@@ -106,6 +111,10 @@ export function StudentDownloads({
   async function paper() {
     setBusy("p");
     try {
+      const [{ downloadPdf, slug }, { QuestionPaperDoc }] = await Promise.all([
+        import("@/lib/pdf/download"),
+        import("@/lib/pdf/documents"),
+      ]);
       await downloadPdf(
         <QuestionPaperDoc
           title={quizTitle}
@@ -146,6 +155,10 @@ export function StudentReportButton({
     setBusy(true);
     setError(null);
     try {
+      const [{ downloadPdf, slug }, { StudentReportDoc }] = await Promise.all([
+        import("@/lib/pdf/download"),
+        import("@/lib/pdf/documents"),
+      ]);
       const r = await getStudentReport(studentId);
       await downloadPdf(
         <StudentReportDoc
@@ -166,7 +179,7 @@ export function StudentReportButton({
   return (
     <span className="inline-flex items-center gap-2">
       <button className={btn} disabled={busy} onClick={go}>
-        {busy ? "Preparing…" : "Report"}
+        {busy ? "Preparing…" : "Download report"}
       </button>
       {error && <span className="text-xs text-red-600">{error}</span>}
     </span>

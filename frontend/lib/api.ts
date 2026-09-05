@@ -49,7 +49,9 @@ export async function uploadDocument(file: File): Promise<UploadResult> {
 
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
-    throw new Error(body.detail || `Upload failed (${res.status})`);
+    throw new Error(
+      body.detail || "We couldn't upload your file. Please try again.",
+    );
   }
   return res.json();
 }
@@ -59,7 +61,7 @@ export async function listDocuments(): Promise<DocumentOut[]> {
   const headers = await authHeader();
   const res = await fetch(`${API_BASE}/api/v1/documents`, { headers });
   if (!res.ok) {
-    throw new Error(`Failed to load documents (${res.status})`);
+    throw new Error("We couldn't load your documents. Please try again.");
   }
   return res.json();
 }
@@ -111,7 +113,10 @@ export async function generateQuiz(
   });
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
-    throw new Error(body.detail || `Generation failed (${res.status})`);
+    throw new Error(
+      body.detail ||
+        "We couldn't generate the quiz. Please try again — if it keeps failing, contact support.",
+    );
   }
   return res.json();
 }
@@ -171,7 +176,9 @@ async function jsonRequest<T>(
   });
   if (!res.ok) {
     const b = await res.json().catch(() => ({}));
-    throw new Error(b.detail || `Request failed (${res.status})`);
+    throw new Error(
+      b.detail || "Something went wrong. Please try again.",
+    );
   }
   return res.json();
 }
@@ -508,7 +515,8 @@ export async function listPublicCourses(
   const res = await fetch(
     `${API_BASE}/api/v1/public/courses?tenant_id=${encodeURIComponent(tenantId)}`,
   );
-  if (!res.ok) throw new Error(`Failed to load courses (${res.status})`);
+  if (!res.ok)
+    throw new Error("We couldn't load the list of courses. Please try again.");
   return res.json();
 }
 

@@ -160,7 +160,7 @@ export function WeakAreaAnalysis() {
         <CardHeader>
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div>
-              <CardTitle>Areas to work on</CardTitle>
+              <CardTitle>Your weak topics</CardTitle>
               <CardDescription>
                 Only your weak topics (below {WEAK}% correct) — weakest first.
                 Strong topics are hidden so you can focus.
@@ -180,7 +180,7 @@ export function WeakAreaAnalysis() {
               {overall.accuracy}%
             </div>
             <div className="text-[11px] uppercase tracking-widest text-muted-foreground">
-              overall success
+              overall accuracy
             </div>
           </div>
           <div>
