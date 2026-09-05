@@ -10,6 +10,8 @@ Teacher class analytics (read-only) for the Class overview.
 
 from __future__ import annotations
 
+import asyncio
+
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from app.lib.auth import CurrentProfile, get_current_profile
@@ -26,7 +28,7 @@ def _initials(name: str | None) -> str:
 
 
 @router.get("/teacher/class-overview")
-def class_overview(
+async def class_overview(
     profile: CurrentProfile = Depends(get_current_profile),
 ) -> dict:
     if profile.role not in STAFF_ROLES:
@@ -45,42 +47,71 @@ def class_overview(
         "pipeline": {"pending_review": 0, "approved": 0, "rejected": 0},
     }
 
-    sets = (
-        service.table("quiz_sets")
-        .select("id, title")
-        .eq("tenant_id", tid)
-        .eq("created_by", uid)
-        .execute()
-        .data
-        or []
-    )
+    # Stage 1: quiz_sets — every later query needs `set_ids` from this, so it
+    # has to run alone first.
+    def fetch_sets():
+        return (
+            service.table("quiz_sets")
+            .select("id, title")
+            .eq("tenant_id", tid)
+            .eq("created_by", uid)
+            .execute()
+            .data
+            or []
+        )
+
+    sets = await asyncio.to_thread(fetch_sets)
     set_ids = [s["id"] for s in sets]
     if not set_ids:
         return empty
     title_by_set = {s["id"]: s["title"] for s in sets}
 
-    variants = (
-        service.table("quiz_variants")
-        .select("id, quiz_set_id, total_marks")
-        .in_("quiz_set_id", set_ids)
-        .execute()
-        .data
-        or []
-    )
+    # Stage 2: quiz_variants — needs `set_ids` from stage 1.
+    def fetch_variants():
+        return (
+            service.table("quiz_variants")
+            .select("id, quiz_set_id, total_marks")
+            .in_("quiz_set_id", set_ids)
+            .execute()
+            .data
+            or []
+        )
+
+    variants = await asyncio.to_thread(fetch_variants)
     var_set = {v["id"]: v["quiz_set_id"] for v in variants}
     var_marks = {v["id"]: v.get("total_marks") for v in variants}
     variant_ids = [v["id"] for v in variants]
     if not variant_ids:
         return empty
 
-    attempts = (
-        service.table("quiz_attempts")
-        .select("student_id, variant_id, total_score")
-        .in_("variant_id", variant_ids)
-        .eq("status", "graded")
-        .execute()
-        .data
-        or []
+    # Stage 3: quiz_attempts and quiz_variant_questions both only need
+    # `variant_ids` from stage 2, not each other's result — run them at the
+    # same time. `supabase-py`'s `.execute()` is a blocking network call, so
+    # `asyncio.to_thread` runs each one on its own thread and `asyncio.gather`
+    # waits for both instead of doing them one after another.
+    def fetch_attempts():
+        return (
+            service.table("quiz_attempts")
+            .select("student_id, variant_id, total_score")
+            .in_("variant_id", variant_ids)
+            .eq("status", "graded")
+            .execute()
+            .data
+            or []
+        )
+
+    def fetch_variant_questions():
+        return (
+            service.table("quiz_variant_questions")
+            .select("question_id")
+            .in_("variant_id", variant_ids)
+            .execute()
+            .data
+            or []
+        )
+
+    attempts, vq = await asyncio.gather(
+        *[asyncio.to_thread(fn) for fn in (fetch_attempts, fetch_variant_questions)]
     )
 
     by_set: dict[str, list[int]] = {}
@@ -112,9 +143,14 @@ def class_overview(
         key=lambda x: -x["attempts"],
     )
 
-    names: dict[str, str | None] = {}
-    if by_student:
-        profs = (
+    qids = list({r["question_id"] for r in vq})
+
+    # Stage 4: profiles (student names) and questions (review status) are
+    # independent of each other — run concurrently.
+    def fetch_profiles():
+        if not by_student:
+            return []
+        return (
             service.table("profiles")
             .select("id, full_name")
             .in_("id", list(by_student.keys()))
@@ -122,7 +158,23 @@ def class_overview(
             .data
             or []
         )
-        names = {p["id"]: p.get("full_name") for p in profs}
+
+    def fetch_questions():
+        if not qids:
+            return []
+        return (
+            service.table("questions")
+            .select("review_status")
+            .in_("id", qids)
+            .execute()
+            .data
+            or []
+        )
+
+    profs, qrows = await asyncio.gather(
+        *[asyncio.to_thread(fn) for fn in (fetch_profiles, fetch_questions)]
+    )
+    names = {p["id"]: p.get("full_name") for p in profs}
 
     students = []
     for sid, v in by_student.items():
@@ -144,28 +196,10 @@ def class_overview(
 
     # Review pipeline: how many of the teacher's questions sit in each state.
     pipeline = {"pending_review": 0, "approved": 0, "rejected": 0}
-    vq = (
-        service.table("quiz_variant_questions")
-        .select("question_id")
-        .in_("variant_id", variant_ids)
-        .execute()
-        .data
-        or []
-    )
-    qids = list({r["question_id"] for r in vq})
-    if qids:
-        qrows = (
-            service.table("questions")
-            .select("review_status")
-            .in_("id", qids)
-            .execute()
-            .data
-            or []
-        )
-        for q in qrows:
-            st = q.get("review_status")
-            if st in pipeline:
-                pipeline[st] += 1
+    for q in qrows:
+        st = q.get("review_status")
+        if st in pipeline:
+            pipeline[st] += 1
 
     class_accuracy = round(sum(all_pcts) / len(all_pcts)) if all_pcts else 0
     return {
@@ -181,7 +215,7 @@ def class_overview(
 
 
 @router.get("/teacher/class-monitor")
-def class_monitor(
+async def class_monitor(
     profile: CurrentProfile = Depends(get_current_profile),
 ) -> dict:
     """
@@ -209,31 +243,60 @@ def class_monitor(
         "students": [],
     }
 
-    sets = (
-        service.table("quiz_sets")
-        .select("id, subject_id")
-        .eq("tenant_id", tid)
-        .eq("created_by", uid)
-        .execute()
-        .data
-        or []
-    )
+    # Stage 1: quiz_sets — every later query needs `set_ids`/`subject_ids`
+    # from this, so it has to run alone first.
+    def fetch_sets():
+        return (
+            service.table("quiz_sets")
+            .select("id, subject_id")
+            .eq("tenant_id", tid)
+            .eq("created_by", uid)
+            .execute()
+            .data
+            or []
+        )
+
+    sets = await asyncio.to_thread(fetch_sets)
     if not sets:
         return empty
     set_ids = [s["id"] for s in sets]
 
     # The teacher's quizzes -> subjects -> courses -> enrolled students (the class).
     subject_ids = list({s["subject_id"] for s in sets if s.get("subject_id")})
-    course_ids: list[str] = []
-    if subject_ids:
-        subs = (
+
+    # Stage 2: subjects (-> course_ids) and quiz_variants (-> variant_ids)
+    # each only need stage 1's output, not each other's — run concurrently.
+    def fetch_subjects():
+        if not subject_ids:
+            return []
+        return (
             service.table("subjects").select("id, course_id").in_("id", subject_ids).execute().data
             or []
         )
-        course_ids = list({s["course_id"] for s in subs if s.get("course_id")})
-    roster: set[str] = set()
-    if course_ids:
-        enr = (
+
+    def fetch_variants():
+        return (
+            service.table("quiz_variants")
+            .select("id, total_marks")
+            .in_("quiz_set_id", set_ids)
+            .execute()
+            .data
+            or []
+        )
+
+    subs, variants = await asyncio.gather(
+        *[asyncio.to_thread(fn) for fn in (fetch_subjects, fetch_variants)]
+    )
+    course_ids = list({s["course_id"] for s in subs if s.get("course_id")})
+    var_marks = {v["id"]: v.get("total_marks") for v in variants}
+    variant_ids = [v["id"] for v in variants]
+
+    # Stage 3: enrollments (needs course_ids) and quiz_attempts (needs
+    # variant_ids) are independent of each other — run concurrently.
+    def fetch_enrollments():
+        if not course_ids:
+            return []
+        return (
             service.table("enrollments")
             .select("profile_id")
             .eq("tenant_id", tid)
@@ -242,22 +305,11 @@ def class_monitor(
             .data
             or []
         )
-        roster = {e["profile_id"] for e in enr}
 
-    # Graded attempts on the teacher's quizzes.
-    variants = (
-        service.table("quiz_variants")
-        .select("id, total_marks")
-        .in_("quiz_set_id", set_ids)
-        .execute()
-        .data
-        or []
-    )
-    var_marks = {v["id"]: v.get("total_marks") for v in variants}
-    variant_ids = [v["id"] for v in variants]
-    attempts = []
-    if variant_ids:
-        attempts = (
+    def fetch_attempts():
+        if not variant_ids:
+            return []
+        return (
             service.table("quiz_attempts")
             .select("student_id, variant_id, total_score, submitted_at")
             .in_("variant_id", variant_ids)
@@ -266,6 +318,11 @@ def class_monitor(
             .data
             or []
         )
+
+    enr, attempts = await asyncio.gather(
+        *[asyncio.to_thread(fn) for fn in (fetch_enrollments, fetch_attempts)]
+    )
+    roster: set[str] = {e["profile_id"] for e in enr}
     # Anyone who attempted counts as part of the class too.
     for a in attempts:
         roster.add(a["student_id"])
@@ -285,14 +342,18 @@ def class_monitor(
         if sa and (d["last"] is None or sa > d["last"]):
             d["last"] = sa
 
-    prows = (
-        service.table("profiles")
-        .select("id, full_name, role")
-        .in_("id", list(roster))
-        .execute()
-        .data
-        or []
-    )
+    # Stage 4: profiles — needs the merged roster from stage 3.
+    def fetch_profiles():
+        return (
+            service.table("profiles")
+            .select("id, full_name, role")
+            .in_("id", list(roster))
+            .execute()
+            .data
+            or []
+        )
+
+    prows = await asyncio.to_thread(fetch_profiles)
     # The class roster is students only — exclude any staff who happen to be
     # enrolled (e.g. a teacher enrolled in their own course for testing).
     names = {p["id"]: p.get("full_name") for p in prows if p.get("role") == "student"}
