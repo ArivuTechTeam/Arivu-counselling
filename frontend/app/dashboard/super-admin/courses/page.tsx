@@ -1,9 +1,5 @@
-import { CourseManager } from "@/components/admin/course-manager";
+import { redirect } from "next/navigation";
 
 export default function CoursesPage() {
-  return (
-    <div className="mx-auto max-w-6xl">
-      <CourseManager />
-    </div>
-  );
+  redirect("/dashboard/super-admin");
 }

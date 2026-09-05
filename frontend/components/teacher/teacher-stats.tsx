@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 
 import { Skeleton, SkeletonStats } from "@/components/ui/skeleton";
+import { ErrorCard } from "@/components/ui/error-card";
 import { listDocuments, listQuizSets } from "@/lib/api";
 
 function useCountUp(target: number, on: boolean, ms = 900) {
@@ -111,20 +112,21 @@ export function TeacherStats() {
   const [docs, setDocs] = useState<number | null>(null);
   const [sets, setSets] = useState<number | null>(null);
   const [published, setPublished] = useState<number | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    listDocuments()
-      .then((d) => setDocs(d.length))
-      .catch(() => setDocs(0));
-    listQuizSets()
-      .then((s) => {
+  function load() {
+    setError(null);
+    Promise.all([listDocuments(), listQuizSets()])
+      .then(([documents, s]) => {
+        setDocs(documents.length);
         setSets(s.length);
         setPublished(s.filter((x) => x.status === "published").length);
       })
-      .catch(() => {
-        setSets(0);
-        setPublished(0);
-      });
+      .catch((e) => setError(e.message));
+  }
+
+  useEffect(() => {
+    load();
   }, []);
 
   const ready = docs !== null && sets !== null;
@@ -136,6 +138,7 @@ export function TeacherStats() {
   const pubA = useCountUp(published ?? 0, ready);
   const draftsA = useCountUp(drafts, ready);
 
+  if (error) return <ErrorCard message={error} onRetry={load} />;
   if (!ready) {
     return (
       <div className="flex flex-col gap-6">

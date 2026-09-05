@@ -144,7 +144,7 @@ export function BlueprintGenerator() {
       .catch((e) => setError(e.message));
     listCourses()
       .then(setCourses)
-      .catch(() => {});
+      .catch((e) => setError(e.message));
   }, []);
 
   // Load the selected subject's chapters for the dropdown.
@@ -157,7 +157,10 @@ export function BlueprintGenerator() {
     }
     listChapters(subjectId)
       .then(setChapters)
-      .catch(() => setChapters([]));
+      .catch((e) => {
+        setChapters([]);
+        setError(e.message);
+      });
   }, [subjectId]);
 
   async function handleUpload(e: React.ChangeEvent<HTMLInputElement>) {

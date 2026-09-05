@@ -130,18 +130,37 @@ def generate_blueprint_quiz(
     tid = profile.tenant_id
     chapter_name = chapter_name.strip()
 
+    enrolled = (
+        service.table("enrollments")
+        .select("course_id")
+        .eq("profile_id", profile.user_id)
+        .eq("tenant_id", tid)
+        .execute()
+        .data
+        or []
+    )
+    teacher_course_ids = {row["course_id"] for row in enrolled}
+
     # 0) Subject must belong to this tenant.
     subj = (
-        service.table("subjects").select("id")
+        service.table("subjects").select("id, course_id")
         .eq("id", subject_id).eq("tenant_id", tid).maybe_single().execute()
     )
-    if subj is None or not subj.data:
+    if (
+        subj is None
+        or not subj.data
+        or subj.data.get("course_id") not in teacher_course_ids
+    ):
         raise ValueError("Subject not found.")
 
     # 1) Fetch the document + extract text.
     doc = (
         service.table("documents").select("*")
-        .eq("id", document_id).eq("tenant_id", tid).maybe_single().execute()
+        .eq("id", document_id)
+        .eq("tenant_id", tid)
+        .eq("uploaded_by", profile.user_id)
+        .maybe_single()
+        .execute()
     )
     if doc is None or not doc.data:
         raise ValueError("Document not found.")
@@ -198,33 +217,41 @@ def generate_blueprint_quiz(
     }).execute()
     quiz_set_id = quiz_set.data[0]["id"]
 
-    total_marks = sum(q.marks for q in questions)
-    variant = service.table("quiz_variants").insert({
-        "tenant_id": tid, "quiz_set_id": quiz_set_id,
-        "variant_type": cognitive_level, "total_marks": total_marks,
-    }).execute()
-    variant_id = variant.data[0]["id"]
-
     stored: list[dict] = []
-    for index, q in enumerate(questions):
-        tag = (q.topic or "").strip().lower()
-        topic_id = (
-            None if tag in ("", GENERAL_TOPIC.lower()) else topic_id_by_name.get(tag)
-        )
-        qrow = service.table("questions").insert({
-            "tenant_id": tid, "chapter_id": chapter_id, "topic_id": topic_id,
-            "type": q.type, "question_text": q.question_text, "options": q.options,
-            "correct_answer": q.correct_answer, "explanation": q.explanation,
-            "difficulty": q.difficulty, "marks": q.marks,
-            "source": "ai_generated", "review_status": "pending_review",
-            "created_by": profile.user_id,
+    created_question_ids: list[str] = []
+    try:
+        total_marks = sum(q.marks for q in questions)
+        variant = service.table("quiz_variants").insert({
+            "tenant_id": tid, "quiz_set_id": quiz_set_id,
+            "variant_type": cognitive_level, "total_marks": total_marks,
         }).execute()
-        question_id = qrow.data[0]["id"]
-        service.table("quiz_variant_questions").insert({
-            "tenant_id": tid, "variant_id": variant_id,
-            "question_id": question_id, "order_index": index,
-        }).execute()
-        stored.append({"id": question_id, **q.model_dump()})
+        variant_id = variant.data[0]["id"]
+
+        for index, q in enumerate(questions):
+            tag = (q.topic or "").strip().lower()
+            topic_id = (
+                None if tag in ("", GENERAL_TOPIC.lower()) else topic_id_by_name.get(tag)
+            )
+            qrow = service.table("questions").insert({
+                "tenant_id": tid, "chapter_id": chapter_id, "topic_id": topic_id,
+                "type": q.type, "question_text": q.question_text, "options": q.options,
+                "correct_answer": q.correct_answer, "explanation": q.explanation,
+                "difficulty": q.difficulty, "marks": q.marks,
+                "source": "ai_generated", "review_status": "pending_review",
+                "created_by": profile.user_id,
+            }).execute()
+            question_id = qrow.data[0]["id"]
+            created_question_ids.append(question_id)
+            service.table("quiz_variant_questions").insert({
+                "tenant_id": tid, "variant_id": variant_id,
+                "question_id": question_id, "order_index": index,
+            }).execute()
+            stored.append({"id": question_id, **q.model_dump()})
+    except Exception:
+        service.table("quiz_sets").delete().eq("id", quiz_set_id).execute()
+        if created_question_ids:
+            service.table("questions").delete().in_("id", created_question_ids).execute()
+        raise
 
     # Instrument: one 'question.generated' event per question (best-effort).
     provider = get_settings().gemini_blueprint_model

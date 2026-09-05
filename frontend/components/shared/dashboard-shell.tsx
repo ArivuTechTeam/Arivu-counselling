@@ -79,22 +79,54 @@ const NAV: Record<string, NavItem[]> = {
     },
   ],
   institution_admin: [
-    { label: "Dashboard", href: "/dashboard/institution-admin", icon: LayoutDashboard },
-    { label: "Users", href: "/dashboard/institution-admin/users", icon: Users },
+    {
+      label: "Dashboard",
+      href: "/dashboard/institution-admin",
+      section: "Overview",
+      icon: LayoutDashboard,
+    },
+    {
+      label: "Users",
+      href: "/dashboard/institution-admin/users",
+      section: "Management",
+      icon: Users,
+    },
     {
       label: "Courses & subjects",
       href: "/dashboard/institution-admin/courses",
+      section: "Management",
       icon: BookOpen,
     },
-    { label: "Quizzes", href: "/dashboard/institution-admin/quizzes", icon: FileText },
-    { label: "Analytics", href: "/dashboard/institution-admin/analytics", icon: BarChart3 },
+    {
+      label: "Quizzes",
+      href: "/dashboard/institution-admin/quizzes",
+      section: "Management",
+      icon: FileText,
+    },
+    {
+      label: "Analytics",
+      href: "/dashboard/institution-admin/analytics",
+      section: "Analytics",
+      icon: BarChart3,
+    },
   ],
   super_admin: [
-    { label: "Dashboard", href: "/dashboard/super-admin", icon: LayoutDashboard },
-    { label: "Institutions", href: "/dashboard/super-admin/institutions", icon: Building2 },
+    {
+      label: "Dashboard",
+      href: "/dashboard/super-admin",
+      section: "Overview",
+      icon: LayoutDashboard,
+    },
+    {
+      label: "Institutions",
+      href: "/dashboard/super-admin/institutions",
+      section: "Management",
+      icon: Building2,
+    },
     {
       label: "Question Quality",
       href: "/dashboard/super-admin/ai-monitoring",
+      section: "Monitoring",
       icon: Sparkles,
     },
   ],
@@ -151,9 +183,7 @@ const NAV: Record<string, NavItem[]> = {
   ],
 };
 
-// Groups consecutive items that share a `section` under one header. Items
-// with no `section` (institution_admin/super_admin today) all fall under a
-// single "Workspace" group, matching the sidebar's previous flat layout.
+// Groups consecutive items that share a `section` under one header.
 function groupBySection(items: NavItem[]) {
   const groups: { section: string; items: NavItem[] }[] = [];
   for (const item of items) {
@@ -235,9 +265,6 @@ export function DashboardShell({
   }, [mustChangePassword]);
 
   const items = role ? NAV[role] ?? [] : [];
-  // institution_admin/super_admin have no `section` on any item — render them
-  // as a plain flat list instead of a collapsible group.
-  const isFlatRole = items.length > 0 && items.every((i) => !i.section);
   // Pick the most specific matching nav item (longest href), so a parent like
   // "Overview" isn't highlighted while you're on a child route like "/users".
   const active = items
@@ -350,22 +377,7 @@ export function DashboardShell({
           <p className="px-2 text-sm text-white/60">No matching items</p>
         )}
 
-        {isFlatRole ? (
-          <nav className="flex flex-col gap-1">
-            {(filteredSections[0]?.items ?? []).map((it) => (
-              <NavRow
-                key={it.label}
-                item={it}
-                active={it.href === active?.href}
-                onNavigate={() => {
-                  setNavOpen(false);
-                  setNavQuery("");
-                }}
-              />
-            ))}
-          </nav>
-        ) : (
-          filteredSections.map((group, i) => {
+        {filteredSections.map((group, i) => {
             // While searching, force every matched group open — collapsing a
             // group would hide the very item the user just searched for.
             const isOpen = query.length > 0 || openSections.has(group.section);
@@ -400,8 +412,7 @@ export function DashboardShell({
                 )}
               </div>
             );
-          })
-        )}
+          })}
       </aside>
 
       {/* Main column */}

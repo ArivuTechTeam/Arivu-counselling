@@ -104,7 +104,8 @@ function OnboardForm({ onDone }: { onDone: () => void }) {
               Plan
               <select className={field} value={plan} onChange={(e) => setPlan(e.target.value)}>
                 <option value="free">Free</option>
-                <option value="pro">Pro</option>
+                <option value="starter">Starter</option>
+                <option value="growth">Growth</option>
                 <option value="enterprise">Enterprise</option>
               </select>
             </label>

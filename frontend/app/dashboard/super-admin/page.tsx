@@ -203,7 +203,7 @@ export default function PlatformOverviewPage() {
                 </span>
               </div>
               <p className="mt-0.5 text-xs text-muted-foreground">
-                Target ≥ 70% approved without edits.
+                Share of reviewed questions currently approved.
               </p>
             </div>
             <div className="flex flex-col gap-2 text-sm">

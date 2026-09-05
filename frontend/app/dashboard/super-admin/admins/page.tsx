@@ -1,9 +1,5 @@
-import { AdminManager } from "@/components/admin/admin-manager";
+import { redirect } from "next/navigation";
 
 export default function SuperAdminAdminsPage() {
-  return (
-    <div className="mx-auto max-w-4xl">
-      <AdminManager />
-    </div>
-  );
+  redirect("/dashboard/super-admin/institutions");
 }

@@ -25,7 +25,7 @@ from functools import lru_cache
 
 import jwt  # the PyJWT library
 from jwt import PyJWKClient
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel
 
@@ -99,6 +99,7 @@ class CurrentProfile(BaseModel):
     role: str  # 'super_admin' | 'institution_admin' | 'teacher' | 'student'
     full_name: str | None = None
     email: str | None = None
+    must_change_password: bool = False
 
 
 def get_current_user(
@@ -140,6 +141,7 @@ def get_current_user(
 
 
 def get_current_profile(
+    request: Request,
     user: CurrentUser = Depends(get_current_user),
 ) -> CurrentProfile:
     """
@@ -153,7 +155,7 @@ def get_current_profile(
     client = get_service_client()
     result = (
         client.table("profiles")
-        .select("id, tenant_id, role, full_name")
+        .select("*")
         .eq("id", user.user_id)
         .maybe_single()  # returns None instead of erroring if no row
         .execute()
@@ -169,10 +171,20 @@ def get_current_profile(
         )
 
     row = result.data
+    must_change_password = bool(row.get("must_change_password", False))
+    if (
+        must_change_password
+        and request.url.path != "/api/v1/auth/change-password"
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You must change your temporary password before continuing.",
+        )
     return CurrentProfile(
         user_id=user.user_id,
         tenant_id=str(row["tenant_id"]),
         role=str(row["role"]),
         full_name=row.get("full_name"),
         email=user.email,
+        must_change_password=must_change_password,
     )

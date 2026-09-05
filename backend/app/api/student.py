@@ -21,6 +21,7 @@ from app.lib.auth import CurrentProfile, get_current_profile
 from app.lib.supabase import get_service_client
 from app.services.events import ATTEMPT_SUBMITTED, log_event
 from app.services.grading import grade_answer
+from app.services.selector import enrolled_subject_ids
 
 router = APIRouter(prefix="/api/v1", tags=["student"])
 
@@ -238,13 +239,19 @@ def start_attempt(
 
     qs = (
         service.table("quiz_sets")
-        .select("status")
+        .select("status, subject_id")
         .eq("id", variant.data["quiz_set_id"])
+        .eq("tenant_id", profile.tenant_id)
         .single()
         .execute()
     )
     if qs.data["status"] != "published":
         raise HTTPException(status_code=400, detail="This quiz is not published.")
+    if qs.data.get("subject_id") not in enrolled_subject_ids(service, profile):
+        raise HTTPException(
+            status_code=403,
+            detail="This quiz is not assigned to your course.",
+        )
 
     attempt = (
         service.table("quiz_attempts")
@@ -291,6 +298,7 @@ def get_attempt(
             "attempt_id": attempt_id,
             "status": "in_progress",
             "questions": [_strip_answer(q) for q in questions],
+            "autosave_state": attempt.get("autosave_state") or {},
         }
 
     # Graded: return full results (answers now allowed).
@@ -359,6 +367,33 @@ class SubmitRequest(BaseModel):
     answers: list[SubmittedAnswer]
 
 
+class AutosaveRequest(BaseModel):
+    answers: dict[str, Any]
+
+
+@router.patch("/attempts/{attempt_id}/autosave")
+def autosave_attempt(
+    attempt_id: str,
+    body: AutosaveRequest,
+    profile: CurrentProfile = Depends(get_current_profile),
+) -> dict:
+    _require_student(profile)
+    service = get_service_client()
+    attempt = _load_attempt(service, attempt_id, profile)
+    if attempt["status"] != "in_progress":
+        raise HTTPException(status_code=400, detail="This attempt is already submitted.")
+    allowed = {
+        q["id"] for q in _ordered_approved_questions(service, attempt["variant_id"])
+    }
+    answers = {key: value for key, value in body.answers.items() if key in allowed}
+    service.table("quiz_attempts").update({"autosave_state": answers}).eq(
+        "id", attempt_id
+    ).eq("tenant_id", profile.tenant_id).eq(
+        "student_id", profile.user_id
+    ).execute()
+    return {"saved": True}
+
+
 @router.post("/attempts/{attempt_id}/submit")
 def submit_attempt(
     attempt_id: str,
@@ -376,11 +411,12 @@ def submit_attempt(
 
     total = 0.0
     results = []
+    answer_rows = []
     for q in questions:
         student_answer = submitted.get(q["id"])
         is_correct, awarded = grade_answer(q, student_answer)
         total += awarded
-        service.table("attempt_answers").insert(
+        answer_rows.append(
             {
                 "tenant_id": profile.tenant_id,
                 "attempt_id": attempt_id,
@@ -389,7 +425,7 @@ def submit_attempt(
                 "is_correct": is_correct,
                 "marks_awarded": awarded,
             }
-        ).execute()
+        )
         results.append(
             {
                 "id": q["id"],
@@ -405,13 +441,42 @@ def submit_attempt(
             }
         )
 
-    service.table("quiz_attempts").update(
-        {
-            "status": "graded",
-            "total_score": total,
-            "submitted_at": datetime.now(timezone.utc).isoformat(),
-        }
-    ).eq("id", attempt_id).execute()
+    submitted_at = datetime.now(timezone.utc).isoformat()
+    claimed = (
+        service.table("quiz_attempts")
+        .update(
+            {
+                "status": "graded",
+                "total_score": total,
+                "submitted_at": submitted_at,
+                "autosave_state": {},
+            }
+        )
+        .eq("id", attempt_id)
+        .eq("tenant_id", profile.tenant_id)
+        .eq("student_id", profile.user_id)
+        .eq("status", "in_progress")
+        .execute()
+    )
+    if not claimed.data:
+        raise HTTPException(status_code=400, detail="This attempt is already submitted.")
+    try:
+        if answer_rows:
+            service.table("attempt_answers").upsert(
+                answer_rows, on_conflict="attempt_id,question_id"
+            ).execute()
+    except Exception as exc:  # noqa: BLE001
+        # Compensate so a failed answer write never leaves a graded attempt
+        # with missing results. The status predicate also makes retries safe.
+        service.table("attempt_answers").delete().eq("attempt_id", attempt_id).execute()
+        service.table("quiz_attempts").update(
+            {
+                "status": "in_progress",
+                "total_score": None,
+                "submitted_at": None,
+            }
+        ).eq("id", attempt_id).eq("student_id", profile.user_id).execute()
+        raise HTTPException(status_code=500, detail=f"Could not save answers: {exc}")
 
     max_score = sum(float(q.get("marks") or 1) for q in questions)
     # Instrument: a graded attempt (powers student-outcome trends).
@@ -862,18 +927,18 @@ def student_attempts(
         .data
         or []
     )
-    if not attempts:
-        return []
-
     variant_ids = list({a["variant_id"] for a in attempts})
-    vrows = (
-        service.table("quiz_variants")
-        .select("id, variant_type, total_marks, quiz_set_id")
-        .in_("id", variant_ids)
-        .execute()
-        .data
-        or []
-    )
+    vrows = []
+    if variant_ids:
+        vrows = (
+            service.table("quiz_variants")
+            .select("id, variant_type, total_marks, quiz_set_id")
+            .in_("id", variant_ids)
+            .eq("tenant_id", tid)
+            .execute()
+            .data
+            or []
+        )
     variants = {v["id"]: v for v in vrows}
 
     set_ids = list({v["quiz_set_id"] for v in variants.values()})
@@ -883,6 +948,7 @@ def student_attempts(
             service.table("quiz_sets")
             .select("id, title")
             .in_("id", set_ids)
+            .eq("tenant_id", tid)
             .execute()
             .data
             or []
@@ -900,6 +966,31 @@ def student_attempts(
                 "total_score": a.get("total_score"),
                 "max_score": v.get("total_marks"),
                 "submitted_at": a.get("submitted_at"),
+                "source": "quiz",
             }
         )
-    return out
+
+    practice = (
+        service.table("practice_sessions")
+        .select("id, mode, total_score, max_score, submitted_at")
+        .eq("tenant_id", tid)
+        .eq("student_id", uid)
+        .eq("status", "graded")
+        .execute()
+        .data
+        or []
+    )
+    for session in practice:
+        mode = str(session.get("mode") or "practice").replace("_", " ").title()
+        out.append(
+            {
+                "attempt_id": session["id"],
+                "quiz_title": f"{mode} practice",
+                "variant_type": session.get("mode"),
+                "total_score": session.get("total_score"),
+                "max_score": session.get("max_score"),
+                "submitted_at": session.get("submitted_at"),
+                "source": "practice",
+            }
+        )
+    return sorted(out, key=lambda row: row.get("submitted_at") or "", reverse=True)

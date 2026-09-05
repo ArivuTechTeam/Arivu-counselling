@@ -21,12 +21,9 @@ from app.lib.supabase import get_service_client
 
 router = APIRouter(prefix="/api/v1", tags=["admin"])
 
-ADMIN_ROLES = {"institution_admin", "super_admin"}
-
-
 def _require_admin(profile: CurrentProfile) -> None:
-    if profile.role not in ADMIN_ROLES:
-        raise HTTPException(status_code=403, detail="Admins only.")
+    if profile.role != "institution_admin":
+        raise HTTPException(status_code=403, detail="Institution admins only.")
 
 
 def _require_super(profile: CurrentProfile) -> None:
@@ -39,6 +36,42 @@ def _count(service, table: str, tenant_id: str, **filters) -> int:
     for k, v in filters.items():
         q = q.eq(k, v)
     return len(q.execute().data or [])
+
+
+def _delete_auth_user_quietly(service, user_id: str) -> None:
+    """Best-effort compensation for a failed multi-step provisioning flow."""
+    try:
+        service.auth.admin.delete_user(user_id)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _set_provisioned_profile(
+    service, *, user_id: str, tenant_id: str, role: str, full_name: str
+) -> None:
+    updated = (
+        service.table("profiles")
+        .update(
+            {
+                "tenant_id": tenant_id,
+                "role": role,
+                "full_name": full_name.strip(),
+            }
+        )
+        .eq("id", user_id)
+        .execute()
+    )
+    if not updated.data:
+        raise RuntimeError("The authorization profile was not created.")
+    # Migration 11 makes this authoritative. Keep provisioning compatible
+    # during a rolling deployment where API code may start just before DDL.
+    try:
+        service.table("profiles").update({"must_change_password": True}).eq(
+            "id", user_id
+        ).execute()
+    except Exception as exc:  # noqa: BLE001
+        if "must_change_password" not in str(exc):
+            raise
 
 
 # ── Users ───────────────────────────────────────────────────────────────────
@@ -110,6 +143,21 @@ def create_user(
     _require_admin(profile)
     service = get_service_client()
 
+    if not body.full_name.strip():
+        raise HTTPException(status_code=400, detail="Full name is required.")
+    if not body.course_id:
+        raise HTTPException(status_code=400, detail="A course is required.")
+    course = (
+        service.table("courses")
+        .select("id")
+        .eq("id", body.course_id)
+        .eq("tenant_id", profile.tenant_id)
+        .maybe_single()
+        .execute()
+    )
+    if course is None or not course.data:
+        raise HTTPException(status_code=400, detail="Course not found in this institution.")
+
     meta: dict = {
         "tenant_id": profile.tenant_id,
         "role": body.role,
@@ -126,10 +174,20 @@ def create_user(
                 "email": body.email.strip(),
                 "password": body.password,
                 "email_confirm": True,  # admin-created accounts are ready to use
+                "app_metadata": {"provisioned_by_backend": True},
                 "user_metadata": meta,
             }
         )
+        _set_provisioned_profile(
+            service,
+            user_id=created.user.id,
+            tenant_id=profile.tenant_id,
+            role=body.role,
+            full_name=body.full_name,
+        )
     except Exception as exc:  # noqa: BLE001
+        if "created" in locals() and created.user:
+            _delete_auth_user_quietly(service, created.user.id)
         raise HTTPException(status_code=400, detail=f"Could not create user: {exc}")
 
     return {"id": created.user.id, "email": body.email}
@@ -144,7 +202,7 @@ def delete_user(
     # Only allow deleting a user inside the admin's own tenant.
     target = (
         service.table("profiles")
-        .select("id")
+        .select("id, role")
         .eq("id", user_id)
         .eq("tenant_id", profile.tenant_id)
         .maybe_single()
@@ -152,6 +210,10 @@ def delete_user(
     )
     if target is None or not target.data:
         raise HTTPException(status_code=404, detail="User not found.")
+    if target.data["role"] not in {"teacher", "student"}:
+        raise HTTPException(status_code=400, detail="Only teachers and students can be removed here.")
+    if user_id == profile.user_id:
+        raise HTTPException(status_code=400, detail="You cannot remove your own account.")
     try:
         service.auth.admin.delete_user(user_id)
     except Exception as exc:  # noqa: BLE001
@@ -234,6 +296,7 @@ def create_admin(
                 "email": body.email.strip(),
                 "password": body.password,
                 "email_confirm": True,  # ready to sign in immediately
+                "app_metadata": {"provisioned_by_backend": True},
                 "user_metadata": {
                     "tenant_id": body.tenant_id,
                     "role": "institution_admin",
@@ -242,7 +305,16 @@ def create_admin(
                 },
             }
         )
+        _set_provisioned_profile(
+            service,
+            user_id=created.user.id,
+            tenant_id=body.tenant_id,
+            role="institution_admin",
+            full_name=body.full_name,
+        )
     except Exception as exc:  # noqa: BLE001
+        if "created" in locals() and created.user:
+            _delete_auth_user_quietly(service, created.user.id)
         raise HTTPException(status_code=400, detail=f"Could not create admin: {exc}")
 
     return {"id": created.user.id, "email": body.email}
@@ -315,8 +387,8 @@ def institution_overview(
     service = get_service_client()
     t = profile.tenant_id
 
-    # Fetch every independent table concurrently (see _gather) — this is the
-    # dashboard's main speed lever: parallel round-trips instead of ~9 serial.
+    # Fetch through the shared helper so database failures are surfaced rather
+    # than converted into valid-looking zero metrics.
     data = _gather(
         {
             "profiles": lambda: service.table("profiles")
@@ -459,23 +531,12 @@ def institution_overview(
 
 # ── Institution admin: Analytics (data-analyst report, no AI) ────────────────
 def _gather(thunks: dict) -> dict:
-    """Run independent Supabase reads concurrently and return {key: rows}.
+    """Run Supabase reads sequentially and propagate failures to the UI.
 
-    supabase-py is blocking, so a small thread pool turns ~8 sequential network
-    round-trips into a handful of parallel ones — the real speed win. A failing
-    read degrades to an empty list rather than breaking the whole dashboard.
+    A sync client is not safe to share across worker threads; doing so
+    caused intermittent HTTP/2 disconnects and false zero-value dashboards.
     """
-    from concurrent.futures import ThreadPoolExecutor
-
-    out: dict = {}
-    with ThreadPoolExecutor(max_workers=8) as ex:
-        futures = {k: ex.submit(fn) for k, fn in thunks.items()}
-        for k, fut in futures.items():
-            try:
-                out[k] = fut.result()
-            except Exception:  # noqa: BLE001 — one slow/failed read must not 500 the page
-                out[k] = []
-    return out
+    return {key: thunk() for key, thunk in thunks.items()}
 
 
 def _admin_findings(
@@ -1065,7 +1126,7 @@ def platform_overview(
 class TenantCreate(BaseModel):
     name: str
     subdomain: str
-    plan_tier: str = "free"
+    plan_tier: Literal["free", "starter", "growth", "enterprise"] = "free"
     # Optional first institution admin created alongside the tenant.
     admin_full_name: str | None = None
     admin_email: str | None = None
@@ -1084,6 +1145,16 @@ def onboard_institution(
     subdomain = body.subdomain.strip().lower()
     if not name or not subdomain:
         raise HTTPException(status_code=400, detail="Name and subdomain are required.")
+    supplied_admin_fields = [
+        body.admin_full_name,
+        body.admin_email,
+        body.admin_password,
+    ]
+    if any(supplied_admin_fields) and not all(supplied_admin_fields):
+        raise HTTPException(
+            status_code=400,
+            detail="Admin name, email and temporary password are all required together.",
+        )
     if not all(c.isalnum() or c == "-" for c in subdomain):
         raise HTTPException(
             status_code=400,
@@ -1121,6 +1192,7 @@ def onboard_institution(
                     "email": body.admin_email.strip(),
                     "password": body.admin_password,
                     "email_confirm": True,
+                    "app_metadata": {"provisioned_by_backend": True},
                     "user_metadata": {
                         "tenant_id": tenant_id,
                         "role": "institution_admin",
@@ -1129,11 +1201,21 @@ def onboard_institution(
                     },
                 }
             )
+            _set_provisioned_profile(
+                service,
+                user_id=u.user.id,
+                tenant_id=tenant_id,
+                role="institution_admin",
+                full_name=body.admin_full_name or "",
+            )
             admin = {"id": u.user.id, "email": body.admin_email.strip()}
         except Exception as exc:  # noqa: BLE001
+            if "u" in locals() and u.user:
+                _delete_auth_user_quietly(service, u.user.id)
+            service.table("tenants").delete().eq("id", tenant_id).execute()
             raise HTTPException(
                 status_code=400,
-                detail=f"Institution '{name}' was created, but its admin could not be: {exc}",
+                detail=f"Could not create institution admin: {exc}",
             )
 
     return {"id": tenant_id, "name": name, "subdomain": subdomain, "admin": admin}

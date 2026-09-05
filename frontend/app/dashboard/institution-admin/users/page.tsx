@@ -14,6 +14,7 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { ErrorCard } from "@/components/ui/error-card";
 import { Eye, EyeOff, Trash, Users, X } from "@/components/ui/icons";
 import { Input } from "@/components/ui/input";
+import { PageHeader } from "@/components/ui/page-header";
 import { SkeletonList } from "@/components/ui/skeleton";
 import { statusLabel } from "@/lib/format";
 import {
@@ -59,7 +60,7 @@ export default function UsersPage() {
   }
   useEffect(() => {
     refresh();
-    listCourses().then(setCourses).catch(() => {});
+    listCourses().then(setCourses).catch((e) => setError(e.message));
   }, []);
 
   async function add() {
@@ -71,7 +72,7 @@ export default function UsersPage() {
         email: form.email,
         password: form.password,
         role: form.role as "teacher" | "student",
-        course_id: form.course_id || undefined,
+        course_id: form.course_id,
       });
       setForm({ full_name: "", email: "", password: "", role: "student", course_id: "" });
       refresh();
@@ -98,7 +99,12 @@ export default function UsersPage() {
 
   return (
     <div className="flex flex-col gap-6">
-      <Card>
+      <PageHeader
+        title="Users"
+        description="Create teacher and student accounts, assign courses, and manage access."
+      />
+
+      <Card className="animate-rise">
         <CardHeader>
           <CardTitle>Add teacher or student</CardTitle>
           <CardDescription>
@@ -130,12 +136,12 @@ export default function UsersPage() {
             <option value="teacher">Teacher</option>
           </select>
           <select className={selectClass} value={form.course_id} onChange={(e) => setForm((f) => ({ ...f, course_id: e.target.value }))}>
-            <option value="">No course</option>
+            <option value="">Select course</option>
             {courses.map((c) => (
               <option key={c.id} value={c.id}>{c.name}</option>
             ))}
           </select>
-          <Button disabled={busy || !form.full_name || !form.email || !form.password} onClick={add}>
+          <Button disabled={busy || !form.full_name || !form.email || !form.password || !form.course_id} onClick={add}>
             Add user
           </Button>
           {error && (
@@ -146,7 +152,7 @@ export default function UsersPage() {
         </CardContent>
       </Card>
 
-      <Card>
+      <Card className="animate-rise">
         <CardHeader>
           <CardTitle>
             Teachers &amp; students{users ? ` (${users.length})` : ""}

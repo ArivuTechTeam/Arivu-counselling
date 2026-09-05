@@ -68,7 +68,7 @@ export function TestHistory() {
             return (
               <Link
                 key={a.attempt_id}
-                href={`/dashboard/student/attempt/${a.attempt_id}`}
+                href={`/dashboard/student/${a.source === "practice" ? "practice" : "attempt"}/${a.attempt_id}`}
                 style={{ animationDelay: `${i * 60}ms` }}
                 className="group relative flex animate-rise items-center gap-5 overflow-hidden rounded-2xl border bg-card p-5 pl-6 shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-md"
               >

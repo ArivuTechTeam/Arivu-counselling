@@ -56,6 +56,7 @@ create table profiles (
   role user_role not null,
   full_name text,
   avatar_url text,
+  must_change_password boolean not null default false,
   created_at timestamptz not null default now()
 );
 create index idx_profiles_tenant on profiles(tenant_id);
@@ -345,9 +346,8 @@ $$;
 
 -- ============================================================================
 -- STEP 12: AUTO-CREATE PROFILE ON SIGNUP
--- The app (or an admin using the service_role key) must pass tenant_id,
--- role, and full_name in raw_user_meta_data when calling supabase.auth.signUp
--- or admin.createUser. This trigger turns that metadata into a profile row.
+-- Public metadata is untrusted. Every signup starts as a student; protected
+-- backend provisioning may promote the profile using the service-role client.
 -- ============================================================================
 
 create or replace function handle_new_user()
@@ -356,12 +356,42 @@ language plpgsql
 security definer
 set search_path = public
 as $$
+declare
+  selected_tenant uuid;
+  requested_course uuid;
+  trusted_provisioning boolean;
 begin
+  trusted_provisioning := coalesce(
+    new.raw_app_meta_data->>'provisioned_by_backend', 'false'
+  ) = 'true';
+  requested_course := nullif(new.raw_user_meta_data->>'course_id', '')::uuid;
+
+  if trusted_provisioning then
+    selected_tenant := (new.raw_user_meta_data->>'tenant_id')::uuid;
+    if not exists (
+      select 1 from public.tenants
+      where id = selected_tenant and is_active = true
+    ) then
+      raise exception 'A valid active institution is required';
+    end if;
+  else
+    if requested_course is null then
+      raise exception 'A valid course is required for public signup';
+    end if;
+    select c.tenant_id into selected_tenant
+    from public.courses c
+    join public.tenants t on t.id = c.tenant_id and t.is_active = true
+    where c.id = requested_course;
+    if selected_tenant is null then
+      raise exception 'A valid course is required for public signup';
+    end if;
+  end if;
+
   insert into public.profiles (id, tenant_id, role, full_name)
   values (
     new.id,
-    (new.raw_user_meta_data->>'tenant_id')::uuid,
-    (new.raw_user_meta_data->>'role')::user_role,
+    selected_tenant,
+    'student'::user_role,
     new.raw_user_meta_data->>'full_name'
   );
   return new;
@@ -412,8 +442,16 @@ create policy "only super admin creates tenants" on tenants
 create policy "see own tenant's profiles" on profiles
   for select using (tenant_id = current_tenant_id() or is_super_admin());
 
-create policy "update own profile or admin manages tenant profiles" on profiles
-  for update using (id = auth.uid() or (tenant_id = current_tenant_id() and current_role_name() = 'institution_admin'));
+create policy "update own safe profile fields" on profiles
+  for update using (id = auth.uid())
+  with check (
+    id = auth.uid()
+    and tenant_id = current_tenant_id()
+    and role = current_role_name()
+  );
+
+revoke update on table profiles from authenticated;
+grant update (full_name, avatar_url) on table profiles to authenticated;
 
 -- Note: no client-facing insert policy on profiles by design — rows are
 -- created only by the handle_new_user trigger (security definer), or by

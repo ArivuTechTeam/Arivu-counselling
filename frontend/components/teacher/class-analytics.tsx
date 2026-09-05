@@ -11,6 +11,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
+import { ErrorCard } from "@/components/ui/error-card";
 import { Skeleton, SkeletonCards } from "@/components/ui/skeleton";
 import {
   AttentionStudent,
@@ -67,11 +68,17 @@ function StudentRow({ s }: { s: AttentionStudent }) {
 export function ClassAnalytics() {
   const router = useRouter();
   const [data, setData] = useState<TeacherClassOverview | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
+  function load() {
+    setError(null);
     getTeacherClassOverview()
       .then(setData)
-      .catch(() => {});
+      .catch((e) => setError(e.message));
+  }
+
+  useEffect(() => {
+    load();
   }, []);
 
   const loaded = data !== null;
@@ -91,6 +98,7 @@ export function ClassAnalytics() {
   const accA = useCountUp(classAccuracy, loaded);
   const hasData = attempts > 0;
 
+  if (error) return <ErrorCard message={error} onRetry={load} />;
   if (!loaded) {
     return (
       <div className="flex flex-col gap-6">

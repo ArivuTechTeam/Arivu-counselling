@@ -50,21 +50,57 @@ language plpgsql
 security definer
 set search_path = public
 as $$
+declare
+  selected_tenant uuid;
+  requested_course uuid;
+  trusted_provisioning boolean;
 begin
+  trusted_provisioning := coalesce(
+    new.raw_app_meta_data->>'provisioned_by_backend', 'false'
+  ) = 'true';
+  requested_course := nullif(new.raw_user_meta_data->>'course_id', '')::uuid;
+
+  if trusted_provisioning then
+    selected_tenant := (new.raw_user_meta_data->>'tenant_id')::uuid;
+    if not exists (
+      select 1 from public.tenants
+      where id = selected_tenant and is_active = true
+    ) then
+      raise exception 'A valid active institution is required';
+    end if;
+  else
+    if requested_course is null then
+      raise exception 'A valid course is required for public signup';
+    end if;
+    select c.tenant_id into selected_tenant
+    from public.courses c
+    join public.tenants t on t.id = c.tenant_id and t.is_active = true
+    where c.id = requested_course;
+    if selected_tenant is null then
+      raise exception 'A valid course is required for public signup';
+    end if;
+  end if;
+
   insert into public.profiles (id, tenant_id, role, full_name)
   values (
     new.id,
-    (new.raw_user_meta_data->>'tenant_id')::uuid,
-    (new.raw_user_meta_data->>'role')::user_role,
+    selected_tenant,
+    'student'::user_role,
     new.raw_user_meta_data->>'full_name'
   );
 
-  if coalesce(new.raw_user_meta_data->>'course_id', '') <> '' then
+  if requested_course is not null then
+    if not exists (
+      select 1 from public.courses
+      where id = requested_course and tenant_id = selected_tenant
+    ) then
+      raise exception 'Course does not belong to the selected institution';
+    end if;
     insert into public.enrollments (tenant_id, profile_id, course_id)
     values (
-      (new.raw_user_meta_data->>'tenant_id')::uuid,
+      selected_tenant,
       new.id,
-      (new.raw_user_meta_data->>'course_id')::uuid
+      requested_course
     )
     on conflict (profile_id, course_id) do nothing;
   end if;

@@ -19,9 +19,6 @@ from app.lib.supabase import get_service_client
 
 router = APIRouter(prefix="/api/v1", tags=["teacher"])
 
-STAFF_ROLES = {"teacher", "institution_admin", "super_admin"}
-
-
 def _initials(name: str | None) -> str:
     parts = (name or "?").split()
     return ("".join(p[0] for p in parts[:2]) or "?").upper()
@@ -31,8 +28,8 @@ def _initials(name: str | None) -> str:
 async def class_overview(
     profile: CurrentProfile = Depends(get_current_profile),
 ) -> dict:
-    if profile.role not in STAFF_ROLES:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Staff only.")
+    if profile.role != "teacher":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Teachers only.")
 
     service = get_service_client()
     tid, uid = profile.tenant_id, profile.user_id
@@ -84,11 +81,8 @@ async def class_overview(
     if not variant_ids:
         return empty
 
-    # Stage 3: quiz_attempts and quiz_variant_questions both only need
-    # `variant_ids` from stage 2, not each other's result — run them at the
-    # same time. `supabase-py`'s `.execute()` is a blocking network call, so
-    # `asyncio.to_thread` runs each one on its own thread and `asyncio.gather`
-    # waits for both instead of doing them one after another.
+    # Stage 3: keep requests sequential because this supabase-py client
+    # owns one HTTP/2 connection pool and is not safe for concurrent threads.
     def fetch_attempts():
         return (
             service.table("quiz_attempts")
@@ -110,9 +104,8 @@ async def class_overview(
             or []
         )
 
-    attempts, vq = await asyncio.gather(
-        *[asyncio.to_thread(fn) for fn in (fetch_attempts, fetch_variant_questions)]
-    )
+    attempts = await asyncio.to_thread(fetch_attempts)
+    vq = await asyncio.to_thread(fetch_variant_questions)
 
     by_set: dict[str, list[int]] = {}
     by_student: dict[str, list[int]] = {}
@@ -145,8 +138,7 @@ async def class_overview(
 
     qids = list({r["question_id"] for r in vq})
 
-    # Stage 4: profiles (student names) and questions (review status) are
-    # independent of each other — run concurrently.
+    # Stage 4: sequential for the same shared-client safety reason.
     def fetch_profiles():
         if not by_student:
             return []
@@ -171,9 +163,8 @@ async def class_overview(
             or []
         )
 
-    profs, qrows = await asyncio.gather(
-        *[asyncio.to_thread(fn) for fn in (fetch_profiles, fetch_questions)]
-    )
+    profs = await asyncio.to_thread(fetch_profiles)
+    qrows = await asyncio.to_thread(fetch_questions)
     names = {p["id"]: p.get("full_name") for p in profs}
 
     students = []
@@ -226,8 +217,8 @@ async def class_monitor(
     """
     from datetime import date, timedelta
 
-    if profile.role not in STAFF_ROLES:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Staff only.")
+    if profile.role != "teacher":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Teachers only.")
 
     service = get_service_client()
     tid, uid = profile.tenant_id, profile.user_id
@@ -264,8 +255,7 @@ async def class_monitor(
     # The teacher's quizzes -> subjects -> courses -> enrolled students (the class).
     subject_ids = list({s["subject_id"] for s in sets if s.get("subject_id")})
 
-    # Stage 2: subjects (-> course_ids) and quiz_variants (-> variant_ids)
-    # each only need stage 1's output, not each other's — run concurrently.
+    # Stage 2: requests are sequential because the Supabase client is shared.
     def fetch_subjects():
         if not subject_ids:
             return []
@@ -284,15 +274,13 @@ async def class_monitor(
             or []
         )
 
-    subs, variants = await asyncio.gather(
-        *[asyncio.to_thread(fn) for fn in (fetch_subjects, fetch_variants)]
-    )
+    subs = await asyncio.to_thread(fetch_subjects)
+    variants = await asyncio.to_thread(fetch_variants)
     course_ids = list({s["course_id"] for s in subs if s.get("course_id")})
     var_marks = {v["id"]: v.get("total_marks") for v in variants}
     variant_ids = [v["id"] for v in variants]
 
-    # Stage 3: enrollments (needs course_ids) and quiz_attempts (needs
-    # variant_ids) are independent of each other — run concurrently.
+    # Stage 3: keep requests sequential on the shared client.
     def fetch_enrollments():
         if not course_ids:
             return []
@@ -319,9 +307,8 @@ async def class_monitor(
             or []
         )
 
-    enr, attempts = await asyncio.gather(
-        *[asyncio.to_thread(fn) for fn in (fetch_enrollments, fetch_attempts)]
-    )
+    enr = await asyncio.to_thread(fetch_enrollments)
+    attempts = await asyncio.to_thread(fetch_attempts)
     roster: set[str] = {e["profile_id"] for e in enr}
     # Anyone who attempted counts as part of the class too.
     for a in attempts:
@@ -431,8 +418,8 @@ def student_report(
     accuracy, per-quiz scores, and weak areas (topic breakdown). Powers the
     'download student report' from Class monitor.
     """
-    if profile.role not in STAFF_ROLES:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Staff only.")
+    if profile.role != "teacher":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Teachers only.")
 
     service = get_service_client()
     tid, uid = profile.tenant_id, profile.user_id

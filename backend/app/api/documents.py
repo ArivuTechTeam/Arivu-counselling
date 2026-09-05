@@ -29,7 +29,6 @@ ALLOWED_EXT = {"pdf", "docx"}
 MAX_MB = 150
 MAX_BYTES = MAX_MB * 1024 * 1024
 PREVIEW_CHARS = 5000
-STAFF_ROLES = {"teacher", "institution_admin", "super_admin"}
 CONTENT_TYPES = {
     "pdf": "application/pdf",
     "docx": (
@@ -58,11 +57,11 @@ def _ext_of(filename: str) -> str:
     return filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
 
 
-def _require_staff(profile: CurrentProfile) -> None:
-    if profile.role not in STAFF_ROLES:
+def _require_teacher(profile: CurrentProfile) -> None:
+    if profile.role != "teacher":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only staff can upload documents.",
+            detail="Only teachers can upload documents.",
         )
 
 
@@ -71,7 +70,7 @@ async def upload_document(
     file: UploadFile = File(...),
     profile: CurrentProfile = Depends(get_current_profile),
 ) -> UploadResult:
-    _require_staff(profile)
+    _require_teacher(profile)
 
     filename = file.filename or "upload"
     ext = _ext_of(filename)
@@ -156,12 +155,13 @@ async def upload_document(
 def list_documents(
     profile: CurrentProfile = Depends(get_current_profile),
 ) -> list[DocumentOut]:
-    _require_staff(profile)
+    _require_teacher(profile)
     service = get_service_client()
     rows = (
         service.table("documents")
         .select("id, original_filename, file_type, status, created_at")
         .eq("tenant_id", profile.tenant_id)  # tenant isolation enforced here
+        .eq("uploaded_by", profile.user_id)
         .order("created_at", desc=True)
         .execute()
     )

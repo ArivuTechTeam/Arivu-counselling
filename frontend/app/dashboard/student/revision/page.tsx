@@ -87,7 +87,7 @@ export default function RevisionPage() {
       .catch((e) => setError(e.message));
     getRevisionTopics()
       .then(setTopics)
-      .catch(() => setTopics([]));
+      .catch((e) => setError(e.message));
   }
   useEffect(load, []);
 

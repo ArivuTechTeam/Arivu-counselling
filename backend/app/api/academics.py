@@ -21,11 +21,10 @@ from app.lib.supabase import get_service_client
 router = APIRouter(prefix="/api/v1", tags=["academics"])
 
 STAFF_ROLES = {"teacher", "institution_admin", "super_admin"}
-ADMIN_ROLES = {"institution_admin", "super_admin"}
 
 
 def _require_admin(profile: CurrentProfile) -> None:
-    if profile.role not in ADMIN_ROLES:
+    if profile.role != "institution_admin":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Only institution admins can manage courses and subjects.",
@@ -157,7 +156,7 @@ def delete_course(
     _require_admin(profile)
     service = get_service_client()
     try:
-        service.table("courses").delete().eq("id", course_id).eq(
+        deleted = service.table("courses").delete().eq("id", course_id).eq(
             "tenant_id", profile.tenant_id
         ).execute()
     except Exception as exc:  # noqa: BLE001
@@ -165,6 +164,8 @@ def delete_course(
             status_code=409,
             detail=f"Could not delete course (is it still in use?): {exc}",
         )
+    if not deleted.data:
+        raise HTTPException(status_code=404, detail="Course not found.")
     return {"deleted": course_id}
 
 
@@ -175,7 +176,7 @@ def delete_subject(
     _require_admin(profile)
     service = get_service_client()
     try:
-        service.table("subjects").delete().eq("id", subject_id).eq(
+        deleted = service.table("subjects").delete().eq("id", subject_id).eq(
             "tenant_id", profile.tenant_id
         ).execute()
     except Exception as exc:  # noqa: BLE001
@@ -183,6 +184,8 @@ def delete_subject(
             status_code=409,
             detail=f"Could not delete subject (is it used by a quiz?): {exc}",
         )
+    if not deleted.data:
+        raise HTTPException(status_code=404, detail="Subject not found.")
     return {"deleted": subject_id}
 
 

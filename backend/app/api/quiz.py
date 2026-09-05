@@ -25,7 +25,6 @@ from app.services.review import get_quiz_set_detail
 router = APIRouter(prefix="/api/v1/quiz-sets", tags=["quiz"])
 
 CORE_TYPES = {"mcq_single", "mcq_multi", "true_false", "numerical", "fill_blank"}
-STAFF_ROLES = {"teacher", "institution_admin", "super_admin"}
 
 
 class GenerateRequest(BaseModel):
@@ -44,10 +43,10 @@ def generate(
     req: GenerateRequest,
     profile: CurrentProfile = Depends(get_current_profile),
 ) -> dict:
-    if profile.role not in STAFF_ROLES:
+    if profile.role != "teacher":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only staff can generate quizzes.",
+            detail="Only teachers can generate quizzes.",
         )
 
     invalid = set(req.question_types) - CORE_TYPES
@@ -108,10 +107,10 @@ def generate_blueprint(
     toward the teacher's selected High/Med/Low topics. Stores chapter + topics
     and tags questions to topics, then hands off to the normal review flow.
     """
-    if profile.role not in STAFF_ROLES:
+    if profile.role != "teacher":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only staff can generate quizzes.",
+            detail="Only teachers can generate quizzes.",
         )
     if not req.chapter_name.strip():
         raise HTTPException(status_code=400, detail="Chapter name is required.")
@@ -158,12 +157,27 @@ def generate_blueprint(
         )
 
 
-def _require_staff(profile: CurrentProfile) -> None:
-    if profile.role not in STAFF_ROLES:
+def _require_teacher(profile: CurrentProfile) -> None:
+    if profile.role != "teacher":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only staff can access quiz sets.",
+            detail="Only teachers can access quiz sets.",
         )
+
+
+def _teacher_quiz_set(service, quiz_set_id: str, profile: CurrentProfile) -> dict:
+    result = (
+        service.table("quiz_sets")
+        .select("id")
+        .eq("id", quiz_set_id)
+        .eq("tenant_id", profile.tenant_id)
+        .eq("created_by", profile.user_id)
+        .maybe_single()
+        .execute()
+    )
+    if result is None or not result.data:
+        raise HTTPException(status_code=404, detail="Quiz set not found.")
+    return result.data
 
 
 @router.get("")
@@ -171,12 +185,13 @@ def list_quiz_sets(
     profile: CurrentProfile = Depends(get_current_profile),
 ) -> list[dict]:
     """List the tenant's quiz sets, newest first."""
-    _require_staff(profile)
+    _require_teacher(profile)
     service = get_service_client()
     rows = (
         service.table("quiz_sets")
         .select("id, title, status, created_at, published_at")
         .eq("tenant_id", profile.tenant_id)
+        .eq("created_by", profile.user_id)
         .order("created_at", desc=True)
         .execute()
     )
@@ -189,7 +204,9 @@ def get_quiz_set(
     profile: CurrentProfile = Depends(get_current_profile),
 ) -> dict:
     """Full quiz set with its variant(s) and each variant's ordered questions."""
-    _require_staff(profile)
+    _require_teacher(profile)
+    service = get_service_client()
+    _teacher_quiz_set(service, quiz_set_id, profile)
     try:
         return get_quiz_set_detail(quiz_set_id, profile.tenant_id)
     except ValueError as exc:
@@ -206,8 +223,50 @@ def publish_quiz_set(
     'approved' inside a published set (enforced by RLS), so pending/rejected
     questions simply don't appear.
     """
-    _require_staff(profile)
+    _require_teacher(profile)
     service = get_service_client()
+    _teacher_quiz_set(service, quiz_set_id, profile)
+    variants = (
+        service.table("quiz_variants")
+        .select("id")
+        .eq("quiz_set_id", quiz_set_id)
+        .eq("tenant_id", profile.tenant_id)
+        .execute()
+        .data
+        or []
+    )
+    variant_ids = [row["id"] for row in variants]
+    links = []
+    if variant_ids:
+        links = (
+            service.table("quiz_variant_questions")
+            .select("question_id")
+            .in_("variant_id", variant_ids)
+            .eq("tenant_id", profile.tenant_id)
+            .execute()
+            .data
+            or []
+        )
+    question_ids = [row["question_id"] for row in links]
+    approved = []
+    if question_ids:
+        approved = (
+            service.table("questions")
+            .select("id")
+            .in_("id", question_ids)
+            .eq("tenant_id", profile.tenant_id)
+            .eq("created_by", profile.user_id)
+            .eq("review_status", "approved")
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+    if not approved:
+        raise HTTPException(
+            status_code=400,
+            detail="Approve at least one question before publishing.",
+        )
     updated = (
         service.table("quiz_sets")
         .update(
@@ -218,6 +277,7 @@ def publish_quiz_set(
         )
         .eq("id", quiz_set_id)
         .eq("tenant_id", profile.tenant_id)
+        .eq("created_by", profile.user_id)
         .execute()
     )
     if not updated.data:
@@ -235,8 +295,9 @@ def approve_all_questions(
     teacher explicitly rejected stay rejected. Lets a teacher accept a good batch
     in one click instead of approving 20 questions individually.
     """
-    _require_staff(profile)
+    _require_teacher(profile)
     service = get_service_client()
+    _teacher_quiz_set(service, quiz_set_id, profile)
 
     variants = (
         service.table("quiz_variants")
