@@ -43,6 +43,7 @@ def generate(
     req: GenerateRequest,
     profile: CurrentProfile = Depends(get_current_profile),
 ) -> dict:
+    # Teacher-only by design — see .claude/CLAUDE.md and the technical document.
     if profile.role != "teacher":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -107,6 +108,7 @@ def generate_blueprint(
     toward the teacher's selected High/Med/Low topics. Stores chapter + topics
     and tags questions to topics, then hands off to the normal review flow.
     """
+    # Teacher-only by design — see .claude/CLAUDE.md and the technical document.
     if profile.role != "teacher":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -158,6 +160,7 @@ def generate_blueprint(
 
 
 def _require_teacher(profile: CurrentProfile) -> None:
+    # Teacher-only by design — see .claude/CLAUDE.md and the technical document.
     if profile.role != "teacher":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,

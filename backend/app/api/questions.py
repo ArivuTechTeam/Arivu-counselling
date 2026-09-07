@@ -31,6 +31,7 @@ from app.services.tutor import explain_question
 router = APIRouter(prefix="/api/v1/questions", tags=["questions"])
 
 def _require_teacher(profile: CurrentProfile) -> None:
+    # Teacher-only by design — see .claude/CLAUDE.md and the technical document.
     if profile.role != "teacher":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,

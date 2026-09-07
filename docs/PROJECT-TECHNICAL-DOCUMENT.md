@@ -274,11 +274,11 @@ Guards: **public** / **student** / **staff** (teacher+admin+super) / **admin** (
 - `GET /api/v1/me` — identity from JWT
 - `GET /api/v1/me/profile` — tenant_id + role from `profiles`
 
-**Documents** (`/api/v1/documents`) — `POST /upload` (staff), `GET ""` (staff). Limits: PDF/DOCX only, 150 MB, 5000-char preview.
+**Documents** (`/api/v1/documents`) — `POST /upload` and `GET ""` are teacher-only by design. Limits: PDF/DOCX only, 150 MB, 5000-char preview.
 
-**Quiz sets** (`/api/v1/quiz-sets`) — `POST /generate`, `POST /generate-blueprint`, `GET ""`, `GET /{id}`, `POST /{id}/publish`, `POST /{id}/approve-all` (all staff).
+**Quiz sets** (`/api/v1/quiz-sets`) — `POST /generate`, `POST /generate-blueprint`, `GET ""`, `GET /{id}`, `POST /{id}/publish`, and `POST /{id}/approve-all` are teacher-only by design.
 
-**Questions** (`/api/v1/questions`) — `PATCH /{id}`, `POST /{id}/approve`, `POST /{id}/reject`, `POST /{id}/regenerate` (staff); `POST /{id}/explain` (any authenticated — students use the tutor).
+**Questions** (`/api/v1/questions`) — `PATCH /{id}`, `POST /{id}/approve`, `POST /{id}/reject`, and `POST /{id}/regenerate` are teacher-only by design; `POST /{id}/explain` is available to a teacher for their own question or to a student after that question has been graded.
 
 **Academics** (`/api/v1`) — `GET /public/courses` (**public**, feeds signup); `GET/POST /courses`, `POST /subjects`, `DELETE …` (read=staff, write=admin); `GET/PUT /teachers/{teacher_id}/subjects` (institution admin); chapters CRUD restricted to explicitly assigned teachers.
 
