@@ -4,9 +4,11 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 
+import { GoogleAuthButton } from "@/components/auth/google-auth-button";
 import { SplitText } from "@/components/shared/split-text";
 import { Brand } from "@/components/ui/brand";
 import { initAuthFx } from "@/lib/auth-fx";
+import { signInWithGoogle } from "@/lib/google-auth";
 import { createClient } from "@/lib/supabase";
 import "./login.css";
 
@@ -35,6 +37,7 @@ const TICKS = [
 
 export default function LoginPage() {
   const router = useRouter();
+  const pageRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -42,6 +45,7 @@ export default function LoginPage() {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [googleLoading, setGoogleLoading] = useState(false);
 
   async function handleSignIn(e: React.FormEvent) {
     e.preventDefault();
@@ -62,6 +66,20 @@ export default function LoginPage() {
     router.push("/dashboard");
   }
 
+  async function handleGoogleSignIn() {
+    setError(null);
+    setNotice(null);
+    setGoogleLoading(true);
+    try {
+      // No course is required for an existing user. A brand-new Google user
+      // selects one securely on the callback page before a profile is created.
+      await signInWithGoogle();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Google sign-in could not start.");
+      setGoogleLoading(false);
+    }
+  }
+
   useEffect(() => {
     const url = new URL(window.location.href);
     if (url.searchParams.get("reason") === "session-expired") {
@@ -71,8 +89,56 @@ export default function LoginPage() {
     }
   }, []);
 
+  // Keep the mobile sheet matched to the visible viewport when iOS/Android
+  // opens the software keyboard. CSS uses these values instead of 100vh,
+  // which includes the area hidden behind the keyboard on some browsers.
+  useEffect(() => {
+    const viewport = window.visualViewport;
+    const updateViewport = () => {
+      const page = pageRef.current;
+      if (!page) return;
+      page.style.setProperty(
+        "--mobile-auth-height",
+        `${viewport?.height ?? window.innerHeight}px`,
+      );
+      page.style.setProperty(
+        "--mobile-auth-offset",
+        `${viewport?.offsetTop ?? 0}px`,
+      );
+    };
+    updateViewport();
+    viewport?.addEventListener("resize", updateViewport);
+    viewport?.addEventListener("scroll", updateViewport);
+    window.addEventListener("resize", updateViewport);
+    return () => {
+      viewport?.removeEventListener("resize", updateViewport);
+      viewport?.removeEventListener("scroll", updateViewport);
+      window.removeEventListener("resize", updateViewport);
+    };
+  }, []);
+
+  function keepMobileActionsVisible(event: React.FocusEvent<HTMLInputElement>) {
+    window.setTimeout(() => {
+      const sheet = event.currentTarget.closest<HTMLElement>(".mobile-sheet");
+      const signIn = sheet?.querySelector<HTMLElement>(".mobile-primary");
+      if (!sheet || !signIn) return;
+
+      const viewportBottom = window.visualViewport
+        ? window.visualViewport.offsetTop + window.visualViewport.height
+        : window.innerHeight;
+      const actionBottom = signIn.getBoundingClientRect().bottom;
+      if (actionBottom > viewportBottom - 16) {
+        sheet.scrollBy({
+          top: actionBottom - viewportBottom + 24,
+          behavior: "smooth",
+        });
+      }
+    }, 180);
+  }
+
   // Floating particle background (ported from the design, no custom cursor).
   useEffect(() => {
+    if (window.matchMedia("(max-width: 900px)").matches) return;
     const canvas = canvasRef.current;
     const ctx = canvas?.getContext("2d");
     if (!canvas || !ctx) return;
@@ -147,11 +213,130 @@ export default function LoginPage() {
   }, []);
 
   // ArivuPro entrance animations, custom cursor, magnetic buttons, counters.
-  useEffect(() => initAuthFx(), []);
+  useEffect(() => {
+    if (!window.matchMedia("(min-width: 901px)").matches) return;
+    return initAuthFx();
+  }, []);
 
   return (
-    <div className="login-page">
+    <div className="login-page mobile-login-page" ref={pageRef}>
       <canvas id="bgCanvas" ref={canvasRef} />
+
+      {/* Purpose-built mobile layout; desktop keeps the existing split view. */}
+      <main className="mobile-auth">
+        <section className="mobile-hero" aria-label="ArivuPro">
+          <span className="mobile-orbit mobile-orbit-one" aria-hidden="true" />
+          <span className="mobile-orbit mobile-orbit-two" aria-hidden="true" />
+          <div className="mobile-logo">
+            <Brand height={34} />
+          </div>
+          <p className="mobile-tagline">
+            Shape your future, one exam at a time.
+          </p>
+        </section>
+
+        <section className="mobile-sheet" aria-labelledby="mobile-login-title">
+          <header className="mobile-sheet-head">
+            <h1 id="mobile-login-title">Welcome Back</h1>
+            <p>Sign in to continue</p>
+          </header>
+
+          <form className="mobile-form" onSubmit={handleSignIn}>
+            {notice && (
+              <div className="session-notice" role="status">
+                <span aria-hidden="true">ⓘ</span>
+                <span>{notice}</span>
+              </div>
+            )}
+            {error && (
+              <div className="err-box" role="alert">
+                <span aria-hidden="true">⚠</span>
+                <span>{error}</span>
+              </div>
+            )}
+
+            <div className="mobile-field">
+              <label htmlFor="mobile-email">Email address</label>
+              <div className="mobile-field-control">
+                <span className="field-icon"><MailIcon /></span>
+                <input
+                  id="mobile-email"
+                  type="email"
+                  name="email"
+                  inputMode="email"
+                  autoComplete="email"
+                  autoCapitalize="none"
+                  autoCorrect="off"
+                  enterKeyHint="next"
+                  placeholder="you@email.com"
+                  value={email}
+                  onChange={(event) => setEmail(event.target.value)}
+                  onFocus={keepMobileActionsVisible}
+                  required
+                />
+              </div>
+            </div>
+
+            <div className="mobile-field">
+              <label htmlFor="mobile-password">Password</label>
+              <div className="mobile-field-control">
+                <span className="field-icon"><LockIcon /></span>
+                <input
+                  id="mobile-password"
+                  type={showPw ? "text" : "password"}
+                  name="password"
+                  autoComplete="current-password"
+                  enterKeyHint="go"
+                  placeholder="Enter your password"
+                  value={password}
+                  onChange={(event) => setPassword(event.target.value)}
+                  onFocus={keepMobileActionsVisible}
+                  required
+                />
+                <button
+                  type="button"
+                  className="pw-eye"
+                  aria-label={showPw ? "Hide password" : "Show password"}
+                  aria-pressed={showPw}
+                  onClick={() => setShowPw((visible) => !visible)}
+                >
+                  {showPw ? "Hide" : "Show"}
+                </button>
+              </div>
+            </div>
+
+            <button
+              className="btn-signin mobile-primary"
+              type="submit"
+              disabled={loading || googleLoading}
+            >
+              {loading ? "Signing in…" : "Sign In"}
+            </button>
+
+            <div className="divider oauth-divider" aria-hidden="true">
+              <div className="div-line" />
+              <div className="div-text">or</div>
+              <div className="div-line" />
+            </div>
+
+            <GoogleAuthButton
+              busy={googleLoading || loading}
+              onClick={handleGoogleSignIn}
+            />
+
+            <Link className="mobile-register" href="/signup">
+              <span>New User?</span>
+              <strong>Create an account</strong>
+              <span aria-hidden="true">→</span>
+            </Link>
+          </form>
+
+          <p className="mobile-legal">
+            By signing in you agree to our Terms of Service &amp; Privacy Policy
+          </p>
+        </section>
+      </main>
+
       <div className="wrap">
         {/* LEFT — brand / marketing */}
         <div className="left">
@@ -263,6 +448,8 @@ export default function LoginPage() {
                   <input
                     className="field-input"
                     type="email"
+                    name="email"
+                    inputMode="email"
                     placeholder="you@email.com"
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
@@ -281,6 +468,7 @@ export default function LoginPage() {
                   <input
                     className="field-input"
                     type={showPw ? "text" : "password"}
+                    name="password"
                     placeholder="Enter your password"
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
@@ -290,6 +478,8 @@ export default function LoginPage() {
                   <button
                     type="button"
                     className="pw-eye"
+                    aria-label={showPw ? "Hide password" : "Show password"}
+                    aria-pressed={showPw}
                     onClick={() => setShowPw((s) => !s)}
                   >
                     {showPw ? "Hide" : "Show"}
@@ -303,9 +493,17 @@ export default function LoginPage() {
                 </span>
               </div>
 
-              <button className="btn-signin" type="submit" disabled={loading}>
+              <button className="btn-signin" type="submit" disabled={loading || googleLoading}>
                 {loading ? "Signing in…" : "Sign In →"}
               </button>
+
+              <div className="divider oauth-divider">
+                <div className="div-line" />
+                <div className="div-text">or</div>
+                <div className="div-line" />
+              </div>
+
+              <GoogleAuthButton busy={googleLoading || loading} onClick={handleGoogleSignIn} />
 
               <div className="divider">
                 <div className="div-line" />

@@ -97,6 +97,19 @@ class MigrationSecurityTests(unittest.TestCase):
         self.assertIn("revoke all on function public.replace_teacher_subjects", sql)
         self.assertIn('drop policy if exists "staff manage enrollments"', sql)
 
+    def test_google_oauth_signup_still_derives_student_tenant_from_course(self) -> None:
+        root = Path(__file__).resolve().parents[2]
+        sql = (root / "migrations/migration-14-google-oauth-onboarding.sql").read_text().lower()
+        self.assertIn("create or replace function public.complete_google_signup", sql)
+        self.assertIn("current_user_id uuid := auth.uid()", sql)
+        self.assertIn("where c.id = p_course_id", sql)
+        self.assertIn("join public.tenants t on t.id = c.tenant_id and t.is_active = true", sql)
+        self.assertIn("'student'::public.user_role", sql)
+        self.assertIn("google authentication is required", sql)
+        self.assertIn("return query select existing_tenant, existing_role", sql)
+        self.assertIn("grant execute on function public.complete_google_signup(uuid)", sql)
+        self.assertNotIn("new.raw_user_meta_data->>'role'", sql)
+
 
 class _RowsQuery:
     def __init__(self, rows: list[dict]) -> None:

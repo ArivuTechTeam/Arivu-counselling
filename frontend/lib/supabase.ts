@@ -52,6 +52,7 @@ export function createClient() {
           storage: window.sessionStorage,
           persistSession: true,
           autoRefreshToken: true,
+          flowType: "pkce",
         },
       },
     );
