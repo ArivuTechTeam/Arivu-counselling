@@ -2,6 +2,9 @@
 
 Use this checklist for the single-college launch. Complete the steps in order.
 
+Google sign-in requires the additional provider and redirect configuration in
+[`docs/google-oauth-setup.md`](google-oauth-setup.md).
+
 ## 1. Preflight
 
 - [ ] Confirm `migration-11-auth-hardening.sql` is applied in the production
@@ -9,6 +12,9 @@ Use this checklist for the single-college launch. Complete the steps in order.
   tenant from the selected course.
 - [ ] Confirm `migration-12-teacher-subjects.sql` is applied. It supports the
   institution admin's teacher subject assignments.
+- [ ] Before enabling Google sign-in, confirm
+  `migration-14-google-oauth-onboarding.sql` is applied and complete the Google
+  provider setup in `docs/google-oauth-setup.md`.
 - [ ] Confirm the production frontend and backend are healthy and the
   super-admin account can sign in.
 - [ ] Decide the institution name, a unique lowercase subdomain slug, plan,

@@ -4,10 +4,12 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 
+import { GoogleAuthButton } from "@/components/auth/google-auth-button";
 import { SplitText } from "@/components/shared/split-text";
 import { Brand } from "@/components/ui/brand";
 import { listPublicCourses } from "@/lib/api";
 import { initAuthFx } from "@/lib/auth-fx";
+import { signInWithGoogle } from "@/lib/google-auth";
 import { createClient } from "@/lib/supabase";
 import "../login/login.css";
 
@@ -63,6 +65,7 @@ export default function SignupPage() {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [googleLoading, setGoogleLoading] = useState(false);
 
   const tenantId = process.env.NEXT_PUBLIC_DEFAULT_TENANT_ID;
 
@@ -119,6 +122,28 @@ export default function SignupPage() {
       router.push("/dashboard");
     } else {
       setNotice("Account created. Check your email to confirm it, then sign in.");
+    }
+  }
+
+  async function handleGoogleSignup() {
+    setError(null);
+    setNotice(null);
+    if (!tenantId) {
+      setError("Institution not configured (missing NEXT_PUBLIC_DEFAULT_TENANT_ID).");
+      return;
+    }
+    if (!courseId) {
+      setError("Please select your course before continuing with Google.");
+      return;
+    }
+    setGoogleLoading(true);
+    try {
+      // The course is only a pending choice here. The database callback
+      // validates it and derives the tenant before creating a student profile.
+      await signInWithGoogle(courseId);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Google sign-in could not start.");
+      setGoogleLoading(false);
     }
   }
 
@@ -305,9 +330,23 @@ export default function SignupPage() {
                 </div>
               </div>
 
-              <button className="btn-signin" type="submit" disabled={loading}>
+              <button className="btn-signin" type="submit" disabled={loading || googleLoading}>
                 {loading ? "Creating account…" : "Create account →"}
               </button>
+
+              <div className="divider oauth-divider">
+                <div className="div-line" />
+                <div className="div-text">or</div>
+                <div className="div-line" />
+              </div>
+
+              <GoogleAuthButton
+                busy={googleLoading || loading}
+                onClick={handleGoogleSignup}
+              />
+              <p className="oauth-help">
+                Select your course first. Google supplies your verified name and email.
+              </p>
             </form>
 
             <div className="card-foot">

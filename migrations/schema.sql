@@ -417,11 +417,15 @@ declare
   selected_tenant uuid;
   requested_course uuid;
   trusted_provisioning boolean;
+  google_oauth_signup boolean;
 begin
   trusted_provisioning := coalesce(
     new.raw_app_meta_data->>'provisioned_by_backend', 'false'
   ) = 'true';
   requested_course := nullif(new.raw_user_meta_data->>'course_id', '')::uuid;
+  google_oauth_signup :=
+    coalesce(new.raw_app_meta_data->>'provider', '') = 'google'
+    or (coalesce(new.raw_app_meta_data->'providers', '[]'::jsonb) ? 'google');
 
   if trusted_provisioning then
     selected_tenant := (new.raw_user_meta_data->>'tenant_id')::uuid;
@@ -433,6 +437,9 @@ begin
     end if;
   else
     if requested_course is null then
+      if google_oauth_signup then
+        return new;
+      end if;
       raise exception 'A valid course is required for public signup';
     end if;
     select c.tenant_id into selected_tenant
@@ -471,6 +478,82 @@ $$;
 create trigger on_auth_user_created
   after insert on auth.users
   for each row execute function handle_new_user();
+
+-- A brand-new Google identity has no course metadata when auth.users is
+-- inserted. The authenticated callback calls this function after course
+-- selection. It derives the tenant from the course and can only create a
+-- student profile; existing profiles are returned unchanged.
+create or replace function complete_google_signup(p_course_id uuid)
+returns table (tenant_id uuid, role public.user_role, course_id uuid)
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  current_user_id uuid := auth.uid();
+  user_metadata jsonb;
+  app_metadata jsonb;
+  selected_tenant uuid;
+  existing_tenant uuid;
+  existing_role public.user_role;
+begin
+  if current_user_id is null then
+    raise exception 'Authentication is required';
+  end if;
+
+  select u.raw_user_meta_data, u.raw_app_meta_data
+  into user_metadata, app_metadata
+  from auth.users u
+  where u.id = current_user_id
+  for update;
+
+  if not found then
+    raise exception 'Authenticated user not found';
+  end if;
+
+  if coalesce(app_metadata->>'provider', '') <> 'google'
+     and not (coalesce(app_metadata->'providers', '[]'::jsonb) ? 'google') then
+    raise exception 'Google authentication is required';
+  end if;
+
+  select p.tenant_id, p.role
+  into existing_tenant, existing_role
+  from public.profiles p
+  where p.id = current_user_id;
+
+  if found then
+    return query select existing_tenant, existing_role, null::uuid;
+    return;
+  end if;
+
+  select c.tenant_id into selected_tenant
+  from public.courses c
+  join public.tenants t on t.id = c.tenant_id and t.is_active = true
+  where c.id = p_course_id;
+
+  if selected_tenant is null then
+    raise exception 'A valid course is required for Google signup';
+  end if;
+
+  insert into public.profiles (id, tenant_id, role, full_name)
+  values (
+    current_user_id,
+    selected_tenant,
+    'student'::public.user_role,
+    nullif(trim(coalesce(user_metadata->>'full_name', user_metadata->>'name')), '')
+  );
+
+  insert into public.enrollments (tenant_id, profile_id, course_id)
+  values (selected_tenant, current_user_id, p_course_id)
+  on conflict (profile_id, course_id) do nothing;
+
+  return query
+    select selected_tenant, 'student'::public.user_role, p_course_id;
+end;
+$$;
+
+revoke all on function complete_google_signup(uuid) from public, anon;
+grant execute on function complete_google_signup(uuid) to authenticated;
 
 -- Called only by the backend service role after an institution admin has been
 -- authenticated. One transaction replaces assignments and their derived

@@ -101,6 +101,12 @@
 .login-page .btn-signin:hover { box-shadow: 0 14px 44px rgba(46, 136, 87, 0.42); transform: translateY(-2px); }
 .login-page .btn-signin:active { transform: scale(0.98); }
 .login-page .btn-signin:disabled { opacity: 0.7; cursor: default; transform: none; box-shadow: 0 8px 28px rgba(46, 136, 87, 0.2); }
+.login-page .btn-google { width: 100%; padding: 12px 14px; border: 1.5px solid var(--bdr); border-radius: 12px; background: #fff; color: var(--td); font-family: 'DM Sans', sans-serif; font-size: 14px; font-weight: 600; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 10px; transition: border-color 0.2s, background 0.2s, box-shadow 0.2s, transform 0.2s; }
+.login-page .btn-google:hover { border-color: rgba(46, 136, 87, 0.45); background: var(--g50); box-shadow: 0 6px 20px rgba(46, 136, 87, 0.1); transform: translateY(-1px); }
+.login-page .btn-google:active { transform: scale(0.99); }
+.login-page .btn-google:disabled { opacity: 0.65; cursor: default; transform: none; box-shadow: none; }
+.login-page .divider.oauth-divider { margin: 16px 0; }
+.login-page .oauth-help { margin: 9px 0 0; color: var(--ts); font-size: 11px; line-height: 1.45; text-align: center; }
 
 .login-page .divider { display: flex; align-items: center; gap: 12px; margin: 20px 0; }
 .login-page .div-line { flex: 1; height: 1px; background: var(--bdr); }

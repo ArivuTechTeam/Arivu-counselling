@@ -4,9 +4,11 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 
+import { GoogleAuthButton } from "@/components/auth/google-auth-button";
 import { SplitText } from "@/components/shared/split-text";
 import { Brand } from "@/components/ui/brand";
 import { initAuthFx } from "@/lib/auth-fx";
+import { signInWithGoogle } from "@/lib/google-auth";
 import { createClient } from "@/lib/supabase";
 import "./login.css";
 
@@ -42,6 +44,7 @@ export default function LoginPage() {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [googleLoading, setGoogleLoading] = useState(false);
 
   async function handleSignIn(e: React.FormEvent) {
     e.preventDefault();
@@ -60,6 +63,20 @@ export default function LoginPage() {
       return;
     }
     router.push("/dashboard");
+  }
+
+  async function handleGoogleSignIn() {
+    setError(null);
+    setNotice(null);
+    setGoogleLoading(true);
+    try {
+      // No course is required for an existing user. A brand-new Google user
+      // selects one securely on the callback page before a profile is created.
+      await signInWithGoogle();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Google sign-in could not start.");
+      setGoogleLoading(false);
+    }
   }
 
   useEffect(() => {
@@ -303,9 +320,17 @@ export default function LoginPage() {
                 </span>
               </div>
 
-              <button className="btn-signin" type="submit" disabled={loading}>
+              <button className="btn-signin" type="submit" disabled={loading || googleLoading}>
                 {loading ? "Signing in…" : "Sign In →"}
               </button>
+
+              <div className="divider oauth-divider">
+                <div className="div-line" />
+                <div className="div-text">or</div>
+                <div className="div-line" />
+              </div>
+
+              <GoogleAuthButton busy={googleLoading || loading} onClick={handleGoogleSignIn} />
 
               <div className="divider">
                 <div className="div-line" />
