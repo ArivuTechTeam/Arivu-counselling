@@ -28,6 +28,10 @@ import {
 const fieldClass =
   "h-10 w-full rounded-md border border-input bg-background px-3 text-sm shadow-sm transition-colors focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20";
 
+const MAX_UPLOAD_MB = 150;
+const MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024;
+const ALLOWED_UPLOAD_EXTENSIONS = new Set(["pdf", "docx"]);
+
 const WEIGHTS: { value: TopicWeight; label: string }[] = [
   { value: "high", label: "High" },
   { value: "medium", label: "Medium" },
@@ -166,8 +170,24 @@ export function BlueprintGenerator() {
   async function handleUpload(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (!file) return;
-    setUploading(true);
     setUploadError(null);
+    const extension = file.name.split(".").pop()?.toLowerCase() ?? "";
+    if (!ALLOWED_UPLOAD_EXTENSIONS.has(extension)) {
+      setUploadError("Choose a PDF or DOCX file.");
+      e.target.value = "";
+      return;
+    }
+    if (file.size === 0) {
+      setUploadError("The selected file is empty.");
+      e.target.value = "";
+      return;
+    }
+    if (file.size > MAX_UPLOAD_BYTES) {
+      setUploadError(`Choose a file no larger than ${MAX_UPLOAD_MB} MB.`);
+      e.target.value = "";
+      return;
+    }
+    setUploading(true);
     try {
       const res = await uploadDocument(file);
       setDocuments((prev) => [
@@ -314,7 +334,7 @@ export function BlueprintGenerator() {
                 )}
               </span>
               <span className="text-xs text-muted-foreground">
-                PDF or DOCX · click to browse from your computer
+                PDF or DOCX · up to {MAX_UPLOAD_MB} MB
               </span>
             </label>
             {uploadError && (

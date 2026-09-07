@@ -3,6 +3,8 @@ import { createClient } from "@/lib/supabase";
 // Base URL of the FastAPI backend (from .env.local).
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL!;
 const DEFAULT_TIMEOUT_MS = 20_000;
+// 150 MB takes about 10 minutes at 2 Mbps before server-side extraction time.
+const DOCUMENT_UPLOAD_TIMEOUT_MS = 15 * 60_000;
 
 async function apiFetch(
   input: RequestInfo | URL,
@@ -74,11 +76,15 @@ export async function uploadDocument(file: File): Promise<UploadResult> {
 
   // NOTE: don't set Content-Type manually — the browser sets the correct
   // multipart boundary automatically when the body is a FormData.
-  const res = await apiFetch(`${API_BASE}/api/v1/documents/upload`, {
-    method: "POST",
-    headers,
-    body: form,
-  }, 60_000);
+  const res = await apiFetch(
+    `${API_BASE}/api/v1/documents/upload`,
+    {
+      method: "POST",
+      headers,
+      body: form,
+    },
+    DOCUMENT_UPLOAD_TIMEOUT_MS,
+  );
 
   if (!res.ok) {
     return apiError(res, "We couldn't upload your file. Please try again.");
