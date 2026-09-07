@@ -26,7 +26,7 @@ from app.services.blueprint_prompts import (
 from app.services.events import QUESTION_GENERATED, log_events, make_event
 from app.services.extraction import extract_text
 from app.services.llm.base import LLMError
-from app.services.llm.structured import gemini_json
+from app.services.llm.structured import complete_json_with_fallback
 from app.services.teacher_access import teacher_has_subject
 
 QuestionType = Literal[
@@ -156,14 +156,12 @@ def generate_blueprint_quiz(
     selected = [SelectedTopic(**t) for t in selected_topics]
     blueprint = build_blueprint(selected, total_questions)
 
-    # 3) Generate (question writer) — Flash-Lite, JSON out, whole-doc coverage.
+    # 3) Generate (question writer) with Gemini primary and DeepSeek fallback.
     system = build_blueprint_system_prompt(question_types, cognitive_level, difficulty)
     user = build_blueprint_user_prompt(
         material, blueprint, question_types, cognitive_level, difficulty, type_counts
     )
-    data = gemini_json(
-        system, user, model=get_settings().gemini_blueprint_model, temperature=0.3
-    )
+    data, provider = complete_json_with_fallback(system, user)
     try:
         quiz = BPQuiz.model_validate(data)
     except ValidationError as exc:
@@ -237,7 +235,6 @@ def generate_blueprint_quiz(
         raise
 
     # Instrument: one 'question.generated' event per question (best-effort).
-    provider = get_settings().gemini_blueprint_model
     log_events(
         [
             make_event(
@@ -262,7 +259,7 @@ def generate_blueprint_quiz(
     return {
         "quiz_set_id": quiz_set_id,
         "variant_id": variant_id,
-        "provider": get_settings().gemini_blueprint_model,
+        "provider": provider,
         "blueprint": blueprint,
         "questions": stored,
     }

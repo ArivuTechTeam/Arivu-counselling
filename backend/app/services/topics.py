@@ -1,9 +1,9 @@
 """
 Topic extraction (blueprint quiz — Slice 6).
 
-Reads a stored document's text and asks Gemini (Flash-Lite) for a clean list of
-the teachable TOPICS in it. The teacher then picks the important ones and marks
-each High/Medium/Low; those choices drive the blueprint in Slice 7.
+Reads a stored document's text and asks Gemini, with DeepSeek fallback, for a
+clean list of teachable TOPICS. The teacher then picks the important ones and
+marks each High/Medium/Low; those choices drive the blueprint in Slice 7.
 
 Extraction is deliberately its own step (and its own cheap model call) so the
 teacher can review/correct topics BEFORE any question generation happens —
@@ -16,17 +16,7 @@ from app.lib.config import get_settings
 from app.lib.storage import download_bytes
 from app.lib.supabase import get_service_client
 from app.services.extraction import extract_text
-from app.services.llm.structured import gemini_json
-
-# responseSchema: Gemini is forced to return {"topics": ["...", ...]}.
-# Gemini's REST API uses UPPERCASE OpenAPI type names (OBJECT/ARRAY/STRING).
-_TOPICS_SCHEMA = {
-    "type": "OBJECT",
-    "properties": {
-        "topics": {"type": "ARRAY", "items": {"type": "STRING"}},
-    },
-    "required": ["topics"],
-}
+from app.services.llm.structured import complete_json_with_fallback
 
 _SYSTEM = (
     "You analyse study material for an exam-prep quiz platform. Extract the list "
@@ -49,12 +39,12 @@ def _window(text: str) -> str:
 
 
 def extract_topics(material: str) -> list[str]:
-    """Ask Gemini for a clean, de-duplicated topic list from raw material text."""
+    """Ask the configured LLMs for a de-duplicated topic list."""
     user = (
         "Extract the teachable topics from the material below.\n\n"
         "=== MATERIAL START ===\n" + _window(material) + "\n=== MATERIAL END ==="
     )
-    data = gemini_json(_SYSTEM, user, _TOPICS_SCHEMA)
+    data, _provider = complete_json_with_fallback(_SYSTEM, user)
 
     raw = data.get("topics", [])
     seen: set[str] = set()
