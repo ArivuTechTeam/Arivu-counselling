@@ -13,6 +13,7 @@ way, then hands off to the extraction orchestrator.
 
 from __future__ import annotations
 
+import hashlib
 import uuid
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
@@ -58,6 +59,8 @@ def _require_teacher(profile: CurrentProfile) -> None:
 async def extract_quiz_endpoint(
     file: UploadFile = File(...),
     subject_id: str = Form(...),
+    chapter_id: str = Form(...),
+    force: bool = Form(False),
     profile: CurrentProfile = Depends(get_current_profile),
 ) -> dict:
     _require_teacher(profile)
@@ -79,12 +82,37 @@ async def extract_quiz_endpoint(
             detail=f"File too large for extraction (max {MAX_MB} MB).",
         )
 
+    service = get_service_client()
+
+    # Soft duplicate guard: if this EXACT file was already uploaded in this
+    # tenant, ask the teacher to confirm (409) rather than silently duplicating.
+    # (Checked BEFORE storing so a declined duplicate leaves no orphan file/row.)
+    content_hash = hashlib.sha256(content).hexdigest()
+    if not force:
+        dup = (
+            service.table("documents")
+            .select("original_filename, created_at")
+            .eq("tenant_id", profile.tenant_id)
+            .eq("content_hash", content_hash)
+            .order("created_at", desc=True)
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+        if dup:
+            prev_name = dup[0].get("original_filename") or "a file"
+            when = str(dup[0].get("created_at") or "")[:10]
+            msg = f"You already uploaded this exact file (‘{prev_name}’"
+            msg += f" on {when})." if when else ")."
+            msg += " Extract it again anyway?"
+            raise HTTPException(status_code=409, detail=msg)
+
     # 1) Store the original under the tenant folder.
     object_path = f"{profile.tenant_id}/{uuid.uuid4()}.{ext}"
     upload_bytes(object_path, content, CONTENT_TYPES[ext])
 
     # 2) Record the document (extraction jobs reference a document_id).
-    service = get_service_client()
     inserted = (
         service.table("documents")
         .insert(
@@ -95,6 +123,7 @@ async def extract_quiz_endpoint(
                 "original_filename": filename,
                 "file_type": ext,
                 "status": "uploaded",
+                "content_hash": content_hash,
             }
         )
         .execute()
@@ -108,6 +137,7 @@ async def extract_quiz_endpoint(
             extract_quiz,
             document_id=document_id,
             subject_id=subject_id,
+            chapter_id=chapter_id,
             profile=profile,
         )
     except ValueError as exc:

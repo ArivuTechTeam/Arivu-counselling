@@ -117,6 +117,20 @@ def create_course(
     if not name:
         raise HTTPException(status_code=400, detail="Course name is required.")
     service = get_service_client()
+    # Reuse an existing course of the same name rather than duplicate it.
+    existing = (
+        service.table("courses")
+        .select("id, name")
+        .eq("tenant_id", profile.tenant_id)
+        .eq("name", name)
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    if existing:
+        c = existing[0]
+        return {**c, "subjects": _subjects_for(service, c["id"], profile.tenant_id)}
     row = (
         service.table("courses")
         .insert({"tenant_id": profile.tenant_id, "name": name})
@@ -145,6 +159,20 @@ def create_subject(
     )
     if course is None or not course.data:
         raise HTTPException(status_code=404, detail="Course not found.")
+    # Reuse an existing subject of the same name in this course.
+    existing = (
+        service.table("subjects")
+        .select("id, name, course_id")
+        .eq("tenant_id", profile.tenant_id)
+        .eq("course_id", body.course_id)
+        .eq("name", name)
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    if existing:
+        return existing[0]
     return (
         service.table("subjects")
         .insert(

@@ -70,6 +70,7 @@ def extract_quiz(
     *,
     document_id: str,
     subject_id: str,
+    chapter_id: str,
     profile: CurrentProfile,
 ) -> dict:
     service = get_service_client()
@@ -78,6 +79,21 @@ def extract_quiz(
     #    is authoritative — same rule the generator enforces).
     if not teacher_has_subject(service, profile, subject_id):
         raise ValueError("Subject not found.")
+
+    # 0b) The chapter must exist AND belong to this subject + tenant, so every
+    #     extracted question is filed under the correct Subject -> Chapter.
+    chapter = (
+        service.table("chapters")
+        .select("id, name")
+        .eq("id", chapter_id)
+        .eq("subject_id", subject_id)
+        .eq("tenant_id", profile.tenant_id)
+        .maybe_single()
+        .execute()
+    )
+    if chapter is None or not chapter.data:
+        raise ValueError("Chapter not found for this subject.")
+    chapter_name = chapter.data["name"]
 
     # 1) Fetch the uploaded document, scoped to the caller.
     doc = (
@@ -153,15 +169,20 @@ def extract_quiz(
             round(sum(confidences) / len(confidences), 3) if confidences else None
         )
 
+        # File the source document under the same chapter for consistency.
+        service.table("documents").update({"chapter_id": chapter_id}).eq(
+            "id", document_id
+        ).execute()
+
         # 5) Persist: quiz_set -> variant -> questions (pending review) -> links.
         quiz_set = (
             service.table("quiz_sets")
             .insert(
                 {
                     "tenant_id": profile.tenant_id,
-                    "chapter_id": doc_row.get("chapter_id"),
+                    "chapter_id": chapter_id,
                     "subject_id": subject_id,
-                    "title": f"{doc_row.get('original_filename', 'Quiz')} — Extracted",
+                    "title": chapter_name,
                     "status": "draft",
                     "created_by": profile.user_id,
                 }
@@ -192,7 +213,7 @@ def extract_quiz(
                 .insert(
                     {
                         "tenant_id": profile.tenant_id,
-                        "chapter_id": doc_row.get("chapter_id"),
+                        "chapter_id": chapter_id,
                         "type": q.type,
                         "question_text": q.question_text,
                         "options": q.options,
