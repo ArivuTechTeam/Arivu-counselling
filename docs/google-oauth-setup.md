@@ -1,5 +1,19 @@
 # Google sign-in setup and user journey
 
+## Local Docker behavior
+
+The local Compose stack mounts `frontend/` and `backend/` into the running
+containers and starts development servers. After the one-time recreation that
+introduced this configuration, stopping and starting the existing containers
+in Docker Desktop loads current application source and `.env` values. Package
+changes are installed during container startup.
+
+Docker cannot apply SQL to the hosted Supabase database with the public/service
+API keys. Database migrations still need a PostgreSQL database connection or a
+one-time run in the Supabase SQL Editor. For Google OAuth, migration 14 must be
+applied before testing a brand-new Google account. Restarting Docker does not
+replace this database operation.
+
 ## Required one-time configuration
 
 1. Apply `migrations/migration-14-google-oauth-onboarding.sql` to the Supabase

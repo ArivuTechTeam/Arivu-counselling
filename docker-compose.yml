@@ -8,6 +8,9 @@ services:
       # only the host side is moved to 8001 to avoid arivupro_examapp's 8000.
       - "8001:8000"
     environment:
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+      PIP_ROOT_USER_ACTION: ignore
+      WATCHFILES_FORCE_POLLING: "true"
       SUPABASE_URL: ${SUPABASE_URL}
       SUPABASE_ANON_KEY: ${SUPABASE_ANON_KEY}
       SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY}
@@ -15,6 +18,15 @@ services:
       FRONTEND_ORIGIN: http://localhost:3001
       DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY}
       GEMINI_API_KEY: ${GEMINI_API_KEY}
+    # Local Docker mounts the checkout so restarting the container never
+    # serves an old COPY baked into its image. Installing requirements at
+    # startup also picks up dependency changes without a separate rebuild.
+    volumes:
+      - ./backend:/app
+      - ./migrations:/migrations:ro
+    command: >-
+      sh -c "pip install -q -r requirements.txt &&
+      exec uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
     networks:
       - quiz-generator-net
 
@@ -41,6 +53,27 @@ services:
       - "3001:3000"
     depends_on:
       - backend
+    # `next dev` reads these on every start. Docker Desktop's stop/start
+    # control therefore uses current .env values instead of an old bundle.
+    environment:
+      NODE_ENV: development
+      CI: "true"
+      NEXT_TELEMETRY_DISABLED: "1"
+      WATCHPACK_POLLING: "true"
+      NEXT_PUBLIC_SUPABASE_URL: ${NEXT_PUBLIC_SUPABASE_URL}
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: ${NEXT_PUBLIC_SUPABASE_ANON_KEY}
+      NEXT_PUBLIC_DEFAULT_TENANT_ID: ${NEXT_PUBLIC_DEFAULT_TENANT_ID}
+      NEXT_PUBLIC_API_BASE_URL: http://localhost:8001
+      NEXT_PUBLIC_DEV_SESSION_STORAGE: "true"
+    # Dependencies and Next's generated files stay inside Docker volumes;
+    # application source comes directly from the current checkout.
+    volumes:
+      - ./frontend:/app
+      - frontend-node-modules:/app/node_modules
+      - frontend-next-cache:/app/.next
+    command: >-
+      sh -c "pnpm install --frozen-lockfile --prefer-offline &&
+      exec pnpm exec next dev --hostname 0.0.0.0 --port 3000"
     networks:
       - quiz-generator-net
 
@@ -48,3 +81,7 @@ networks:
   quiz-generator-net:
     name: quiz-generator-net
     driver: bridge
+
+volumes:
+  frontend-node-modules:
+  frontend-next-cache:
