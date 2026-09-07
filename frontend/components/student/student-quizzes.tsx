@@ -18,6 +18,8 @@ import { variantLabel } from "@/lib/format";
 type QuizItem = {
   setId: string;
   title: string;
+  subjectName?: string | null;
+  chapterName?: string | null;
   variantId: string;
   variantType: string;
   questionCount: number;
@@ -27,6 +29,11 @@ type QuizItem = {
   bestPct?: number | null;
 };
 
+/** "Accounting · Depreciation" (subject · chapter), skipping any that are missing. */
+function topicLine(i: QuizItem): string {
+  return [i.subjectName, i.chapterName].filter(Boolean).join(" · ");
+}
+
 function flatten(quizzes: StudentQuiz[]): QuizItem[] {
   const items: QuizItem[] = [];
   for (const q of quizzes) {
@@ -34,6 +41,8 @@ function flatten(quizzes: StudentQuiz[]): QuizItem[] {
       items.push({
         setId: q.id,
         title: q.title,
+        subjectName: q.subject_name,
+        chapterName: q.chapter_name,
         variantId: v.id,
         variantType: v.variant_type,
         questionCount: v.question_count,
@@ -117,6 +126,11 @@ export function StudentQuizzes() {
                     <p className="mt-2 font-semibold leading-snug text-foreground">
                       {i.title}
                     </p>
+                    {topicLine(i) && (
+                      <p className="mt-0.5 text-xs font-medium text-primary/80">
+                        {topicLine(i)}
+                      </p>
+                    )}
                     <p className="mt-1 text-xs text-muted-foreground">
                       {i.questionCount} question{i.questionCount === 1 ? "" : "s"}
                       {i.totalMarks ? ` · ${i.totalMarks} marks` : ""}
@@ -166,7 +180,8 @@ export function StudentQuizzes() {
                   <p className="truncate text-sm font-medium text-foreground">
                     {i.title}
                   </p>
-                  <p className="text-xs text-muted-foreground">
+                  <p className="truncate text-xs text-muted-foreground">
+                    {topicLine(i) ? `${topicLine(i)} · ` : ""}
                     {variantLabel(i.variantType)}
                     {i.bestPct != null ? ` · best ${i.bestPct}%` : ""}
                   </p>

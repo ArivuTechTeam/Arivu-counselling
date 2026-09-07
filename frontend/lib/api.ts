@@ -101,6 +101,62 @@ export async function uploadDocument(file: File): Promise<UploadResult> {
   return res.json();
 }
 
+// ---------------------------------------------------------------------------
+// Quiz extraction — pull an EXISTING quiz out of an uploaded document
+// ---------------------------------------------------------------------------
+
+export type ExtractResult = {
+  quiz_set_id: string;
+  variant_id: string;
+  provider: string;
+  extraction_job_id: string;
+  extracted: number;
+  skipped: number;
+  overall_confidence: number | null;
+  questions: GeneratedQuestion[];
+};
+
+/** Thrown when the same file was already uploaded — caller can retry with force. */
+export class DuplicateFileError extends Error {
+  readonly code = "duplicate_file";
+}
+
+/**
+ * Upload an existing quiz document (PDF / DOCX / PNG / JPG) and have Gemini
+ * extract the questions into a draft quiz set (pending review). Can take
+ * ~10-40s, so it uses a longer timeout. If the exact file was already uploaded,
+ * this throws DuplicateFileError unless `force` is true.
+ */
+export async function extractQuiz(
+  file: File,
+  subjectId: string,
+  chapterId: string,
+  force = false,
+): Promise<ExtractResult> {
+  const headers = await authHeader();
+  const form = new FormData();
+  form.append("file", file);
+  form.append("subject_id", subjectId);
+  form.append("chapter_id", chapterId);
+  form.append("force", String(force));
+  const res = await apiFetch(
+    `${API_BASE}/api/v1/quiz-sets/extract`,
+    { method: "POST", headers, body: form },
+    120_000,
+  );
+  if (res.status === 409) {
+    const body = await res.json().catch(() => ({}));
+    throw new DuplicateFileError(body.detail || "You already uploaded this file.");
+  }
+  if (!res.ok) {
+    return apiError(
+      res,
+      "We couldn't extract a quiz from this file. Try a clearer scan or a different file.",
+    );
+  }
+  return res.json();
+}
+
 /** List the documents uploaded within the caller's tenant. */
 export async function listDocuments(): Promise<DocumentOut[]> {
   const headers = await authHeader();
