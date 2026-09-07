@@ -1,10 +1,9 @@
 """
-Structured (JSON-schema-constrained) Gemini calls.
+Structured JSON calls.
 
 Gemini's `responseSchema` guarantees the model returns JSON matching an exact
-shape — so we never parse fragile free-text. This is the backbone of the
-blueprint quiz feature: BOTH topic extraction and blueprint generation call
-`gemini_json` with a schema and get back a validated dict.
+shape. `complete_json_with_fallback` uses the provider-agnostic fallback router
+for features that must continue on DeepSeek when Gemini is unavailable.
 
 Kept separate from the plain-text `LLMProvider` path because it is Gemini-
 specific and schema-driven. Model defaults to the cheap Flash-Lite tier
@@ -18,6 +17,7 @@ import json
 import httpx
 
 from app.lib.config import get_settings
+from app.services.llm import complete_with_fallback
 from app.services.llm.base import LLMError
 
 
@@ -89,3 +89,17 @@ def gemini_json(
     if not isinstance(parsed, dict):
         raise LLMError(f"Gemini returned a non-object JSON: {str(parsed)[:200]}")
     return parsed
+
+
+def complete_json_with_fallback(
+    system_prompt: str, user_prompt: str
+) -> tuple[dict, str]:
+    """Return a parsed JSON object plus the successful provider name."""
+    raw, provider = complete_with_fallback(system_prompt, user_prompt)
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise LLMError(f"{provider} returned invalid JSON: {raw[:300]}") from exc
+    if not isinstance(parsed, dict):
+        raise LLMError(f"{provider} returned non-object JSON: {str(parsed)[:200]}")
+    return parsed, provider

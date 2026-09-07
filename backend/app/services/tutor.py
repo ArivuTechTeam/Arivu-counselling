@@ -10,19 +10,8 @@ at most once per question (a few paise), never per student.
 
 from __future__ import annotations
 
-from app.lib.config import get_settings
 from app.lib.supabase import get_service_client
-from app.services.llm.structured import gemini_json
-
-_SCHEMA = {
-    "type": "OBJECT",
-    "properties": {
-        "explanation": {"type": "STRING"},
-        "simplified": {"type": "STRING"},
-        "hints": {"type": "ARRAY", "items": {"type": "STRING"}},
-    },
-    "required": ["explanation", "simplified", "hints"],
-}
+from app.services.llm.structured import complete_json_with_fallback
 
 _SYSTEM = (
     "You are a patient tutor for exam-prep students. Given ONE quiz question, its "
@@ -96,9 +85,8 @@ def explain_question(question_id: str, tenant_id: str) -> dict:
         raise ValueError("Question not found.")
     q = qrow[0]
 
-    # 3) Generate once (cheap model).
-    model = get_settings().gemini_blueprint_model
-    data = gemini_json(_SYSTEM, _build_prompt(q), _SCHEMA, model=model, temperature=0.3)
+    # 3) Generate once with Gemini primary and DeepSeek fallback.
+    data, provider = complete_json_with_fallback(_SYSTEM, _build_prompt(q))
     explanation = (data.get("explanation") or "").strip()
     simplified = (data.get("simplified") or "").strip()
     hints = [h.strip() for h in (data.get("hints") or []) if isinstance(h, str) and h.strip()]
@@ -112,7 +100,7 @@ def explain_question(question_id: str, tenant_id: str) -> dict:
                 "explanation_text": explanation,
                 "simplified_text": simplified,
                 "hints": hints,
-                "model_used": model,
+                "model_used": provider,
             }
         ).execute()
     except Exception:  # noqa: BLE001 — cache write is non-critical
