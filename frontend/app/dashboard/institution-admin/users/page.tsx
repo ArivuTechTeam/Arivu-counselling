@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -30,6 +30,7 @@ import {
 
 const selectClass =
   "h-9 rounded-md border border-input bg-transparent px-3 text-sm";
+const USERS_PER_PAGE = 25;
 
 function initials(text: string): string {
   return (
@@ -61,6 +62,28 @@ export default function UsersPage() {
   const [loadingSubjects, setLoadingSubjects] = useState(false);
   const [savingSubjects, setSavingSubjects] = useState(false);
   const [assignmentError, setAssignmentError] = useState<string | null>(null);
+  const [query, setQuery] = useState("");
+  const [page, setPage] = useState(1);
+
+  const filteredUsers = useMemo(() => {
+    if (!users) return [];
+    const normalizedQuery = query.trim().toLowerCase();
+    if (!normalizedQuery) return users;
+    return users.filter((user) =>
+      [user.full_name, user.email, user.role, ...user.courses]
+        .some((value) => value?.toLowerCase().includes(normalizedQuery) ?? false),
+    );
+  }, [query, users]);
+  const totalPages = Math.max(1, Math.ceil(filteredUsers.length / USERS_PER_PAGE));
+  const currentPage = Math.min(page, totalPages);
+  const pageUsers = filteredUsers.slice(
+    (currentPage - 1) * USERS_PER_PAGE,
+    currentPage * USERS_PER_PAGE,
+  );
+  const firstResult = filteredUsers.length
+    ? (currentPage - 1) * USERS_PER_PAGE + 1
+    : 0;
+  const lastResult = Math.min(currentPage * USERS_PER_PAGE, filteredUsers.length);
 
   function refresh() {
     listUsers().then(setUsers).catch((e) => setError(e.message));
@@ -207,6 +230,9 @@ export default function UsersPage() {
           <CardTitle>
             Teachers &amp; students{users ? ` (${users.length})` : ""}
           </CardTitle>
+          <CardDescription>
+            Search by name, email, role, or course. Results are shown 25 at a time.
+          </CardDescription>
         </CardHeader>
         <CardContent>
           {users === null ? (
@@ -218,14 +244,39 @@ export default function UsersPage() {
               message="Add your first teacher or student using the form above."
             />
           ) : (
-            <ul className="flex flex-col divide-y">
-              {users.map((u) => {
-                const name = u.full_name || u.email || "";
-                return (
-                  <li
-                    key={u.id}
-                    className="flex items-center justify-between gap-3 py-3 text-sm"
-                  >
+            <div className="flex flex-col gap-4">
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                <Input
+                  type="search"
+                  value={query}
+                  onChange={(event) => {
+                    setQuery(event.target.value);
+                    setPage(1);
+                  }}
+                  placeholder="Search users"
+                  aria-label="Search teachers and students"
+                  className="sm:max-w-sm"
+                />
+                <p className="text-xs text-muted-foreground" aria-live="polite">
+                  Showing {firstResult}–{lastResult} of {filteredUsers.length}
+                </p>
+              </div>
+
+              {filteredUsers.length === 0 ? (
+                <EmptyState
+                  icon={<Users />}
+                  title="No matching users"
+                  message="Try a different name, email, role, or course."
+                />
+              ) : (
+                <ul className="flex max-h-[38rem] flex-col divide-y overflow-y-auto pr-1">
+                  {pageUsers.map((u) => {
+                    const name = u.full_name || u.email || "";
+                    return (
+                      <li
+                        key={u.id}
+                        className="flex items-center justify-between gap-3 py-3 text-sm"
+                      >
                     <div className="flex min-w-0 items-center gap-3">
                       <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-primary/10 text-xs font-bold text-primary">
                         {initials(name)}
@@ -265,10 +316,36 @@ export default function UsersPage() {
                         <Trash size={16} />
                       </button>
                     </div>
-                  </li>
-                );
-              })}
-            </ul>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+
+              {filteredUsers.length > USERS_PER_PAGE && (
+                <div className="flex items-center justify-between border-t pt-4">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={currentPage === 1}
+                    onClick={() => setPage((value) => Math.max(1, value - 1))}
+                  >
+                    Previous
+                  </Button>
+                  <span className="text-sm text-muted-foreground">
+                    Page {currentPage} of {totalPages}
+                  </span>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={currentPage === totalPages}
+                    onClick={() => setPage((value) => Math.min(totalPages, value + 1))}
+                  >
+                    Next
+                  </Button>
+                </div>
+              )}
+            </div>
           )}
         </CardContent>
       </Card>
