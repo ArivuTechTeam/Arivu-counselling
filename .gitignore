@@ -48,3 +48,4 @@ docs/*.zip
 
 # Uploaded test files
 test-uploads/
+.superdesign/

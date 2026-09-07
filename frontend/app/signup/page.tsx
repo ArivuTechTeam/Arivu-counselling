@@ -201,7 +201,10 @@ export default function SignupPage() {
   }, []);
 
   // ArivuPro entrance animations, custom cursor, magnetic buttons, counters.
-  useEffect(() => initAuthFx(), []);
+  useEffect(() => {
+    if (!window.matchMedia("(min-width: 901px)").matches) return;
+    return initAuthFx();
+  }, []);
 
   return (
     <div className="login-page">
