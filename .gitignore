@@ -36,7 +36,6 @@ Thumbs.db
 
 # Claude Code agent tooling / skills (local, not product source)
 .claude/
-CLAUDE.md
 .tokensave/
 
 # Local scratch scripts
