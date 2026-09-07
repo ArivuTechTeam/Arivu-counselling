@@ -22,6 +22,9 @@ from app.services.teacher_access import replace_teacher_subjects
 
 router = APIRouter(prefix="/api/v1", tags=["admin"])
 
+AUTH_USERS_PAGE_SIZE = 1000
+
+
 def _require_admin(profile: CurrentProfile) -> None:
     if profile.role != "institution_admin":
         raise HTTPException(status_code=403, detail="Institution admins only.")
@@ -45,6 +48,27 @@ def _delete_auth_user_quietly(service, user_id: str) -> None:
         service.auth.admin.delete_user(user_id)
     except Exception:  # noqa: BLE001
         pass
+
+
+def _list_all_auth_users(service, *, per_page: int = AUTH_USERS_PAGE_SIZE) -> list:
+    """Fetch every GoTrue user instead of silently stopping at its first page."""
+    users: list = []
+    page = 1
+    while True:
+        response = service.auth.admin.list_users(page=page, per_page=per_page)
+        page_users = getattr(response, "users", response) or []
+        page_users = list(page_users)
+        users.extend(page_users)
+        if len(page_users) < per_page:
+            return users
+        page += 1
+
+
+def _email_by_auth_user_id(service) -> dict[str, str | None]:
+    return {
+        str(user.id): getattr(user, "email", None)
+        for user in _list_all_auth_users(service)
+    }
 
 
 def _set_provisioned_profile(
@@ -90,9 +114,7 @@ def list_users(profile: CurrentProfile = Depends(get_current_profile)) -> list[d
         .data
         or []
     )
-    auth_users = service.auth.admin.list_users()
-    auth_users = getattr(auth_users, "users", auth_users)
-    email_by_id = {u.id: getattr(u, "email", None) for u in auth_users}
+    email_by_id = _email_by_auth_user_id(service)
 
     enrollments = (
         service.table("enrollments")
@@ -273,9 +295,7 @@ def list_admins(
         .data
         or []
     )
-    auth_users = service.auth.admin.list_users()
-    auth_users = getattr(auth_users, "users", auth_users)
-    email_by_id = {u.id: getattr(u, "email", None) for u in auth_users}
+    email_by_id = _email_by_auth_user_id(service)
     tenants = service.table("tenants").select("id, name").execute().data or []
     tname = {t["id"]: t["name"] for t in tenants}
     return [

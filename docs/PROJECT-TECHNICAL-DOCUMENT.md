@@ -618,7 +618,7 @@ This is the biggest missing block for a "real SaaS":
 - Complete the events instrumentation (emit on standard generation + uploads).
 - Lazy-load heavy client bundles (charts, PDF).
 - Expand the backend security-regression suite with Supabase integration tests and add frontend unit/e2e coverage.
-- CI to run `pnpm build` + lint on every PR so broken builds never reach `main`.
+- Require the existing backend-test and frontend lint/build GitHub Actions checks in the `main` branch ruleset.
 
 ---
 

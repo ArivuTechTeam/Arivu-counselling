@@ -12,11 +12,14 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from app.lib.auth import CurrentProfile, get_current_profile
+from app.lib.config import get_settings
 from app.lib.supabase import get_service_client
 from app.services.llm import LLMError
+from app.services.rate_limit import TOPIC_EXTRACTION, enforce_ai_rate_limit
 from app.services.topics import extract_topics_for_document
 
 router = APIRouter(prefix="/api/v1", tags=["topics"])
+
 
 @router.post("/documents/{document_id}/topics")
 def extract_document_topics(
@@ -40,6 +43,12 @@ def extract_document_topics(
     )
     if document is None or not document.data:
         raise HTTPException(status_code=404, detail="Document not found.")
+    enforce_ai_rate_limit(
+        profile=profile,
+        endpoint=TOPIC_EXTRACTION,
+        hourly_limit=get_settings().rate_limit_topic_extraction_per_hour,
+        action_label="topic extraction",
+    )
     try:
         topics = extract_topics_for_document(document_id, profile.tenant_id)
     except ValueError as exc:

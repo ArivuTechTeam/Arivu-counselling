@@ -16,10 +16,16 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 
 from app.lib.auth import CurrentProfile, get_current_profile
+from app.lib.config import get_settings
 from app.lib.supabase import get_service_client
 from app.services.blueprint import generate_blueprint_quiz
 from app.services.generation import generate_quiz
 from app.services.llm import LLMError
+from app.services.rate_limit import (
+    BLUEPRINT_GENERATION,
+    QUIZ_GENERATION,
+    enforce_ai_rate_limit,
+)
 from app.services.review import get_quiz_set_detail
 
 router = APIRouter(prefix="/api/v1/quiz-sets", tags=["quiz"])
@@ -57,6 +63,12 @@ def generate(
             detail=f"Unsupported question types: {sorted(invalid) or 'none selected'}.",
         )
 
+    enforce_ai_rate_limit(
+        profile=profile,
+        endpoint=QUIZ_GENERATION,
+        hourly_limit=get_settings().rate_limit_quiz_generation_per_hour,
+        action_label="quiz generation",
+    )
     try:
         return generate_quiz(
             document_id=req.document_id,
@@ -137,6 +149,12 @@ def generate_blueprint(
             detail="That's more than 50 questions in total — please reduce the counts.",
         )
 
+    enforce_ai_rate_limit(
+        profile=profile,
+        endpoint=BLUEPRINT_GENERATION,
+        hourly_limit=get_settings().rate_limit_blueprint_per_hour,
+        action_label="blueprint generation",
+    )
     try:
         return generate_blueprint_quiz(
             document_id=req.document_id,

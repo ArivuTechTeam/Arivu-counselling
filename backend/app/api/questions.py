@@ -16,6 +16,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 
 from app.lib.auth import CurrentProfile, get_current_profile
+from app.lib.config import get_settings
 from app.lib.supabase import get_service_client
 from app.services.events import (
     QUESTION_APPROVED,
@@ -25,6 +26,11 @@ from app.services.events import (
     log_event,
 )
 from app.services.llm import LLMError
+from app.services.rate_limit import (
+    QUESTION_EXPLAIN,
+    QUESTION_REGENERATE,
+    enforce_ai_rate_limit,
+)
 from app.services.review import regenerate_question
 from app.services.tutor import explain_question
 
@@ -227,6 +233,12 @@ def regenerate(
     _require_teacher(profile)
     service = get_service_client()
     _assert_teacher_question(service, question_id, profile)
+    enforce_ai_rate_limit(
+        profile=profile,
+        endpoint=QUESTION_REGENERATE,
+        hourly_limit=get_settings().rate_limit_question_regenerate_per_hour,
+        action_label="question regeneration",
+    )
     try:
         result = regenerate_question(question_id, profile.tenant_id)
         log_event(
@@ -267,6 +279,12 @@ def explain(
             status_code=403,
             detail="Explanations are available after you submit this question.",
         )
+    enforce_ai_rate_limit(
+        profile=profile,
+        endpoint=QUESTION_EXPLAIN,
+        hourly_limit=get_settings().rate_limit_question_explain_per_hour,
+        action_label="question explanations",
+    )
     try:
         return explain_question(question_id, profile.tenant_id)
     except ValueError as exc:
