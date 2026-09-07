@@ -8,6 +8,7 @@ import unittest
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack
 from http.client import HTTPConnection
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import uvicorn
@@ -97,6 +98,15 @@ class QuizGenerationLoadTests(unittest.TestCase):
             if hasattr(quiz_api, "enforce_ai_rate_limit"):
                 patches.enter_context(
                     patch.object(quiz_api, "enforce_ai_rate_limit", return_value=None)
+                )
+                patches.enter_context(
+                    patch.object(
+                        quiz_api,
+                        "get_settings",
+                        return_value=SimpleNamespace(
+                            rate_limit_quiz_generation_per_hour=10
+                        ),
+                    )
                 )
 
             server_thread.start()
