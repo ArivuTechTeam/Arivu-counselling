@@ -17,6 +17,7 @@ BLUEPRINT_GENERATION = "blueprint_generation"
 TOPIC_EXTRACTION = "topic_extraction"
 QUESTION_REGENERATE = "question_regenerate"
 QUESTION_EXPLAIN = "question_explain"
+QUIZ_EXTRACTION = "quiz_extraction"
 
 
 def enforce_ai_rate_limit(

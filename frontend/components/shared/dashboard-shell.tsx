@@ -66,6 +66,12 @@ const NAV: Record<string, NavItem[]> = {
       icon: Plus,
     },
     {
+      label: "Extract quiz",
+      href: "/dashboard/teacher/extract",
+      section: "Content",
+      icon: Sparkles,
+    },
+    {
       label: "Review queue",
       href: "/dashboard/teacher/review",
       section: "Content",

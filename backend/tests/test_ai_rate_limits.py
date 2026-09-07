@@ -115,7 +115,7 @@ class RateLimitConfigurationTests(unittest.TestCase):
                     with self.assertRaisesRegex(RuntimeError, "positive integer"):
                         _positive_int("EXAMPLE_RATE_LIMIT", 10)
 
-    def test_all_five_settings_are_independently_configurable(self) -> None:
+    def test_all_six_settings_are_independently_configurable(self) -> None:
         environment = {
             "SUPABASE_URL": "https://example.supabase.co",
             "SUPABASE_ANON_KEY": "anon",
@@ -126,6 +126,7 @@ class RateLimitConfigurationTests(unittest.TestCase):
             "RATE_LIMIT_TOPIC_EXTRACTION_PER_HOUR": "13",
             "RATE_LIMIT_QUESTION_REGENERATE_PER_HOUR": "14",
             "RATE_LIMIT_QUESTION_EXPLAIN_PER_HOUR": "15",
+            "RATE_LIMIT_QUIZ_EXTRACTION_PER_HOUR": "16",
         }
         with patch.dict(os.environ, environment, clear=True):
             settings = Settings()
@@ -135,6 +136,7 @@ class RateLimitConfigurationTests(unittest.TestCase):
         self.assertEqual(settings.rate_limit_topic_extraction_per_hour, 13)
         self.assertEqual(settings.rate_limit_question_regenerate_per_hour, 14)
         self.assertEqual(settings.rate_limit_question_explain_per_hour, 15)
+        self.assertEqual(settings.rate_limit_quiz_extraction_per_hour, 16)
 
 
 class RateLimitMigrationTests(unittest.TestCase):

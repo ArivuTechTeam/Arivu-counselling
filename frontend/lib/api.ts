@@ -7,6 +7,8 @@ const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL!;
 const DEFAULT_TIMEOUT_MS = 20_000;
 // 150 MB takes about 10 minutes at 2 Mbps before server-side extraction time.
 const DOCUMENT_UPLOAD_TIMEOUT_MS = 15 * 60_000;
+// Includes a 180-second model call plus upload and database processing time.
+const QUIZ_EXTRACTION_TIMEOUT_MS = 5 * 60_000;
 
 async function apiFetch(
   input: RequestInfo | URL,
@@ -97,6 +99,62 @@ export async function uploadDocument(file: File): Promise<UploadResult> {
 
   if (!res.ok) {
     return apiError(res, "We couldn't upload your file. Please try again.");
+  }
+  return res.json();
+}
+
+// ---------------------------------------------------------------------------
+// Quiz extraction — pull an EXISTING quiz out of an uploaded document
+// ---------------------------------------------------------------------------
+
+export type ExtractResult = {
+  quiz_set_id: string;
+  variant_id: string;
+  provider: string;
+  extraction_job_id: string;
+  extracted: number;
+  skipped: number;
+  overall_confidence: number | null;
+  questions: GeneratedQuestion[];
+};
+
+/** Thrown when the same file was already uploaded — caller can retry with force. */
+export class DuplicateFileError extends Error {
+  readonly code = "duplicate_file";
+}
+
+/**
+ * Upload an existing quiz document (PDF / DOCX / PNG / JPG) and have the AI
+ * provider extract its questions into a draft quiz set for review. This can
+ * take several minutes. If the exact file was already uploaded, this throws
+ * DuplicateFileError unless `force` is true.
+ */
+export async function extractQuiz(
+  file: File,
+  subjectId: string,
+  chapterId: string,
+  force = false,
+): Promise<ExtractResult> {
+  const headers = await authHeader();
+  const form = new FormData();
+  form.append("file", file);
+  form.append("subject_id", subjectId);
+  form.append("chapter_id", chapterId);
+  form.append("force", String(force));
+  const res = await apiFetch(
+    `${API_BASE}/api/v1/quiz-sets/extract`,
+    { method: "POST", headers, body: form },
+    QUIZ_EXTRACTION_TIMEOUT_MS,
+  );
+  if (res.status === 409) {
+    const body = await res.json().catch(() => ({}));
+    throw new DuplicateFileError(body.detail || "You already uploaded this file.");
+  }
+  if (!res.ok) {
+    return apiError(
+      res,
+      "We couldn't extract a quiz from this file. Try a clearer scan or a different file.",
+    );
   }
   return res.json();
 }

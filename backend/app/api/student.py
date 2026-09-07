@@ -124,6 +124,7 @@ def list_quizzes(profile: CurrentProfile = Depends(get_current_profile)) -> list
             service.table("subjects")
             .select("id, name")
             .in_("id", subject_ids)
+            .eq("tenant_id", profile.tenant_id)
             .execute()
             .data
             or []
@@ -138,6 +139,7 @@ def list_quizzes(profile: CurrentProfile = Depends(get_current_profile)) -> list
                 service.table("chapters")
                 .select("id, name")
                 .in_("id", chapter_ids)
+                .eq("tenant_id", profile.tenant_id)
                 .execute()
                 .data
                 or []
