@@ -49,12 +49,20 @@ migration-10-plan-limits-rls.sql
 migration-11-auth-hardening.sql
 migration-12-teacher-subjects.sql
 migration-13-ai-rate-limits.sql
+migration-14-google-oauth-onboarding.sql
+migration-15-quiz-extraction.sql
+migration-16-chapter-uniqueness.sql
+migration-17-document-hash.sql
+migration-18-course-subject-uniqueness.sql
+migration-19-quiz-extraction-rate-limit.sql
 ```
 
 The repository does not prove which migrations are applied to a deployed
 Supabase project. Check the target project before skipping any file. Migration
 12 must be applied before deploying backend code that reads `teacher_subjects`.
 Migration 13 must be applied before deploying backend code with AI rate limits.
+Migrations 15–19 must be applied in order before deploying quiz extraction;
+run the duplicate checks documented in migrations 16 and 18 first.
 
 ---
 
@@ -102,6 +110,7 @@ explicitly in Railway so the production policy is visible and easy to edit:
 | `RATE_LIMIT_TOPIC_EXTRACTION_PER_HOUR` | per-user topic extractions per rolling hour (default `10`) |
 | `RATE_LIMIT_QUESTION_REGENERATE_PER_HOUR` | per-user question regenerations per rolling hour (default `10`) |
 | `RATE_LIMIT_QUESTION_EXPLAIN_PER_HOUR` | per-user question explanations per rolling hour (default `10`) |
+| `RATE_LIMIT_QUIZ_EXTRACTION_PER_HOUR` | per-user existing-quiz document extractions per rolling hour (default `10`) |
 
 **Deploying a change (Railway):** merge to `main` first, then run
 `scripts/deploy.sh` from `main` (or `railway up backend --path-as-root

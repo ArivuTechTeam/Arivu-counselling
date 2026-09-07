@@ -1,5 +1,5 @@
 -- ============================================================================
--- Migration 14 — Chapter integrity: no duplicate chapters within a subject
+-- Migration 16 — Chapter integrity: no duplicate chapters within a subject
 -- Run this ONCE in the Supabase SQL Editor.
 --
 -- Chapters are deduped today only in application code (the POST /chapters
@@ -21,5 +21,5 @@ create unique index if not exists uq_chapters_tenant_subject_name
   on chapters (tenant_id, subject_id, name);
 
 -- ============================================================================
--- END OF MIGRATION 14
+-- END OF MIGRATION 16
 -- ============================================================================

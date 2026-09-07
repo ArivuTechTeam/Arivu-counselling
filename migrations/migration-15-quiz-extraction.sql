@@ -1,5 +1,5 @@
 -- ============================================================================
--- Migration 13 — Quiz extraction: tag extracted questions
+-- Migration 15 — Quiz extraction: tag extracted questions
 -- Run this ONCE in the Supabase SQL Editor.
 --
 -- The quiz-EXTRACTION feature (Gemini reads a teacher's existing MCQ document
@@ -17,5 +17,5 @@
 alter type question_source add value if not exists 'extracted';
 
 -- ============================================================================
--- END OF MIGRATION 13
+-- END OF MIGRATION 15
 -- ============================================================================

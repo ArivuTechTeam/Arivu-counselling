@@ -25,3 +25,16 @@ the user, update `docs/akbar_changelog/` as follows:
    record reaches the repository in the same pull request.
 
 The full convention is documented in `docs/akbar_changelog/README.md`.
+
+## AI rate limits
+
+All AI request limits are per user in a rolling one-hour window and are read
+from the environment when the backend starts. Railway can change them without
+a code change; restart the backend after editing a value.
+
+- `RATE_LIMIT_QUIZ_GENERATION_PER_HOUR` (default `10`)
+- `RATE_LIMIT_BLUEPRINT_PER_HOUR` (default `10`)
+- `RATE_LIMIT_TOPIC_EXTRACTION_PER_HOUR` (default `10`)
+- `RATE_LIMIT_QUESTION_REGENERATE_PER_HOUR` (default `10`)
+- `RATE_LIMIT_QUESTION_EXPLAIN_PER_HOUR` (default `10`)
+- `RATE_LIMIT_QUIZ_EXTRACTION_PER_HOUR` (default `10`)

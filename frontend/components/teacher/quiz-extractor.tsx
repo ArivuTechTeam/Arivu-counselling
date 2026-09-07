@@ -26,6 +26,31 @@ const fieldClass =
   "h-10 w-full rounded-md border border-input bg-background px-3 text-sm shadow-sm transition-colors focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20";
 
 const NEW_CHAPTER = "__new__";
+const MAX_EXTRACTION_BYTES = 20 * 1024 * 1024;
+const EXTRACTION_EXTENSIONS = new Set(["pdf", "docx", "png", "jpg", "jpeg"]);
+const EXTRACTION_MIME_TYPES = new Set([
+  "application/pdf",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  "image/png",
+  "image/jpeg",
+]);
+
+function validateExtractionFile(file: File): string | null {
+  const extension = file.name.split(".").pop()?.toLowerCase() ?? "";
+  if (
+    !EXTRACTION_EXTENSIONS.has(extension) ||
+    (file.type !== "" && !EXTRACTION_MIME_TYPES.has(file.type))
+  ) {
+    return "Choose a PDF, DOCX, PNG, or JPG file.";
+  }
+  if (file.size > MAX_EXTRACTION_BYTES) {
+    return "This file is larger than 20 MB. Choose a smaller quiz document.";
+  }
+  if (file.size === 0) {
+    return "The selected file is empty.";
+  }
+  return null;
+}
 
 function Spinner() {
   return (
@@ -204,7 +229,18 @@ export function QuizExtractor() {
               className="hidden"
               disabled={busy}
               onChange={(e) => {
-                setFile(e.target.files?.[0] ?? null);
+                const selected = e.target.files?.[0] ?? null;
+                const validationError = selected
+                  ? validateExtractionFile(selected)
+                  : null;
+                if (validationError) {
+                  setFile(null);
+                  setError(validationError);
+                  e.currentTarget.value = "";
+                } else {
+                  setFile(selected);
+                  setError(null);
+                }
                 setDupMessage(null);
               }}
             />
@@ -216,7 +252,7 @@ export function QuizExtractor() {
         {busy ? (
           <div className="flex items-center gap-2 rounded-lg border border-primary/20 bg-primary/5 px-3 py-2.5 text-sm text-primary">
             <Spinner />
-            Reading your document with AI… this can take up to a minute. Please
+            Reading your document with AI… this can take several minutes. Please
             don&apos;t close this tab.
           </div>
         ) : dupMessage ? (

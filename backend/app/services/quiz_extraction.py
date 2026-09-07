@@ -2,14 +2,15 @@
 Quiz EXTRACTION orchestration.
 
 Reads an existing quiz document a teacher uploaded (typed PDF, scanned image, or
-DOCX) and pulls the questions out with Gemini, then stores them as a DRAFT quiz
-set whose questions are `pending_review` — so they flow through the SAME teacher
-review -> publish path as generated quizzes. The teacher review gate is the
-accuracy guarantee: students only ever see approved questions.
+DOCX) and pulls the questions out with the configured AI providers, then stores
+them as a DRAFT quiz set whose questions are `pending_review` — so they flow
+through the same teacher review -> publish path as generated quizzes. The
+teacher review gate is the accuracy guarantee: students only ever see approved
+questions.
 
 Deliberately separate from generation.py so the core generator is untouched.
   PDF / image  -> Gemini vision (bytes sent inline, no OCR needed)
-  DOCX         -> extract text -> Gemini (text)
+  DOCX         -> extract text -> Gemini with DeepSeek fallback
 
 Raises ValueError for caller/input problems and LLMError for model problems; the
 API layer maps those to HTTP status codes.
@@ -19,7 +20,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, Field, ValidationError
 
 from app.lib.auth import CurrentProfile
 from app.lib.config import get_settings
@@ -33,7 +34,10 @@ from app.services.extraction_prompts import (
 )
 from app.services.generation import GeneratedQuestion
 from app.services.llm import LLMError
-from app.services.llm.structured import gemini_json, gemini_json_multimodal
+from app.services.llm.structured import (
+    complete_json_with_fallback,
+    gemini_json_multimodal,
+)
 from app.services.teacher_access import teacher_has_subject
 
 # Which uploads the extractor accepts, and how to hand each to Gemini.
@@ -45,7 +49,7 @@ _TEXT_EXT = {"docx"}  # extracted to text first
 class ExtractedQuestion(GeneratedQuestion):
     """A generated-question shape plus extraction-only metadata."""
 
-    confidence: float | None = None
+    confidence: float | None = Field(default=None, ge=0, le=1)
     is_pyq: bool = False
     year: str | None = None
 
@@ -64,6 +68,29 @@ def _prefix_pyq(explanation: str | None, is_pyq: bool, year: str | None) -> str 
         return explanation
     tag = f"[PYQ {year}]" if year else "[PYQ]"
     return f"{tag} {explanation}".strip() if explanation else tag
+
+
+def _extract_document_content(
+    *, content: bytes, ext: str
+) -> tuple[dict, str]:
+    """Extract model JSON and report the provider that produced it."""
+    if ext in _VISION_EXT:
+        return (
+            gemini_json_multimodal(
+                EXTRACTION_SYSTEM,
+                EXTRACTION_USER_FILE,
+                files=[(_VISION_EXT[ext], content)],
+            ),
+            "gemini",
+        )
+
+    text = extract_text(content, ext)
+    if not text.strip():
+        raise ValueError("This document has no readable text.")
+    return complete_json_with_fallback(
+        EXTRACTION_SYSTEM,
+        build_extraction_user_text(text),
+    )
 
 
 def extract_quiz(
@@ -132,24 +159,9 @@ def extract_quiz(
     quiz_set_id: str | None = None
     created_question_ids: list[str] = []
     try:
-        # 3) Read the document with Gemini — vision for PDF/images, text for DOCX.
+        # 3) Read PDF/images with Gemini vision; DOCX text has provider fallback.
         content = download_bytes(doc_row["storage_path"])
-        if ext in _VISION_EXT:
-            raw = gemini_json_multimodal(
-                EXTRACTION_SYSTEM,
-                EXTRACTION_USER_FILE,
-                files=[(_VISION_EXT[ext], content)],
-            )
-        else:  # docx
-            text = extract_text(content, ext)
-            if not text.strip():
-                raise ValueError("This document has no readable text.")
-            raw = gemini_json(
-                EXTRACTION_SYSTEM,
-                build_extraction_user_text(text),
-                model=settings.gemini_model,
-                temperature=0.1,
-            )
+        raw, provider = _extract_document_content(content=content, ext=ext)
 
         # 4) Validate per-question; skip malformed ones (teacher reviews the rest).
         questions: list[ExtractedQuestion] = []
@@ -247,6 +259,7 @@ def extract_quiz(
             {
                 "status": "succeeded",
                 "raw_output": raw,
+                "model_used": provider,
                 "overall_confidence": overall_confidence,
                 "completed_at": _now(),
             }
@@ -255,7 +268,7 @@ def extract_quiz(
         return {
             "quiz_set_id": quiz_set_id,
             "variant_id": variant_id,
-            "provider": "gemini",
+            "provider": provider,
             "extraction_job_id": job_id,
             "extracted": len(stored),
             "skipped": skipped,

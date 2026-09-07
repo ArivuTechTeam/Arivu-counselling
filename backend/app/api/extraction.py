@@ -2,8 +2,9 @@
 Quiz EXTRACTION API.
 
   POST /api/v1/quiz-sets/extract  — teacher uploads an existing quiz document
-    (typed PDF, scanned image, or DOCX); Gemini extracts the questions and
-    stores them as a DRAFT quiz set (pending review) under the chosen subject.
+    (typed PDF, scanned image, or DOCX); the configured AI provider extracts
+    the questions and stores them as a DRAFT quiz set (pending review) under
+    the chosen subject.
 
 Isolated in its own router so the core generator (quiz.py / generation.py) is
 untouched. Accepts its own multipart upload (so it can take images, which the
@@ -14,18 +15,24 @@ way, then hands off to the extraction orchestrator.
 from __future__ import annotations
 
 import hashlib
+import io
+import logging
 import uuid
+import zipfile
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 from starlette.concurrency import run_in_threadpool
 
 from app.lib.auth import CurrentProfile, get_current_profile
-from app.lib.storage import upload_bytes
+from app.lib.config import get_settings
+from app.lib.storage import delete_bytes, upload_bytes
 from app.lib.supabase import get_service_client
 from app.services.llm import LLMError
 from app.services.quiz_extraction import extract_quiz
+from app.services.rate_limit import QUIZ_EXTRACTION, enforce_ai_rate_limit
 
 router = APIRouter(prefix="/api/v1/quiz-sets", tags=["extraction"])
+logger = logging.getLogger(__name__)
 
 # Vision handles scans/typed PDFs; DOCX goes via text. Images allowed here even
 # though the shared /documents upload only takes pdf/docx.
@@ -48,11 +55,30 @@ def _ext_of(filename: str) -> str:
 
 
 def _require_teacher(profile: CurrentProfile) -> None:
+    # Teacher-only by design — see CLAUDE.md.
     if profile.role != "teacher":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Only teachers can extract quizzes.",
         )
+
+
+def _has_expected_signature(ext: str, content: bytes) -> bool:
+    """Reject renamed or malformed files before storage and model processing."""
+    if ext == "pdf":
+        return content[:1024].lstrip().startswith(b"%PDF-")
+    if ext == "png":
+        return content.startswith(b"\x89PNG\r\n\x1a\n")
+    if ext in {"jpg", "jpeg"}:
+        return content.startswith(b"\xff\xd8\xff")
+    if ext == "docx":
+        try:
+            with zipfile.ZipFile(io.BytesIO(content)) as archive:
+                names = set(archive.namelist())
+                return "[Content_Types].xml" in names and "word/document.xml" in names
+        except (OSError, zipfile.BadZipFile):
+            return False
+    return False
 
 
 @router.post("/extract")
@@ -73,13 +99,21 @@ async def extract_quiz_endpoint(
             detail="Supported files: PDF, DOCX, PNG, JPG.",
         )
 
-    content = await file.read()
+    content = await file.read(MAX_BYTES + 1)
     if not content:
         raise HTTPException(status_code=400, detail="Uploaded file is empty.")
     if len(content) > MAX_BYTES:
         raise HTTPException(
             status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
             detail=f"File too large for extraction (max {MAX_MB} MB).",
+        )
+    if not _has_expected_signature(ext, content):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "The selected file does not appear to be a valid PDF, DOCX, "
+                "PNG, or JPG."
+            ),
         )
 
     service = get_service_client()
@@ -108,30 +142,46 @@ async def extract_quiz_endpoint(
             msg += " Extract it again anyway?"
             raise HTTPException(status_code=409, detail=msg)
 
+    enforce_ai_rate_limit(
+        profile=profile,
+        endpoint=QUIZ_EXTRACTION,
+        hourly_limit=get_settings().rate_limit_quiz_extraction_per_hour,
+        action_label="quiz extraction",
+    )
+
     # 1) Store the original under the tenant folder.
     object_path = f"{profile.tenant_id}/{uuid.uuid4()}.{ext}"
     upload_bytes(object_path, content, CONTENT_TYPES[ext])
 
     # 2) Record the document (extraction jobs reference a document_id).
-    inserted = (
-        service.table("documents")
-        .insert(
-            {
-                "tenant_id": profile.tenant_id,
-                "uploaded_by": profile.user_id,
-                "storage_path": object_path,
-                "original_filename": filename,
-                "file_type": ext,
-                "status": "uploaded",
-                "content_hash": content_hash,
-            }
+    try:
+        inserted = (
+            service.table("documents")
+            .insert(
+                {
+                    "tenant_id": profile.tenant_id,
+                    "uploaded_by": profile.user_id,
+                    "storage_path": object_path,
+                    "original_filename": filename,
+                    "file_type": ext,
+                    "status": "uploaded",
+                    "content_hash": content_hash,
+                }
+            )
+            .execute()
         )
-        .execute()
-    )
+    except Exception:
+        try:
+            delete_bytes(object_path)
+        except Exception:  # noqa: BLE001 - retain the original database error
+            logger.exception(
+                "Could not remove orphaned extraction upload %s", object_path
+            )
+        raise
     document_id = inserted.data[0]["id"]
 
-    # 3) Extract (Gemini vision/text + persist). Off the event loop — it does
-    #    blocking network + DB work.
+    # 3) Extract with the configured AI providers and persist. Off the event
+    #    loop because it performs blocking network and database work.
     try:
         result = await run_in_threadpool(
             extract_quiz,
@@ -147,5 +197,11 @@ async def extract_quiz_endpoint(
             status_code=502,
             detail=f"Could not extract the quiz: {exc}",
         )
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Unexpected quiz extraction failure")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="We couldn't finish extracting this quiz. Please try again.",
+        ) from exc
 
     return result

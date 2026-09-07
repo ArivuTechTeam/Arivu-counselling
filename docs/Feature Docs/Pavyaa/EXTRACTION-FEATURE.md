@@ -32,7 +32,7 @@ POST /api/v1/quiz-sets/extract   (multipart: file, subject_id, chapter_id, force
 quiz_extraction.extract_quiz()
         │  • authorise: teacher owns the subject (teacher_has_subject)
         │  • validate: chapter belongs to that subject + tenant
-        │  • PDF/image → Gemini VISION (bytes inline, no OCR); DOCX → text → Gemini
+        │  • PDF/image → Gemini VISION (bytes inline, no OCR); DOCX → text → Gemini/DeepSeek fallback
         │  • validate each question (skip malformed), compute confidence
         │  • persist: quiz_set(draft) → variant → questions(source='extracted',
         │             review_status='pending_review', chapter_id, confidence_score,
@@ -56,7 +56,7 @@ redirect → /dashboard/teacher/review/{quiz_set_id}  (EXISTING review screen)
 ### Modified files
 | File | Change |
 |---|---|
-| `backend/app/services/llm/structured.py` | **New** `gemini_json_multimodal(system, user, files, ...)` — sends PDF/image bytes to Gemini vision inline (base64). The existing text-only `gemini_json` is unchanged. |
+| `backend/app/services/llm/structured.py` | Adds `gemini_json_multimodal(system, user, files, ...)` for PDF/image bytes while preserving the shared text fallback path from `main`. |
 | `backend/app/main.py` | Mounts the new `extraction.router`. |
 | `backend/app/api/academics.py` | `create_course` + `create_subject` are now **get-or-create** (reuse an existing one by name instead of duplicating) — matching how `create_chapter` already worked. |
 
@@ -102,29 +102,30 @@ All are **additive** (no existing column/row changed). Run any dup-check queries
 
 | Migration | What it does | Required? |
 |---|---|---|
-| `migrations/migration-13-quiz-extraction.sql` | Adds `'extracted'` to the `question_source` enum (tags extracted questions). | **Required** — extraction inserts `source='extracted'`. |
-| `migrations/migration-14-chapter-uniqueness.sql` | Unique index `chapters(tenant_id, subject_id, name)`. | Recommended (DB backstop for chapter dedup). |
-| `migrations/migration-15-document-hash.sql` | Adds `documents.content_hash` + index (duplicate-file detection). | **Required** — extraction writes/queries `content_hash`. |
-| `migrations/migration-16-course-subject-uniqueness.sql` | Unique indexes on `courses(tenant_id,name)` and `subjects(tenant_id,course_id,name)`. | Recommended (DB backstop for catalog dedup). |
+| `migrations/migration-15-quiz-extraction.sql` | Adds `'extracted'` to the `question_source` enum (tags extracted questions). | **Required** — extraction inserts `source='extracted'`. |
+| `migrations/migration-16-chapter-uniqueness.sql` | Unique index `chapters(tenant_id, subject_id, name)`. | Recommended (DB backstop for chapter dedup). |
+| `migrations/migration-17-document-hash.sql` | Adds `documents.content_hash` + index (duplicate-file detection). | **Required** — extraction writes/queries `content_hash`. |
+| `migrations/migration-18-course-subject-uniqueness.sql` | Unique indexes on `courses(tenant_id,name)` and `subjects(tenant_id,course_id,name)`. | Recommended (DB backstop for catalog dedup). |
+| `migrations/migration-19-quiz-extraction-rate-limit.sql` | Adds `quiz_extraction` to the shared per-user AI rate limiter. | **Required** — the endpoint fails closed if rate limiting is unavailable. |
 
 > **Reuses existing schema (no change):** `questions.chapter_id`, `questions.confidence_score`, `questions.extraction_job_id`, and the `ai_extraction_jobs` table already existed — extraction just started populating them.
 
 ---
 
 ## 6. Configuration
-- **`backend/.env`** → `GEMINI_API_KEY=...` (required for extraction).
-- **`frontend/.env.local`** → `NEXT_PUBLIC_API_BASE_URL=http://localhost:8000` for local; and (dev only) `NEXT_PUBLIC_DEV_ACCOUNTS_JSON=[...]` to enable the "Dev" account switcher. `.env.local` is gitignored — copy the format from `.env.local.example`. **NEXT_PUBLIC_* vars bake at server start → restart `pnpm dev` after changing them.**
+- **`backend/.env`** → `GEMINI_API_KEY=...` for PDF/image extraction, `DEEPSEEK_API_KEY=...` for DOCX fallback, and optionally `RATE_LIMIT_QUIZ_EXTRACTION_PER_HOUR=10`.
+- **`frontend/.env.local`** → `NEXT_PUBLIC_API_BASE_URL=http://localhost:8001` for local. `.env.local` is gitignored — copy the format from `.env.local.example`. **NEXT_PUBLIC_* vars bake at server start → restart the frontend after changing them.**
 
 ---
 
 ## 7. Run & test locally
 ```powershell
-# Backend (port 8000)
-cd backend; .\.venv\Scripts\Activate.ps1; uvicorn app.main:app --reload --port 8000
-# Frontend (port 3009 — 3000 is reserved)
-cd frontend; pnpm install; pnpm dev --port 3009
+# Backend (port 8001)
+cd backend; .\.venv\Scripts\Activate.ps1; uvicorn app.main:app --reload --port 8001
+# Frontend (port 3001)
+cd frontend; pnpm install; pnpm dev --port 3001
 ```
-1. Run migrations **13 + 15** (required), **14 + 16** (recommended) in Supabase.
+1. Run migrations **15–19** in order. Run the duplicate prechecks in 16 and 18 before their indexes.
 2. Log in as a teacher who has an assigned subject → sidebar **Extract quiz**.
 3. Pick subject + chapter (or add a new chapter), upload an MCQ file → **Extract quiz** → lands on the Review screen.
 4. Approve/publish → switch to a student → the quiz shows its **chapter name** + `Subject · Chapter`.
@@ -146,6 +147,8 @@ cd frontend; pnpm install; pnpm dev --port 3009
 
 ---
 
-## 10. Commit status (as of writing)
-- **Pushed to `origin/extraction-pavyaa`:** the `main` merge + **Phase A** (backend extraction core + `migration-13`).
-- **Local, not yet committed** (kept uncommitted for review/testing per request): the frontend extract UI, chapter mapping, student display fix, dev-switcher config, duplicate detection, course/subject get-or-create, and `migration-14/15/16`. These will be committed together once approved.
+## 10. Integration status
+
+The teammate implementation is integrated on `akbar/quiz-extraction-integration`
+with current `main`. Its migration numbers, validation, timeout, fallback,
+rate-limiting, and test coverage were updated during integration review.

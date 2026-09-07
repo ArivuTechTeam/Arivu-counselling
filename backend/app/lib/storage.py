@@ -33,3 +33,9 @@ def download_bytes(path: str) -> bytes:
     """Download the file at `path` from the bucket as raw bytes."""
     client = get_service_client()
     return client.storage.from_(BUCKET).download(path)
+
+
+def delete_bytes(path: str) -> None:
+    """Delete a stored object when a later database operation cannot reference it."""
+    client = get_service_client()
+    client.storage.from_(BUCKET).remove([path])

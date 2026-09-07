@@ -109,6 +109,9 @@ class Settings:
         self.rate_limit_question_explain_per_hour = _positive_int(
             "RATE_LIMIT_QUESTION_EXPLAIN_PER_HOUR", 10
         )
+        self.rate_limit_quiz_extraction_per_hour = _positive_int(
+            "RATE_LIMIT_QUIZ_EXTRACTION_PER_HOUR", 10
+        )
 
 
 def _require(name: str) -> str:

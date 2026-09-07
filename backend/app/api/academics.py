@@ -50,6 +50,51 @@ def _subjects_for(service, course_id: str, tenant_id: str) -> list[dict]:
     )
 
 
+def _course_named(service, tenant_id: str, name: str) -> list[dict]:
+    return (
+        service.table("courses")
+        .select("id, name")
+        .eq("tenant_id", tenant_id)
+        .eq("name", name)
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+
+
+def _subject_named(
+    service, tenant_id: str, course_id: str, name: str
+) -> list[dict]:
+    return (
+        service.table("subjects")
+        .select("id, name, course_id")
+        .eq("tenant_id", tenant_id)
+        .eq("course_id", course_id)
+        .eq("name", name)
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+
+
+def _chapter_named(
+    service, tenant_id: str, subject_id: str, name: str
+) -> list[dict]:
+    return (
+        service.table("chapters")
+        .select("id, name, order_index")
+        .eq("subject_id", subject_id)
+        .eq("tenant_id", tenant_id)
+        .eq("name", name)
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+
+
 @router.get("/public/courses")
 def public_courses(tenant_id: str) -> list[dict]:
     """Unauthenticated list of a tenant's courses — for the signup dropdown."""
@@ -118,25 +163,22 @@ def create_course(
         raise HTTPException(status_code=400, detail="Course name is required.")
     service = get_service_client()
     # Reuse an existing course of the same name rather than duplicate it.
-    existing = (
-        service.table("courses")
-        .select("id, name")
-        .eq("tenant_id", profile.tenant_id)
-        .eq("name", name)
-        .limit(1)
-        .execute()
-        .data
-        or []
-    )
+    existing = _course_named(service, profile.tenant_id, name)
     if existing:
         c = existing[0]
         return {**c, "subjects": _subjects_for(service, c["id"], profile.tenant_id)}
-    row = (
-        service.table("courses")
-        .insert({"tenant_id": profile.tenant_id, "name": name})
-        .execute()
-        .data[0]
-    )
+    try:
+        row = (
+            service.table("courses")
+            .insert({"tenant_id": profile.tenant_id, "name": name})
+            .execute()
+            .data[0]
+        )
+    except Exception:  # noqa: BLE001 - recover a concurrent get-or-create race
+        existing = _course_named(service, profile.tenant_id, name)
+        if not existing:
+            raise
+        row = existing[0]
     return {**row, "subjects": []}
 
 
@@ -160,27 +202,27 @@ def create_subject(
     if course is None or not course.data:
         raise HTTPException(status_code=404, detail="Course not found.")
     # Reuse an existing subject of the same name in this course.
-    existing = (
-        service.table("subjects")
-        .select("id, name, course_id")
-        .eq("tenant_id", profile.tenant_id)
-        .eq("course_id", body.course_id)
-        .eq("name", name)
-        .limit(1)
-        .execute()
-        .data
-        or []
-    )
+    existing = _subject_named(service, profile.tenant_id, body.course_id, name)
     if existing:
         return existing[0]
-    return (
-        service.table("subjects")
-        .insert(
-            {"tenant_id": profile.tenant_id, "course_id": body.course_id, "name": name}
+    try:
+        return (
+            service.table("subjects")
+            .insert(
+                {
+                    "tenant_id": profile.tenant_id,
+                    "course_id": body.course_id,
+                    "name": name,
+                }
+            )
+            .execute()
+            .data[0]
         )
-        .execute()
-        .data[0]
-    )
+    except Exception:  # noqa: BLE001 - recover a concurrent get-or-create race
+        existing = _subject_named(service, profile.tenant_id, body.course_id, name)
+        if not existing:
+            raise
+        return existing[0]
 
 
 @router.delete("/courses/{course_id}")
@@ -409,17 +451,7 @@ def create_chapter(
     _assert_teacher_subject(service, body.subject_id, profile)
 
     # Reuse an existing chapter with the same name rather than duplicate it.
-    existing = (
-        service.table("chapters")
-        .select("id, name, order_index")
-        .eq("subject_id", body.subject_id)
-        .eq("tenant_id", profile.tenant_id)
-        .eq("name", name)
-        .limit(1)
-        .execute()
-        .data
-        or []
-    )
+    existing = _chapter_named(service, profile.tenant_id, body.subject_id, name)
     if existing:
         return {**existing[0], "quiz_count": 0, "question_count": 0}
 
@@ -434,19 +466,25 @@ def create_chapter(
         or []
     )
     next_idx = (last[0]["order_index"] + 1) if last else 0
-    row = (
-        service.table("chapters")
-        .insert(
-            {
-                "tenant_id": profile.tenant_id,
-                "subject_id": body.subject_id,
-                "name": name,
-                "order_index": next_idx,
-            }
+    try:
+        row = (
+            service.table("chapters")
+            .insert(
+                {
+                    "tenant_id": profile.tenant_id,
+                    "subject_id": body.subject_id,
+                    "name": name,
+                    "order_index": next_idx,
+                }
+            )
+            .execute()
+            .data[0]
         )
-        .execute()
-        .data[0]
-    )
+    except Exception:  # noqa: BLE001 - recover a concurrent get-or-create race
+        existing = _chapter_named(service, profile.tenant_id, body.subject_id, name)
+        if not existing:
+            raise
+        row = existing[0]
     return {**row, "quiz_count": 0, "question_count": 0}
 
 

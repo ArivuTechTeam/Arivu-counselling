@@ -7,6 +7,8 @@ const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL!;
 const DEFAULT_TIMEOUT_MS = 20_000;
 // 150 MB takes about 10 minutes at 2 Mbps before server-side extraction time.
 const DOCUMENT_UPLOAD_TIMEOUT_MS = 15 * 60_000;
+// Includes a 180-second model call plus upload and database processing time.
+const QUIZ_EXTRACTION_TIMEOUT_MS = 5 * 60_000;
 
 async function apiFetch(
   input: RequestInfo | URL,
@@ -122,10 +124,10 @@ export class DuplicateFileError extends Error {
 }
 
 /**
- * Upload an existing quiz document (PDF / DOCX / PNG / JPG) and have Gemini
- * extract the questions into a draft quiz set (pending review). Can take
- * ~10-40s, so it uses a longer timeout. If the exact file was already uploaded,
- * this throws DuplicateFileError unless `force` is true.
+ * Upload an existing quiz document (PDF / DOCX / PNG / JPG) and have the AI
+ * provider extract its questions into a draft quiz set for review. This can
+ * take several minutes. If the exact file was already uploaded, this throws
+ * DuplicateFileError unless `force` is true.
  */
 export async function extractQuiz(
   file: File,
@@ -142,7 +144,7 @@ export async function extractQuiz(
   const res = await apiFetch(
     `${API_BASE}/api/v1/quiz-sets/extract`,
     { method: "POST", headers, body: form },
-    120_000,
+    QUIZ_EXTRACTION_TIMEOUT_MS,
   );
   if (res.status === 409) {
     const body = await res.json().catch(() => ({}));

@@ -1,8 +1,8 @@
 -- ============================================================================
--- Migration 16 — Catalog integrity: no duplicate courses / subjects
+-- Migration 18 — Catalog integrity: no duplicate courses / subjects
 -- Run this ONCE in the Supabase SQL Editor.
 --
--- Mirrors the chapter uniqueness (migration-14) one level up, so a teacher/admin
+-- Mirrors the chapter uniqueness (migration-16) one level up, so a teacher/admin
 -- can't accidentally create the same course twice, or the same subject twice
 -- within a course. The API also does get-or-create (reuse), and these indexes
 -- are the database-level backstop.
@@ -27,5 +27,5 @@ create unique index if not exists uq_subjects_tenant_course_name
   on subjects (tenant_id, course_id, name);
 
 -- ============================================================================
--- END OF MIGRATION 16
+-- END OF MIGRATION 18
 -- ============================================================================
