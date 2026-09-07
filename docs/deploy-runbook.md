@@ -94,7 +94,7 @@ explicitly in Railway so the production policy is visible and easy to edit:
 | `SUPABASE_ANON_KEY` | anon public key |
 | `SUPABASE_SERVICE_ROLE_KEY` | service role key (server-only, **secret**) |
 | `SUPABASE_JWT_SECRET` | for verifying JWTs (ES256 via JWKS) |
-| `FRONTEND_ORIGIN` | the deployed **frontend URL** (for CORS) |
+| `FRONTEND_ORIGIN` | exact deployed **frontend origin** (scheme + hostname, no path or trailing slash) for CORS |
 | `GEMINI_API_KEY` | quiz generation (primary) |
 | `DEEPSEEK_API_KEY` | quiz generation (fallback) |
 | `RATE_LIMIT_QUIZ_GENERATION_PER_HOUR` | per-user standard quiz generations per rolling hour (default `10`) |
@@ -138,6 +138,12 @@ Notes/gotchas below.
 
 (They point at each other; CORS on the backend already allows the configured
 origin, plus any `localhost` port for dev.)
+
+Production verification on 2026-09-07: Railway service `quiz-generator` has
+`FRONTEND_ORIGIN=https://quiz-generator-drab-nine.vercel.app`. The frontend
+returned HTTP 200 and the backend CORS preflight returned that exact value in
+`Access-Control-Allow-Origin`. Change it only if the real Vercel production
+hostname changes, then restart or redeploy the backend.
 
 ---
 
