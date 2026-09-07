@@ -23,6 +23,7 @@ from app.lib.supabase import get_service_client
 from app.services.extraction import extract_text
 from app.services.llm import LLMError, complete_with_fallback
 from app.services.quiz_prompts import build_system_prompt, build_user_prompt
+from app.services.teacher_access import teacher_has_subject
 
 # For long documents we skip likely front-matter (cover, copyright page, table
 # of contents, preface) and then take a large slice of real subject content — so
@@ -80,33 +81,10 @@ def generate_quiz(
 ) -> dict:
     service = get_service_client()
 
-    enrolled = (
-        service.table("enrollments")
-        .select("course_id")
-        .eq("profile_id", profile.user_id)
-        .eq("tenant_id", profile.tenant_id)
-        .execute()
-        .data
-        or []
-    )
-    teacher_course_ids = [row["course_id"] for row in enrolled]
-
-    # 0) If a subject was chosen, confirm it belongs to this tenant.
-    if subject_id:
-        subj = (
-            service.table("subjects")
-            .select("id, course_id")
-            .eq("id", subject_id)
-            .eq("tenant_id", profile.tenant_id)
-            .maybe_single()
-            .execute()
-        )
-        if (
-            subj is None
-            or not subj.data
-            or subj.data.get("course_id") not in teacher_course_ids
-        ):
-            raise ValueError("Subject not found.")
+    # 0) Explicit assignments are authoritative. Course enrolment is maintained
+    # as derived compatibility data and must never grant additional access.
+    if subject_id and not teacher_has_subject(service, profile, subject_id):
+        raise ValueError("Subject not found.")
 
     # 1) Fetch the document, scoped to the caller's tenant.
     doc = (

@@ -12,11 +12,17 @@ Academic hierarchy API (courses / subjects).
 
 from __future__ import annotations
 
+from uuid import UUID
+
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.lib.auth import CurrentProfile, get_current_profile
 from app.lib.supabase import get_service_client
+from app.services.teacher_access import (
+    replace_teacher_subjects,
+    teacher_subject_ids,
+)
 
 router = APIRouter(prefix="/api/v1", tags=["academics"])
 
@@ -76,21 +82,21 @@ def list_courses(profile: CurrentProfile = Depends(get_current_profile)) -> list
         .data
         or []
     )
-    if profile.role == "teacher":
-        enrolled = (
-            service.table("enrollments")
-            .select("course_id")
-            .eq("profile_id", profile.user_id)
-            .eq("tenant_id", profile.tenant_id)
-            .execute()
-            .data
-            or []
-        )
-        allowed = {e["course_id"] for e in enrolled}
-        courses = [c for c in courses if c["id"] in allowed]
+    assigned = (
+        teacher_subject_ids(service, profile)
+        if profile.role == "teacher"
+        else None
+    )
+    visible_courses: list[dict] = []
     for course in courses:
-        course["subjects"] = _subjects_for(service, course["id"], profile.tenant_id)
-    return courses
+        subjects = _subjects_for(service, course["id"], profile.tenant_id)
+        if assigned is not None:
+            subjects = [subject for subject in subjects if subject["id"] in assigned]
+            if not subjects:
+                continue
+        course["subjects"] = subjects
+        visible_courses.append(course)
+    return visible_courses
 
 
 class CourseCreate(BaseModel):
@@ -189,6 +195,103 @@ def delete_subject(
     return {"deleted": subject_id}
 
 
+# ── Teacher ⇄ subject assignment (institution-admin managed) ─────────────────
+class TeacherSubjectsUpdate(BaseModel):
+    subject_ids: list[UUID] = Field(default_factory=list, max_length=500)
+
+
+class TeacherSubjectsResponse(BaseModel):
+    subject_ids: list[str]
+
+
+def _assert_tenant_teacher(service, teacher_id: str, profile: CurrentProfile) -> None:
+    teacher = (
+        service.table("profiles")
+        .select("id, role")
+        .eq("id", teacher_id)
+        .eq("tenant_id", profile.tenant_id)
+        .maybe_single()
+        .execute()
+    )
+    if teacher is None or not teacher.data or teacher.data["role"] != "teacher":
+        raise HTTPException(status_code=404, detail="Teacher not found.")
+
+
+@router.get(
+    "/teachers/{teacher_id}/subjects",
+    response_model=TeacherSubjectsResponse,
+)
+def get_teacher_subjects(
+    teacher_id: UUID,
+    profile: CurrentProfile = Depends(get_current_profile),
+) -> TeacherSubjectsResponse:
+    _require_admin(profile)
+    service = get_service_client()
+    teacher_id_str = str(teacher_id)
+    _assert_tenant_teacher(service, teacher_id_str, profile)
+    assigned = (
+        service.table("teacher_subjects")
+        .select("subject_id")
+        .eq("teacher_id", teacher_id_str)
+        .eq("tenant_id", profile.tenant_id)
+        .execute()
+        .data
+        or []
+    )
+    return TeacherSubjectsResponse(
+        subject_ids=[str(row["subject_id"]) for row in assigned]
+    )
+
+
+@router.put(
+    "/teachers/{teacher_id}/subjects",
+    response_model=TeacherSubjectsResponse,
+)
+def set_teacher_subjects(
+    teacher_id: UUID,
+    body: TeacherSubjectsUpdate,
+    profile: CurrentProfile = Depends(get_current_profile),
+) -> TeacherSubjectsResponse:
+    """Replace a teacher's assignments in one database transaction."""
+    _require_admin(profile)
+    service = get_service_client()
+    teacher_id_str = str(teacher_id)
+    subject_ids = list(
+        dict.fromkeys(str(subject_id) for subject_id in body.subject_ids)
+    )
+    _assert_tenant_teacher(service, teacher_id_str, profile)
+
+    if subject_ids:
+        rows = (
+            service.table("subjects")
+            .select("id")
+            .in_("id", subject_ids)
+            .eq("tenant_id", profile.tenant_id)
+            .execute()
+            .data
+            or []
+        )
+        if {str(row["id"]) for row in rows} != set(subject_ids):
+            raise HTTPException(
+                status_code=400,
+                detail="One or more subjects do not belong to this institution.",
+            )
+
+    try:
+        assigned = replace_teacher_subjects(
+            service,
+            tenant_id=profile.tenant_id,
+            teacher_id=teacher_id_str,
+            subject_ids=subject_ids,
+        )
+    except Exception:  # noqa: BLE001
+        raise HTTPException(
+            status_code=500,
+            detail="Could not update teacher subjects.",
+        )
+    return TeacherSubjectsResponse(subject_ids=assigned)
+
+
 # ── Chapters (teacher-managed, within the teacher's own subjects) ─────────────
 def _require_teacher(profile: CurrentProfile) -> None:
     if profile.role != "teacher":
@@ -198,34 +301,8 @@ def _require_teacher(profile: CurrentProfile) -> None:
         )
 
 
-def _teacher_subject_ids(service, profile: CurrentProfile) -> set[str]:
-    """Subjects that belong to the courses this teacher is mapped to."""
-    enrolled = (
-        service.table("enrollments")
-        .select("course_id")
-        .eq("profile_id", profile.user_id)
-        .eq("tenant_id", profile.tenant_id)
-        .execute()
-        .data
-        or []
-    )
-    course_ids = [e["course_id"] for e in enrolled]
-    if not course_ids:
-        return set()
-    subs = (
-        service.table("subjects")
-        .select("id")
-        .in_("course_id", course_ids)
-        .eq("tenant_id", profile.tenant_id)
-        .execute()
-        .data
-        or []
-    )
-    return {s["id"] for s in subs}
-
-
 def _assert_teacher_subject(service, subject_id: str, profile: CurrentProfile) -> None:
-    if subject_id not in _teacher_subject_ids(service, profile):
+    if subject_id not in teacher_subject_ids(service, profile):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="You can only manage chapters in your own subjects.",

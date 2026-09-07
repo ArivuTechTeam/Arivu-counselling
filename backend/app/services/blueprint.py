@@ -27,6 +27,7 @@ from app.services.events import QUESTION_GENERATED, log_events, make_event
 from app.services.extraction import extract_text
 from app.services.llm.base import LLMError
 from app.services.llm.structured import gemini_json
+from app.services.teacher_access import teacher_has_subject
 
 QuestionType = Literal[
     "mcq_single", "mcq_multi", "true_false", "numerical", "fill_blank"
@@ -130,27 +131,9 @@ def generate_blueprint_quiz(
     tid = profile.tenant_id
     chapter_name = chapter_name.strip()
 
-    enrolled = (
-        service.table("enrollments")
-        .select("course_id")
-        .eq("profile_id", profile.user_id)
-        .eq("tenant_id", tid)
-        .execute()
-        .data
-        or []
-    )
-    teacher_course_ids = {row["course_id"] for row in enrolled}
-
-    # 0) Subject must belong to this tenant.
-    subj = (
-        service.table("subjects").select("id, course_id")
-        .eq("id", subject_id).eq("tenant_id", tid).maybe_single().execute()
-    )
-    if (
-        subj is None
-        or not subj.data
-        or subj.data.get("course_id") not in teacher_course_ids
-    ):
+    # 0) Explicit assignments are authoritative. Course enrolment is maintained
+    # as derived compatibility data and must never grant additional access.
+    if not teacher_has_subject(service, profile, subject_id):
         raise ValueError("Subject not found.")
 
     # 1) Fetch the document + extract text.

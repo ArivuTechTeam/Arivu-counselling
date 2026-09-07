@@ -595,6 +595,19 @@ export const deleteCourse = (id: string) =>
 export const deleteSubject = (id: string) =>
   jsonRequest<{ deleted: string }>(`/api/v1/subjects/${id}`, "DELETE");
 
+export const getTeacherSubjects = (teacherId: string) =>
+  jsonRequest<{ subject_ids: string[] }>(
+    `/api/v1/teachers/${teacherId}/subjects`,
+    "GET",
+  );
+
+export const setTeacherSubjects = (teacherId: string, subjectIds: string[]) =>
+  jsonRequest<{ subject_ids: string[] }>(
+    `/api/v1/teachers/${teacherId}/subjects`,
+    "PUT",
+    { subject_ids: subjectIds },
+  );
+
 // --- Teacher: manage chapters within their subjects ---
 export type Chapter = {
   id: string;

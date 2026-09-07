@@ -22,8 +22,10 @@ import {
   Course,
   createUser,
   deleteUser,
+  getTeacherSubjects,
   listCourses,
   listUsers,
+  setTeacherSubjects,
 } from "@/lib/api";
 
 const selectClass =
@@ -54,6 +56,11 @@ export default function UsersPage() {
   const [busy, setBusy] = useState(false);
   const [showPw, setShowPw] = useState(false);
   const [confirmDel, setConfirmDel] = useState<AdminUser | null>(null);
+  const [manageTeacher, setManageTeacher] = useState<AdminUser | null>(null);
+  const [assignedSubjects, setAssignedSubjects] = useState<Set<string>>(new Set());
+  const [loadingSubjects, setLoadingSubjects] = useState(false);
+  const [savingSubjects, setSavingSubjects] = useState(false);
+  const [assignmentError, setAssignmentError] = useState<string | null>(null);
 
   function refresh() {
     listUsers().then(setUsers).catch((e) => setError(e.message));
@@ -94,6 +101,49 @@ export default function UsersPage() {
       setError(e instanceof Error ? e.message : "Failed to remove user");
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function openSubjectAssignments(teacher: AdminUser) {
+    setManageTeacher(teacher);
+    setAssignedSubjects(new Set());
+    setAssignmentError(null);
+    setLoadingSubjects(true);
+    try {
+      const result = await getTeacherSubjects(teacher.id);
+      setAssignedSubjects(new Set(result.subject_ids));
+    } catch (e) {
+      setAssignmentError(
+        e instanceof Error ? e.message : "Failed to load subject assignments.",
+      );
+    } finally {
+      setLoadingSubjects(false);
+    }
+  }
+
+  function toggleSubject(subjectId: string) {
+    setAssignedSubjects((current) => {
+      const next = new Set(current);
+      if (next.has(subjectId)) next.delete(subjectId);
+      else next.add(subjectId);
+      return next;
+    });
+  }
+
+  async function saveSubjectAssignments() {
+    if (!manageTeacher) return;
+    setSavingSubjects(true);
+    setAssignmentError(null);
+    try {
+      await setTeacherSubjects(manageTeacher.id, Array.from(assignedSubjects));
+      setManageTeacher(null);
+      refresh();
+    } catch (e) {
+      setAssignmentError(
+        e instanceof Error ? e.message : "Failed to save subject assignments.",
+      );
+    } finally {
+      setSavingSubjects(false);
     }
   }
 
@@ -195,14 +245,26 @@ export default function UsersPage() {
                         </div>
                       </div>
                     </div>
-                    <button
-                      className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive disabled:opacity-50"
-                      disabled={busy}
-                      aria-label={`Remove ${name}`}
-                      onClick={() => setConfirmDel(u)}
-                    >
-                      <Trash size={16} />
-                    </button>
+                    <div className="flex shrink-0 items-center gap-1.5">
+                      {u.role === "teacher" && (
+                        <button
+                          type="button"
+                          className="rounded-lg border border-input px-2.5 py-1 text-xs font-medium text-foreground transition-colors hover:bg-accent"
+                          onClick={() => openSubjectAssignments(u)}
+                        >
+                          Subjects
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive disabled:opacity-50"
+                        disabled={busy}
+                        aria-label={`Remove ${name}`}
+                        onClick={() => setConfirmDel(u)}
+                      >
+                        <Trash size={16} />
+                      </button>
+                    </div>
                   </li>
                 );
               })}
@@ -210,6 +272,109 @@ export default function UsersPage() {
           )}
         </CardContent>
       </Card>
+
+      {manageTeacher && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+          onClick={(e) => {
+            if (e.target === e.currentTarget && !savingSubjects) {
+              setManageTeacher(null);
+            }
+          }}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="subject-assignment-title"
+            className="animate-rise flex max-h-[85vh] w-full max-w-md flex-col rounded-2xl border border-border bg-card shadow-2xl"
+          >
+            <div className="flex items-start justify-between gap-3 border-b p-5">
+              <div>
+                <h3 id="subject-assignment-title" className="text-base font-bold text-foreground">
+                  Assign subjects
+                </h3>
+                <p className="mt-0.5 text-xs text-muted-foreground">
+                  Choose the subjects that {manageTeacher.full_name || manageTeacher.email} can
+                  access and manage.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => !savingSubjects && setManageTeacher(null)}
+                aria-label="Close subject assignments"
+                className="text-muted-foreground transition-colors hover:text-foreground"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-5">
+              {loadingSubjects ? (
+                <SkeletonList rows={4} />
+              ) : courses.length === 0 ? (
+                <EmptyState
+                  title="No subjects available"
+                  message="Create a course and its subjects before assigning them to a teacher."
+                />
+              ) : (
+                <div className="flex flex-col gap-4">
+                  {courses.map((course) => (
+                    <div key={course.id}>
+                      <div className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                        {course.name}
+                      </div>
+                      {course.subjects.length === 0 ? (
+                        <p className="pl-1 text-xs text-muted-foreground">
+                          No subjects in this course.
+                        </p>
+                      ) : (
+                        <div className="flex flex-col gap-1">
+                          {course.subjects.map((subject) => (
+                            <label
+                              key={subject.id}
+                              className="flex cursor-pointer items-center gap-2.5 rounded-lg px-2 py-1.5 hover:bg-accent"
+                            >
+                              <input
+                                type="checkbox"
+                                checked={assignedSubjects.has(subject.id)}
+                                onChange={() => toggleSubject(subject.id)}
+                                className="h-4 w-4 rounded border-input accent-primary"
+                              />
+                              <span className="text-sm text-foreground">{subject.name}</span>
+                            </label>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+              {assignmentError && (
+                <div className="mt-3">
+                  <ErrorCard message={assignmentError} />
+                </div>
+              )}
+            </div>
+
+            <div className="flex justify-end gap-2 border-t p-4">
+              <button
+                type="button"
+                onClick={() => setManageTeacher(null)}
+                disabled={savingSubjects}
+                className="rounded-lg border border-input px-4 py-2 text-sm font-semibold text-foreground transition hover:bg-secondary disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <Button
+                onClick={saveSubjectAssignments}
+                disabled={savingSubjects || loadingSubjects || Boolean(assignmentError)}
+              >
+                {savingSubjects ? "Saving…" : "Save subjects"}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {confirmDel && (
         <div

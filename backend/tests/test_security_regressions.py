@@ -15,6 +15,9 @@ from app.api.practice import _exam_deadline_passed
 from app.api.questions import _require_teacher as require_question_teacher
 from app.api.quiz import _require_teacher as require_quiz_teacher
 from app.lib.auth import CurrentProfile, CurrentUser, get_current_profile
+from app.services.blueprint import generate_blueprint_quiz
+from app.services.generation import generate_quiz
+from app.services.teacher_access import teacher_has_subject
 
 
 def profile(role: str) -> CurrentProfile:
@@ -82,6 +85,89 @@ class MigrationSecurityTests(unittest.TestCase):
         self.assertIn("revoke update on table profiles from authenticated", sql.lower())
         self.assertIn("grant update (full_name, avatar_url)", sql.lower())
         self.assertIn("must_change_password boolean not null default false", sql.lower())
+
+    def test_teacher_subject_migration_is_tenant_safe_and_atomic(self) -> None:
+        root = Path(__file__).resolve().parents[2]
+        sql = (root / "migrations/migration-12-teacher-subjects.sql").read_text().lower()
+        self.assertIn("foreign key (teacher_id, tenant_id)", sql)
+        self.assertIn("foreign key (subject_id, tenant_id)", sql)
+        self.assertIn("create policy \"read permitted teacher subjects\"", sql)
+        self.assertIn("create or replace function public.replace_teacher_subjects", sql)
+        self.assertIn("set search_path = ''", sql)
+        self.assertIn("revoke all on function public.replace_teacher_subjects", sql)
+        self.assertIn('drop policy if exists "staff manage enrollments"', sql)
+
+
+class _RowsQuery:
+    def __init__(self, rows: list[dict]) -> None:
+        self.rows = rows
+
+    def select(self, *_args):
+        return self
+
+    def eq(self, *_args):
+        return self
+
+    def maybe_single(self):
+        return self
+
+    def execute(self):
+        return SimpleNamespace(data=self.rows[0] if self.rows else None)
+
+
+class _RowsService:
+    def __init__(self, rows: list[dict]) -> None:
+        self.rows = rows
+
+    def table(self, table: str) -> _RowsQuery:
+        if table != "teacher_subjects":
+            raise AssertionError(f"Unexpected table access: {table}")
+        return _RowsQuery(self.rows)
+
+
+class TeacherSubjectAuthorizationTests(unittest.TestCase):
+    def test_explicit_assignment_is_required(self) -> None:
+        teacher = profile("teacher")
+        self.assertFalse(teacher_has_subject(_RowsService([]), teacher, "subject-1"))
+        self.assertTrue(
+            teacher_has_subject(
+                _RowsService([{"subject_id": "subject-1"}]), teacher, "subject-1"
+            )
+        )
+
+    def test_unassigned_subject_stops_both_generation_paths_early(self) -> None:
+        teacher = profile("teacher")
+        with patch(
+            "app.services.generation.get_service_client",
+            return_value=_RowsService([]),
+        ):
+            with self.assertRaisesRegex(ValueError, "Subject not found"):
+                generate_quiz(
+                    document_id="document-1",
+                    num_questions=1,
+                    question_types=["mcq_single"],
+                    cognitive_level="mixed",
+                    difficulty="medium",
+                    profile=teacher,
+                    subject_id="subject-1",
+                )
+
+        with patch(
+            "app.services.blueprint.get_service_client",
+            return_value=_RowsService([]),
+        ):
+            with self.assertRaisesRegex(ValueError, "Subject not found"):
+                generate_blueprint_quiz(
+                    document_id="document-1",
+                    subject_id="subject-1",
+                    chapter_name="Chapter",
+                    selected_topics=[],
+                    total_questions=1,
+                    question_types=["mcq_single"],
+                    cognitive_level="mixed",
+                    difficulty="medium",
+                    profile=teacher,
+                )
 
 
 class _ProfileQuery:

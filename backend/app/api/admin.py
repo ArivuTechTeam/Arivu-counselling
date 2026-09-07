@@ -18,6 +18,7 @@ from pydantic import BaseModel
 
 from app.lib.auth import CurrentProfile, get_current_profile
 from app.lib.supabase import get_service_client
+from app.services.teacher_access import replace_teacher_subjects
 
 router = APIRouter(prefix="/api/v1", tags=["admin"])
 
@@ -185,6 +186,22 @@ def create_user(
             role=body.role,
             full_name=body.full_name,
         )
+        if body.role == "teacher":
+            subjects = (
+                service.table("subjects")
+                .select("id")
+                .eq("course_id", body.course_id)
+                .eq("tenant_id", profile.tenant_id)
+                .execute()
+                .data
+                or []
+            )
+            replace_teacher_subjects(
+                service,
+                tenant_id=profile.tenant_id,
+                teacher_id=created.user.id,
+                subject_ids=(str(subject["id"]) for subject in subjects),
+            )
     except Exception as exc:  # noqa: BLE001
         if "created" in locals() and created.user:
             _delete_auth_user_quietly(service, created.user.id)

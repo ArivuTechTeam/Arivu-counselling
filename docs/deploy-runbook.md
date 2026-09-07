@@ -44,9 +44,15 @@ migration-05-practice.sql
 migration-06-revised-topics.sql
 migration-07-challenges.sql
 migration-08-exam-config.sql
+migration-09-dev-tenant.sql
+migration-10-plan-limits-rls.sql
+migration-11-auth-hardening.sql
+migration-12-teacher-subjects.sql
 ```
 
-(Our live Supabase already has 01–08 applied; this list is for a fresh project.)
+The repository does not prove which migrations are applied to a deployed
+Supabase project. Check the target project before skipping any file. Migration
+12 must be applied before deploying backend code that reads `teacher_subjects`.
 
 ---
 
