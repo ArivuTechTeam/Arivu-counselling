@@ -48,11 +48,13 @@ migration-09-dev-tenant.sql
 migration-10-plan-limits-rls.sql
 migration-11-auth-hardening.sql
 migration-12-teacher-subjects.sql
+migration-13-ai-rate-limits.sql
 ```
 
 The repository does not prove which migrations are applied to a deployed
 Supabase project. Check the target project before skipping any file. Migration
 12 must be applied before deploying backend code that reads `teacher_subjects`.
+Migration 13 must be applied before deploying backend code with AI rate limits.
 
 ---
 
@@ -80,9 +82,11 @@ Supabase project. Check the target project before skipping any file. Migration
   can't regress even if Railway ever re-applies a plain string command.
 - **Python:** 3.12 (set by `FROM python:3.12-slim` in the Dockerfile).
 
-**Environment variables** (from `backend/.env.example`) — confirmed present
-on the live Railway service as of 2026-09-04 (existence checked in the
-dashboard; values themselves not re-verified this session):
+**Environment variables** (from `backend/.env.example`). The connection and
+AI provider variables were confirmed present on the live Railway service as
+of 2026-09-04 (existence checked in the dashboard; values themselves were not
+re-verified). The rate-limit variables have safe code defaults, but set them
+explicitly in Railway so the production policy is visible and easy to edit:
 
 | Var | What |
 |---|---|
@@ -90,9 +94,14 @@ dashboard; values themselves not re-verified this session):
 | `SUPABASE_ANON_KEY` | anon public key |
 | `SUPABASE_SERVICE_ROLE_KEY` | service role key (server-only, **secret**) |
 | `SUPABASE_JWT_SECRET` | for verifying JWTs (ES256 via JWKS) |
-| `FRONTEND_ORIGIN` | the deployed **frontend URL** (for CORS) |
+| `FRONTEND_ORIGIN` | exact deployed **frontend origin** (scheme + hostname, no path or trailing slash) for CORS |
 | `GEMINI_API_KEY` | quiz generation (primary) |
 | `DEEPSEEK_API_KEY` | quiz generation (fallback) |
+| `RATE_LIMIT_QUIZ_GENERATION_PER_HOUR` | per-user standard quiz generations per rolling hour (default `10`) |
+| `RATE_LIMIT_BLUEPRINT_PER_HOUR` | per-user blueprint generations per rolling hour (default `10`) |
+| `RATE_LIMIT_TOPIC_EXTRACTION_PER_HOUR` | per-user topic extractions per rolling hour (default `10`) |
+| `RATE_LIMIT_QUESTION_REGENERATE_PER_HOUR` | per-user question regenerations per rolling hour (default `10`) |
+| `RATE_LIMIT_QUESTION_EXPLAIN_PER_HOUR` | per-user question explanations per rolling hour (default `10`) |
 
 **Deploying a change (Railway):** merge to `main` first, then run
 `scripts/deploy.sh` from `main` (or `railway up backend --path-as-root
@@ -129,6 +138,12 @@ Notes/gotchas below.
 
 (They point at each other; CORS on the backend already allows the configured
 origin, plus any `localhost` port for dev.)
+
+Production verification on 2026-09-07: Railway service `quiz-generator` has
+`FRONTEND_ORIGIN=https://quiz-generator-drab-nine.vercel.app`. The frontend
+returned HTTP 200 and the backend CORS preflight returned that exact value in
+`Access-Control-Allow-Origin`. Change it only if the real Vercel production
+hostname changes, then restart or redeploy the backend.
 
 ---
 

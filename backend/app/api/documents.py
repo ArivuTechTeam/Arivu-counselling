@@ -2,7 +2,7 @@
 Document upload + listing API (Slice 2).
 
 Flow for POST /api/v1/documents/upload:
-  1. Verify the caller is staff (students can't upload).
+  1. Verify the caller is a teacher.
   2. Validate the file (type + size).
   3. Store the original bytes in the tenant's Storage folder.
   4. Record a `documents` row.
@@ -58,6 +58,7 @@ def _ext_of(filename: str) -> str:
 
 
 def _require_teacher(profile: CurrentProfile) -> None:
+    # Teacher-only by design — see .claude/CLAUDE.md and the technical document.
     if profile.role != "teacher":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,

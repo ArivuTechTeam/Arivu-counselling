@@ -24,6 +24,18 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
+def _positive_int(name: str, default: int) -> int:
+    """Read a positive integer setting and fail fast on invalid values."""
+    raw_value = os.getenv(name, str(default))
+    try:
+        value = int(raw_value)
+    except ValueError as exc:
+        raise RuntimeError(f"{name} must be a positive integer.") from exc
+    if value < 1:
+        raise RuntimeError(f"{name} must be a positive integer.")
+    return value
+
+
 class Settings:
     """Typed, validated view of our environment variables."""
 
@@ -77,6 +89,25 @@ class Settings:
         # tokens/cost. Tunable without a code change.
         self.generation_max_text_chars: int = int(
             os.getenv("GENERATION_MAX_TEXT_CHARS", "60000")
+        )
+
+        # --- Per-user AI request limits (rolling one-hour windows) ---
+        # Read once at process startup so changing a Railway variable and
+        # restarting the service applies the new limit without a code change.
+        self.rate_limit_quiz_generation_per_hour = _positive_int(
+            "RATE_LIMIT_QUIZ_GENERATION_PER_HOUR", 10
+        )
+        self.rate_limit_blueprint_per_hour = _positive_int(
+            "RATE_LIMIT_BLUEPRINT_PER_HOUR", 10
+        )
+        self.rate_limit_topic_extraction_per_hour = _positive_int(
+            "RATE_LIMIT_TOPIC_EXTRACTION_PER_HOUR", 10
+        )
+        self.rate_limit_question_regenerate_per_hour = _positive_int(
+            "RATE_LIMIT_QUESTION_REGENERATE_PER_HOUR", 10
+        )
+        self.rate_limit_question_explain_per_hour = _positive_int(
+            "RATE_LIMIT_QUESTION_EXPLAIN_PER_HOUR", 10
         )
 
 

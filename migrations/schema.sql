@@ -335,6 +335,27 @@ create table tenant_usage (
   updated_at timestamptz not null default now()
 );
 
+-- One atomic rolling-hour counter per user and AI endpoint. The backend
+-- accesses this only through consume_ai_rate_limit using the service role.
+create table ai_rate_limits (
+  tenant_id uuid not null references tenants(id) on delete cascade,
+  user_id uuid not null,
+  endpoint text not null check (endpoint in (
+    'quiz_generation',
+    'blueprint_generation',
+    'topic_extraction',
+    'question_regenerate',
+    'question_explain'
+  )),
+  window_started_at timestamptz not null,
+  request_count integer not null check (request_count > 0),
+  updated_at timestamptz not null default now(),
+  primary key (tenant_id, user_id, endpoint),
+  constraint ai_rate_limits_user_tenant_fk
+    foreign key (user_id, tenant_id)
+    references profiles(id, tenant_id) on delete cascade
+);
+
 
 -- ============================================================================
 -- STEP 11: HELPER FUNCTIONS (used everywhere in RLS policies below)
@@ -518,6 +539,95 @@ revoke all on function replace_teacher_subjects(uuid, uuid, uuid[])
 grant execute on function replace_teacher_subjects(uuid, uuid, uuid[])
   to service_role;
 
+-- Atomically consumes one request from a user's rolling one-hour AI quota.
+-- The upsert locks the counter row, so concurrent Railway workers cannot
+-- both pass after only one remaining request.
+create or replace function consume_ai_rate_limit(
+  p_tenant_id uuid,
+  p_user_id uuid,
+  p_endpoint text,
+  p_limit integer
+)
+returns table (
+  allowed boolean,
+  retry_after_seconds integer,
+  remaining integer
+)
+language plpgsql
+security invoker
+set search_path = ''
+as $$
+declare
+  request_time timestamptz := clock_timestamp();
+  consumed_count integer;
+  active_window_start timestamptz;
+begin
+  if p_limit < 1 then
+    raise exception 'Rate limit must be a positive integer';
+  end if;
+  if p_endpoint not in (
+    'quiz_generation',
+    'blueprint_generation',
+    'topic_extraction',
+    'question_regenerate',
+    'question_explain'
+  ) then
+    raise exception 'Unknown AI rate-limit endpoint';
+  end if;
+
+  insert into public.ai_rate_limits as limits (
+    tenant_id, user_id, endpoint, window_started_at, request_count, updated_at
+  )
+  values (p_tenant_id, p_user_id, p_endpoint, request_time, 1, request_time)
+  on conflict (tenant_id, user_id, endpoint) do update
+  set
+    window_started_at = case
+      when limits.window_started_at <= request_time - interval '1 hour'
+        then request_time
+      else limits.window_started_at
+    end,
+    request_count = case
+      when limits.window_started_at <= request_time - interval '1 hour'
+        then 1
+      else limits.request_count + 1
+    end,
+    updated_at = request_time
+  where
+    limits.window_started_at <= request_time - interval '1 hour'
+    or limits.request_count < p_limit
+  returning limits.request_count, limits.window_started_at
+  into consumed_count, active_window_start;
+
+  if found then
+    return query select true, 0, greatest(p_limit - consumed_count, 0);
+    return;
+  end if;
+
+  select limits.window_started_at
+  into active_window_start
+  from public.ai_rate_limits as limits
+  where limits.tenant_id = p_tenant_id
+    and limits.user_id = p_user_id
+    and limits.endpoint = p_endpoint;
+
+  return query
+  select
+    false,
+    greatest(
+      1,
+      ceil(extract(epoch from (
+        active_window_start + interval '1 hour' - request_time
+      )))::integer
+    ),
+    0;
+end;
+$$;
+
+revoke all on function consume_ai_rate_limit(uuid, uuid, text, integer)
+  from public, anon, authenticated;
+grant execute on function consume_ai_rate_limit(uuid, uuid, text, integer)
+  to service_role;
+
 
 -- ============================================================================
 -- STEP 13: ROW LEVEL SECURITY
@@ -545,6 +655,10 @@ alter table attempt_answers enable row level security;
 alter table ai_explanations enable row level security;
 alter table tenant_usage enable row level security;
 alter table plan_limits enable row level security;
+alter table ai_rate_limits enable row level security;
+
+revoke all on table ai_rate_limits from public, anon, authenticated;
+grant select, insert, update, delete on table ai_rate_limits to service_role;
 
 -- ---------- tenants ----------
 create policy "tenant self or super admin - select" on tenants

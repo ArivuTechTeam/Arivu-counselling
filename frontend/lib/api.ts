@@ -1,8 +1,12 @@
 import { createClient } from "@/lib/supabase";
 
+let sessionExpiryRedirectStarted = false;
+
 // Base URL of the FastAPI backend (from .env.local).
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL!;
 const DEFAULT_TIMEOUT_MS = 20_000;
+// 150 MB takes about 10 minutes at 2 Mbps before server-side extraction time.
+const DOCUMENT_UPLOAD_TIMEOUT_MS = 15 * 60_000;
 
 async function apiFetch(
   input: RequestInfo | URL,
@@ -44,8 +48,15 @@ async function authHeader(): Promise<Record<string, string>> {
 
 async function apiError(res: Response, fallback: string): Promise<never> {
   if (res.status === 401) {
-    await createClient().auth.signOut();
-    window.location.assign("/login");
+    if (!sessionExpiryRedirectStarted) {
+      sessionExpiryRedirectStarted = true;
+      try {
+        await createClient().auth.signOut();
+      } finally {
+        window.location.replace("/login?reason=session-expired");
+      }
+    }
+    throw new Error("Your session expired. Please log in again.");
   }
   const body = await res.json().catch(() => ({}));
   throw new Error(body.detail || fallback);
@@ -74,11 +85,15 @@ export async function uploadDocument(file: File): Promise<UploadResult> {
 
   // NOTE: don't set Content-Type manually — the browser sets the correct
   // multipart boundary automatically when the body is a FormData.
-  const res = await apiFetch(`${API_BASE}/api/v1/documents/upload`, {
-    method: "POST",
-    headers,
-    body: form,
-  }, 60_000);
+  const res = await apiFetch(
+    `${API_BASE}/api/v1/documents/upload`,
+    {
+      method: "POST",
+      headers,
+      body: form,
+    },
+    DOCUMENT_UPLOAD_TIMEOUT_MS,
+  );
 
   if (!res.ok) {
     return apiError(res, "We couldn't upload your file. Please try again.");

@@ -40,11 +40,13 @@ export default function LoginPage() {
   const [password, setPassword] = useState("");
   const [showPw, setShowPw] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
   async function handleSignIn(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
+    setNotice(null);
     if (!email || !password) {
       setError("Please enter your email and password.");
       return;
@@ -59,6 +61,15 @@ export default function LoginPage() {
     }
     router.push("/dashboard");
   }
+
+  useEffect(() => {
+    const url = new URL(window.location.href);
+    if (url.searchParams.get("reason") === "session-expired") {
+      setNotice("Your session expired. Please log in again.");
+      url.searchParams.delete("reason");
+      window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
+    }
+  }, []);
 
   // Floating particle background (ported from the design, no custom cursor).
   useEffect(() => {
@@ -230,6 +241,12 @@ export default function LoginPage() {
             </div>
 
             <form className="form-body" onSubmit={handleSignIn}>
+              {notice && (
+                <div className="session-notice" role="status">
+                  <span aria-hidden="true">ⓘ</span>
+                  <span>{notice}</span>
+                </div>
+              )}
               {error && (
                 <div className="err-box">
                   <span>⚠</span>
