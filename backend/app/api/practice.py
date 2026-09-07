@@ -35,6 +35,21 @@ def _require_student(profile: CurrentProfile) -> None:
         )
 
 
+def _exam_deadline_passed(session: dict, now: datetime | None = None) -> bool:
+    config = session.get("config") or {}
+    if session.get("mode") != "exam" or not config.get("duration_minutes"):
+        return False
+    if not session.get("started_at"):
+        return False
+    started = datetime.fromisoformat(str(session["started_at"]).replace("Z", "+00:00"))
+    if started.tzinfo is None:
+        started = started.replace(tzinfo=timezone.utc)
+    deadline = started + timedelta(
+        minutes=float(config["duration_minutes"]), seconds=10
+    )
+    return (now or datetime.now(timezone.utc)) > deadline
+
+
 # Sensible default exam pattern; a per-institution value in tenants.exam_config
 # overrides any of these keys.
 DEFAULT_EXAM = {"questions": 50, "duration_minutes": 60, "negative_marking": 0.25}
@@ -185,6 +200,7 @@ def get_practice(
             "attempt_id": session_id,
             "status": "in_progress",
             "questions": [_strip(q) for q in questions],
+            "autosave_state": s.get("autosave_state") or {},
             # Present only for timed modes (exam) — drives the countdown + auto-submit.
             "time_limit_minutes": cfg.get("duration_minutes"),
             "started_at": s.get("started_at"),
@@ -236,6 +252,31 @@ class SubmitPractice(BaseModel):
     answers: list[SubmittedAnswer]
 
 
+class AutosavePractice(BaseModel):
+    answers: dict[str, Any]
+
+
+@router.patch("/practice/sessions/{session_id}/autosave")
+def autosave_practice(
+    session_id: str,
+    body: AutosavePractice,
+    profile: CurrentProfile = Depends(get_current_profile),
+) -> dict:
+    _require_student(profile)
+    service = get_service_client()
+    session = _load_session(service, session_id, profile)
+    if session["status"] != "in_progress":
+        raise HTTPException(status_code=400, detail="This session is already submitted.")
+    allowed = set(session.get("question_ids") or [])
+    answers = {key: value for key, value in body.answers.items() if key in allowed}
+    service.table("practice_sessions").update({"autosave_state": answers}).eq(
+        "id", session_id
+    ).eq("tenant_id", profile.tenant_id).eq(
+        "student_id", profile.user_id
+    ).execute()
+    return {"saved": True}
+
+
 @router.post("/practice/sessions/{session_id}/submit")
 def submit_practice(
     session_id: str,
@@ -250,13 +291,18 @@ def submit_practice(
 
     questions = _load_questions(service, s["question_ids"], profile.tenant_id)
     submitted = {a.question_id: a.student_answer for a in body.answers}
+    cfg = s.get("config") or {}
+    if _exam_deadline_passed(s):
+        # A modified client cannot keep answering after the exam expires.
+        submitted = {}
     # Negative marking is frozen into the session's config (exam mode). A wrong,
     # ANSWERED question loses marks; a blank one scores 0 (never negative).
-    neg = float((s.get("config") or {}).get("negative_marking") or 0)
+    neg = float(cfg.get("negative_marking") or 0)
 
     total = 0.0
     max_score = 0.0
     results = []
+    answer_rows = []
     for q in questions:
         student_answer = submitted.get(q["id"])
         is_correct, awarded = grade_answer(q, student_answer)
@@ -264,7 +310,7 @@ def submit_practice(
             awarded = -neg
         total += awarded
         max_score += float(q.get("marks") or 1)
-        service.table("practice_answers").insert(
+        answer_rows.append(
             {
                 "tenant_id": profile.tenant_id,
                 "session_id": session_id,
@@ -273,7 +319,7 @@ def submit_practice(
                 "is_correct": is_correct,
                 "marks_awarded": awarded,
             }
-        ).execute()
+        )
         results.append(
             {
                 "id": q["id"],
@@ -292,14 +338,40 @@ def submit_practice(
     if neg > 0:
         total = max(0.0, total)  # an exam total never drops below zero
 
-    service.table("practice_sessions").update(
-        {
-            "status": "graded",
-            "total_score": total,
-            "max_score": max_score,
-            "submitted_at": datetime.now(timezone.utc).isoformat(),
-        }
-    ).eq("id", session_id).execute()
+    claimed = (
+        service.table("practice_sessions")
+        .update(
+            {
+                "status": "graded",
+                "total_score": total,
+                "max_score": max_score,
+                "submitted_at": datetime.now(timezone.utc).isoformat(),
+            }
+        )
+        .eq("id", session_id)
+        .eq("tenant_id", profile.tenant_id)
+        .eq("student_id", profile.user_id)
+        .eq("status", "in_progress")
+        .execute()
+    )
+    if not claimed.data:
+        raise HTTPException(status_code=400, detail="This session is already submitted.")
+    try:
+        if answer_rows:
+            service.table("practice_answers").upsert(
+                answer_rows, on_conflict="session_id,question_id"
+            ).execute()
+    except Exception as exc:  # noqa: BLE001
+        service.table("practice_answers").delete().eq("session_id", session_id).execute()
+        service.table("practice_sessions").update(
+            {
+                "status": "in_progress",
+                "total_score": None,
+                "max_score": None,
+                "submitted_at": None,
+            }
+        ).eq("id", session_id).eq("student_id", profile.user_id).execute()
+        raise HTTPException(status_code=500, detail=f"Could not save answers: {exc}")
 
     return {
         "attempt_id": session_id,
@@ -356,6 +428,19 @@ def add_bookmark(
 ) -> dict:
     _require_student(profile)
     service = get_service_client()
+    # A student may only bookmark a real, approved question in their own tenant —
+    # otherwise this would let them probe for/insert arbitrary question ids.
+    qrow = (
+        service.table("questions")
+        .select("id")
+        .eq("id", body.question_id)
+        .eq("tenant_id", profile.tenant_id)
+        .eq("review_status", "approved")
+        .maybe_single()
+        .execute()
+    )
+    if qrow is None or not qrow.data:
+        raise HTTPException(status_code=404, detail="Question not found.")
     # Idempotent: unique(student_id, question_id) means re-adding is a no-op.
     service.table("bookmarks").upsert(
         {

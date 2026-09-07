@@ -18,6 +18,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { ErrorCard } from "@/components/ui/error-card";
+import { PageHeader } from "@/components/ui/page-header";
 import { Skeleton, SkeletonStats } from "@/components/ui/skeleton";
 import { AiMonitoring, QualityFinding, getAiMonitoring } from "@/lib/api";
 
@@ -127,7 +128,17 @@ export default function QuestionQualityPage() {
   }
   useEffect(load, []);
 
-  if (error) return <ErrorCard message={error} onRetry={load} />;
+  if (error) {
+    return (
+      <div className="flex flex-col gap-6">
+        <PageHeader
+          title="Question quality"
+          description="Track AI question quality and improvements using real teacher reviews."
+        />
+        <ErrorCard message={error} onRetry={load} />
+      </div>
+    );
+  }
 
   // First load: one coherent skeleton instead of real-looking 0/0% tiles.
   if (d === null) {
@@ -173,33 +184,27 @@ export default function QuestionQualityPage() {
 
   return (
     <div className="flex flex-col gap-6">
-      {/* Header + refresh */}
-      <div className="flex flex-wrap items-end justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight text-foreground">
-            Question Quality Report
-          </h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            How good the AI is, where it&apos;s weak, and exactly what to fix next —
-            measured from real teacher reviews, not guesswork.
-          </p>
-        </div>
-        <div className="flex items-center gap-3">
-          {updated && (
-            <span className="text-xs text-muted-foreground">
-              Updated{" "}
-              {updated.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
-            </span>
-          )}
-          <button
-            onClick={load}
-            disabled={loading}
-            className="rounded-lg border border-input bg-card px-3 py-1.5 text-sm font-medium text-foreground shadow-sm transition-colors hover:bg-accent disabled:opacity-60"
-          >
-            {loading ? "Refreshing…" : "Refresh"}
-          </button>
-        </div>
-      </div>
+      <PageHeader
+        title="Question quality"
+        description="Track AI question quality and improvements using real teacher reviews."
+        actions={
+          <div className="flex items-center gap-3">
+            {updated && (
+              <span className="text-xs text-muted-foreground">
+                Updated{" "}
+                {updated.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+              </span>
+            )}
+            <button
+              onClick={load}
+              disabled={loading}
+              className="rounded-lg border border-input bg-card px-3 py-1.5 text-sm font-medium text-foreground shadow-sm transition-colors hover:bg-accent disabled:opacity-60"
+            >
+              {loading ? "Refreshing…" : "Refresh"}
+            </button>
+          </div>
+        }
+      />
 
       {/* Verdict hero */}
       <div className="animate-rise relative overflow-hidden rounded-2xl bg-gradient-to-br from-[#1a6942] via-[#15603d] to-[#0f4e33] p-6 text-white shadow-lg sm:p-8">

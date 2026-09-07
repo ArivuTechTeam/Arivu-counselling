@@ -56,9 +56,11 @@ create table profiles (
   role user_role not null,
   full_name text,
   avatar_url text,
+  must_change_password boolean not null default false,
   created_at timestamptz not null default now()
 );
 create index idx_profiles_tenant on profiles(tenant_id);
+create unique index uq_profiles_id_tenant on profiles(id, tenant_id);
 
 
 -- ============================================================================
@@ -81,6 +83,39 @@ create table subjects (
 );
 create index idx_subjects_tenant on subjects(tenant_id);
 create index idx_subjects_course on subjects(course_id);
+create unique index uq_subjects_id_tenant on subjects(id, tenant_id);
+
+-- A student is enrolled in courses. Teacher course rows are retained for
+-- reporting compatibility and are derived from explicit subject assignments.
+create table enrollments (
+  id uuid primary key default gen_random_uuid(),
+  tenant_id uuid not null references tenants(id),
+  profile_id uuid not null references profiles(id) on delete cascade,
+  course_id uuid not null references courses(id) on delete cascade,
+  created_at timestamptz not null default now(),
+  unique (profile_id, course_id)
+);
+create index idx_enrollments_tenant on enrollments(tenant_id);
+create index idx_enrollments_profile on enrollments(profile_id);
+create index idx_enrollments_course on enrollments(course_id);
+
+create table teacher_subjects (
+  id uuid primary key default gen_random_uuid(),
+  tenant_id uuid not null references tenants(id) on delete cascade,
+  teacher_id uuid not null,
+  subject_id uuid not null,
+  created_at timestamptz not null default now(),
+  constraint teacher_subjects_teacher_tenant_fk
+    foreign key (teacher_id, tenant_id)
+    references profiles(id, tenant_id) on delete cascade,
+  constraint teacher_subjects_subject_tenant_fk
+    foreign key (subject_id, tenant_id)
+    references subjects(id, tenant_id) on delete cascade,
+  unique (teacher_id, subject_id)
+);
+create index idx_teacher_subjects_tenant on teacher_subjects(tenant_id);
+create index idx_teacher_subjects_teacher on teacher_subjects(teacher_id);
+create index idx_teacher_subjects_subject on teacher_subjects(subject_id);
 
 create table chapters (
   id uuid primary key default gen_random_uuid(),
@@ -183,6 +218,7 @@ create table quiz_sets (
   id uuid primary key default gen_random_uuid(),
   tenant_id uuid not null references tenants(id),
   chapter_id uuid references chapters(id),
+  subject_id uuid references subjects(id),
   title text not null,
   description text,
   status quiz_status not null default 'draft',
@@ -191,6 +227,7 @@ create table quiz_sets (
   published_at timestamptz
 );
 create index idx_quizsets_tenant on quiz_sets(tenant_id);
+create index idx_quizsets_subject on quiz_sets(subject_id);
 
 create table quiz_variants (
   id uuid primary key default gen_random_uuid(),
@@ -345,9 +382,8 @@ $$;
 
 -- ============================================================================
 -- STEP 12: AUTO-CREATE PROFILE ON SIGNUP
--- The app (or an admin using the service_role key) must pass tenant_id,
--- role, and full_name in raw_user_meta_data when calling supabase.auth.signUp
--- or admin.createUser. This trigger turns that metadata into a profile row.
+-- Public metadata is untrusted. Every signup starts as a student; protected
+-- backend provisioning may promote the profile using the service-role client.
 -- ============================================================================
 
 create or replace function handle_new_user()
@@ -356,14 +392,57 @@ language plpgsql
 security definer
 set search_path = public
 as $$
+declare
+  selected_tenant uuid;
+  requested_course uuid;
+  trusted_provisioning boolean;
 begin
+  trusted_provisioning := coalesce(
+    new.raw_app_meta_data->>'provisioned_by_backend', 'false'
+  ) = 'true';
+  requested_course := nullif(new.raw_user_meta_data->>'course_id', '')::uuid;
+
+  if trusted_provisioning then
+    selected_tenant := (new.raw_user_meta_data->>'tenant_id')::uuid;
+    if not exists (
+      select 1 from public.tenants
+      where id = selected_tenant and is_active = true
+    ) then
+      raise exception 'A valid active institution is required';
+    end if;
+  else
+    if requested_course is null then
+      raise exception 'A valid course is required for public signup';
+    end if;
+    select c.tenant_id into selected_tenant
+    from public.courses c
+    join public.tenants t on t.id = c.tenant_id and t.is_active = true
+    where c.id = requested_course;
+    if selected_tenant is null then
+      raise exception 'A valid course is required for public signup';
+    end if;
+  end if;
+
   insert into public.profiles (id, tenant_id, role, full_name)
   values (
     new.id,
-    (new.raw_user_meta_data->>'tenant_id')::uuid,
-    (new.raw_user_meta_data->>'role')::user_role,
+    selected_tenant,
+    'student'::user_role,
     new.raw_user_meta_data->>'full_name'
   );
+
+  if requested_course is not null then
+    if not exists (
+      select 1 from public.courses
+      where id = requested_course and tenant_id = selected_tenant
+    ) then
+      raise exception 'Course does not belong to the selected institution';
+    end if;
+    insert into public.enrollments (tenant_id, profile_id, course_id)
+    values (selected_tenant, new.id, requested_course)
+    on conflict (profile_id, course_id) do nothing;
+  end if;
+
   return new;
 end;
 $$;
@@ -372,17 +451,87 @@ create trigger on_auth_user_created
   after insert on auth.users
   for each row execute function handle_new_user();
 
+-- Called only by the backend service role after an institution admin has been
+-- authenticated. One transaction replaces assignments and their derived
+-- teacher course-enrolment rows.
+create or replace function replace_teacher_subjects(
+  p_tenant_id uuid,
+  p_teacher_id uuid,
+  p_subject_ids uuid[] default '{}'::uuid[]
+)
+returns uuid[]
+language plpgsql
+security invoker
+set search_path = ''
+as $$
+declare
+  normalized_ids uuid[];
+begin
+  select coalesce(array_agg(subject_id order by first_position), '{}'::uuid[])
+  into normalized_ids
+  from (
+    select subject_id, min(position) as first_position
+    from unnest(coalesce(p_subject_ids, '{}'::uuid[]))
+      with ordinality as requested(subject_id, position)
+    group by subject_id
+  ) deduplicated;
+
+  if cardinality(normalized_ids) > 500 then
+    raise exception 'A teacher may have at most 500 assigned subjects';
+  end if;
+  if not exists (
+    select 1 from public.profiles
+    where id = p_teacher_id and tenant_id = p_tenant_id and role = 'teacher'
+  ) then
+    raise exception 'Teacher not found in this institution';
+  end if;
+  if exists (
+    select 1
+    from unnest(normalized_ids) requested(subject_id)
+    left join public.subjects s
+      on s.id = requested.subject_id and s.tenant_id = p_tenant_id
+    where s.id is null
+  ) then
+    raise exception 'One or more subjects do not belong to this institution';
+  end if;
+
+  delete from public.teacher_subjects
+  where teacher_id = p_teacher_id and tenant_id = p_tenant_id;
+  insert into public.teacher_subjects (tenant_id, teacher_id, subject_id)
+  select p_tenant_id, p_teacher_id, subject_id
+  from unnest(normalized_ids) requested(subject_id);
+
+  delete from public.enrollments
+  where profile_id = p_teacher_id and tenant_id = p_tenant_id;
+  insert into public.enrollments (tenant_id, profile_id, course_id)
+  select distinct p_tenant_id, p_teacher_id, s.course_id
+  from public.subjects s
+  where s.tenant_id = p_tenant_id and s.id = any(normalized_ids)
+  on conflict (profile_id, course_id) do nothing;
+
+  return normalized_ids;
+end;
+$$;
+
+revoke all on function replace_teacher_subjects(uuid, uuid, uuid[])
+  from public, anon, authenticated;
+grant execute on function replace_teacher_subjects(uuid, uuid, uuid[])
+  to service_role;
+
 
 -- ============================================================================
 -- STEP 13: ROW LEVEL SECURITY
--- plan_limits is deliberately left WITHOUT rls — it's global, non-sensitive
--- config, same for every tenant. Every other table below is tenant-scoped.
+-- plan_limits is global, non-tenant-scoped config — read-only for every
+-- client via a permissive select policy; only service_role can write it.
+-- Every other table below is tenant-scoped via current_tenant_id().
 -- ============================================================================
 
 alter table tenants enable row level security;
 alter table profiles enable row level security;
 alter table courses enable row level security;
 alter table subjects enable row level security;
+alter table enrollments enable row level security;
+alter table teacher_subjects enable row level security;
 alter table chapters enable row level security;
 alter table topics enable row level security;
 alter table documents enable row level security;
@@ -395,6 +544,7 @@ alter table quiz_attempts enable row level security;
 alter table attempt_answers enable row level security;
 alter table ai_explanations enable row level security;
 alter table tenant_usage enable row level security;
+alter table plan_limits enable row level security;
 
 -- ---------- tenants ----------
 create policy "tenant self or super admin - select" on tenants
@@ -410,8 +560,16 @@ create policy "only super admin creates tenants" on tenants
 create policy "see own tenant's profiles" on profiles
   for select using (tenant_id = current_tenant_id() or is_super_admin());
 
-create policy "update own profile or admin manages tenant profiles" on profiles
-  for update using (id = auth.uid() or (tenant_id = current_tenant_id() and current_role_name() = 'institution_admin'));
+create policy "update own safe profile fields" on profiles
+  for update using (id = auth.uid())
+  with check (
+    id = auth.uid()
+    and tenant_id = current_tenant_id()
+    and role = current_role_name()
+  );
+
+revoke update on table profiles from authenticated;
+grant update (full_name, avatar_url) on table profiles to authenticated;
 
 -- Note: no client-facing insert policy on profiles by design — rows are
 -- created only by the handle_new_user trigger (security definer), or by
@@ -429,6 +587,34 @@ create policy "read own tenant hierarchy" on subjects
 create policy "staff writes hierarchy" on subjects
   for all using (tenant_id = current_tenant_id() and is_staff())
   with check (tenant_id = current_tenant_id() and is_staff());
+
+create policy "read own enrollment or staff" on enrollments
+  for select using (
+    tenant_id = current_tenant_id()
+    and (profile_id = auth.uid() or is_staff())
+  );
+create policy "institution admins manage enrollments" on enrollments
+  for all using (
+    tenant_id = current_tenant_id()
+    and current_role_name() = 'institution_admin'
+  )
+  with check (
+    tenant_id = current_tenant_id()
+    and current_role_name() = 'institution_admin'
+  );
+
+create policy "read permitted teacher subjects" on teacher_subjects
+  for select to authenticated
+  using (
+    is_super_admin()
+    or (
+      tenant_id = current_tenant_id()
+      and (
+        teacher_id = auth.uid()
+        or current_role_name() = 'institution_admin'
+      )
+    )
+  );
 
 create policy "read own tenant hierarchy" on chapters
   for select using (tenant_id = current_tenant_id() or is_super_admin());
@@ -542,6 +728,11 @@ create policy "admins view own tenant usage" on tenant_usage
     and (current_role_name() = 'institution_admin' or is_super_admin())
   );
 -- No client-facing write policy — only the backend (service_role) increments this.
+
+create policy "anyone can read plan limits" on plan_limits
+  for select using (true);
+-- No client-facing write policy — pricing/quota tiers change via a new
+-- migration (service_role), never from an anon/authenticated client.
 
 
 -- ============================================================================

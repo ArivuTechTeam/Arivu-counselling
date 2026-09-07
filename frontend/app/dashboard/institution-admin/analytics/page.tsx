@@ -18,6 +18,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { ErrorCard } from "@/components/ui/error-card";
+import { PageHeader } from "@/components/ui/page-header";
 import {
   InstitutionAnalytics,
   QualityFinding,
@@ -121,7 +122,17 @@ export default function InstitutionAnalyticsPage() {
   }
   useEffect(load, []);
 
-  if (error) return <ErrorCard message={error} onRetry={load} />;
+  if (error) {
+    return (
+      <div className="flex flex-col gap-6">
+        <PageHeader
+          title="Institution analytics"
+          description="See performance trends, quality signals, and where your institution needs attention."
+        />
+        <ErrorCard message={error} onRetry={load} />
+      </div>
+    );
+  }
 
   const sm = d?.summary;
   const trend = d?.trend;
@@ -131,33 +142,27 @@ export default function InstitutionAnalyticsPage() {
 
   return (
     <div className="flex flex-col gap-6">
-      {/* Header + refresh */}
-      <div className="flex flex-wrap items-end justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight text-foreground">
-            Institution Analytics
-          </h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            How your institution is doing and exactly what needs attention —
-            straight from your real data.
-          </p>
-        </div>
-        <div className="flex items-center gap-3">
-          {updated && (
-            <span className="text-xs text-muted-foreground">
-              Updated{" "}
-              {updated.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
-            </span>
-          )}
-          <button
-            onClick={load}
-            disabled={loading}
-            className="rounded-lg border border-input bg-card px-3 py-1.5 text-sm font-medium text-foreground shadow-sm transition-colors hover:bg-accent disabled:opacity-60"
-          >
-            {loading ? "Refreshing…" : "Refresh"}
-          </button>
-        </div>
-      </div>
+      <PageHeader
+        title="Institution analytics"
+        description="See performance trends, quality signals, and where your institution needs attention."
+        actions={
+          <div className="flex items-center gap-3">
+            {updated && (
+              <span className="text-xs text-muted-foreground">
+                Updated{" "}
+                {updated.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+              </span>
+            )}
+            <button
+              onClick={load}
+              disabled={loading}
+              className="rounded-lg border border-input bg-card px-3 py-1.5 text-sm font-medium text-foreground shadow-sm transition-colors hover:bg-accent disabled:opacity-60"
+            >
+              {loading ? "Refreshing…" : "Refresh"}
+            </button>
+          </div>
+        }
+      />
 
       {d === null ? (
         <Skeleton />

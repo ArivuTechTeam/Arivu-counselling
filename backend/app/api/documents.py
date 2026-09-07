@@ -16,6 +16,7 @@ import uuid
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from pydantic import BaseModel
+from starlette.concurrency import run_in_threadpool
 
 from app.lib.auth import CurrentProfile, get_current_profile
 from app.lib.storage import upload_bytes
@@ -28,7 +29,6 @@ ALLOWED_EXT = {"pdf", "docx"}
 MAX_MB = 150
 MAX_BYTES = MAX_MB * 1024 * 1024
 PREVIEW_CHARS = 5000
-STAFF_ROLES = {"teacher", "institution_admin", "super_admin"}
 CONTENT_TYPES = {
     "pdf": "application/pdf",
     "docx": (
@@ -57,11 +57,11 @@ def _ext_of(filename: str) -> str:
     return filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
 
 
-def _require_staff(profile: CurrentProfile) -> None:
-    if profile.role not in STAFF_ROLES:
+def _require_teacher(profile: CurrentProfile) -> None:
+    if profile.role != "teacher":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only staff can upload documents.",
+            detail="Only teachers can upload documents.",
         )
 
 
@@ -70,7 +70,7 @@ async def upload_document(
     file: UploadFile = File(...),
     profile: CurrentProfile = Depends(get_current_profile),
 ) -> UploadResult:
-    _require_staff(profile)
+    _require_teacher(profile)
 
     filename = file.filename or "upload"
     ext = _ext_of(filename)
@@ -117,16 +117,19 @@ async def upload_document(
     row = inserted.data[0]
     doc_id = row["id"]
 
-    # 3) Extract text and mark the row completed/failed.
+    # 3) Extract text and mark the row completed/failed. pdfplumber/python-docx are
+    #    synchronous and CPU-bound, so run them off the event loop or they'd block
+    #    every other request this worker is handling.
     try:
-        text = extract_text(content, ext)
+        text = await run_in_threadpool(extract_text, content, ext)
     except Exception as exc:  # noqa: BLE001 - surface any parse failure to the row
         service.table("documents").update(
             {"status": "failed", "error_message": str(exc)}
         ).eq("id", doc_id).execute()
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=f"Could not extract text: {exc}",
+            detail="Could not extract text from this file. It may be corrupted, "
+            "password-protected, or in an unsupported format.",
         )
 
     service.table("documents").update({"status": "completed"}).eq(
@@ -152,12 +155,13 @@ async def upload_document(
 def list_documents(
     profile: CurrentProfile = Depends(get_current_profile),
 ) -> list[DocumentOut]:
-    _require_staff(profile)
+    _require_teacher(profile)
     service = get_service_client()
     rows = (
         service.table("documents")
         .select("id, original_filename, file_type, status, created_at")
         .eq("tenant_id", profile.tenant_id)  # tenant isolation enforced here
+        .eq("uploaded_by", profile.user_id)
         .order("created_at", desc=True)
         .execute()
     )

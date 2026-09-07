@@ -1,0 +1,50 @@
+services:
+  backend:
+    build:
+      context: ./backend
+    container_name: quiz-generator-backend
+    ports:
+      # host:container — container keeps the app's normal port (8000);
+      # only the host side is moved to 8001 to avoid arivupro_examapp's 8000.
+      - "8001:8000"
+    environment:
+      SUPABASE_URL: ${SUPABASE_URL}
+      SUPABASE_ANON_KEY: ${SUPABASE_ANON_KEY}
+      SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY}
+      SUPABASE_JWT_SECRET: ${SUPABASE_JWT_SECRET}
+      FRONTEND_ORIGIN: http://localhost:3001
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY}
+      GEMINI_API_KEY: ${GEMINI_API_KEY}
+    networks:
+      - quiz-generator-net
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        NEXT_PUBLIC_SUPABASE_URL: ${NEXT_PUBLIC_SUPABASE_URL}
+        NEXT_PUBLIC_SUPABASE_ANON_KEY: ${NEXT_PUBLIC_SUPABASE_ANON_KEY}
+        NEXT_PUBLIC_DEFAULT_TENANT_ID: ${NEXT_PUBLIC_DEFAULT_TENANT_ID}
+        # Baked into the browser bundle, so it must be a URL the HOST
+        # browser can reach — not the internal "backend" service name.
+        NEXT_PUBLIC_API_BASE_URL: http://localhost:8001
+        # This container always runs with NODE_ENV=production (see
+        # frontend/Dockerfile's runner stage), even though it's only used for
+        # local testing here — so lib/supabase.ts can't tell "local Docker
+        # test" apart from "real prod deploy" via NODE_ENV alone. This flag
+        # is the explicit signal: only set here, never in the real Vercel
+        # prod env, so multi-tab test logins stay isolated locally without
+        # changing real users' "logged in everywhere" behavior.
+        NEXT_PUBLIC_DEV_SESSION_STORAGE: "true"
+    container_name: quiz-generator-frontend
+    ports:
+      - "3001:3000"
+    depends_on:
+      - backend
+    networks:
+      - quiz-generator-net
+
+networks:
+  quiz-generator-net:
+    name: quiz-generator-net
+    driver: bridge

@@ -3,8 +3,8 @@
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 
-import { AiTutor } from "@/components/ai-tutor";
-import { StudentDownloads } from "@/components/pdf-buttons";
+import { AiTutor } from "@/components/student/ai-tutor";
+import { StudentDownloads } from "@/components/shared/pdf-buttons";
 import { downloadCardImage } from "@/lib/share-card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -12,7 +12,7 @@ import { Input } from "@/components/ui/input";
 import { ErrorCard } from "@/components/ui/error-card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Check, X } from "@/components/ui/icons";
-import { formatAnswerValue } from "@/lib/format";
+import { formatAnswerValue, typeLabel } from "@/lib/format";
 import {
   AttemptInProgress,
   AttemptResult,
@@ -21,6 +21,8 @@ import {
   addBookmark,
   getAttempt,
   getPracticeSession,
+  saveAttemptProgress,
+  savePracticeProgress,
   submitAttempt,
   submitPracticeSession,
 } from "@/lib/api";
@@ -48,13 +50,19 @@ export function QuizAttempt({
   const [current, setCurrent] = useState(0);
   const [marked, setMarked] = useState<Record<string, boolean>>({});
   const [error, setError] = useState<string | null>(null);
+  const [autosaveError, setAutosaveError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
   function load() {
     setError(null);
     const fetcher = source === "practice" ? getPracticeSession : getAttempt;
     fetcher(attemptId)
-      .then(setState)
+      .then((next) => {
+        setState(next);
+        if (next.status === "in_progress") {
+          setAnswers((next as AttemptInProgress).autosave_state ?? {});
+        }
+      })
       .catch((e) => setError(e.message));
   }
 
@@ -62,6 +70,21 @@ export function QuizAttempt({
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [attemptId, source]);
+
+  useEffect(() => {
+    if (!state || state.status !== "in_progress") return;
+    const timer = window.setTimeout(() => {
+      const saver = source === "practice" ? savePracticeProgress : saveAttemptProgress;
+      saver(attemptId, answers)
+        .then(() => setAutosaveError(null))
+        .catch(() =>
+          setAutosaveError(
+            "Progress could not be saved. Keep this page open and check your connection.",
+          ),
+        );
+    }, 600);
+    return () => window.clearTimeout(timer);
+  }, [answers, attemptId, source, state]);
 
   // Countdown for timed modes (exam). submitRef always points at the latest
   // handleSubmit so the timer auto-submits exactly once when the clock hits zero.
@@ -176,7 +199,7 @@ export function QuizAttempt({
         <div className="rounded-lg border bg-card p-5 shadow-sm">
           <div className="mb-3 flex items-center justify-between">
             <span className="font-semibold">Q{current + 1}</span>
-            <Badge tone="type">{q.type}</Badge>
+            <Badge tone="type">{typeLabel(q.type)}</Badge>
           </div>
           <p className="mb-4 text-[15px] text-foreground">{q.question_text}</p>
           <QuestionInput
@@ -219,6 +242,9 @@ export function QuizAttempt({
             </div>
           </div>
         </div>
+        {autosaveError && (
+          <p className="text-sm text-amber-700">{autosaveError}</p>
+        )}
         {error && <p className="text-sm text-red-600">{error}</p>}
       </div>
 
@@ -544,14 +570,16 @@ function Results({ result }: { result: AttemptResult }) {
 function BookmarkButton({ questionId }: { questionId: string }) {
   const [saved, setSaved] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [failed, setFailed] = useState(false);
   async function save() {
     if (saved || busy) return;
     setBusy(true);
+    setFailed(false);
     try {
       await addBookmark(questionId);
       setSaved(true);
     } catch {
-      /* non-critical — ignore */
+      setFailed(true);
     } finally {
       setBusy(false);
     }
@@ -566,7 +594,7 @@ function BookmarkButton({ questionId }: { questionId: string }) {
           : "border-input text-muted-foreground hover:border-primary/40 hover:text-primary"
       }`}
     >
-      {saved ? "★ Saved" : "☆ Revise"}
+      {saved ? "★ Saved" : failed ? "Retry save" : "☆ Revise"}
     </button>
   );
 }

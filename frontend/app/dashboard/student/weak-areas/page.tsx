@@ -1,7 +1,7 @@
 import Link from "next/link";
 
 import { PageHeader } from "@/components/ui/page-header";
-import { WeakAreaAnalysis } from "@/components/weak-area-analysis";
+import { WeakAreaAnalysis } from "@/components/student/weak-area-analysis";
 
 export default function WeakAreasPage() {
   return (
@@ -13,8 +13,8 @@ export default function WeakAreasPage() {
         ← Back to dashboard
       </Link>
       <PageHeader
-        title="Weak-area analysis"
-        description="Drill from subject to chapter to topic to see exactly where to focus."
+        title="Weak Areas"
+        description="Go from subject to chapter to topic to see exactly where to focus."
       />
       <WeakAreaAnalysis />
     </div>

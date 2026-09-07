@@ -6,9 +6,9 @@ import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { ErrorCard } from "@/components/ui/error-card";
 import { Skeleton, SkeletonCards } from "@/components/ui/skeleton";
-import { QuestionPaperButtons } from "@/components/pdf-buttons";
-import { QuestionReviewCard } from "@/components/question-review-card";
-import { statusLabel } from "@/lib/format";
+import { QuestionPaperButtons } from "@/components/shared/pdf-buttons";
+import { QuestionReviewCard } from "@/components/teacher/question-review-card";
+import { statusLabel, variantLabel } from "@/lib/format";
 import {
   QuizSetDetail,
   ReviewQuestion,
@@ -164,7 +164,7 @@ export default function ReviewDetailPage({ params }: { params: { id: string } })
       {detail.variants.map((v) => (
         <section key={v.id} className="flex flex-col gap-4">
           <h2 className="text-[11px] font-semibold uppercase tracking-widest text-muted-foreground">
-            {statusLabel(v.variant_type)} variant
+            {variantLabel(v.variant_type)} version
           </h2>
           {v.questions.map((q, i) => (
             <QuestionReviewCard

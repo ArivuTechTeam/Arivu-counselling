@@ -1,4 +1,4 @@
-import { TestHistory } from "@/components/test-history";
+import { TestHistory } from "@/components/student/test-history";
 
 export default function TestHistoryPage() {
   return (

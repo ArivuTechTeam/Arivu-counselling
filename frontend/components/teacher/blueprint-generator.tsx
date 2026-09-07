@@ -35,8 +35,8 @@ const WEIGHTS: { value: TopicWeight; label: string }[] = [
 ];
 
 const QUESTION_TYPES = [
-  { value: "mcq_single", label: "MCQ (single)" },
-  { value: "mcq_multi", label: "MCQ (multiple)" },
+  { value: "mcq_single", label: "Single choice" },
+  { value: "mcq_multi", label: "Multiple choice" },
   { value: "true_false", label: "True / False" },
   { value: "numerical", label: "Numerical" },
   { value: "fill_blank", label: "Fill in the blank" },
@@ -144,7 +144,7 @@ export function BlueprintGenerator() {
       .catch((e) => setError(e.message));
     listCourses()
       .then(setCourses)
-      .catch(() => {});
+      .catch((e) => setError(e.message));
   }, []);
 
   // Load the selected subject's chapters for the dropdown.
@@ -157,7 +157,10 @@ export function BlueprintGenerator() {
     }
     listChapters(subjectId)
       .then(setChapters)
-      .catch(() => setChapters([]));
+      .catch((e) => {
+        setChapters([]);
+        setError(e.message);
+      });
   }, [subjectId]);
 
   async function handleUpload(e: React.ChangeEvent<HTMLInputElement>) {
@@ -533,7 +536,7 @@ export function BlueprintGenerator() {
                           aria-label={`Fewer ${t.label}`}
                           onClick={() => setCount(t.value, n - 1)}
                           disabled={n <= 0}
-                          className="flex h-7 w-7 items-center justify-center rounded-md border border-input text-lg leading-none text-muted-foreground transition-colors hover:border-primary/50 hover:text-primary disabled:cursor-not-allowed disabled:opacity-40"
+                          className="flex h-9 w-9 items-center justify-center rounded-md border border-input text-lg leading-none text-muted-foreground transition-colors hover:border-primary/50 hover:text-primary disabled:cursor-not-allowed disabled:opacity-40"
                         >
                           −
                         </button>
@@ -543,13 +546,13 @@ export function BlueprintGenerator() {
                           max={30}
                           value={n}
                           onChange={(e) => setCount(t.value, Number(e.target.value))}
-                          className="h-7 w-11 rounded-md border border-input text-center text-sm [appearance:textfield] focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20 [&::-webkit-inner-spin-button]:appearance-none"
+                          className="h-9 w-11 rounded-md border border-input text-center text-sm [appearance:textfield] focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20 [&::-webkit-inner-spin-button]:appearance-none"
                         />
                         <button
                           type="button"
                           aria-label={`More ${t.label}`}
                           onClick={() => setCount(t.value, n + 1)}
-                          className="flex h-7 w-7 items-center justify-center rounded-md border border-input text-lg leading-none text-muted-foreground transition-colors hover:border-primary/50 hover:text-primary"
+                          className="flex h-9 w-9 items-center justify-center rounded-md border border-input text-lg leading-none text-muted-foreground transition-colors hover:border-primary/50 hover:text-primary"
                         >
                           +
                         </button>
@@ -562,7 +565,7 @@ export function BlueprintGenerator() {
 
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <label className="flex flex-col gap-1.5 text-sm font-medium">
-                Cognitive level
+                Question style
                 <select
                   className={fieldClass}
                   value={level}

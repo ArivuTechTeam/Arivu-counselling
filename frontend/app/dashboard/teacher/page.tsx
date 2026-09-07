@@ -1,5 +1,5 @@
-import { ClassAnalytics } from "@/components/class-analytics";
-import { TeacherStats } from "@/components/teacher-stats";
+import { ClassAnalytics } from "@/components/teacher/class-analytics";
+import { TeacherStats } from "@/components/teacher/teacher-stats";
 
 // Class overview — the teacher's at-a-glance workspace + class performance.
 export default function TeacherClassOverview() {

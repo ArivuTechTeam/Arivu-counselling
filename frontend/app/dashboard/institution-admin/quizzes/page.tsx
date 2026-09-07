@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 
-import { QuestionPaperButtons } from "@/components/pdf-buttons";
+import { QuestionPaperButtons } from "@/components/shared/pdf-buttons";
 import {
   Card,
   CardContent,

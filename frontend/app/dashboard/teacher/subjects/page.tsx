@@ -70,7 +70,7 @@ export default function TeacherSubjectsPage() {
         <EmptyState
           icon={<BookOpen />}
           title="No subjects yet"
-          message="You're not mapped to any subjects yet. Ask your institution admin to add you to a course."
+          message="You haven't been assigned to any subjects yet. Ask your institution admin to add you to a course."
         />
       ) : (
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
@@ -164,8 +164,8 @@ function ChapterManager({
         <CardHeader>
           <CardTitle>Add a chapter</CardTitle>
           <CardDescription>
-            Chapters appear in the Generate-Quiz dropdown and in your students&apos;
-            subject view.
+            Chapters appear in the Chapter dropdown when you generate a quiz,
+            and in your students&apos; subject view.
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -217,7 +217,7 @@ function ChapterManager({
             <EmptyState
               icon={<BookOpen />}
               title="No chapters yet"
-              message="Add your first chapter above to start organising this subject."
+              message="Add your first chapter above to start organizing this subject."
             />
           ) : (
             chapters.map((c) => (

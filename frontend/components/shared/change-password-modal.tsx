@@ -4,7 +4,7 @@ import { useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { AlertTriangle } from "@/components/ui/icons";
-import { createClient } from "@/lib/supabase";
+import { changePassword } from "@/lib/api";
 
 /**
  * In-dashboard "change your password" modal. The user is already logged in, so
@@ -44,16 +44,14 @@ export function ChangePasswordModal({
       return;
     }
     setBusy(true);
-    const supabase = createClient();
-    const { error: err } = await supabase.auth.updateUser({
-      password: pw,
-      data: { must_change_password: false },
-    });
-    setBusy(false);
-    if (err) {
-      setError(err.message);
+    try {
+      await changePassword(pw);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not change password.");
+      setBusy(false);
       return;
     }
+    setBusy(false);
     setPw("");
     setConfirm("");
     onDone();
@@ -103,7 +101,7 @@ export function ChangePasswordModal({
               type={show ? "text" : "password"}
               value={confirm}
               onChange={(e) => setConfirm(e.target.value)}
-              placeholder="Re-type the password"
+              placeholder="Enter the password again"
             />
           </label>
 
@@ -115,11 +113,13 @@ export function ChangePasswordModal({
           )}
 
           <div className="mt-2 flex justify-end gap-2">
-            <Button type="button" variant="outline" onClick={onClose} disabled={busy}>
-              {forced ? "Later" : "Cancel"}
-            </Button>
+            {!forced && (
+              <Button type="button" variant="outline" onClick={onClose} disabled={busy}>
+                Cancel
+              </Button>
+            )}
             <Button type="submit" disabled={busy}>
-              {busy ? "Saving…" : "Set password"}
+              {busy ? "Saving…" : "Change password"}
             </Button>
           </div>
         </form>

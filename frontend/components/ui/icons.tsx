@@ -86,6 +86,20 @@ export const X = (p: IconProps) => (
   </Svg>
 );
 
+export const ChevronDown = (p: IconProps) => (
+  <Svg {...p}>
+    <polyline points="6 9 12 15 18 9" />
+  </Svg>
+);
+
+export const Menu = (p: IconProps) => (
+  <Svg {...p}>
+    <line x1="4" y1="6" x2="20" y2="6" />
+    <line x1="4" y1="12" x2="20" y2="12" />
+    <line x1="4" y1="18" x2="20" y2="18" />
+  </Svg>
+);
+
 export const Eye = (p: IconProps) => (
   <Svg {...p}>
     <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z" />
@@ -137,5 +151,74 @@ export const Trophy = (p: IconProps) => (
     <path d="M10 14.66V17c0 .55-.47.98-.97 1.21C7.85 18.75 7 20.24 7 22" />
     <path d="M14 14.66V17c0 .55.47.98.97 1.21C16.15 18.75 17 20.24 17 22" />
     <path d="M18 2H6v7a6 6 0 0 0 12 0V2Z" />
+  </Svg>
+);
+
+export const LayoutDashboard = (p: IconProps) => (
+  <Svg {...p}>
+    <rect width="7" height="9" x="3" y="3" rx="1" />
+    <rect width="7" height="5" x="14" y="3" rx="1" />
+    <rect width="7" height="9" x="14" y="12" rx="1" />
+    <rect width="7" height="5" x="3" y="16" rx="1" />
+  </Svg>
+);
+
+export const TrendingUp = (p: IconProps) => (
+  <Svg {...p}>
+    <polyline points="22 7 13.5 15.5 8.5 10.5 2 17" />
+    <polyline points="16 7 22 7 22 13" />
+  </Svg>
+);
+
+export const FileText = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z" />
+    <path d="M14 2v4a2 2 0 0 0 2 2h4" />
+    <path d="M10 9H8" />
+    <path d="M16 13H8" />
+    <path d="M16 17H8" />
+  </Svg>
+);
+
+export const Plus = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M5 12h14" />
+    <path d="M12 5v14" />
+  </Svg>
+);
+
+export const UserCheck = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
+    <circle cx="9" cy="7" r="4" />
+    <polyline points="16 11 18 13 22 9" />
+  </Svg>
+);
+
+export const BarChart3 = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M3 3v18h18" />
+    <path d="M18 17V9" />
+    <path d="M13 17V5" />
+    <path d="M8 17v-3" />
+  </Svg>
+);
+
+export const Building2 = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M6 22V4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v18Z" />
+    <path d="M6 12H4a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h2" />
+    <path d="M18 9h2a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-2" />
+    <path d="M10 6h4" />
+    <path d="M10 10h4" />
+    <path d="M10 14h4" />
+    <path d="M10 18h4" />
+  </Svg>
+);
+
+export const Clock = (p: IconProps) => (
+  <Svg {...p}>
+    <circle cx="12" cy="12" r="10" />
+    <polyline points="12 6 12 12 16 14" />
   </Svg>
 );

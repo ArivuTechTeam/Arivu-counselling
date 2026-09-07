@@ -40,6 +40,7 @@ export function AdminManager({ embedded = false }: { embedded?: boolean }) {
   const [notice, setNotice] = useState<string | null>(null);
 
   function refresh() {
+    setError(null);
     listAdmins()
       .then(setAdmins)
       .catch((e) => setError(e.message));
@@ -51,7 +52,7 @@ export function AdminManager({ embedded = false }: { embedded?: boolean }) {
         setTenants(t);
         setForm((f) => ({ ...f, tenant_id: t[0]?.id ?? "" }));
       })
-      .catch(() => {});
+      .catch((e) => setError(e.message));
     refresh();
   }, []);
 

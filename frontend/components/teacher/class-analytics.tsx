@@ -11,6 +11,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
+import { ErrorCard } from "@/components/ui/error-card";
 import { Skeleton, SkeletonCards } from "@/components/ui/skeleton";
 import {
   AttentionStudent,
@@ -67,11 +68,17 @@ function StudentRow({ s }: { s: AttentionStudent }) {
 export function ClassAnalytics() {
   const router = useRouter();
   const [data, setData] = useState<TeacherClassOverview | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
+  function load() {
+    setError(null);
     getTeacherClassOverview()
       .then(setData)
-      .catch(() => {});
+      .catch((e) => setError(e.message));
+  }
+
+  useEffect(() => {
+    load();
   }, []);
 
   const loaded = data !== null;
@@ -91,6 +98,7 @@ export function ClassAnalytics() {
   const accA = useCountUp(classAccuracy, loaded);
   const hasData = attempts > 0;
 
+  if (error) return <ErrorCard message={error} onRetry={load} />;
   if (!loaded) {
     return (
       <div className="flex flex-col gap-6">
@@ -133,9 +141,9 @@ export function ClassAnalytics() {
             <p className="mt-1 text-sm text-muted-foreground">
               {hasData
                 ? `Across ${attempts} graded ${
-                    attempts === 1 ? "attempt" : "attempts"
+                    attempts === 1 ? "quiz taken" : "quizzes taken"
                   } from ${students} ${students === 1 ? "student" : "students"}.`
-                : "No graded attempts yet — publish a quiz and your class results appear here."}
+                : "No graded quizzes yet — publish a quiz and your class results appear here."}
             </p>
           </div>
 
@@ -150,7 +158,7 @@ export function ClassAnalytics() {
             <div className="text-center">
               <div className="text-2xl font-bold text-foreground">{attempts}</div>
               <div className="text-[11px] uppercase tracking-wide text-muted-foreground">
-                attempts
+                quizzes taken
               </div>
             </div>
             <div className="text-center">
@@ -179,7 +187,7 @@ export function ClassAnalytics() {
           </CardHeader>
           <CardContent className="flex flex-col gap-3">
             {quizzes.length === 0 ? (
-              <EmptyState message="No attempts yet — once students take your published quizzes, their scores appear here." />
+              <EmptyState message="No quizzes taken yet — once students take your published quizzes, their scores appear here." />
             ) : (
               quizzes.map((q) => (
                 <button
@@ -196,7 +204,7 @@ export function ClassAnalytics() {
                     </span>
                     <span className="shrink-0 text-muted-foreground">
                       {q.accuracy}% · {q.attempts}{" "}
-                      {q.attempts === 1 ? "attempt" : "attempts"}
+                      {q.attempts === 1 ? "quiz taken" : "quizzes taken"}
                     </span>
                   </div>
                   <div className="h-2 w-full overflow-hidden rounded-full bg-muted">
@@ -217,7 +225,7 @@ export function ClassAnalytics() {
         {/* Review pipeline */}
         <Card className="animate-rise lg:col-span-1" style={{ animationDelay: "60ms" }}>
           <CardHeader>
-            <CardTitle>Review pipeline</CardTitle>
+            <CardTitle>Review status</CardTitle>
             <CardDescription>Your questions by status.</CardDescription>
           </CardHeader>
           <CardContent className="flex flex-col gap-2">
@@ -272,7 +280,7 @@ export function ClassAnalytics() {
           </CardHeader>
           <CardContent className="flex flex-col gap-2">
             {performers.length === 0 ? (
-              <EmptyState message="No graded attempts yet." />
+              <EmptyState message="No graded quizzes yet." />
             ) : (
               performers.map((s, i) => <StudentRow key={i} s={s} />)
             )}

@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 
-import { SplitText } from "@/components/split-text";
+import { SplitText } from "@/components/shared/split-text";
 import { Brand } from "@/components/ui/brand";
 import { listPublicCourses } from "@/lib/api";
 import { initAuthFx } from "@/lib/auth-fx";
@@ -58,7 +58,6 @@ export default function SignupPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPw, setShowPw] = useState(false);
-  const [role, setRole] = useState("student");
   const [courseId, setCourseId] = useState("");
   const [courses, setCourses] = useState<{ id: string; name: string }[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -100,10 +99,14 @@ export default function SignupPage() {
       password,
       options: {
         data: {
+          // Kept for compatibility while Migration 11 rolls out. The hardened
+          // trigger ignores this value for public users and derives the tenant
+          // from course_id instead.
           tenant_id: tenantId,
-          role,
           full_name: fullName,
-          course_id: courseId, // -> trigger enrolls the user in this course
+          // The database derives the tenant from this course and always creates
+          // a student. It ignores browser-supplied role/tenant metadata.
+          course_id: courseId,
         },
       },
     });
@@ -282,13 +285,10 @@ export default function SignupPage() {
               </div>
 
               <div className="field">
-                <div className="field-label">I am a <span className="req">*</span></div>
+                <div className="field-label">Account type</div>
                 <div className="field-box">
                   <span className="field-icon"><UserIcon /></span>
-                  <select className="field-input" value={role} onChange={(e) => setRole(e.target.value)}>
-                    <option value="student">Student</option>
-                    <option value="teacher">Teacher</option>
-                  </select>
+                  <input className="field-input" value="Student" disabled />
                 </div>
               </div>
 

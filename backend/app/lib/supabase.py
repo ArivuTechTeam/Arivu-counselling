@@ -17,14 +17,11 @@ name of the function makes the security intent obvious at the call site.
 
 from __future__ import annotations
 
-from functools import lru_cache
-
 from supabase import Client, create_client
 
 from app.lib.config import get_settings
 
 
-@lru_cache
 def get_service_client() -> Client:
     """
     Client authenticated with the service_role key. BYPASSES Row Level
@@ -34,7 +31,6 @@ def get_service_client() -> Client:
     return create_client(settings.supabase_url, settings.supabase_service_role_key)
 
 
-@lru_cache
 def get_anon_client() -> Client:
     """
     Client authenticated with the anon key. RESPECTS Row Level Security.

@@ -17,15 +17,17 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api import (
     academics,
-    admin,
+    auth_account,
     challenge,
     documents,
     practice,
     questions,
     quiz,
     student,
+    super_admin,
     teacher,
     topics,
+    institution_admin,
 )
 from app.lib.auth import (
     CurrentProfile,
@@ -60,7 +62,9 @@ app.add_middleware(
 
 # --- Routers ------------------------------------------------------------
 app.include_router(academics.router)
-app.include_router(admin.router)
+app.include_router(auth_account.router)
+app.include_router(institution_admin.router)
+app.include_router(super_admin.router)
 app.include_router(challenge.router)
 app.include_router(documents.router)
 app.include_router(practice.router)

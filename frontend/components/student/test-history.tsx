@@ -9,6 +9,7 @@ import { ErrorCard } from "@/components/ui/error-card";
 import { SkeletonList } from "@/components/ui/skeleton";
 import { Inbox } from "@/components/ui/icons";
 import { AttemptHistoryItem, listStudentAttempts } from "@/lib/api";
+import { variantLabel } from "@/lib/format";
 
 function hexFor(pct: number) {
   return pct >= 70 ? "#00a651" : pct >= 40 ? "#f5a623" : "#ff6b7a";
@@ -41,7 +42,7 @@ export function TestHistory() {
   return (
     <div className="flex flex-col gap-6">
       <PageHeader
-        title="Test history"
+        title="Quiz history"
         description="Every attempt you've made, newest first — tap a card to review it."
       />
 
@@ -67,7 +68,7 @@ export function TestHistory() {
             return (
               <Link
                 key={a.attempt_id}
-                href={`/dashboard/student/attempt/${a.attempt_id}`}
+                href={`/dashboard/student/${a.source === "practice" ? "practice" : "attempt"}/${a.attempt_id}`}
                 style={{ animationDelay: `${i * 60}ms` }}
                 className="group relative flex animate-rise items-center gap-5 overflow-hidden rounded-2xl border bg-card p-5 pl-6 shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-md"
               >
@@ -92,8 +93,8 @@ export function TestHistory() {
                   <p className="truncate text-base font-semibold text-foreground">
                     {a.quiz_title}
                   </p>
-                  <p className="mt-0.5 text-xs capitalize text-muted-foreground">
-                    {a.variant_type ?? "quiz"}
+                  <p className="mt-0.5 text-xs text-muted-foreground">
+                    {variantLabel(a.variant_type)}
                     {a.submitted_at
                       ? ` · ${new Date(a.submitted_at).toLocaleDateString()}`
                       : ""}

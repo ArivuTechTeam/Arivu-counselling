@@ -5,22 +5,35 @@ A practical, repeatable guide to getting this app live. Two deployables:
 uvicorn)**, both talking to one **Supabase** project.
 
 > Backend note: there is no `vercel.json`, so the FastAPI backend is **not**
-> set up for Vercel serverless. Deploy it to **Render** or **Railway** (they run
-> `uvicorn` directly, zero adapter work). The frontend goes on Vercel.
+> set up for Vercel serverless. It runs on a host that runs `uvicorn` directly
+> (zero adapter work) — **Render** and **Railway** both work; **confirmed live
+> on Railway as of 2026-09-04** (verified in the Railway dashboard: service
+> `quiz-generator`, project `ExamApp`, environment `production`, domain
+> `quiz-generator-production-7461.up.railway.app`). Render remains a valid
+> alternative if you're setting this up fresh, but isn't what's deployed today.
+> The frontend goes on Vercel.
 
 ---
 
 ## 0. One-time: get the code on GitHub `main`
 
-Vercel/Render build from GitHub. Make sure the latest work is merged to `main`
-before deploying (see the consolidation note — recent phases must be pushed).
+Merge your work to `main` first (see `docs/merge-workflow.md`).
+
+- **Frontend (Vercel):** builds automatically from GitHub via Vercel's
+  standard integration (not independently re-verified this session — confirm
+  in the Vercel dashboard if unsure).
+- **Backend (Railway): does NOT auto-deploy from GitHub.** Confirmed
+  2026-09-04 via `railway status --json` → the service's `"source"` field is
+  `null`. Merging to `main` alone does nothing to the backend — after
+  merging, you must manually deploy (see Step 2).
 
 ---
 
 ## 1. Database (Supabase SQL Editor)
 
-Run these **once, in order**, top-to-bottom (skip any already applied). Note
-there is **no migration 03** — the seed library was removed; `04` drops it.
+These files live in `migrations/` at the project root. Run these **once, in
+order**, top-to-bottom (skip any already applied). Note there is **no
+migration 03** — the seed library was removed; `04` drops it.
 
 ```
 schema.sql
@@ -31,20 +44,45 @@ migration-05-practice.sql
 migration-06-revised-topics.sql
 migration-07-challenges.sql
 migration-08-exam-config.sql
+migration-09-dev-tenant.sql
+migration-10-plan-limits-rls.sql
+migration-11-auth-hardening.sql
+migration-12-teacher-subjects.sql
 ```
 
-(Our live Supabase already has 01–08 applied; this list is for a fresh project.)
+The repository does not prove which migrations are applied to a deployed
+Supabase project. Check the target project before skipping any file. Migration
+12 must be applied before deploying backend code that reads `teacher_subjects`.
 
 ---
 
-## 2. Backend → Render (or Railway)
+## 2. Backend → Railway (confirmed) or Render (also supported)
 
-- **Root directory:** `backend`
-- **Build command:** `pip install -r requirements.txt`
-- **Start command:** `uvicorn app.main:app --host 0.0.0.0 --port $PORT`
-- **Python:** 3.12
+- **Build:** Docker, via `backend/Dockerfile` (confirmed via `railway status
+  --json` → `"builder": "DOCKERFILE"`). The Dockerfile itself runs `pip
+  install -r requirements.txt` — there is no separate dashboard build command.
+- **Root directory:** there is **no** dashboard "root directory" setting for
+  this service (confirmed `"rootDirectory": null`). Instead, every deploy
+  must scope the build to `backend/` at the CLI level:
+  `railway up backend --path-as-root --service quiz-generator` (wrapped by
+  `scripts/deploy.sh` — use that script rather than a bare `railway up`).
+  Running `railway up` from the repo root without `--path-as-root` fails
+  ("Railpack could not determine how to build the app").
+- **Start command:** leave the Railway dashboard's custom Start Command
+  **blank** so it falls back to the Dockerfile's own `CMD`. A leftover custom
+  override (`uvicorn app.main:app --host 0.0.0.0 --port $PORT`, predating the
+  Dockerfile) caused a production outage on 2026-09-04: for a Docker-built
+  service, Railway passes a custom Start Command straight to the container
+  without shell expansion, so uvicorn received the literal string `$PORT`
+  instead of a number and crash-looped (every request 502'd). Cleared in the
+  dashboard, and `backend/Dockerfile`'s `CMD` now uses shell form
+  (`CMD uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}`) so this
+  can't regress even if Railway ever re-applies a plain string command.
+- **Python:** 3.12 (set by `FROM python:3.12-slim` in the Dockerfile).
 
-**Environment variables** (from `backend/.env.example`):
+**Environment variables** (from `backend/.env.example`) — confirmed present
+on the live Railway service as of 2026-09-04 (existence checked in the
+dashboard; values themselves not re-verified this session):
 
 | Var | What |
 |---|---|
@@ -56,7 +94,13 @@ migration-08-exam-config.sql
 | `GEMINI_API_KEY` | quiz generation (primary) |
 | `DEEPSEEK_API_KEY` | quiz generation (fallback) |
 
-→ After it deploys, copy the **backend URL** (e.g. `https://…onrender.com`).
+**Deploying a change (Railway):** merge to `main` first, then run
+`scripts/deploy.sh` from `main` (or `railway up backend --path-as-root
+--service quiz-generator` directly) — merging alone does not deploy, see
+Step 0. On first-ever setup (fresh Render project, or a from-scratch Railway
+project), copy the **backend URL** after the first deploy (e.g.
+`https://…onrender.com`); for the current Railway deploy, see the live URL in
+Notes/gotchas below.
 
 ---
 
@@ -110,3 +154,8 @@ If a page 500s, check the backend logs and that all env vars are set + migration
   and chart bundles.
 - **Free-tier note:** Render/Railway free tiers sleep on idle (first request is
   slow to wake) — acceptable for a demo, upgrade for real usage.
+- **Live backend URL:** `https://quiz-generator-production-7461.up.railway.app`
+  (Railway dashboard, verified 2026-09-04). This is where Vercel's
+  `NEXT_PUBLIC_API_BASE_URL` should point in production — check the Vercel
+  dashboard's env vars, not `frontend/.env.local`, to confirm what's actually
+  configured there.

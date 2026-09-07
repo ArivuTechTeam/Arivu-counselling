@@ -21,7 +21,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { StudentQuizzes } from "@/components/student-quizzes";
+import { StudentQuizzes } from "@/components/student/student-quizzes";
 import { ErrorCard } from "@/components/ui/error-card";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
@@ -197,7 +197,7 @@ const FEATURES: {
   },
   {
     href: "/dashboard/student/weak-areas",
-    title: "Weak areas",
+    title: "Weak Areas",
     desc: "Where to focus next",
     chip: "bg-rose-500/10 text-rose-500",
     icon: <AlertIcon />,
@@ -398,7 +398,7 @@ export function StudentDashboard() {
               Welcome
             </p>
             <h2 className="mt-2 text-2xl font-bold leading-tight sm:text-[28px]">
-              Start attending quizzes
+              Start taking quizzes
             </h2>
             <p className="mt-3 text-sm text-white/80">
               Take your first quiz to unlock your progress dashboard — your

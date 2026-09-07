@@ -23,6 +23,7 @@ from app.lib.supabase import get_service_client
 from app.services.extraction import extract_text
 from app.services.llm import LLMError, complete_with_fallback
 from app.services.quiz_prompts import build_system_prompt, build_user_prompt
+from app.services.teacher_access import teacher_has_subject
 
 # For long documents we skip likely front-matter (cover, copyright page, table
 # of contents, preface) and then take a large slice of real subject content — so
@@ -80,18 +81,10 @@ def generate_quiz(
 ) -> dict:
     service = get_service_client()
 
-    # 0) If a subject was chosen, confirm it belongs to this tenant.
-    if subject_id:
-        subj = (
-            service.table("subjects")
-            .select("id")
-            .eq("id", subject_id)
-            .eq("tenant_id", profile.tenant_id)
-            .maybe_single()
-            .execute()
-        )
-        if subj is None or not subj.data:
-            raise ValueError("Subject not found.")
+    # 0) Explicit assignments are authoritative. Course enrolment is maintained
+    # as derived compatibility data and must never grant additional access.
+    if subject_id and not teacher_has_subject(service, profile, subject_id):
+        raise ValueError("Subject not found.")
 
     # 1) Fetch the document, scoped to the caller's tenant.
     doc = (
@@ -99,6 +92,7 @@ def generate_quiz(
         .select("*")
         .eq("id", document_id)
         .eq("tenant_id", profile.tenant_id)
+        .eq("uploaded_by", profile.user_id)
         .maybe_single()
         .execute()
     )
@@ -152,53 +146,63 @@ def generate_quiz(
     )
     quiz_set_id = quiz_set.data[0]["id"]
 
-    total_marks = sum(q.marks for q in questions)
-    variant = (
-        service.table("quiz_variants")
-        .insert(
-            {
-                "tenant_id": profile.tenant_id,
-                "quiz_set_id": quiz_set_id,
-                "variant_type": cognitive_level,  # theory | practical | mixed
-                "total_marks": total_marks,
-            }
-        )
-        .execute()
-    )
-    variant_id = variant.data[0]["id"]
-
     stored: list[dict] = []
-    for index, q in enumerate(questions):
-        question_row = (
-            service.table("questions")
+    created_question_ids: list[str] = []
+    try:
+        total_marks = sum(q.marks for q in questions)
+        variant = (
+            service.table("quiz_variants")
             .insert(
                 {
                     "tenant_id": profile.tenant_id,
-                    "chapter_id": doc_row.get("chapter_id"),
-                    "type": q.type,
-                    "question_text": q.question_text,
-                    "options": q.options,
-                    "correct_answer": q.correct_answer,
-                    "explanation": q.explanation,
-                    "difficulty": q.difficulty,
-                    "marks": q.marks,
-                    "source": "ai_generated",
-                    "review_status": "pending_review",
-                    "created_by": profile.user_id,
+                    "quiz_set_id": quiz_set_id,
+                    "variant_type": cognitive_level,
+                    "total_marks": total_marks,
                 }
             )
             .execute()
         )
-        question_id = question_row.data[0]["id"]
-        service.table("quiz_variant_questions").insert(
-            {
-                "tenant_id": profile.tenant_id,
-                "variant_id": variant_id,
-                "question_id": question_id,
-                "order_index": index,
-            }
-        ).execute()
-        stored.append({"id": question_id, **q.model_dump()})
+        variant_id = variant.data[0]["id"]
+
+        for index, q in enumerate(questions):
+            question_row = (
+                service.table("questions")
+                .insert(
+                    {
+                        "tenant_id": profile.tenant_id,
+                        "chapter_id": doc_row.get("chapter_id"),
+                        "type": q.type,
+                        "question_text": q.question_text,
+                        "options": q.options,
+                        "correct_answer": q.correct_answer,
+                        "explanation": q.explanation,
+                        "difficulty": q.difficulty,
+                        "marks": q.marks,
+                        "source": "ai_generated",
+                        "review_status": "pending_review",
+                        "created_by": profile.user_id,
+                    }
+                )
+                .execute()
+            )
+            question_id = question_row.data[0]["id"]
+            created_question_ids.append(question_id)
+            service.table("quiz_variant_questions").insert(
+                {
+                    "tenant_id": profile.tenant_id,
+                    "variant_id": variant_id,
+                    "question_id": question_id,
+                    "order_index": index,
+                }
+            ).execute()
+            stored.append({"id": question_id, **q.model_dump()})
+    except Exception:
+        # Compensate across PostgREST calls so failed generations do not leave
+        # visible draft sets or orphaned questions.
+        service.table("quiz_sets").delete().eq("id", quiz_set_id).execute()
+        if created_question_ids:
+            service.table("questions").delete().in_("id", created_question_ids).execute()
+        raise
 
     return {
         "quiz_set_id": quiz_set_id,

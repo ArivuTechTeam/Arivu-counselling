@@ -63,7 +63,7 @@ export default function DashboardRouter() {
         setError({
           title: "Account not set up",
           message:
-            "Your account doesn't have a workspace assigned yet. Please contact your administrator.",
+            "Your account hasn't been set up with a role yet. Please contact your administrator.",
         });
         return;
       }

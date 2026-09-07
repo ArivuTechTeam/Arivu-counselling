@@ -45,6 +45,19 @@ export function typeLabel(t: string): string {
   return TYPE_LABEL[t] ?? statusLabel(t);
 }
 
+// Friendly labels for the three quiz variant (cognitive level) tokens.
+const VARIANT_LABEL: Record<string, string> = {
+  theory: "Theory",
+  practical: "Practical",
+  mixed: "Mixed",
+};
+
+/** "practical" → "Practical". Falls back to Title Case for unknowns. */
+export function variantLabel(v: string | null | undefined): string {
+  if (!v) return "Quiz";
+  return VARIANT_LABEL[v] ?? statusLabel(v);
+}
+
 /**
  * Safely render any answer value (string, number, array, or the various object
  * shapes the API emits) to human text. Never returns raw JSON.

@@ -1,9 +1,9 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 
-import { DashboardShell } from "@/components/dashboard-shell";
+import { DashboardShell } from "@/components/shared/dashboard-shell";
 import { Brand } from "@/components/ui/brand";
 import { Skeleton } from "@/components/ui/skeleton";
 import { createClient } from "@/lib/supabase";
@@ -18,6 +18,7 @@ export default function DashboardLayout({
   children: React.ReactNode;
 }) {
   const router = useRouter();
+  const pathname = usePathname();
   const [role, setRole] = useState<string | null>(null);
   const [email, setEmail] = useState("");
   const [mustChangePassword, setMustChangePassword] = useState(false);
@@ -45,17 +46,33 @@ export default function DashboardLayout({
         router.replace("/login");
         return;
       }
-      setRole((data.role as string) ?? null);
+      const resolvedRole = (data.role as string) ?? "";
+      const homeByRole: Record<string, string> = {
+        super_admin: "/dashboard/super-admin",
+        institution_admin: "/dashboard/institution-admin",
+        teacher: "/dashboard/teacher",
+        student: "/dashboard/student",
+      };
+      const allowedHome = homeByRole[resolvedRole];
+      if (!allowedHome) {
+        router.replace("/login");
+        return;
+      }
+      if (pathname !== "/dashboard" && !pathname.startsWith(`${allowedHome}/`) && pathname !== allowedHome) {
+        router.replace(allowedHome);
+        return;
+      }
+      setRole(resolvedRole);
       setReady(true);
     });
-  }, [router]);
+  }, [pathname, router]);
 
   if (!ready) {
     return (
       <main className="flex min-h-screen flex-col items-center justify-center gap-6 p-4">
         <Brand height={40} />
         <Skeleton className="h-2 w-40 rounded-full" />
-        <p className="text-sm text-muted-foreground">Loading your workspace…</p>
+        <p className="text-sm text-muted-foreground">Loading your dashboard…</p>
       </main>
     );
   }

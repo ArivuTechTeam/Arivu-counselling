@@ -2,6 +2,30 @@ import { createClient } from "@/lib/supabase";
 
 // Base URL of the FastAPI backend (from .env.local).
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL!;
+const DEFAULT_TIMEOUT_MS = 20_000;
+
+async function apiFetch(
+  input: RequestInfo | URL,
+  init: RequestInit = {},
+  timeoutMs = DEFAULT_TIMEOUT_MS,
+): Promise<Response> {
+  const controller = new AbortController();
+  const timer = window.setTimeout(() => controller.abort(), timeoutMs);
+  const upstream = init.signal;
+  const abortFromUpstream = () => controller.abort();
+  upstream?.addEventListener("abort", abortFromUpstream, { once: true });
+  try {
+    return await fetch(input, { ...init, signal: controller.signal });
+  } catch (error) {
+    if (controller.signal.aborted) {
+      throw new Error("The request timed out. Please check your connection and try again.");
+    }
+    throw error;
+  } finally {
+    window.clearTimeout(timer);
+    upstream?.removeEventListener("abort", abortFromUpstream);
+  }
+}
 
 /**
  * Build the Authorization header for backend calls.
@@ -16,6 +40,15 @@ async function authHeader(): Promise<Record<string, string>> {
   } = await supabase.auth.getSession();
   const token = session?.access_token;
   return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
+async function apiError(res: Response, fallback: string): Promise<never> {
+  if (res.status === 401) {
+    await createClient().auth.signOut();
+    window.location.assign("/login");
+  }
+  const body = await res.json().catch(() => ({}));
+  throw new Error(body.detail || fallback);
 }
 
 export type DocumentOut = {
@@ -41,15 +74,14 @@ export async function uploadDocument(file: File): Promise<UploadResult> {
 
   // NOTE: don't set Content-Type manually — the browser sets the correct
   // multipart boundary automatically when the body is a FormData.
-  const res = await fetch(`${API_BASE}/api/v1/documents/upload`, {
+  const res = await apiFetch(`${API_BASE}/api/v1/documents/upload`, {
     method: "POST",
     headers,
     body: form,
-  });
+  }, 60_000);
 
   if (!res.ok) {
-    const body = await res.json().catch(() => ({}));
-    throw new Error(body.detail || `Upload failed (${res.status})`);
+    return apiError(res, "We couldn't upload your file. Please try again.");
   }
   return res.json();
 }
@@ -57,9 +89,9 @@ export async function uploadDocument(file: File): Promise<UploadResult> {
 /** List the documents uploaded within the caller's tenant. */
 export async function listDocuments(): Promise<DocumentOut[]> {
   const headers = await authHeader();
-  const res = await fetch(`${API_BASE}/api/v1/documents`, { headers });
+  const res = await apiFetch(`${API_BASE}/api/v1/documents`, { headers });
   if (!res.ok) {
-    throw new Error(`Failed to load documents (${res.status})`);
+    return apiError(res, "We couldn't load your documents. Please try again.");
   }
   return res.json();
 }
@@ -104,14 +136,16 @@ export async function generateQuiz(
     ...(await authHeader()),
     "Content-Type": "application/json",
   };
-  const res = await fetch(`${API_BASE}/api/v1/quiz-sets/generate`, {
+  const res = await apiFetch(`${API_BASE}/api/v1/quiz-sets/generate`, {
     method: "POST",
     headers,
     body: JSON.stringify(req),
-  });
+  }, 90_000);
   if (!res.ok) {
-    const body = await res.json().catch(() => ({}));
-    throw new Error(body.detail || `Generation failed (${res.status})`);
+    return apiError(
+      res,
+      "We couldn't generate the quiz. Please try again — if it keeps failing, contact support.",
+    );
   }
   return res.json();
 }
@@ -161,17 +195,21 @@ async function jsonRequest<T>(
   path: string,
   method: string,
   body?: unknown,
+  timeoutMs = DEFAULT_TIMEOUT_MS,
 ): Promise<T> {
   const headers: Record<string, string> = { ...(await authHeader()) };
   if (body !== undefined) headers["Content-Type"] = "application/json";
-  const res = await fetch(`${API_BASE}${path}`, {
-    method,
-    headers,
-    body: body !== undefined ? JSON.stringify(body) : undefined,
-  });
+  const res = await apiFetch(
+    `${API_BASE}${path}`,
+    {
+      method,
+      headers,
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+    },
+    timeoutMs,
+  );
   if (!res.ok) {
-    const b = await res.json().catch(() => ({}));
-    throw new Error(b.detail || `Request failed (${res.status})`);
+    return apiError(res, "Something went wrong. Please try again.");
   }
   return res.json();
 }
@@ -193,7 +231,12 @@ export const rejectQuestion = (id: string) =>
 
 /** AI rewrites the question (same type/concept). Can take ~10-20s. */
 export const regenerateQuestion = (id: string) =>
-  jsonRequest<ReviewQuestion>(`/api/v1/questions/${id}/regenerate`, "POST");
+  jsonRequest<ReviewQuestion>(
+    `/api/v1/questions/${id}/regenerate`,
+    "POST",
+    undefined,
+    60_000,
+  );
 
 // AI Tutor — cached, deeper explanation + a simplified version + hints.
 export type Explanation = {
@@ -204,7 +247,17 @@ export type Explanation = {
 };
 
 export const explainQuestion = (id: string) =>
-  jsonRequest<Explanation>(`/api/v1/questions/${id}/explain`, "POST");
+  jsonRequest<Explanation>(
+    `/api/v1/questions/${id}/explain`,
+    "POST",
+    undefined,
+    60_000,
+  );
+
+export const changePassword = (password: string) =>
+  jsonRequest<{ changed: boolean }>("/api/v1/auth/change-password", "POST", {
+    password,
+  });
 
 export const publishQuizSet = (id: string) =>
   jsonRequest<QuizSetSummary>(`/api/v1/quiz-sets/${id}/publish`, "POST");
@@ -262,6 +315,7 @@ export type AttemptInProgress = {
   questions: TakingQuestion[];
   time_limit_minutes?: number | null; // set for timed modes (exam)
   started_at?: string | null;
+  autosave_state?: Record<string, unknown>;
 };
 
 export type AttemptResult = {
@@ -345,6 +399,7 @@ export type AttemptHistoryItem = {
   total_score: number | null;
   max_score: number | null;
   submitted_at: string | null;
+  source: "quiz" | "practice";
 };
 
 /** The student's past graded attempts, newest first. */
@@ -366,6 +421,13 @@ export const submitAttempt = (
   jsonRequest<AttemptResult>(`/api/v1/attempts/${attemptId}/submit`, "POST", {
     answers,
   });
+export const saveAttemptProgress = (
+  attemptId: string,
+  answers: Record<string, unknown>,
+) =>
+  jsonRequest<{ saved: boolean }>(`/api/v1/attempts/${attemptId}/autosave`, "PATCH", {
+    answers,
+  });
 
 // --- Self-serve practice (Smart Quiz, chapter practice, …) ---
 // These mirror the quiz-attempt shape so the same take/results UI is reused.
@@ -385,6 +447,13 @@ export const submitPracticeSession = (
   answers: { question_id: string; student_answer: unknown }[],
 ) =>
   jsonRequest<AttemptResult>(`/api/v1/practice/sessions/${id}/submit`, "POST", {
+    answers,
+  });
+export const savePracticeProgress = (
+  id: string,
+  answers: Record<string, unknown>,
+) =>
+  jsonRequest<{ saved: boolean }>(`/api/v1/practice/sessions/${id}/autosave`, "PATCH", {
     answers,
   });
 
@@ -505,10 +574,11 @@ export const listCourses = () => jsonRequest<Course[]>("/api/v1/courses", "GET")
 export async function listPublicCourses(
   tenantId: string,
 ): Promise<{ id: string; name: string }[]> {
-  const res = await fetch(
+  const res = await apiFetch(
     `${API_BASE}/api/v1/public/courses?tenant_id=${encodeURIComponent(tenantId)}`,
   );
-  if (!res.ok) throw new Error(`Failed to load courses (${res.status})`);
+  if (!res.ok)
+    throw new Error("We couldn't load the list of courses. Please try again.");
   return res.json();
 }
 
@@ -524,6 +594,19 @@ export const deleteCourse = (id: string) =>
 
 export const deleteSubject = (id: string) =>
   jsonRequest<{ deleted: string }>(`/api/v1/subjects/${id}`, "DELETE");
+
+export const getTeacherSubjects = (teacherId: string) =>
+  jsonRequest<{ subject_ids: string[] }>(
+    `/api/v1/teachers/${teacherId}/subjects`,
+    "GET",
+  );
+
+export const setTeacherSubjects = (teacherId: string, subjectIds: string[]) =>
+  jsonRequest<{ subject_ids: string[] }>(
+    `/api/v1/teachers/${teacherId}/subjects`,
+    "PUT",
+    { subject_ids: subjectIds },
+  );
 
 // --- Teacher: manage chapters within their subjects ---
 export type Chapter = {
@@ -938,4 +1021,5 @@ export const generateBlueprintQuiz = (req: BlueprintGenerateRequest) =>
     "/api/v1/quiz-sets/generate-blueprint",
     "POST",
     req,
+    90_000,
   );

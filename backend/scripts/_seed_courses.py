@@ -1,7 +1,10 @@
 """
 Seed ArivuPro's course + subjects and enroll the test student.
-Run AFTER migration-01-enrollments.sql has been applied in Supabase. Idempotent.
+Run AFTER migrations/migration-01-enrollments.sql has been applied in Supabase. Idempotent.
 Deleted after it succeeds.
+
+Run from backend/ (not from inside scripts/) so the `app` package resolves:
+    python -m scripts._seed_courses
 """
 
 from app.lib.supabase import get_service_client

@@ -8,6 +8,10 @@
  * the logo sits in its own white pill (handled there), since the logo art needs
  * a light background.
  */
+import Image from "next/image";
+
+const LOGO_ASPECT = 814 / 158;
+
 export function Brand({
   height = 36,
   className,
@@ -17,11 +21,11 @@ export function Brand({
 }) {
   return (
     <span className={`inline-flex flex-col items-center gap-1.5 ${className ?? ""}`}>
-      {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img
+      <Image
         src="/arivu-logo.png"
         alt="ArivuPro Academy"
-        style={{ height }}
+        width={Math.round(height * LOGO_ASPECT)}
+        height={height}
         className="w-auto"
       />
       <span className="text-[10px] font-bold uppercase tracking-[0.22em] text-[#2E8857]">
