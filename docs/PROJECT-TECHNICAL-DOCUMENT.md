@@ -1,14 +1,14 @@
 # ArivuPro Quiz Platform (quiz-generator-v1) — Technical Project Document
 
-> **Purpose of this document.** A single, self-contained technical reference for the ArivuPro Quiz Platform. It is written so that **any technically literate reader — with no prior exposure to this codebase — can understand what the system is, how it is built, how it runs, what it costs, and how to extend it.** Every statement here reflects the **code that is actually deployed** (verified by direct code review), not the original planning documents. Where the running system differs from older specs, this document says so explicitly in **§13 Corrections**.
+> **Purpose of this document.** A single, self-contained technical reference for the ArivuPro Quiz Platform. It is written so that **any technically literate reader — with no prior exposure to this codebase — can understand what the system is, how it is built, how it runs, what it costs, and how to extend it.** Technical statements were reviewed against `main` at commit `016830e` and the production deployment verified on 7 September 2026. Provider pricing and operational settings can change independently and must be rechecked before making financial or deployment decisions.
 
 | | |
 |---|---|
 | **Product** | ArivuPro Quiz Platform — multi-tenant AI quiz generator for coaching institutions |
 | **Repository** | `ArivuTechTeam/quiz-generator` |
-| **Document version** | 1.0 |
-| **Document date** | 3 September 2026 |
-| **Basis** | Deployed code on branch history through `feature/ui-polish-and-branding` |
+| **Document version** | 1.1 |
+| **Document date** | 7 September 2026 |
+| **Basis** | `main` at `016830e`; Railway production deployment and migrations 11–12 verified |
 | **Status of product** | Phase 1 (functional product + multi-tenant foundation) — **live in production pilot** |
 | **Audience** | Engineering, technical leadership, prospective contributors, stakeholders |
 
@@ -58,7 +58,7 @@ The ArivuPro Quiz Platform is a **multi-tenant SaaS web application** that lets 
 Coaching institutions (CA / CMA / ACCA / commerce, and adjacent exam-prep markets) spend enormous manual effort creating practice questions. This platform automates the *generation* of questions from existing material while keeping a **human teacher in the loop** for quality control, then gives students a modern, gamified practice experience.
 
 ### 2.2 Who uses it (the four roles)
-The system has exactly **one users table** (`profiles`) with a `role` column. There are four roles, in a strict hierarchy:
+The application has one authoritative profile table (`profiles`) linked 1:1 to Supabase `auth.users`. There are four roles with distinct access scopes:
 
 | Role | What they do |
 |---|---|
@@ -70,7 +70,7 @@ The system has exactly **one users table** (`profiles`) with a `role` column. Th
 ### 2.3 The business model (intended)
 - **Who pays:** the **institution** (a tenant), not students.
 - **How:** per-institution monthly subscription, target **₹5,000–15,000 / institution / month**.
-- **Onboarding (by design):** top-down and invite-based — super-admin onboards an institution → institution-admin creates its teachers and students. (Note: a public self-signup page currently also exists; see §12 for the access-control gap.)
+- **Onboarding:** super-admin onboards an institution → institution-admin creates teachers and students. Public self-signup is available for students only; the database derives the tenant from the selected course and ignores browser-supplied role and tenant metadata.
 - ArivuPro Academy is **tenant #1** — the first pilot customer — and is *not* special-cased in code.
 
 ---
@@ -148,7 +148,7 @@ flowchart TD
 | Package manager | pnpm | — | — |
 | Backend framework | FastAPI | 0.141.1 | Railway |
 | Backend server | Uvicorn | 0.52.1 | — |
-| Backend language | Python | 3.11+ (3.12 in dev) | — |
+| Backend language | Python | 3.12 (Docker image) | — |
 | Database | PostgreSQL (via Supabase) | 15/16 managed | Supabase |
 | Auth | Supabase Auth (GoTrue), JWT (ES256) | — | Supabase |
 | File storage | Supabase Storage (private bucket) | — | Supabase |
@@ -156,7 +156,7 @@ flowchart TD
 | Fallback LLM | **DeepSeek** — `deepseek-chat` (OpenAI-compatible) | — | DeepSeek |
 | PDF/DOCX extraction | pdfplumber, python-docx | — | — |
 
-> **Important:** the original spec (`CLAUDE.md`) named DeepSeek as primary and Claude as fallback, and named SQLModel as the ORM. The **deployed code uses Gemini primary + DeepSeek fallback, has no Claude integration, and does not use SQLModel** (all DB access is via the Supabase client). See §13.
+> **Important:** the historical project specification named DeepSeek as primary and Claude as fallback, and named SQLModel as the ORM. The **deployed code uses Gemini primary + DeepSeek fallback, has no Claude integration, and does not use SQLModel** (all DB access is via the Supabase client). See §13.
 
 ---
 
@@ -170,7 +170,7 @@ Next.js 14 **App Router**. Almost all dashboard pages are client components (`"u
 ```
 app/
 ├── login/page.tsx                       PUBLIC — sign in
-├── signup/page.tsx                      PUBLIC — self-register (role + course)
+├── signup/page.tsx                      PUBLIC — student self-registration by course
 └── dashboard/
     ├── layout.tsx                       Role-gated shell (sidebar + topbar), loading gate
     ├── page.tsx                         Role router → per-role home
@@ -223,7 +223,7 @@ Two independent channels:
 - All response shapes are typed TypeScript mirrors of the backend's Pydantic models. Functions are grouped by feature (documents, generation, teacher review, student attempts, practice/engagement, academics, admin, super-admin, teacher analytics).
 
 **(B) Supabase directly** — `frontend/lib/supabase.ts` (anon key, RLS applies)
-- Used **only for auth**: `signInWithPassword`, `signUp` (with `tenant_id`, `role`, `full_name`, `course_id` metadata), `getUser`/`getSession`, `signOut`, and reading the caller's own `profiles.role` for role-routing.
+- Used **only for auth**: `signInWithPassword`, student `signUp` (with `full_name` and `course_id`; legacy `tenant_id` is ignored by the hardened trigger), `getUser`/`getSession`, `signOut`, and reading the caller's own `profiles.role` for role-routing.
 - **All business data goes through the FastAPI backend**, never direct table reads.
 
 ### 5.4 Auth & session flow
@@ -258,7 +258,7 @@ Two independent channels:
 ```
 backend/app/
 ├── main.py            FastAPI app, CORS, router mounting, /health + /me endpoints
-├── api/               11 router modules (HTTP endpoints)
+├── api/               Role and feature router modules (HTTP endpoints)
 ├── services/          Business logic (generation, grading, selection, review,
 │                      topics, blueprint, tutor, events, extraction) + services/llm/
 ├── lib/               config.py, supabase.py, auth.py, storage.py
@@ -280,7 +280,7 @@ Guards: **public** / **student** / **staff** (teacher+admin+super) / **admin** (
 
 **Questions** (`/api/v1/questions`) — `PATCH /{id}`, `POST /{id}/approve`, `POST /{id}/reject`, `POST /{id}/regenerate` (staff); `POST /{id}/explain` (any authenticated — students use the tutor).
 
-**Academics** (`/api/v1`) — `GET /public/courses` (**public**, feeds signup); `GET/POST /courses`, `POST /subjects`, `DELETE …` (read=staff, write=admin); chapters CRUD (teacher).
+**Academics** (`/api/v1`) — `GET /public/courses` (**public**, feeds signup); `GET/POST /courses`, `POST /subjects`, `DELETE …` (read=staff, write=admin); `GET/PUT /teachers/{teacher_id}/subjects` (institution admin); chapters CRUD restricted to explicitly assigned teachers.
 
 **Admin** (`/api/v1`) — user management (`/users` admin), institution onboarding & admin management (`/platform/tenants`, `/admins` super_admin), dashboards (`/admin/overview`, `/admin/analytics`, `/platform/overview`, `/platform/ai-monitoring`).
 
@@ -316,13 +316,14 @@ Guards: **public** / **student** / **staff** (teacher+admin+super) / **admin** (
 ### 6.5 Auth model
 - **JWT verification** (`lib/auth.py`): reads the token header; modern Supabase tokens are **ES256**, verified against the project's public keys fetched from the JWKS endpoint (cached). Audience `authenticated` is enforced.
 - **Identity vs authority:** the user's `user_id`/`email` come from the token; the authoritative **`tenant_id` and `role` are read from the `profiles` table**, not from the token — so a user cannot forge their tenant or role at request time.
+- **Provisioning:** public signup always creates a student, derives the tenant from a valid course, and ignores untrusted role/tenant metadata. Teacher and admin roles are created through authenticated backend provisioning and admin-created users must change their temporary password.
 - **Database access uses the Supabase service-role key**, which **bypasses RLS**. Tenant isolation for API traffic is therefore enforced **in application code** via explicit `.eq("tenant_id", …)` filters on every query, with RLS as a defense-in-depth backstop (see §9 and §12).
 
 ---
 
 ## 7. Database Schema
 
-PostgreSQL on Supabase. Current schema = `docs/schema.sql` + migrations 01, 02, 04, 05, 06, 07, 08 (there is no migration-03; migration-04 dropped a removed "seed library" feature).
+PostgreSQL on Supabase. The repository baseline is `migrations/schema.sql` plus migrations 01, 02, and 04–12. There is no migration 03; migration 04 removed the abandoned seed-library feature. Apply migrations once, in numeric order, using `docs/deploy-runbook.md`.
 
 ### 7.1 Enums
 `user_role` (super_admin, institution_admin, teacher, student) · `question_type` (mcq_single, mcq_multi, numerical, true_false, fill_blank, **descriptive**) · `question_source` (ai_generated, manual) · `review_status` (pending_review, approved, rejected, needs_edit) · `document_status` · `job_status` · `variant_type` (theory, practical, mixed) · `quiz_status` (draft, published, archived) · `attempt_status` (in_progress, submitted, graded, abandoned).
@@ -331,9 +332,9 @@ PostgreSQL on Supabase. Current schema = `docs/schema.sql` + migrations 01, 02, 
 
 **Tenancy & identity**
 - `tenants` — one row per institution (name, subdomain, branding colors, `plan_tier`, `is_active`, `exam_config` jsonb).
-- `profiles` — 1:1 extension of `auth.users`; holds `tenant_id` + `role` + name. **This is the single users table.**
+- `profiles` — 1:1 extension of `auth.users`; holds authoritative `tenant_id`, `role`, name, and `must_change_password`. **This is the single application users table.**
 
-**Academics** — `courses` → `subjects` → `chapters` → `topics` (a clean hierarchy, each cascading on delete) + `enrollments` (maps any profile to a course; unique per profile+course).
+**Academics** — `courses` → `subjects` → `chapters` → `topics` (a clean hierarchy, each cascading on delete) + `enrollments` (student course membership and derived teacher course membership) + `teacher_subjects` (the authorization source for each teacher's explicit subject access).
 
 **Content & question bank**
 - `documents` — uploaded files (storage path, type, status).
@@ -365,6 +366,8 @@ erDiagram
     chapters ||--o{ topics : contains
     profiles ||--o{ enrollments : enrolls
     courses  ||--o{ enrollments : in
+    profiles ||--o{ teacher_subjects : assigned
+    subjects ||--o{ teacher_subjects : grants
     profiles ||--o{ documents : uploads
     documents ||--o{ ai_extraction_jobs : processed_by
     ai_extraction_jobs ||--o{ questions : produces
@@ -395,6 +398,10 @@ erDiagram
 | 06 revised-topics | `revised_topics` (revision tracking). |
 | 07 challenges | `challenges` + `practice_sessions.challenge_id`. |
 | 08 exam-config | `tenants.exam_config` (per-institution exam pattern). |
+| 09 dev-tenant | Development tenant bootstrap used by the established environment setup. |
+| 10 plan-limits-rls | Plan-limit data and RLS hardening for monetization scaffolding. |
+| 11 auth-hardening | Student-only public signup, course-derived tenant assignment, protected profile updates, forced temporary-password changes, and practice autosave state. |
+| 12 teacher-subjects | Tenant-consistent `teacher_subjects`, assignment RLS, atomic assignment replacement, enrollment derivation, and backfill of existing teacher access. |
 
 ---
 
@@ -428,6 +435,7 @@ Teacher uploads PDF/DOCX
         ▼
 Teacher reviews → approve/edit/reject/regenerate → PUBLISH  →  visible to students
 ```
+- Before generation or chapter management, the backend verifies that the teacher is explicitly assigned to the selected subject through `teacher_subjects`.
 - **Blueprint generation** is a richer variant: the teacher first extracts topics, assigns each a priority (High/Med/Low) and per-type question counts; the system converts priorities to a weighted mix and tags each generated question with its topic. This powers weightage-based question papers.
 
 ### 8.2 Grading (deterministic — no AI)
@@ -458,9 +466,11 @@ The institution analytics, teacher class monitor, and super-admin "Question Qual
 ## 9. Security & Multi-Tenancy
 
 - **Two enforcement layers:**
-  1. **Database RLS** — every tenant table has policies scoping rows to `current_tenant_id()`, with role-aware rules (students see only *approved* questions in *published* sets; students read only their own attempts; the `events` ledger is append-only; etc.). This is comprehensive and correct.
+  1. **Database RLS** — tenant tables use policies that scope rows to `current_tenant_id()`, with role-aware rules (students see only *approved* questions in *published* sets; students read only their own attempts; the `events` ledger is append-only; etc.).
   2. **Application-level tenant filtering** — because the backend uses the **service-role key (which bypasses RLS)**, every backend query also filters by `tenant_id` explicitly. The authoritative `tenant_id`/`role` come from the DB `profiles` row, not the token, so they cannot be forged per request.
 - **Auth:** Supabase JWT (ES256) verified via JWKS; audience enforced; JWKS cached.
+- **Role provisioning:** public callers cannot select elevated roles. Institution admins and super-admins provision staff through tenant-scoped backend endpoints.
+- **Teacher access:** teachers can generate content and manage chapters only for subjects present in `teacher_subjects`; tenant-consistent foreign keys reject cross-tenant assignments.
 - **Storage:** private `documents` bucket; object paths namespaced by `tenant_id`.
 - **Known caveat:** isolation for API traffic is *defense-by-convention* — a future endpoint that forgets its `tenant_id` filter would not be caught by RLS (because service-role bypasses it). This is called out as tech debt in §12.
 
@@ -474,7 +484,7 @@ GitHub (ArivuTechTeam/quiz-generator)
      │  push / merge to main
      ├──────────────► VERCEL   → builds & deploys FRONTEND automatically (Root Dir = frontend)
      │
-     └── (manual)  ──► RAILWAY  → backend deployed via `railway up` from /backend
+     └── (manual)  ──► RAILWAY  → backend deployed by `scripts/deploy.sh` from repository root
                                   (no GitHub auto-deploy for backend)
 
 SUPABASE (dashboard-configured): Postgres + Auth + Storage — settings apply instantly
@@ -482,7 +492,7 @@ SUPABASE (dashboard-configured): Postgres + Auth + Storage — settings apply in
 
 ### 10.2 Deploy workflow (two tracks)
 - **Frontend change:** push to GitHub → **merge PR to `main`** → **Vercel auto-deploys**. (`next build` runs ESLint and fails on lint errors — always run `pnpm build` locally before merging, not just `tsc`.)
-- **Backend change:** `cd backend` → **`railway up`** (manual upload; Railway builds the image and restarts the service).
+- **Backend change:** from a clean, synchronized `main`, run **`./scripts/deploy.sh`**. It scopes Railway to `backend/` with `--path-as-root`; a bare `railway up` from the repository root is invalid for this service. Keep Railway's custom Start Command blank so the Dockerfile `CMD` expands `$PORT` correctly.
 - **Supabase change:** dashboard settings (auth URLs, SMTP, RLS) apply immediately; schema changes are applied by running migration SQL in order.
 
 ### 10.3 Environment variables
@@ -506,7 +516,7 @@ Email confirmation and password-reset emails require a custom SMTP provider (e.g
 
 ## 11. Cost Analysis
 
-> **Assumptions.** Prices are Google Gemini API list prices as published **2 September 2026** (per 1M tokens, paid tier). USD→INR at **₹88 = $1** (illustrative; adjust to current rate). Token estimates are derived from the actual code (material window + JSON output contract).
+> **Assumptions.** Prices were rechecked on **7 September 2026** against the official [Gemini](https://ai.google.dev/gemini-api/docs/pricing), [Supabase](https://supabase.com/pricing), [Vercel](https://vercel.com/pricing), and [Railway](https://docs.railway.com/pricing) pricing pages. USD→INR at **₹88 = $1** is illustrative; adjust it and provider usage before making a budget decision. Token estimates are derived from the actual code (material window + JSON output contract).
 
 ### 11.1 Gemini list pricing (models the code uses)
 | Model | Input / 1M tokens | Output / 1M tokens | Used for |
@@ -556,18 +566,17 @@ At the target price of **₹5,000–15,000 / institution / month**, 10 instituti
 Presented honestly, as a forward-deployed engineer would to a new maintainer:
 
 1. **No billing / monetization enforcement.** The DB has `plan_limits` (free/starter ₹2,999/growth ₹9,999/enterprise) and `tenant_usage`, plus `tenants.plan_tier`/`is_active` — but **no code reads or enforces any of it**. There is no payment gateway, no subscription tables, no "suspend an unpaid tenant" logic. It is currently a free, open app with billing *scaffolding* only.
-2. **Open self-signup with role choice (security gap).** The public signup page lets anyone register and **choose "Teacher"**, and the DB trigger trusts the client-supplied role/tenant — so a technical user could self-assign elevated roles. This contradicts the intended invite-only model and should be hardened (force `role='student'` server-side; validate tenant; reject admin roles in the trigger).
-3. **RLS is a backstop, not the primary guard for API traffic.** The backend uses the service-role key (bypasses RLS); isolation depends on every query including a `tenant_id` filter. A missed filter in a future endpoint would leak cross-tenant data. Consider a shared query helper or using the RLS-respecting client for user-scoped reads.
-4. **Instrumentation gaps.** Standard generation does not emit a `question.generated` event (only blueprint does), and `DOCUMENT_UPLOADED` is never emitted — so some AI-monitoring numbers undercount.
-5. **Dead/unused code.** A PYQ (past-year-questions) parser and the RLS-respecting anon DB client exist but are unwired; the `questions.embedding` vector column is unused (no dedup yet).
-6. **SMTP not configured.** Email confirmation/reset won't deliver until a provider (e.g. Brevo) is set up.
-7. **Bundle size.** The quiz-attempt/practice/class-monitor routes are heavy (~640 kB first load) because they pull in Recharts + the PDF renderer; lazy-loading these is a quick win.
+2. **RLS is a backstop, not the primary guard for API traffic.** The backend uses the service-role key (bypasses RLS); isolation depends on every query including a `tenant_id` filter. A missed filter in a future endpoint would leak cross-tenant data. Consider a shared query helper or using the RLS-respecting client for user-scoped reads.
+3. **Instrumentation gaps.** Standard generation does not emit a `question.generated` event (only blueprint does), and `DOCUMENT_UPLOADED` is never emitted — so some AI-monitoring numbers undercount.
+4. **Dead/unused code.** A PYQ (past-year-questions) parser and the RLS-respecting anon DB client exist but are unwired; the `questions.embedding` vector column is unused (no dedup yet).
+5. **SMTP not configured.** Email confirmation/reset won't deliver until a provider (e.g. Brevo) is set up.
+6. **Bundle size.** The quiz-attempt/practice/class-monitor routes are heavy (~640 kB first load) because they pull in Recharts + the PDF renderer; lazy-loading these is a quick win.
 
 ---
 
 ## 13. Corrections vs the Original Specification
 
-The original `CLAUDE.md` describes some choices that the **deployed code does not match**. This document reflects the code. The differences:
+The historical project specification described some choices that the **deployed code does not match**. This document reflects the code. The differences:
 
 | Topic | Original spec said | Deployed reality |
 |---|---|---|
@@ -593,8 +602,8 @@ This is the biggest missing block for a "real SaaS":
 4. **Enforcement** — a FastAPI dependency that blocks inactive/expired tenants at auth time; quota checks that read `plan_limits` and write `tenant_usage`.
 5. **Paywall/feature-flag UI** — plan-gated features and upgrade prompts.
 
-### 14.2 Access-control hardening (do regardless of billing)
-- Make public signup student-only (server-enforced) or fully invite-only; harden the `handle_new_user` trigger; add invite codes / admin approval.
+### 14.2 Access-control follow-up
+- Student-only public signup and the hardened `handle_new_user` trigger are deployed. Future work may add invite codes, admin approval, and explicit session revocation for stricter onboarding control.
 
 ### 14.3 Product enhancements (from scope + observed opportunities)
 - **Self-service institution onboarding** and per-institution subdomains / white-labeling.
@@ -608,7 +617,7 @@ This is the biggest missing block for a "real SaaS":
 - Shared tenant-scoped query helper (or RLS-respecting client) to make isolation defense-in-depth.
 - Complete the events instrumentation (emit on standard generation + uploads).
 - Lazy-load heavy client bundles (charts, PDF).
-- Automated tests (backend pytest against a Supabase test project; frontend unit/e2e).
+- Expand the backend security-regression suite with Supabase integration tests and add frontend unit/e2e coverage.
 - CI to run `pnpm build` + lint on every PR so broken builds never reach `main`.
 
 ---
