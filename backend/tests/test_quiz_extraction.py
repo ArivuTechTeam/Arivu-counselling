@@ -131,21 +131,113 @@ class ExtractionProviderTests(unittest.TestCase):
                 "app.services.quiz_extraction.complete_json_with_fallback",
                 return_value=expected,
             ) as fallback,
+            patch(
+                "app.services.quiz_extraction.get_settings",
+                return_value=SimpleNamespace(
+                    extraction_text_chunk_chars=18000,
+                    extraction_chunk_concurrency=4,
+                ),
+            ),
         ):
             result = _extract_document_content(content=b"docx", ext="docx")
 
         self.assertEqual(result, expected)
         fallback.assert_called_once()
 
-    def test_pdf_uses_multimodal_gemini(self) -> None:
+    def test_typed_pdf_uses_text_fallback_not_vision(self) -> None:
+        # A PDF with a real text layer must take the cheap text path and NEVER
+        # touch vision — that's the whole point of smart routing.
+        expected = ({"questions": []}, "gemini")
+        with (
+            patch(
+                "app.services.quiz_extraction.extract_text",
+                return_value="Q1. What is 2+2?  a) 3  b) 4  Answer: b" * 10,
+            ),
+            patch(
+                "app.services.quiz_extraction.complete_json_with_fallback",
+                return_value=expected,
+            ) as fallback,
+            patch(
+                "app.services.quiz_extraction.gemini_json_multimodal",
+            ) as multimodal,
+            patch(
+                "app.services.quiz_extraction.get_settings",
+                return_value=SimpleNamespace(
+                    extraction_text_chunk_chars=18000,
+                    extraction_chunk_concurrency=4,
+                ),
+            ),
+        ):
+            result = _extract_document_content(content=b"%PDF", ext="pdf")
+
+        self.assertEqual(result, expected)
+        fallback.assert_called_once()
+        multimodal.assert_not_called()
+
+    def test_scanned_pdf_uses_multimodal_gemini(self) -> None:
+        # No extractable text (a scanned image PDF) -> Gemini vision.
+        with (
+            patch(
+                "app.services.quiz_extraction.extract_text",
+                return_value="",
+            ),
+            patch(
+                "app.services.quiz_extraction.gemini_json_multimodal",
+                return_value={"questions": []},
+            ) as multimodal,
+        ):
+            result = _extract_document_content(content=b"%PDF", ext="pdf")
+
+        self.assertEqual(result, ({"questions": []}, "gemini-vision"))
+        multimodal.assert_called_once()
+
+    def test_image_uses_multimodal_gemini(self) -> None:
+        # Images can only be read by vision.
         with patch(
             "app.services.quiz_extraction.gemini_json_multimodal",
             return_value={"questions": []},
         ) as multimodal:
-            result = _extract_document_content(content=b"%PDF", ext="pdf")
+            result = _extract_document_content(content=b"\x89PNG", ext="png")
 
-        self.assertEqual(result, ({"questions": []}, "gemini"))
+        self.assertEqual(result, ({"questions": []}, "gemini-vision"))
         multimodal.assert_called_once()
+
+    def test_large_text_is_chunked_and_deduped(self) -> None:
+        # A 120-150 page document must be split into several bounded calls, and
+        # questions repeated across chunk boundaries must be de-duplicated.
+        big_text = "\n\n".join(f"Paragraph {i} " * 40 for i in range(500))
+        self.assertGreater(len(big_text), 18000)
+        per_chunk = (
+            {
+                "questions": [
+                    {"question_text": "Shared question one"},
+                    {"question_text": "Shared question two"},
+                ]
+            },
+            "gemini",
+        )
+        with (
+            patch(
+                "app.services.quiz_extraction.extract_text",
+                return_value=big_text,
+            ),
+            patch(
+                "app.services.quiz_extraction.complete_json_with_fallback",
+                return_value=per_chunk,
+            ) as fallback,
+            patch(
+                "app.services.quiz_extraction.get_settings",
+                return_value=SimpleNamespace(
+                    extraction_text_chunk_chars=18000,
+                    extraction_chunk_concurrency=4,
+                ),
+            ),
+        ):
+            raw, provider = _extract_document_content(content=b"docx", ext="docx")
+
+        self.assertGreater(fallback.call_count, 1)  # actually chunked
+        self.assertEqual(len(raw["questions"]), 2)  # deduped across chunks
+        self.assertIn("chunked", provider)
 
 
 class ExtractionEndpointTests(unittest.IsolatedAsyncioTestCase):
@@ -216,6 +308,18 @@ class ExtractionMigrationTests(unittest.TestCase):
             "create or replace function public.consume_ai_rate_limit", sql
         )
         self.assertIn("set search_path = ''", sql)
+
+    def test_document_link_migration_and_schema_stay_in_sync(self) -> None:
+        root = Path(__file__).resolve().parents[2]
+        migration = (
+            root / "migrations/migration-23-quiz-set-document-link.sql"
+        ).read_text().lower()
+        schema = (root / "migrations/schema.sql").read_text().lower()
+        self.assertIn("alter table public.quiz_sets", migration)
+        self.assertIn("references public.documents(id) on delete set null", migration)
+        self.assertIn("idx_quizsets_tenant_document", migration)
+        self.assertIn("document_id uuid references documents(id) on delete set null", schema)
+        self.assertIn("idx_quizsets_tenant_document", schema)
 
 
 if __name__ == "__main__":

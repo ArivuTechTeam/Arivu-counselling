@@ -89,7 +89,7 @@ def generate_quiz(
     # 1) Fetch the document, scoped to the caller's tenant.
     doc = (
         service.table("documents")
-        .select("*")
+        .select("storage_path,file_type,chapter_id,original_filename")
         .eq("id", document_id)
         .eq("tenant_id", profile.tenant_id)
         .eq("uploaded_by", profile.user_id)
@@ -137,6 +137,7 @@ def generate_quiz(
                 "tenant_id": profile.tenant_id,
                 "chapter_id": doc_row.get("chapter_id"),
                 "subject_id": subject_id,
+                "document_id": document_id,  # link back to the source upload
                 "title": f"{doc_row.get('original_filename', 'Quiz')} — {cognitive_level}",
                 "status": "draft",
                 "created_by": profile.user_id,
