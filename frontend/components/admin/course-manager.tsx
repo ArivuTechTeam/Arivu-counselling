@@ -378,7 +378,7 @@ export function CourseManager() {
             }
           />
         ) : (
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-[repeat(auto-fill,minmax(280px,320px))]">
             {subs.map((sub) => (
               <SubjectCard
                 key={sub.id}
@@ -468,7 +468,7 @@ export function CourseManager() {
           }
         />
       ) : (
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-[repeat(auto-fill,minmax(280px,320px))]">
           {courses.map((c) => (
             <CourseCard
               key={c.id}
