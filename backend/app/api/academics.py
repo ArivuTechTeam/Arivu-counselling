@@ -132,6 +132,43 @@ def list_courses(profile: CurrentProfile = Depends(get_current_profile)) -> list
         if profile.role == "teacher"
         else None
     )
+    student_count_by_course: dict[str, int] = {}
+    if profile.role == "institution_admin" and courses:
+        course_ids = [str(course["id"]) for course in courses]
+        enrollments = (
+            service.table("enrollments")
+            .select("profile_id, course_id")
+            .eq("tenant_id", profile.tenant_id)
+            .in_("course_id", course_ids)
+            .execute()
+            .data
+            or []
+        )
+        enrolled_ids = list({str(row["profile_id"]) for row in enrollments})
+        student_ids: set[str] = set()
+        if enrolled_ids:
+            student_rows = (
+                service.table("profiles")
+                .select("id")
+                .eq("tenant_id", profile.tenant_id)
+                .eq("role", "student")
+                .in_("id", enrolled_ids)
+                .execute()
+                .data
+                or []
+            )
+            student_ids = {str(row["id"]) for row in student_rows}
+        students_by_course: dict[str, set[str]] = {}
+        for enrollment in enrollments:
+            profile_id = str(enrollment["profile_id"])
+            if profile_id in student_ids:
+                students_by_course.setdefault(str(enrollment["course_id"]), set()).add(
+                    profile_id
+                )
+        student_count_by_course = {
+            course_id: len(profile_ids)
+            for course_id, profile_ids in students_by_course.items()
+        }
     visible_courses: list[dict] = []
     for course in courses:
         subjects = _subjects_for(service, course["id"], profile.tenant_id)
@@ -140,6 +177,8 @@ def list_courses(profile: CurrentProfile = Depends(get_current_profile)) -> list
             if not subjects:
                 continue
         course["subjects"] = subjects
+        if profile.role == "institution_admin":
+            course["student_count"] = student_count_by_course.get(str(course["id"]), 0)
         visible_courses.append(course)
     return visible_courses
 
@@ -459,6 +498,7 @@ def create_chapter(
         service.table("chapters")
         .select("order_index")
         .eq("subject_id", body.subject_id)
+        .eq("tenant_id", profile.tenant_id)
         .order("order_index", desc=True)
         .limit(1)
         .execute()

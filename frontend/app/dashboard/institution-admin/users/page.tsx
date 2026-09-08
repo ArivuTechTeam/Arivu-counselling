@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -514,6 +515,11 @@ export default function UsersPage() {
                           <ChevronDown size={18} className={`mt-1 shrink-0 transition-transform ${isExpanded ? "rotate-180" : ""}`} />
                         </button>
                         <div className="flex shrink-0 flex-col items-end gap-1 sm:flex-row sm:items-center">
+                          <Button size="sm" variant="outline" asChild>
+                            <Link href={`/dashboard/institution-admin/quizzes?teacher=${encodeURIComponent(teacher.id)}`}>
+                              Performance
+                            </Link>
+                          </Button>
                           <Button
                             size="sm"
                             variant="outline"

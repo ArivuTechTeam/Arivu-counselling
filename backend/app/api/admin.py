@@ -884,7 +884,7 @@ def institution_overview(
     data = _gather(
         {
             "profiles": lambda: service.table("profiles")
-            .select("role")
+            .select("id, role")
             .eq("tenant_id", t)
             .execute()
             .data
@@ -933,7 +933,7 @@ def institution_overview(
             .data
             or [],
             "enrollments": lambda: service.table("enrollments")
-            .select("course_id")
+            .select("profile_id, course_id")
             .eq("tenant_id", t)
             .execute()
             .data
@@ -968,12 +968,15 @@ def institution_overview(
     var_marks = {v["id"]: v.get("total_marks") for v in variants}
     attempts = data["attempts"]
     graded = [a for a in attempts if a["status"] == "graded"]
-    pcts = []
+    total_score = 0.0
+    total_maximum = 0.0
     for a in graded:
         m = var_marks.get(a["variant_id"])
         if m:
-            pcts.append(max(0, min(100, round((a.get("total_score") or 0) / m * 100))))
-    accuracy = round(sum(pcts) / len(pcts)) if pcts else 0
+            maximum = float(m)
+            total_score += max(0.0, min(maximum, float(a.get("total_score") or 0)))
+            total_maximum += maximum
+    accuracy = round(total_score / total_maximum * 100) if total_maximum else 0
 
     today = date.today()
     window = [(today - timedelta(days=i)) for i in range(13, -1, -1)]
@@ -986,7 +989,10 @@ def institution_overview(
 
     # Top courses by enrolment
     enrollments = data["enrollments"]
-    enr_counts = Counter(e["course_id"] for e in enrollments)
+    student_ids = {p["id"] for p in profiles if p["role"] == "student"}
+    enr_counts = Counter(
+        e["course_id"] for e in enrollments if e.get("profile_id") in student_ids
+    )
     top_courses = sorted(
         [
             {"name": course_name.get(cid, "Course"), "students": n}
@@ -1011,7 +1017,7 @@ def institution_overview(
         "published_quizzes": published,
         "draft_quizzes": draft,
         "questions": len(questions),
-        "attempts": len(attempts),
+        "attempts": len(graded),
         "graded_attempts": len(graded),
         "accuracy": accuracy,
         "pipeline": pipeline,
@@ -1058,6 +1064,7 @@ class AnalyticsSummary(BaseModel):
     avg_accuracy: int
     graded_attempts: int
     published_quizzes: int
+    quiz_sets: int
     courses: int
 
 
@@ -1428,8 +1435,6 @@ def institution_analytics(
 
     graded = [a for a in attempts if a["status"] == "graded"]
     stu_pcts: dict = defaultdict(list)
-    course_pcts: dict = defaultdict(list)
-    quizset_pcts: dict = defaultdict(list)
     quizset_scores: dict = defaultdict(lambda: [0.0, 0.0])
     course_scores: dict = defaultdict(lambda: [0.0, 0.0])
     student_scores: dict = defaultdict(lambda: [0.0, 0.0])
@@ -1438,12 +1443,23 @@ def institution_analytics(
         lambda: defaultdict(lambda: [0.0, 0.0])
     )
     student_quiz_last: dict = defaultdict(dict)
+    quizset_attempts: Counter = Counter()
+    course_attempts: Counter = Counter()
+    graded_student_ids: set[str] = set()
     active_ids: set = set()
     attempts_last7 = attempts_prev7 = 0
     for a in graded:
         p = pct(a)
         sid = a.get("student_id")
         sa = a.get("submitted_at")
+        quiz_set_id = var_quizset.get(a.get("variant_id"))
+        course_id = quizset_course.get(quiz_set_id)
+        if sid:
+            graded_student_ids.add(sid)
+        if quiz_set_id:
+            quizset_attempts[quiz_set_id] += 1
+        if course_id:
+            course_attempts[course_id] += 1
         if p is not None:
             max_score = float(var_marks[a["variant_id"]])
             score = max(0.0, min(max_score, float(a.get("total_score") or 0)))
@@ -1451,9 +1467,7 @@ def institution_analytics(
                 stu_pcts[sid].append(p)
                 student_scores[sid][0] += score
                 student_scores[sid][1] += max_score
-            quiz_set_id = var_quizset.get(a["variant_id"])
             if quiz_set_id:
-                quizset_pcts[quiz_set_id].append(p)
                 quizset_scores[quiz_set_id][0] += score
                 quizset_scores[quiz_set_id][1] += max_score
                 if sid:
@@ -1462,11 +1476,9 @@ def institution_analytics(
                     student_quiz_scores[sid][quiz_set_id][1] += max_score
                     if sa and sa > student_quiz_last[sid].get(quiz_set_id, ""):
                         student_quiz_last[sid][quiz_set_id] = sa
-            cid = quizset_course.get(quiz_set_id)
-            if cid:
-                course_pcts[cid].append(p)
-                course_scores[cid][0] += score
-                course_scores[cid][1] += max_score
+            if course_id:
+                course_scores[course_id][0] += score
+                course_scores[course_id][1] += max_score
         if sa:
             day = sa[:10]
             if current_week_start <= day <= today.isoformat():
@@ -1479,8 +1491,7 @@ def institution_analytics(
     total_score = sum(value[0] for value in student_scores.values())
     total_possible = sum(value[1] for value in student_scores.values())
     avg_accuracy = round(total_score / total_possible * 100) if total_possible else 0
-    with_attempts = set(stu_pcts.keys())
-    inactive_students = [s for s in students if s["id"] not in with_attempts]
+    inactive_students = [s for s in students if s["id"] not in graded_student_ids]
 
     quizset_title = {q["id"]: q.get("title") or "Untitled quiz" for q in quiz_sets}
     at_risk = []
@@ -1528,7 +1539,10 @@ def institution_analytics(
     ]
 
     # Course performance.
-    enr_by_course = Counter(e["course_id"] for e in enrollments)
+    student_ids = {student["id"] for student in students}
+    enr_by_course = Counter(
+        e["course_id"] for e in enrollments if e.get("profile_id") in student_ids
+    )
     published_by_course = Counter(
         quizset_course.get(q["id"]) for q in quiz_sets if q["status"] == "published"
     )
@@ -1555,7 +1569,7 @@ def institution_analytics(
                     if course_scores.get(c["id"], [0, 0])[1]
                     else 0
                 ),
-                "attempts": len(course_pcts.get(c["id"], [])),
+                "attempts": course_attempts.get(c["id"], 0),
             }
             for c in courses
         ],
@@ -1581,12 +1595,12 @@ def institution_analytics(
         for q in questions
         if q.get("review_status") == "approved" and q.get("reviewed_by")
     )
-    teacher_pcts: dict = defaultdict(list)
     teacher_scores: dict = defaultdict(lambda: [0.0, 0.0])
+    teacher_attempts: Counter = Counter()
     for quiz_set in quiz_sets:
         teacher_id = quiz_set.get("created_by")
         if teacher_id:
-            teacher_pcts[teacher_id].extend(quizset_pcts.get(quiz_set["id"], []))
+            teacher_attempts[teacher_id] += quizset_attempts.get(quiz_set["id"], 0)
             teacher_scores[teacher_id][0] += quizset_scores[quiz_set["id"]][0]
             teacher_scores[teacher_id][1] += quizset_scores[quiz_set["id"]][1]
     teacher_activity = sorted(
@@ -1597,14 +1611,14 @@ def institution_analytics(
                 "quiz_sets": qs_by_teacher.get(tt["id"], {}).get("sets", 0),
                 "published": qs_by_teacher.get(tt["id"], {}).get("published", 0),
                 "approved": approved_by_teacher.get(tt["id"], 0),
-                "attempts": len(teacher_pcts.get(tt["id"], [])),
+                "attempts": teacher_attempts.get(tt["id"], 0),
                 "accuracy": (
                     round(
                         teacher_scores[tt["id"]][0]
                         / teacher_scores[tt["id"]][1]
                         * 100
                     )
-                    if teacher_pcts.get(tt["id"])
+                    if teacher_scores[tt["id"]][1]
                     else 0
                 ),
                 "last_quiz_created": qs_by_teacher.get(tt["id"], {}).get(
@@ -1638,6 +1652,7 @@ def institution_analytics(
         "avg_accuracy": avg_accuracy,
         "graded_attempts": len(graded),
         "published_quizzes": sum(1 for q in quiz_sets if q["status"] == "published"),
+        "quiz_sets": len(quiz_sets),
         "courses": len(courses),
     }
 
@@ -1751,8 +1766,8 @@ def platform_overview(
             "quiz_sets": 0,
             "published": 0,
             "attempts": 0,
-            "acc_sum": 0,
-            "acc_n": 0,
+            "score_sum": 0.0,
+            "maximum_sum": 0.0,
         }
 
     agg: dict = defaultdict(blank)
@@ -1770,7 +1785,8 @@ def platform_overview(
         if q["status"] == "published":
             a["published"] += 1
 
-    graded_pcts: list[int] = []
+    platform_score = 0.0
+    platform_maximum = 0.0
     for at in attempts:
         a = agg[at["tenant_id"]]
         if at["status"] != "graded":
@@ -1778,15 +1794,21 @@ def platform_overview(
         a["attempts"] += 1
         m = var_marks.get(at["variant_id"])
         if m:
-            pct = max(0, min(100, round((at.get("total_score") or 0) / m * 100)))
-            a["acc_sum"] += pct
-            a["acc_n"] += 1
-            graded_pcts.append(pct)
+            maximum = float(m)
+            score = max(0.0, min(maximum, float(at.get("total_score") or 0)))
+            a["score_sum"] += score
+            a["maximum_sum"] += maximum
+            platform_score += score
+            platform_maximum += maximum
 
     institutions = []
     for t in tenants:
         a = agg.get(t["id"], blank())
-        acc = round(a["acc_sum"] / a["acc_n"]) if a["acc_n"] else 0
+        acc = (
+            round(a["score_sum"] / a["maximum_sum"] * 100)
+            if a["maximum_sum"]
+            else 0
+        )
         institutions.append(
             {
                 "id": t["id"],
@@ -1839,7 +1861,11 @@ def platform_overview(
         "questions": len(questions),
         "documents": len(documents),
         "attempts": sum(1 for a in attempts if a["status"] == "graded"),
-        "accuracy": round(sum(graded_pcts) / len(graded_pcts)) if graded_pcts else 0,
+        "accuracy": (
+            round(platform_score / platform_maximum * 100)
+            if platform_maximum
+            else 0
+        ),
         "approval_rate": approval_rate,
         "pipeline": {
             "pending_review": q_status.get("pending_review", 0),
@@ -2848,6 +2874,7 @@ def admin_teacher_analytics(
         service.table("quiz_attempts")
         .select("variant_id, status, total_score")
         .eq("tenant_id", tenant_id)
+        .eq("status", "graded")
         .in_("variant_id", variant_ids)
         .execute()
         .data
@@ -2875,8 +2902,10 @@ def admin_teacher_analytics(
             continue
         attempts_by_teacher[teacher_id] += 1
         maximum = variant_marks.get(variant_id, 0)
-        if attempt.get("status") == "graded" and maximum > 0:
-            score_by_teacher[teacher_id] += float(attempt.get("total_score") or 0)
+        if maximum > 0:
+            score_by_teacher[teacher_id] += max(
+                0.0, min(maximum, float(attempt.get("total_score") or 0))
+            )
             maximum_by_teacher[teacher_id] += maximum
 
     active_since = datetime.now(timezone.utc) - timedelta(days=30)

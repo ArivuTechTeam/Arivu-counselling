@@ -639,7 +639,12 @@ export const getLeaderboard = (courseId?: string) =>
 // ---------------------------------------------------------------------------
 
 export type Subject = { id: string; name: string };
-export type Course = { id: string; name: string; subjects: Subject[] };
+export type Course = {
+  id: string;
+  name: string;
+  subjects: Subject[];
+  student_count?: number;
+};
 
 export const listCourses = () => jsonRequest<Course[]>("/api/v1/courses", "GET");
 
@@ -819,6 +824,7 @@ export type InstitutionAnalytics = {
     avg_accuracy: number;
     graded_attempts: number;
     published_quizzes: number;
+    quiz_sets: number;
     courses: number;
   };
   trend: {

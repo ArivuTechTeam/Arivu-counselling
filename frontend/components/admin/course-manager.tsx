@@ -168,6 +168,9 @@ function CourseCard({
           >
             {n} subject{n === 1 ? "" : "s"}
           </span>
+          <span className="rounded-full border bg-secondary px-2.5 py-0.5 text-[0.7rem] font-bold text-muted-foreground">
+            {course.student_count ?? 0} student{course.student_count === 1 ? "" : "s"}
+          </span>
           <span className="inline-flex items-center gap-1 text-[0.72rem] font-semibold text-muted-foreground">
             View subjects <span aria-hidden="true">→</span>
           </span>

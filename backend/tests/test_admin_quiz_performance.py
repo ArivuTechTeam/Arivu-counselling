@@ -9,6 +9,9 @@ from app.api.admin import (
     admin_quiz_sets,
     admin_teacher_analytics,
     institution_analytics,
+    institution_overview,
+    institution_stats,
+    list_users,
 )
 from app.api.institution_admin import router as institution_admin_router
 from app.lib.auth import CurrentProfile
@@ -71,6 +74,14 @@ class _Service:
                 {"id": "teacher-inactive", "tenant_id": "tenant-a", "role": "teacher", "full_name": "No quizzes"},
                 {"id": "student-a", "tenant_id": "tenant-a", "role": "student", "full_name": "Sam"},
                 {"id": "teacher-b", "tenant_id": "tenant-b", "role": "teacher", "full_name": "Hidden"},
+            ],
+            "teacher_subjects": [
+                {"tenant_id": "tenant-a", "teacher_id": "teacher-a", "subject_id": "subject-a"},
+                {"tenant_id": "tenant-b", "teacher_id": "teacher-b", "subject_id": "subject-b"},
+            ],
+            "documents": [
+                {"id": "document-a", "tenant_id": "tenant-a"},
+                {"id": "document-b", "tenant_id": "tenant-b"},
             ],
             "quiz_variants": [
                 {"id": "variant-a1", "tenant_id": "tenant-a", "quiz_set_id": "set-a", "total_marks": 10},
@@ -149,13 +160,13 @@ class AdminQuizPerformanceTests(unittest.TestCase):
         self.assertEqual(result.summary.active_teachers, 1)
         self.assertEqual(result.summary.total_quiz_sets, 1)
         self.assertEqual(result.summary.total_published, 1)
-        self.assertEqual(result.summary.total_attempts, 3)
+        self.assertEqual(result.summary.total_attempts, 2)
         self.assertEqual(result.summary.avg_accuracy, 43.3)
         teacher = result.teachers[0]
         self.assertEqual(teacher.teacher_id, "teacher-a")
         self.assertEqual(teacher.quiz_sets_created, 1)
         self.assertEqual(teacher.quiz_sets_published, 1)
-        self.assertEqual(teacher.total_attempts, 3)
+        self.assertEqual(teacher.total_attempts, 2)
         self.assertEqual(teacher.avg_accuracy, 43.3)
         self.assertEqual(teacher.course_names, ["B.Sc"])
         inactive = result.teachers[1]
@@ -208,6 +219,54 @@ class AdminQuizPerformanceTests(unittest.TestCase):
         self.assertEqual(result.at_risk_students[0].student_id, "student-risk")
         self.assertEqual(result.at_risk_students[0].worst_quiz.title, "Algebra")
         self.assertEqual(result.at_risk_students[0].worst_quiz.accuracy, 10)
+
+        for table, filters in self.service.executed:
+            with self.subTest(table=table):
+                self.assertIn(("tenant_id", "tenant-a"), filters)
+
+    def test_institution_pages_share_one_metric_definition(self) -> None:
+        with patch(
+            "app.api.admin._email_by_auth_user_id",
+            return_value={"teacher-a": "ada@example.com"},
+        ):
+            teachers = list_users(self.profile)
+        stats = institution_stats(self.profile)
+        overview = institution_overview(self.profile)
+        analytics = institution_analytics(self.profile)
+        quizzes = admin_quiz_sets(self.profile)
+
+        self.assertEqual(stats["teachers"], len(teachers))
+        self.assertEqual(stats["teachers"], overview["teachers"])
+        self.assertEqual(stats["teachers"], analytics.summary.teachers)
+        self.assertEqual(stats["students"], overview["students"])
+        self.assertEqual(stats["students"], analytics.summary.students)
+        self.assertEqual(stats["quiz_sets"], overview["quiz_sets"])
+        self.assertEqual(stats["quiz_sets"], analytics.summary.quiz_sets)
+        self.assertEqual(stats["quiz_sets"], len(quizzes))
+        self.assertEqual(stats["published_quizzes"], overview["published_quizzes"])
+        self.assertEqual(
+            stats["published_quizzes"], analytics.summary.published_quizzes
+        )
+        self.assertEqual(
+            stats["published_quizzes"],
+            sum(quiz.status == "published" for quiz in quizzes),
+        )
+        self.assertEqual(overview["attempts"], 2)
+        self.assertEqual(overview["attempts"], analytics.summary.graded_attempts)
+        self.assertEqual(overview["accuracy"], 43)
+        self.assertEqual(overview["accuracy"], analytics.summary.avg_accuracy)
+        self.assertAlmostEqual(quizzes[0].avg_accuracy, 43.3)
+
+    def test_institution_page_queries_are_tenant_scoped(self) -> None:
+        with patch(
+            "app.api.admin._email_by_auth_user_id",
+            return_value={"teacher-a": "ada@example.com"},
+        ):
+            list_users(self.profile)
+        institution_stats(self.profile)
+        institution_overview(self.profile)
+        institution_analytics(self.profile)
+        admin_quiz_sets(self.profile)
 
         for table, filters in self.service.executed:
             with self.subTest(table=table):

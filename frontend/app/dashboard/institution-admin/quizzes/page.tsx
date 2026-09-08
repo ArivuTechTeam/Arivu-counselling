@@ -45,6 +45,7 @@ const STATUS_TONE: Record<string, string> = {
 
 const SELECT_CLASS =
   "h-11 rounded-xl border border-input bg-background px-3 text-sm shadow-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/20";
+const RETAINED_TEACHER_ID = "__retained__";
 
 function health(quiz: AdminQuizSet) {
   const pending = quiz.review_status.pending + quiz.review_status.needs_edit;
@@ -141,13 +142,16 @@ export default function AdminQuizzesPage() {
   );
   const selectedTeacherName = selectedTeacher?.teacher_name
     ? `${selectedTeacher.teacher_name.charAt(0).toUpperCase()}${selectedTeacher.teacher_name.slice(1)}`
-    : "Faculty";
+    : teacherId === RETAINED_TEACHER_ID ? "Former faculty" : "Faculty";
+  const retainedRows = useMemo(() => (rows ?? []).filter((quiz) => !quiz.teacher_id), [rows]);
   const sourceRows = useMemo(
     () =>
-      teacherId && teacherRows?.teacherId === teacherId
+      teacherId === RETAINED_TEACHER_ID
+        ? retainedRows
+        : teacherId && teacherRows?.teacherId === teacherId
         ? teacherRows.rows
         : (rows ?? []).filter((quiz) => !teacherId || quiz.teacher_id === teacherId),
-    [rows, teacherId, teacherRows],
+    [retainedRows, rows, teacherId, teacherRows],
   );
   const courses = useMemo(() => {
     const options = new Map<string, string>();
@@ -206,6 +210,10 @@ export default function AdminQuizzesPage() {
     setCourseId("");
     setStatus("");
     setSort("created_desc");
+    if (nextTeacherId === RETAINED_TEACHER_ID) {
+      setTeacherRows({ teacherId: nextTeacherId, rows: retainedRows });
+      return;
+    }
     getAdminQuizSets(nextTeacherId)
       .then((quizRows) =>
         setTeacherRows({ teacherId: nextTeacherId, rows: quizRows }),
@@ -244,7 +252,7 @@ export default function AdminQuizzesPage() {
       {!teacherId ? (
         faculty === null ? (
           <SkeletonList rows={4} />
-        ) : faculty.teachers.length === 0 ? (
+        ) : faculty.teachers.length === 0 && retainedRows.length === 0 ? (
           <EmptyState
             icon={<Users />}
             title="No faculty yet"
@@ -259,6 +267,13 @@ export default function AdminQuizzesPage() {
                 onOpen={() => openTeacher(teacher.teacher_id)}
               />
             ))}
+            {retainedRows.length > 0 && (
+              <button type="button" onClick={() => openTeacher(RETAINED_TEACHER_ID)} className="w-full overflow-hidden rounded-2xl border border-border bg-card text-left shadow-sm transition hover:-translate-y-0.5 hover:border-primary/35 hover:shadow-md">
+                <div className="p-5"><p className="font-bold text-foreground">Former faculty content</p><p className="mt-1 text-sm text-muted-foreground">Quizzes retained after a teacher account was removed.</p></div>
+                <div className="grid grid-cols-3 divide-x border-y bg-secondary/25 py-3 text-center"><span><strong className="block text-lg">{retainedRows.length}</strong><small className="uppercase text-muted-foreground">Quizzes</small></span><span><strong className="block text-lg">{retainedRows.filter((quiz) => quiz.status === "published").length}</strong><small className="uppercase text-muted-foreground">Published</small></span><span><strong className="block text-lg">{retainedRows.reduce((sum, quiz) => sum + quiz.attempts_count, 0)}</strong><small className="uppercase text-muted-foreground">Attempts</small></span></div>
+                <div className="px-5 py-3 text-right text-xs font-semibold text-primary">View retained quizzes →</div>
+              </button>
+            )}
           </div>
         )
       ) : (
