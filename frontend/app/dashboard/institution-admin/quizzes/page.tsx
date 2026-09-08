@@ -47,11 +47,13 @@ const SELECT_CLASS =
   "h-11 rounded-xl border border-input bg-background px-3 text-sm shadow-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/20";
 
 function health(quiz: AdminQuizSet) {
-  if (quiz.review_status.pending + quiz.review_status.needs_edit > 0) {
+  const pending = quiz.review_status.pending + quiz.review_status.needs_edit;
+  if (pending > 0) {
     return {
-      label: "Pending review",
+      label: `${pending} question${pending === 1 ? "" : "s"} pending review`,
       tone: "bg-amber-100 text-amber-800",
       icon: "⚠️",
+      edge: "border-l-amber-400",
     };
   }
   if (quiz.attempts_count === 0) {
@@ -59,6 +61,7 @@ function health(quiz: AdminQuizSet) {
       label: "No attempts",
       tone: "bg-rose-100 text-rose-700",
       icon: "●",
+      edge: "border-l-rose-400",
     };
   }
   if (quiz.attempts_count < 5) {
@@ -66,12 +69,14 @@ function health(quiz: AdminQuizSet) {
       label: "Low engagement",
       tone: "bg-amber-100 text-amber-800",
       icon: "●",
+      edge: "border-l-amber-400",
     };
   }
   return {
     label: "Active",
     tone: "bg-emerald-100 text-emerald-700",
     icon: "●",
+    edge: "border-l-emerald-500",
   };
 }
 
@@ -134,6 +139,9 @@ export default function AdminQuizzesPage() {
     () => faculty?.teachers.find((teacher) => teacher.teacher_id === teacherId),
     [faculty, teacherId],
   );
+  const selectedTeacherName = selectedTeacher?.teacher_name
+    ? `${selectedTeacher.teacher_name.charAt(0).toUpperCase()}${selectedTeacher.teacher_name.slice(1)}`
+    : "Faculty";
   const sourceRows = useMemo(
     () =>
       teacherId && teacherRows?.teacherId === teacherId
@@ -224,7 +232,7 @@ export default function AdminQuizzesPage() {
   return (
     <div className="flex flex-col gap-6">
       <PageHeader
-        title={teacherId ? `${selectedTeacher?.teacher_name ?? "Faculty"} quizzes` : "Faculty quiz performance"}
+        title={teacherId ? `${selectedTeacherName} quizzes` : "Faculty quiz performance"}
         description={
           teacherId
             ? "Review this faculty member's quizzes, engagement, accuracy, and question health."
@@ -339,17 +347,15 @@ export default function AdminQuizzesPage() {
               }
             />
           ) : (
-            <div className="grid gap-4 xl:grid-cols-2">
+            <div className="flex flex-col gap-3">
               {filtered.map((quiz) => {
                 const state = health(quiz);
-                const pending =
-                  quiz.review_status.pending + quiz.review_status.needs_edit;
                 return (
                   <Card
                     key={quiz.id}
                     role="button"
                     tabIndex={0}
-                    className="animate-rise cursor-pointer overflow-hidden transition hover:-translate-y-0.5 hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+                    className={`animate-rise cursor-pointer overflow-hidden border-l-4 ${state.edge} transition hover:border-primary/40 hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary`}
                     onClick={() => setSelectedQuiz(quiz)}
                     onKeyDown={(event) => {
                       if (event.key === "Enter" || event.key === " ") {
@@ -358,34 +364,52 @@ export default function AdminQuizzesPage() {
                       }
                     }}
                   >
-                    <CardContent className="p-5">
-                      <div className="flex items-start justify-between gap-4">
-                        <div className="min-w-0">
-                          <h2 className="truncate text-base font-bold text-foreground">{quiz.title}</h2>
-                          <p className="mt-1 truncate text-sm text-muted-foreground">
-                            {[quiz.course, quiz.subject].filter(Boolean).join(" · ") || "—"}
+                    <CardContent className="p-0">
+                      <div className="grid gap-5 p-5 lg:grid-cols-[minmax(240px,1fr)_360px] lg:items-center">
+                        <div className="min-w-0 space-y-3">
+                          <div className="flex items-start justify-between gap-3 lg:justify-start">
+                            <h2 className="truncate text-base font-bold text-foreground">
+                              {quiz.title}
+                            </h2>
+                            <span className={`shrink-0 rounded-full px-2.5 py-1 text-xs font-semibold capitalize ${STATUS_TONE[quiz.status] ?? "bg-muted text-muted-foreground"}`}>
+                              {quiz.status}
+                            </span>
+                          </div>
+                          <p className="truncate text-sm text-muted-foreground">
+                            {[quiz.course, quiz.subject].filter(Boolean).join(" · ") || "No course or subject"}
                           </p>
+                          <span className={`inline-flex max-w-full items-center rounded-full px-2.5 py-1 text-xs font-semibold ${state.tone}`}>
+                            <span className="mr-1.5">{state.icon}</span>
+                            <span className="truncate">{state.label}</span>
+                          </span>
                         </div>
-                        <span className={`shrink-0 rounded-full px-2.5 py-1 text-xs font-semibold capitalize ${STATUS_TONE[quiz.status] ?? "bg-muted text-muted-foreground"}`}>
-                          {quiz.status}
+                        <div className="grid grid-cols-3 divide-x rounded-xl border bg-secondary/20 py-4 text-center">
+                          <div className="px-2">
+                            <div className="text-xl font-bold text-foreground">{quiz.attempts_count}</div>
+                            <div className="mt-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Attempts</div>
+                          </div>
+                          <div className="px-2">
+                            <div className="text-xl font-bold text-foreground">{quiz.attempts_count ? `${quiz.avg_accuracy}%` : "—"}</div>
+                            <div className="mt-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Accuracy</div>
+                          </div>
+                          <div className="px-2">
+                            <div className="text-xl font-bold text-foreground">{quiz.questions}</div>
+                            <div className="mt-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Questions</div>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="flex flex-col gap-3 border-t bg-secondary/10 px-5 py-3 sm:flex-row sm:items-center sm:justify-between">
+                        <span className="text-xs text-muted-foreground">
+                          Created {quiz.created_at ? new Date(quiz.created_at).toLocaleDateString() : "date unavailable"}
                         </span>
-                      </div>
-                      <div className="mt-5 grid grid-cols-3 divide-x rounded-xl bg-secondary/35 py-3 text-center">
-                        <div><div className="text-lg font-bold text-foreground">{quiz.attempts_count}</div><div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Attempts</div></div>
-                        <div><div className="text-lg font-bold text-foreground">{quiz.attempts_count ? `${quiz.avg_accuracy}%` : "—"}</div><div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Accuracy</div></div>
-                        <div><div className="text-lg font-bold text-foreground">{quiz.questions}</div><div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Questions</div></div>
-                      </div>
-                      <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
-                        <div className="flex flex-wrap gap-2">
-                          <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${state.tone}`}><span className="mr-1">{state.icon}</span>{state.label}</span>
-                          {pending > 0 && <span className="rounded-full bg-violet-100 px-2.5 py-1 text-xs font-semibold text-violet-700">{pending} awaiting review</span>}
-                        </div>
-                        <div className="flex items-center gap-3">
-                          <span className="hidden text-xs text-muted-foreground sm:inline">{quiz.created_at ? new Date(quiz.created_at).toLocaleDateString() : "—"}</span>
+                        <div className="flex flex-wrap items-center gap-3">
                           <div onClick={(event) => event.stopPropagation()}>
                             <QuestionPaperButtons quizSetId={quiz.id} title={quiz.title} meta={[quiz.course, quiz.subject].filter(Boolean).join(" · ")} compact />
                           </div>
-                          <ChevronDown size={17} className="-rotate-90 text-muted-foreground" />
+                          <span className="inline-flex items-center gap-1 text-xs font-semibold text-primary">
+                            View performance <ChevronDown size={15} className="-rotate-90" />
+                          </span>
                         </div>
                       </div>
                     </CardContent>

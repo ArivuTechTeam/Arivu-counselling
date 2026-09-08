@@ -50,7 +50,7 @@ export function FacultyAnalysisCard({
             {initials}
           </span>
           <span className="min-w-0">
-            <span className="block truncate text-base font-bold text-foreground">
+            <span className="block truncate text-base font-bold capitalize text-foreground">
               {teacher.teacher_name}
             </span>
             <span className="mt-1 block truncate text-sm text-muted-foreground">
