@@ -831,6 +831,7 @@ export type InstitutionAnalytics = {
     attempts_last7: number;
     attempts_prev7: number;
     delta: number;
+    percentage_change: number;
     has_trend: boolean;
   };
   activity: { date: string; attempts: number }[];

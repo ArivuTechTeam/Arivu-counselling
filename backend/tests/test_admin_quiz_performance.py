@@ -210,6 +210,7 @@ class AdminQuizPerformanceTests(unittest.TestCase):
         self.assertEqual(result.course_perf[0].pending_review, 1)
         self.assertEqual(result.teacher_activity[0].teacher_id, "teacher-a")
         self.assertTrue(result.teacher_activity[0].is_active)
+        self.assertEqual(result.trend.percentage_change, 100.0)
         self.assertEqual(
             result.teacher_activity[0].last_quiz_created.isoformat(),
             "2026-09-08T10:00:00+00:00",

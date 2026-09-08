@@ -1072,6 +1072,7 @@ class AnalyticsTrend(BaseModel):
     attempts_last7: int
     attempts_prev7: int
     delta: int
+    percentage_change: float
     has_trend: bool
 
 
@@ -1641,6 +1642,11 @@ def institution_analytics(
         "attempts_last7": attempts_last7,
         "attempts_prev7": attempts_prev7,
         "delta": attempts_last7 - attempts_prev7,
+        "percentage_change": (
+            round((attempts_last7 - attempts_prev7) / attempts_prev7 * 100, 1)
+            if attempts_prev7
+            else (100.0 if attempts_last7 else 0.0)
+        ),
         "has_trend": (attempts_last7 + attempts_prev7) > 0,
     }
     summary = {
