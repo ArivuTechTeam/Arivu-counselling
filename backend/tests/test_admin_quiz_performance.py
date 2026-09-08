@@ -194,6 +194,7 @@ class AdminQuizPerformanceTests(unittest.TestCase):
         )
         result = institution_analytics(self.profile)
 
+        self.assertIsNotNone(result.updated_at.tzinfo)
         self.assertEqual(result.course_perf[0].course_id, "course-a")
         self.assertEqual(result.course_perf[0].pending_review, 1)
         self.assertEqual(result.teacher_activity[0].teacher_id, "teacher-a")

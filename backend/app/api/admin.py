@@ -1642,7 +1642,7 @@ def institution_analytics(
     }
 
     return InstitutionAnalyticsResponse(**{
-        "updated_at": datetime.now().isoformat(timespec="seconds"),
+        "updated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "summary": summary,
         "trend": trend,
         "activity": activity,
