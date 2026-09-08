@@ -706,17 +706,35 @@ export const deleteChapter = (id: string) =>
 export type AdminUser = {
   id: string;
   full_name: string | null;
-  role: string;
+  role: "teacher";
   email: string | null;
   courses: string[];
+  subject_count: number;
 };
 
-export type UserCreateInput = {
+export type TeacherCreateInput = {
   full_name: string;
   email: string;
   password: string;
-  role: "teacher" | "student";
-  course_id?: string;
+};
+
+export type TeacherCourse = {
+  id: string;
+  name: string;
+  subjects: { id: string; name: string }[];
+  student_count: number;
+};
+
+export type CourseStudent = {
+  id: string;
+  full_name: string | null;
+  email: string | null;
+};
+
+export type CourseRoster = {
+  course: { id: string; name: string };
+  count: number;
+  students: CourseStudent[];
 };
 
 export type AdminStats = {
@@ -736,10 +754,14 @@ export type PlatformStats = {
 };
 
 export const listUsers = () => jsonRequest<AdminUser[]>("/api/v1/users", "GET");
-export const createUser = (input: UserCreateInput) =>
+export const createTeacher = (input: TeacherCreateInput) =>
   jsonRequest<{ id: string; email: string }>("/api/v1/users", "POST", input);
 export const deleteUser = (id: string) =>
   jsonRequest<{ deleted: string }>(`/api/v1/users/${id}`, "DELETE");
+export const listTeacherCourses = (teacherId: string) =>
+  jsonRequest<TeacherCourse[]>(`/api/v1/teachers/${teacherId}/courses`, "GET");
+export const listCourseStudents = (courseId: string) =>
+  jsonRequest<CourseRoster>(`/api/v1/courses/${courseId}/students`, "GET");
 export const getAdminStats = () =>
   jsonRequest<AdminStats>("/api/v1/admin/stats", "GET");
 

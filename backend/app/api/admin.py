@@ -2,9 +2,11 @@
 Admin API — institution-admin user management + analytics, and super-admin
 platform analytics.
 
-  GET    /api/v1/users          — institution's teachers + students
-  POST   /api/v1/users          — admin creates a teacher/student (+ enroll)
-  DELETE /api/v1/users/{id}      — admin removes a user
+  GET    /api/v1/users          — institution's teachers
+  POST   /api/v1/users          — admin creates a teacher
+  DELETE /api/v1/users/{id}     — admin removes a teacher
+  GET    /api/v1/teachers/{id}/courses — a teacher's assigned courses
+  GET    /api/v1/courses/{id}/students — students enrolled in a course
   GET    /api/v1/admin/stats     — this institution's counts
   GET    /api/v1/platform/stats  — super-admin: all institutions' counts
 """
@@ -14,11 +16,10 @@ from __future__ import annotations
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from app.lib.auth import CurrentProfile, get_current_profile
 from app.lib.supabase import get_service_client
-from app.services.teacher_access import replace_teacher_subjects
 
 router = APIRouter(prefix="/api/v1", tags=["admin"])
 
@@ -99,31 +100,48 @@ def _set_provisioned_profile(
             raise
 
 
-# ── Users ───────────────────────────────────────────────────────────────────
+# ── Institution teacher management ──────────────────────────────────────────
 @router.get("/users")
 def list_users(profile: CurrentProfile = Depends(get_current_profile)) -> list[dict]:
+    """List teachers managed by this institution admin.
+
+    Student accounts are created through self-signup and deliberately excluded
+    from this management endpoint.
+    """
     _require_admin(profile)
     service = get_service_client()
 
-    profiles = (
+    teachers = (
         service.table("profiles")
         .select("id, full_name, role")
         .eq("tenant_id", profile.tenant_id)
-        .in_("role", ["teacher", "student"])
+        .eq("role", "teacher")
         .execute()
         .data
         or []
     )
     email_by_id = _email_by_auth_user_id(service)
 
-    enrollments = (
-        service.table("enrollments")
-        .select("profile_id, course_id")
+    assignments = (
+        service.table("teacher_subjects")
+        .select("teacher_id, subject_id")
         .eq("tenant_id", profile.tenant_id)
         .execute()
         .data
         or []
     )
+    subject_ids = list({str(row["subject_id"]) for row in assignments})
+    subjects = []
+    if subject_ids:
+        subjects = (
+            service.table("subjects")
+            .select("id, course_id")
+            .eq("tenant_id", profile.tenant_id)
+            .in_("id", subject_ids)
+            .execute()
+            .data
+            or []
+        )
     courses = (
         service.table("courses")
         .select("id, name")
@@ -132,64 +150,65 @@ def list_users(profile: CurrentProfile = Depends(get_current_profile)) -> list[d
         .data
         or []
     )
-    course_name = {c["id"]: c["name"] for c in courses}
-    courses_by_profile: dict[str, list[str]] = {}
-    for e in enrollments:
-        courses_by_profile.setdefault(e["profile_id"], []).append(
-            course_name.get(e["course_id"], "?")
-        )
+    course_name = {str(course["id"]): course["name"] for course in courses}
+    course_by_subject = {
+        str(subject["id"]): str(subject["course_id"]) for subject in subjects
+    }
+    subjects_by_teacher: dict[str, set[str]] = {}
+    course_ids_by_teacher: dict[str, set[str]] = {}
+    for assignment in assignments:
+        teacher_id = str(assignment["teacher_id"])
+        subject_id = str(assignment["subject_id"])
+        subjects_by_teacher.setdefault(teacher_id, set()).add(subject_id)
+        course_id = course_by_subject.get(subject_id)
+        if course_id:
+            course_ids_by_teacher.setdefault(teacher_id, set()).add(course_id)
 
     return [
         {
-            "id": p["id"],
-            "full_name": p["full_name"],
-            "role": p["role"],
-            "email": email_by_id.get(p["id"]),
-            "courses": courses_by_profile.get(p["id"], []),
+            "id": teacher["id"],
+            "full_name": teacher["full_name"],
+            "role": teacher["role"],
+            "email": email_by_id.get(teacher["id"]),
+            "courses": sorted(
+                course_name[course_id]
+                for course_id in course_ids_by_teacher.get(str(teacher["id"]), set())
+                if course_id in course_name
+            ),
+            "subject_count": len(
+                subjects_by_teacher.get(str(teacher["id"]), set())
+            ),
         }
-        for p in profiles
+        for teacher in teachers
     ]
 
 
-class UserCreate(BaseModel):
+class TeacherCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     full_name: str
     email: str
     password: str
-    role: Literal["teacher", "student"]
-    course_id: str | None = None
 
 
 @router.post("/users")
 def create_user(
-    body: UserCreate, profile: CurrentProfile = Depends(get_current_profile)
+    body: TeacherCreate, profile: CurrentProfile = Depends(get_current_profile)
 ) -> dict:
+    """Create a teacher; students join through the public signup flow."""
     _require_admin(profile)
     service = get_service_client()
 
     if not body.full_name.strip():
         raise HTTPException(status_code=400, detail="Full name is required.")
-    if not body.course_id:
-        raise HTTPException(status_code=400, detail="A course is required.")
-    course = (
-        service.table("courses")
-        .select("id")
-        .eq("id", body.course_id)
-        .eq("tenant_id", profile.tenant_id)
-        .maybe_single()
-        .execute()
-    )
-    if course is None or not course.data:
-        raise HTTPException(status_code=400, detail="Course not found in this institution.")
 
     meta: dict = {
         "tenant_id": profile.tenant_id,
-        "role": body.role,
+        "role": "teacher",
         "full_name": body.full_name.strip(),
         # Admin set a temp password → prompt them to change it on first login.
         "must_change_password": True,
     }
-    if body.course_id:
-        meta["course_id"] = body.course_id
 
     try:
         created = service.auth.admin.create_user(
@@ -205,25 +224,9 @@ def create_user(
             service,
             user_id=created.user.id,
             tenant_id=profile.tenant_id,
-            role=body.role,
+            role="teacher",
             full_name=body.full_name,
         )
-        if body.role == "teacher":
-            subjects = (
-                service.table("subjects")
-                .select("id")
-                .eq("course_id", body.course_id)
-                .eq("tenant_id", profile.tenant_id)
-                .execute()
-                .data
-                or []
-            )
-            replace_teacher_subjects(
-                service,
-                tenant_id=profile.tenant_id,
-                teacher_id=created.user.id,
-                subject_ids=(str(subject["id"]) for subject in subjects),
-            )
     except Exception as exc:  # noqa: BLE001
         if "created" in locals() and created.user:
             _delete_auth_user_quietly(service, created.user.id)
@@ -238,7 +241,7 @@ def delete_user(
 ) -> dict:
     _require_admin(profile)
     service = get_service_client()
-    # Only allow deleting a user inside the admin's own tenant.
+    # Only allow deleting a teacher inside the admin's own tenant.
     target = (
         service.table("profiles")
         .select("id, role")
@@ -249,8 +252,8 @@ def delete_user(
     )
     if target is None or not target.data:
         raise HTTPException(status_code=404, detail="User not found.")
-    if target.data["role"] not in {"teacher", "student"}:
-        raise HTTPException(status_code=400, detail="Only teachers and students can be removed here.")
+    if target.data["role"] != "teacher":
+        raise HTTPException(status_code=400, detail="Only teachers can be removed here.")
     if user_id == profile.user_id:
         raise HTTPException(status_code=400, detail="You cannot remove your own account.")
     try:
@@ -258,6 +261,187 @@ def delete_user(
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=400, detail=f"Could not delete user: {exc}")
     return {"deleted": user_id}
+
+
+def _assert_tenant_teacher(service, *, teacher_id: str, tenant_id: str) -> None:
+    teacher = (
+        service.table("profiles")
+        .select("id")
+        .eq("id", teacher_id)
+        .eq("tenant_id", tenant_id)
+        .eq("role", "teacher")
+        .maybe_single()
+        .execute()
+    )
+    if teacher is None or not teacher.data:
+        raise HTTPException(status_code=404, detail="Teacher not found.")
+
+
+def _assert_tenant_course(service, *, course_id: str, tenant_id: str) -> dict:
+    course = (
+        service.table("courses")
+        .select("id, name")
+        .eq("id", course_id)
+        .eq("tenant_id", tenant_id)
+        .maybe_single()
+        .execute()
+    )
+    if course is None or not course.data:
+        raise HTTPException(status_code=404, detail="Course not found.")
+    return course.data
+
+
+@router.get("/teachers/{teacher_id}/courses")
+def list_teacher_courses(
+    teacher_id: str, profile: CurrentProfile = Depends(get_current_profile)
+) -> list[dict]:
+    """Return courses derived from a teacher's explicit subject assignments."""
+    _require_admin(profile)
+    service = get_service_client()
+    _assert_tenant_teacher(
+        service, teacher_id=teacher_id, tenant_id=profile.tenant_id
+    )
+
+    assignments = (
+        service.table("teacher_subjects")
+        .select("subject_id")
+        .eq("teacher_id", teacher_id)
+        .eq("tenant_id", profile.tenant_id)
+        .execute()
+        .data
+        or []
+    )
+    subject_ids = list({str(row["subject_id"]) for row in assignments})
+    if not subject_ids:
+        return []
+
+    subjects = (
+        service.table("subjects")
+        .select("id, name, course_id")
+        .eq("tenant_id", profile.tenant_id)
+        .in_("id", subject_ids)
+        .execute()
+        .data
+        or []
+    )
+    course_ids = list({str(subject["course_id"]) for subject in subjects})
+    if not course_ids:
+        return []
+    courses = (
+        service.table("courses")
+        .select("id, name")
+        .eq("tenant_id", profile.tenant_id)
+        .in_("id", course_ids)
+        .execute()
+        .data
+        or []
+    )
+
+    enrollments = (
+        service.table("enrollments")
+        .select("profile_id, course_id")
+        .eq("tenant_id", profile.tenant_id)
+        .in_("course_id", course_ids)
+        .execute()
+        .data
+        or []
+    )
+    enrolled_profile_ids = list(
+        {str(enrollment["profile_id"]) for enrollment in enrollments}
+    )
+    student_ids: set[str] = set()
+    if enrolled_profile_ids:
+        students = (
+            service.table("profiles")
+            .select("id")
+            .eq("tenant_id", profile.tenant_id)
+            .eq("role", "student")
+            .in_("id", enrolled_profile_ids)
+            .execute()
+            .data
+            or []
+        )
+        student_ids = {str(student["id"]) for student in students}
+
+    subjects_by_course: dict[str, list[dict]] = {}
+    for subject in subjects:
+        subjects_by_course.setdefault(str(subject["course_id"]), []).append(
+            {"id": str(subject["id"]), "name": subject["name"]}
+        )
+    student_count_by_course: dict[str, int] = {}
+    for enrollment in enrollments:
+        if str(enrollment["profile_id"]) in student_ids:
+            course_id = str(enrollment["course_id"])
+            student_count_by_course[course_id] = (
+                student_count_by_course.get(course_id, 0) + 1
+            )
+
+    return sorted(
+        [
+            {
+                "id": str(course["id"]),
+                "name": course["name"],
+                "subjects": sorted(
+                    subjects_by_course.get(str(course["id"]), []),
+                    key=lambda subject: subject["name"].lower(),
+                ),
+                "student_count": student_count_by_course.get(str(course["id"]), 0),
+            }
+            for course in courses
+        ],
+        key=lambda course: course["name"].lower(),
+    )
+
+
+@router.get("/courses/{course_id}/students")
+def list_course_students(
+    course_id: str, profile: CurrentProfile = Depends(get_current_profile)
+) -> dict:
+    """Return the tenant-scoped student roster for one course."""
+    _require_admin(profile)
+    service = get_service_client()
+    course = _assert_tenant_course(
+        service, course_id=course_id, tenant_id=profile.tenant_id
+    )
+    enrollments = (
+        service.table("enrollments")
+        .select("profile_id")
+        .eq("tenant_id", profile.tenant_id)
+        .eq("course_id", course_id)
+        .execute()
+        .data
+        or []
+    )
+    profile_ids = list({str(row["profile_id"]) for row in enrollments})
+    students = []
+    if profile_ids:
+        students = (
+            service.table("profiles")
+            .select("id, full_name")
+            .eq("tenant_id", profile.tenant_id)
+            .eq("role", "student")
+            .in_("id", profile_ids)
+            .execute()
+            .data
+            or []
+        )
+    email_by_id = _email_by_auth_user_id(service) if students else {}
+    roster = sorted(
+        [
+            {
+                "id": str(student["id"]),
+                "full_name": student["full_name"],
+                "email": email_by_id.get(str(student["id"])),
+            }
+            for student in students
+        ],
+        key=lambda student: (student["full_name"] or student["email"] or "").lower(),
+    )
+    return {
+        "course": {"id": str(course["id"]), "name": course["name"]},
+        "count": len(roster),
+        "students": roster,
+    }
 
 
 # ── Super-admin: institution admins ──────────────────────────────────────────

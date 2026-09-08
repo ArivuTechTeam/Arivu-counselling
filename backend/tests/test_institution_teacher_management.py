@@ -1,0 +1,163 @@
+from __future__ import annotations
+
+import unittest
+from types import SimpleNamespace
+from unittest.mock import patch
+
+from fastapi import HTTPException
+from pydantic import ValidationError
+
+from app.api.admin import (
+    TeacherCreate,
+    delete_user,
+    list_course_students,
+    list_teacher_courses,
+    list_users,
+)
+from app.lib.auth import CurrentProfile
+
+
+class _Query:
+    def __init__(self, rows: list[dict]) -> None:
+        self.rows = rows
+        self.filters: list[tuple[str, object]] = []
+        self.in_filters: list[tuple[str, set[object]]] = []
+        self.single = False
+
+    def select(self, _columns: str):
+        return self
+
+    def eq(self, column: str, value: object):
+        self.filters.append((column, value))
+        return self
+
+    def in_(self, column: str, values: list[object]):
+        self.in_filters.append((column, set(values)))
+        return self
+
+    def maybe_single(self):
+        self.single = True
+        return self
+
+    def execute(self):
+        rows = [dict(row) for row in self.rows]
+        for column, value in self.filters:
+            rows = [row for row in rows if row.get(column) == value]
+        for column, values in self.in_filters:
+            rows = [row for row in rows if row.get(column) in values]
+        return SimpleNamespace(data=(rows[0] if rows else None) if self.single else rows)
+
+
+class _AuthAdmin:
+    def __init__(self, users: list) -> None:
+        self.users = users
+
+    def list_users(self, *, page: int, per_page: int):
+        start = (page - 1) * per_page
+        return self.users[start : start + per_page]
+
+
+class _Service:
+    def __init__(self) -> None:
+        self.tables = {
+            "profiles": [
+                {"id": "teacher-a", "tenant_id": "tenant-a", "role": "teacher", "full_name": "Ada Teacher"},
+                {"id": "student-a", "tenant_id": "tenant-a", "role": "student", "full_name": "Sam Student"},
+                {"id": "teacher-enrolled", "tenant_id": "tenant-a", "role": "teacher", "full_name": "Terry Teacher"},
+                {"id": "teacher-b", "tenant_id": "tenant-b", "role": "teacher", "full_name": "Other Teacher"},
+                {"id": "student-b", "tenant_id": "tenant-b", "role": "student", "full_name": "Other Student"},
+            ],
+            "teacher_subjects": [
+                {"tenant_id": "tenant-a", "teacher_id": "teacher-a", "subject_id": "subject-a"},
+                {"tenant_id": "tenant-b", "teacher_id": "teacher-b", "subject_id": "subject-b"},
+            ],
+            "subjects": [
+                {"id": "subject-a", "tenant_id": "tenant-a", "course_id": "course-a", "name": "Mathematics"},
+                {"id": "subject-b", "tenant_id": "tenant-b", "course_id": "course-b", "name": "Physics"},
+            ],
+            "courses": [
+                {"id": "course-a", "tenant_id": "tenant-a", "name": "First Year"},
+                {"id": "course-b", "tenant_id": "tenant-b", "name": "Other College"},
+            ],
+            "enrollments": [
+                {"tenant_id": "tenant-a", "profile_id": "student-a", "course_id": "course-a"},
+                {"tenant_id": "tenant-a", "profile_id": "teacher-enrolled", "course_id": "course-a"},
+                {"tenant_id": "tenant-b", "profile_id": "student-b", "course_id": "course-b"},
+            ],
+        }
+        users = [
+            SimpleNamespace(id=row["id"], email=f'{row["id"]}@example.com')
+            for row in self.tables["profiles"]
+        ]
+        self.auth = SimpleNamespace(admin=_AuthAdmin(users))
+
+    def table(self, name: str) -> _Query:
+        return _Query(self.tables[name])
+
+
+class InstitutionTeacherManagementTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.service = _Service()
+        self.profile = CurrentProfile(
+            user_id="admin-a", tenant_id="tenant-a", role="institution_admin"
+        )
+        self.service_patch = patch(
+            "app.api.admin.get_service_client", return_value=self.service
+        )
+        self.service_patch.start()
+
+    def tearDown(self) -> None:
+        self.service_patch.stop()
+
+    def test_teacher_list_excludes_students_and_other_tenants(self) -> None:
+        teachers = list_users(self.profile)
+
+        self.assertEqual({teacher["id"] for teacher in teachers}, {"teacher-a", "teacher-enrolled"})
+        assigned = next(teacher for teacher in teachers if teacher["id"] == "teacher-a")
+        self.assertEqual(assigned["courses"], ["First Year"])
+        self.assertEqual(assigned["subject_count"], 1)
+
+    def test_teacher_course_counts_only_student_enrollments(self) -> None:
+        courses = list_teacher_courses("teacher-a", self.profile)
+
+        self.assertEqual(len(courses), 1)
+        self.assertEqual(courses[0]["name"], "First Year")
+        self.assertEqual(courses[0]["student_count"], 1)
+        self.assertEqual(courses[0]["subjects"], [{"id": "subject-a", "name": "Mathematics"}])
+
+    def test_course_roster_excludes_teachers_and_other_tenants(self) -> None:
+        roster = list_course_students("course-a", self.profile)
+
+        self.assertEqual(roster["count"], 1)
+        self.assertEqual([student["id"] for student in roster["students"]], ["student-a"])
+        self.assertEqual(roster["students"][0]["email"], "student-a@example.com")
+
+    def test_cross_tenant_teacher_and_course_are_not_visible(self) -> None:
+        with self.assertRaises(HTTPException) as teacher_error:
+            list_teacher_courses("teacher-b", self.profile)
+        self.assertEqual(teacher_error.exception.status_code, 404)
+
+        with self.assertRaises(HTTPException) as course_error:
+            list_course_students("course-b", self.profile)
+        self.assertEqual(course_error.exception.status_code, 404)
+
+    def test_teacher_create_contract_rejects_student_role_and_course(self) -> None:
+        with self.assertRaises(ValidationError):
+            TeacherCreate(
+                full_name="Student",
+                email="student@example.com",
+                password="password",
+                role="student",
+                course_id="course-a",
+            )
+
+    def test_student_cannot_be_deleted_through_teacher_management(self) -> None:
+        with self.assertRaises(HTTPException) as error:
+            delete_user("student-a", self.profile)
+
+        self.assertEqual(error.exception.status_code, 400)
+        self.assertEqual(error.exception.detail, "Only teachers can be removed here.")
+
+
+if __name__ == "__main__":
+    unittest.main()
