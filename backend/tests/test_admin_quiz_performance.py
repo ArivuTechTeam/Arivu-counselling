@@ -8,6 +8,7 @@ from app.api.admin import (
     admin_quiz_set_detail,
     admin_quiz_sets,
     admin_teacher_analytics,
+    institution_analytics,
 )
 from app.api.institution_admin import router as institution_admin_router
 from app.lib.auth import CurrentProfile
@@ -97,6 +98,10 @@ class _Service:
                 {"tenant_id": "tenant-a", "attempt_id": "attempt-a1", "question_id": "question-a2", "is_correct": False},
                 {"tenant_id": "tenant-a", "attempt_id": "attempt-a2", "question_id": "question-a1", "is_correct": False},
             ],
+            "enrollments": [
+                {"tenant_id": "tenant-a", "profile_id": "student-a", "course_id": "course-a"},
+                {"tenant_id": "tenant-b", "profile_id": "student-b", "course_id": "course-b"},
+            ],
         }
 
     def table(self, name: str) -> _Query:
@@ -175,6 +180,33 @@ class AdminQuizPerformanceTests(unittest.TestCase):
 
     def test_every_performance_query_is_tenant_scoped(self) -> None:
         admin_quiz_set_detail("set-a", self.profile)
+
+        for table, filters in self.service.executed:
+            with self.subTest(table=table):
+                self.assertIn(("tenant_id", "tenant-a"), filters)
+
+    def test_institution_analytics_adds_actionable_drilldown_metrics(self) -> None:
+        self.service.tables["profiles"].append(
+            {"id": "student-risk", "tenant_id": "tenant-a", "role": "student", "full_name": "Riya"}
+        )
+        self.service.tables["quiz_attempts"].append(
+            {"id": "attempt-risk", "tenant_id": "tenant-a", "student_id": "student-risk", "variant_id": "variant-a1", "status": "graded", "total_score": 1, "submitted_at": "2026-09-08T14:00:00Z"}
+        )
+        result = institution_analytics(self.profile)
+
+        self.assertEqual(result.course_perf[0].course_id, "course-a")
+        self.assertEqual(result.course_perf[0].pending_review, 1)
+        self.assertEqual(result.teacher_activity[0].teacher_id, "teacher-a")
+        self.assertTrue(result.teacher_activity[0].is_active)
+        self.assertEqual(
+            result.teacher_activity[0].last_quiz_created.isoformat(),
+            "2026-09-08T10:00:00+00:00",
+        )
+        inactive = next(row for row in result.teacher_activity if row.teacher_id == "teacher-inactive")
+        self.assertFalse(inactive.is_active)
+        self.assertEqual(result.at_risk_students[0].student_id, "student-risk")
+        self.assertEqual(result.at_risk_students[0].worst_quiz.title, "Algebra")
+        self.assertEqual(result.at_risk_students[0].worst_quiz.accuracy, 10)
 
         for table, filters in self.service.executed:
             with self.subTest(table=table):

@@ -1022,6 +1022,97 @@ def institution_overview(
 
 
 # ── Institution admin: Analytics (data-analyst report, no AI) ────────────────
+class AnalyticsFinding(BaseModel):
+    severity: Literal["critical", "warn", "good", "info"]
+    title: str
+    detail: str
+    action: str
+    action_type: Literal["pending_review", "at_risk", "course", "teacher"] | None = None
+    action_id: str | None = None
+    action_label: str | None = None
+
+
+class AtRiskQuiz(BaseModel):
+    quiz_set_id: str
+    title: str
+    accuracy: int
+    attempts: int
+    last_attempted_at: datetime | None = None
+
+
+class AtRiskStudent(BaseModel):
+    student_id: str
+    name: str
+    accuracy: int
+    attempts: int
+    worst_quiz: AtRiskQuiz | None = None
+    quizzes: list[AtRiskQuiz]
+
+
+class AnalyticsSummary(BaseModel):
+    students: int
+    teachers: int
+    active_week: int
+    inactive_students: int
+    at_risk: int
+    avg_accuracy: int
+    graded_attempts: int
+    published_quizzes: int
+    courses: int
+
+
+class AnalyticsTrend(BaseModel):
+    attempts_last7: int
+    attempts_prev7: int
+    delta: int
+    has_trend: bool
+
+
+class AnalyticsPipeline(BaseModel):
+    pending_review: int
+    approved: int
+    rejected: int
+
+
+class CoursePerformance(BaseModel):
+    course_id: str
+    name: str
+    students: int
+    published: int
+    pending_review: int
+    accuracy: int
+    attempts: int
+
+
+class TeacherPerformance(BaseModel):
+    teacher_id: str
+    name: str
+    quiz_sets: int
+    published: int
+    approved: int
+    attempts: int
+    accuracy: int
+    last_quiz_created: datetime | None = None
+    is_active: bool
+
+
+class AnalyticsActivity(BaseModel):
+    date: str
+    attempts: int
+
+
+class InstitutionAnalyticsResponse(BaseModel):
+    updated_at: datetime
+    summary: AnalyticsSummary
+    trend: AnalyticsTrend
+    activity: list[AnalyticsActivity]
+    pipeline: AnalyticsPipeline
+    course_perf: list[CoursePerformance]
+    teacher_activity: list[TeacherPerformance]
+    at_risk_students: list[AtRiskStudent]
+    findings: list[AnalyticsFinding]
+
+
 def _gather(thunks: dict) -> dict:
     """Run Supabase reads sequentially and propagate failures to the UI.
 
@@ -1111,7 +1202,9 @@ def _admin_findings(
                 "severity": "critical" if summary["at_risk"] >= 3 else "warn",
                 "title": f"{summary['at_risk']} student(s) are struggling",
                 "detail": "These students average below 40% — they may need extra help.",
-                "action": "See the at-risk list below and share it with their teachers.",
+                "action": "Open the at-risk list and review each student's weakest quiz.",
+                "action_type": "at_risk",
+                "action_label": "View students",
             }
         )
 
@@ -1150,21 +1243,66 @@ def _admin_findings(
                 "title": f"{c['name']} has students but no published quiz",
                 "detail": f"{c['students']} enrolled with nothing to attempt yet{more}.",
                 "action": "Ask that course's teacher to publish a quiz.",
+                "action_type": "course",
+                "action_id": c["course_id"],
+                "action_label": "View course",
             }
         )
 
     # 6) Review backlog.
-    if pipeline["pending_review"] >= 10:
+    if pipeline["pending_review"] > 0:
         out.append(
             {
-                "severity": "info",
+                "severity": "critical" if pipeline["pending_review"] >= 10 else "warn",
                 "title": f"{pipeline['pending_review']} questions await review",
                 "detail": "Unreviewed questions can't be published to students.",
                 "action": "Nudge teachers to clear their review queue.",
+                "action_type": "pending_review",
+                "action_label": "View pending",
             }
         )
 
-    # 7) Idle teachers.
+    # 7) Teachers creating content without publishing it.
+    unpublished = [
+        teacher
+        for teacher in teacher_activity
+        if teacher["quiz_sets"] > 0 and teacher["published"] == 0
+    ]
+    if unpublished:
+        teacher = unpublished[0]
+        out.append(
+            {
+                "severity": "warn",
+                "title": f"{teacher['name']} has created quizzes but published none",
+                "detail": f"{teacher['quiz_sets']} quiz set(s) are not available to students.",
+                "action": "Review this teacher's drafts and help move ready quizzes to published.",
+                "action_type": "teacher",
+                "action_id": teacher["teacher_id"],
+                "action_label": "View teacher",
+            }
+        )
+
+    # 8) Courses with weak outcomes.
+    weak_courses = [
+        course
+        for course in course_perf
+        if course["attempts"] > 0 and course["accuracy"] < 50
+    ]
+    if weak_courses:
+        course = min(weak_courses, key=lambda row: row["accuracy"])
+        out.append(
+            {
+                "severity": "warn" if course["accuracy"] >= 40 else "critical",
+                "title": f"{course['name']} is averaging {course['accuracy']}% accuracy",
+                "detail": f"Based on {course['attempts']} graded attempt(s).",
+                "action": "Open the course and inspect its lowest-performing quizzes.",
+                "action_type": "course",
+                "action_id": course["course_id"],
+                "action_label": "View course",
+            }
+        )
+
+    # 9) Idle teachers.
     idle = [t for t in teacher_activity if t["quiz_sets"] == 0]
     if idle and summary["teachers"]:
         out.append(
@@ -1173,16 +1311,20 @@ def _admin_findings(
                 "title": f"{len(idle)} teacher(s) haven't created a quiz",
                 "detail": "Some teachers aren't using the platform yet.",
                 "action": "Check whether they need onboarding help.",
+                "action_type": "teacher",
+                "action_id": idle[0]["teacher_id"],
+                "action_label": "View teacher",
             }
         )
 
-    return out
+    severity_rank = {"critical": 0, "warn": 1, "good": 2, "info": 3}
+    return sorted(out, key=lambda finding: severity_rank[finding["severity"]])
 
 
-@router.get("/admin/analytics")
+@router.get("/admin/analytics", response_model=InstitutionAnalyticsResponse)
 def institution_analytics(
     profile: CurrentProfile = Depends(get_current_profile),
-) -> dict:
+) -> InstitutionAnalyticsResponse:
     """Data-analyst-style analytics for the institution admin: engagement, student
     outcomes, course performance, teacher activity, and plain-language findings.
     Pure database aggregation — no AI/ML."""
@@ -1220,7 +1362,13 @@ def institution_analytics(
             .data
             or [],
             "questions": lambda: service.table("questions")
-            .select("review_status, source, type, reviewed_by")
+            .select("id, review_status, source, type, reviewed_by")
+            .eq("tenant_id", t)
+            .execute()
+            .data
+            or [],
+            "variant_questions": lambda: service.table("quiz_variant_questions")
+            .select("variant_id, question_id")
             .eq("tenant_id", t)
             .execute()
             .data
@@ -1250,6 +1398,7 @@ def institution_analytics(
     subjects = data["subjects"]
     quiz_sets = data["quiz_sets"]
     questions = data["questions"]
+    variant_questions = data["variant_questions"]
     variants = data["variants"]
     attempts = data["attempts"]
     enrollments = data["enrollments"]
@@ -1268,19 +1417,27 @@ def institution_analytics(
     }
 
     today = date.today()
-    iso7 = (today - timedelta(days=7)).isoformat()
-    iso14 = (today - timedelta(days=14)).isoformat()
+    current_week_start = (today - timedelta(days=6)).isoformat()
+    previous_week_start = (today - timedelta(days=13)).isoformat()
 
     def pct(a: dict):
         m = var_marks.get(a["variant_id"])
         if not m:
             return None
-        return max(0, min(100, round((a.get("total_score") or 0) / m * 100)))
+        return max(0, min(100, (a.get("total_score") or 0) / m * 100))
 
     graded = [a for a in attempts if a["status"] == "graded"]
     stu_pcts: dict = defaultdict(list)
     course_pcts: dict = defaultdict(list)
     quizset_pcts: dict = defaultdict(list)
+    quizset_scores: dict = defaultdict(lambda: [0.0, 0.0])
+    course_scores: dict = defaultdict(lambda: [0.0, 0.0])
+    student_scores: dict = defaultdict(lambda: [0.0, 0.0])
+    student_quiz_pcts: dict = defaultdict(lambda: defaultdict(list))
+    student_quiz_scores: dict = defaultdict(
+        lambda: defaultdict(lambda: [0.0, 0.0])
+    )
+    student_quiz_last: dict = defaultdict(dict)
     active_ids: set = set()
     attempts_last7 = attempts_prev7 = 0
     for a in graded:
@@ -1288,41 +1445,76 @@ def institution_analytics(
         sid = a.get("student_id")
         sa = a.get("submitted_at")
         if p is not None:
+            max_score = float(var_marks[a["variant_id"]])
+            score = max(0.0, min(max_score, float(a.get("total_score") or 0)))
             if sid:
                 stu_pcts[sid].append(p)
+                student_scores[sid][0] += score
+                student_scores[sid][1] += max_score
             quiz_set_id = var_quizset.get(a["variant_id"])
             if quiz_set_id:
                 quizset_pcts[quiz_set_id].append(p)
+                quizset_scores[quiz_set_id][0] += score
+                quizset_scores[quiz_set_id][1] += max_score
+                if sid:
+                    student_quiz_pcts[sid][quiz_set_id].append(p)
+                    student_quiz_scores[sid][quiz_set_id][0] += score
+                    student_quiz_scores[sid][quiz_set_id][1] += max_score
+                    if sa and sa > student_quiz_last[sid].get(quiz_set_id, ""):
+                        student_quiz_last[sid][quiz_set_id] = sa
             cid = quizset_course.get(quiz_set_id)
             if cid:
                 course_pcts[cid].append(p)
+                course_scores[cid][0] += score
+                course_scores[cid][1] += max_score
         if sa:
             day = sa[:10]
-            if day >= iso7:
+            if current_week_start <= day <= today.isoformat():
                 attempts_last7 += 1
                 if sid:
                     active_ids.add(sid)
-            elif day >= iso14:
+            elif previous_week_start <= day < current_week_start:
                 attempts_prev7 += 1
 
-    all_pcts = [p for lst in stu_pcts.values() for p in lst]
-    avg_accuracy = round(sum(all_pcts) / len(all_pcts)) if all_pcts else 0
+    total_score = sum(value[0] for value in student_scores.values())
+    total_possible = sum(value[1] for value in student_scores.values())
+    avg_accuracy = round(total_score / total_possible * 100) if total_possible else 0
     with_attempts = set(stu_pcts.keys())
     inactive_students = [s for s in students if s["id"] not in with_attempts]
 
+    quizset_title = {q["id"]: q.get("title") or "Untitled quiz" for q in quiz_sets}
     at_risk = []
     for s in students:
         ps = stu_pcts.get(s["id"])
         if ps:
-            avg = sum(ps) / len(ps)
+            score, possible = student_scores[s["id"]]
+            avg = score / possible * 100 if possible else 0
             if avg < 40:
-                at_risk.append(
-                    {
-                        "name": name_by_id.get(s["id"], "—"),
-                        "accuracy": round(avg),
-                        "attempts": len(ps),
-                    }
+                quiz_rows = sorted(
+                    [
+                        {
+                            "quiz_set_id": quiz_set_id,
+                            "title": quizset_title.get(quiz_set_id, "Untitled quiz"),
+                            "accuracy": round(
+                                student_quiz_scores[s["id"]][quiz_set_id][0]
+                                / student_quiz_scores[s["id"]][quiz_set_id][1]
+                                * 100
+                            ),
+                            "attempts": len(values),
+                            "last_attempted_at": student_quiz_last[s["id"]].get(quiz_set_id),
+                        }
+                        for quiz_set_id, values in student_quiz_pcts[s["id"]].items()
+                    ],
+                    key=lambda row: (row["accuracy"], -row["attempts"]),
                 )
+                at_risk.append({
+                    "student_id": s["id"],
+                    "name": name_by_id.get(s["id"], "—"),
+                    "accuracy": round(avg),
+                    "attempts": len(ps),
+                    "worst_quiz": quiz_rows[0] if quiz_rows else None,
+                    "quizzes": quiz_rows,
+                })
     at_risk.sort(key=lambda x: x["accuracy"])
 
     window = [(today - timedelta(days=i)) for i in range(13, -1, -1)]
@@ -1340,6 +1532,16 @@ def institution_analytics(
     published_by_course = Counter(
         quizset_course.get(q["id"]) for q in quiz_sets if q["status"] == "published"
     )
+    pending_question_ids = {
+        q["id"] for q in questions if q.get("review_status") == "pending_review"
+    }
+    pending_by_course: dict[str, set[str]] = defaultdict(set)
+    for link in variant_questions:
+        question_id = link.get("question_id")
+        quiz_set_id = var_quizset.get(link.get("variant_id"))
+        course_id = quizset_course.get(quiz_set_id)
+        if question_id in pending_question_ids and course_id:
+            pending_by_course[course_id].add(question_id)
     course_perf = sorted(
         [
             {
@@ -1347,9 +1549,10 @@ def institution_analytics(
                 "name": course_name.get(c["id"], "Course"),
                 "students": enr_by_course.get(c["id"], 0),
                 "published": published_by_course.get(c["id"], 0),
+                "pending_review": len(pending_by_course.get(c["id"], set())),
                 "accuracy": (
-                    round(sum(course_pcts[c["id"]]) / len(course_pcts[c["id"]]))
-                    if course_pcts.get(c["id"])
+                    round(course_scores[c["id"]][0] / course_scores[c["id"]][1] * 100)
+                    if course_scores.get(c["id"], [0, 0])[1]
                     else 0
                 ),
                 "attempts": len(course_pcts.get(c["id"], [])),
@@ -1360,10 +1563,17 @@ def institution_analytics(
     )
 
     # Teacher activity.
-    qs_by_teacher: dict = defaultdict(lambda: {"sets": 0, "published": 0})
+    qs_by_teacher: dict = defaultdict(
+        lambda: {"sets": 0, "published": 0, "last_quiz_created": None}
+    )
     for q in quiz_sets:
         b = qs_by_teacher[q.get("created_by")]
         b["sets"] += 1
+        created_at = q.get("created_at")
+        if created_at and (
+            b["last_quiz_created"] is None or created_at > b["last_quiz_created"]
+        ):
+            b["last_quiz_created"] = created_at
         if q["status"] == "published":
             b["published"] += 1
     approved_by_teacher = Counter(
@@ -1372,10 +1582,13 @@ def institution_analytics(
         if q.get("review_status") == "approved" and q.get("reviewed_by")
     )
     teacher_pcts: dict = defaultdict(list)
+    teacher_scores: dict = defaultdict(lambda: [0.0, 0.0])
     for quiz_set in quiz_sets:
         teacher_id = quiz_set.get("created_by")
         if teacher_id:
             teacher_pcts[teacher_id].extend(quizset_pcts.get(quiz_set["id"], []))
+            teacher_scores[teacher_id][0] += quizset_scores[quiz_set["id"]][0]
+            teacher_scores[teacher_id][1] += quizset_scores[quiz_set["id"]][1]
     teacher_activity = sorted(
         [
             {
@@ -1387,16 +1600,21 @@ def institution_analytics(
                 "attempts": len(teacher_pcts.get(tt["id"], [])),
                 "accuracy": (
                     round(
-                        sum(teacher_pcts[tt["id"]])
-                        / len(teacher_pcts[tt["id"]])
+                        teacher_scores[tt["id"]][0]
+                        / teacher_scores[tt["id"]][1]
+                        * 100
                     )
                     if teacher_pcts.get(tt["id"])
                     else 0
                 ),
+                "last_quiz_created": qs_by_teacher.get(tt["id"], {}).get(
+                    "last_quiz_created"
+                ),
+                "is_active": qs_by_teacher.get(tt["id"], {}).get("sets", 0) > 0,
             }
             for tt in teachers
         ],
-        key=lambda x: -x["quiz_sets"],
+        key=lambda x: (-x["attempts"], -x["quiz_sets"], x["name"].lower()),
     )
 
     pipeline = {"pending_review": 0, "approved": 0, "rejected": 0}
@@ -1423,7 +1641,7 @@ def institution_analytics(
         "courses": len(courses),
     }
 
-    return {
+    return InstitutionAnalyticsResponse(**{
         "updated_at": datetime.now().isoformat(timespec="seconds"),
         "summary": summary,
         "trend": trend,
@@ -1431,7 +1649,7 @@ def institution_analytics(
         "pipeline": pipeline,
         "course_perf": course_perf,
         "teacher_activity": teacher_activity,
-        "at_risk_students": at_risk[:8],
+        "at_risk_students": at_risk,
         "findings": _admin_findings(
             summary=summary,
             trend=trend,
@@ -1439,7 +1657,7 @@ def institution_analytics(
             course_perf=course_perf,
             teacher_activity=teacher_activity,
         ),
-    }
+    })
 
 
 @router.get("/platform/stats")

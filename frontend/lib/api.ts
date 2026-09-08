@@ -834,6 +834,7 @@ export type InstitutionAnalytics = {
     name: string;
     students: number;
     published: number;
+    pending_review: number;
     accuracy: number;
     attempts: number;
   }[];
@@ -845,8 +846,29 @@ export type InstitutionAnalytics = {
     approved: number;
     attempts: number;
     accuracy: number;
+    last_quiz_created: string | null;
+    is_active: boolean;
   }[];
-  at_risk_students: { name: string; accuracy: number; attempts: number }[];
+  at_risk_students: {
+    student_id: string;
+    name: string;
+    accuracy: number;
+    attempts: number;
+    worst_quiz: {
+      quiz_set_id: string;
+      title: string;
+      accuracy: number;
+      attempts: number;
+      last_attempted_at: string | null;
+    } | null;
+    quizzes: {
+      quiz_set_id: string;
+      title: string;
+      accuracy: number;
+      attempts: number;
+      last_attempted_at: string | null;
+    }[];
+  }[];
   findings: QualityFinding[];
 };
 export const getInstitutionAnalytics = () =>
@@ -955,6 +977,9 @@ export type QualityFinding = {
   title: string;
   detail: string;
   action: string;
+  action_type?: "pending_review" | "at_risk" | "course" | "teacher" | null;
+  action_id?: string | null;
+  action_label?: string | null;
 };
 export type QualityTrend = {
   keep_rate_last7: number;
