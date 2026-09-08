@@ -4,6 +4,7 @@ platform analytics.
 
   GET    /api/v1/users          — institution's teachers
   POST   /api/v1/users          — admin creates a teacher
+  PUT    /api/v1/users/{id}     — admin edits a teacher and assignments
   DELETE /api/v1/users/{id}     — admin removes a teacher
   GET    /api/v1/teachers/{id}/courses — a teacher's assigned courses
   GET    /api/v1/courses/{id}/students — students enrolled in a course
@@ -16,10 +17,11 @@ from __future__ import annotations
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.lib.auth import CurrentProfile, get_current_profile
 from app.lib.supabase import get_service_client
+from app.services.teacher_access import replace_teacher_subjects
 
 router = APIRouter(prefix="/api/v1", tags=["admin"])
 
@@ -113,7 +115,7 @@ def list_users(profile: CurrentProfile = Depends(get_current_profile)) -> list[d
 
     teachers = (
         service.table("profiles")
-        .select("id, full_name, role")
+        .select("id, full_name, role, created_at")
         .eq("tenant_id", profile.tenant_id)
         .eq("role", "teacher")
         .execute()
@@ -164,6 +166,7 @@ def list_users(profile: CurrentProfile = Depends(get_current_profile)) -> list[d
         if course_id:
             course_ids_by_teacher.setdefault(teacher_id, set()).add(course_id)
 
+    teachers.sort(key=lambda teacher: teacher.get("created_at") or "", reverse=True)
     return [
         {
             "id": teacher["id"],
@@ -178,6 +181,7 @@ def list_users(profile: CurrentProfile = Depends(get_current_profile)) -> list[d
             "subject_count": len(
                 subjects_by_teacher.get(str(teacher["id"]), set())
             ),
+            "created_at": teacher.get("created_at"),
         }
         for teacher in teachers
     ]
@@ -189,30 +193,84 @@ class TeacherCreate(BaseModel):
     full_name: str
     email: str
     password: str
+    course_id: str
+    subject_ids: list[str] = Field(min_length=1, max_length=500)
 
 
-def _teacher_provisioning_course_id(service, tenant_id: str) -> str:
-    """Pick a tenant-owned course used only while the Auth trigger runs.
+class TeacherUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
 
-    Supabase applies custom app_metadata after inserting auth.users, so the
-    insert trigger cannot see our protected provisioning marker. A validated
-    course lets the existing trigger derive the tenant safely; the temporary
-    enrollment is removed immediately after the profile is promoted.
-    """
-    courses = (
-        service.table("courses")
-        .select("id")
+    full_name: str
+    email: str
+    subject_ids: list[str] = Field(max_length=500)
+
+
+def _validated_subject_ids(
+    service,
+    *,
+    tenant_id: str,
+    subject_ids: list[str],
+    course_id: str | None = None,
+    require_subject: bool = True,
+) -> list[str]:
+    """Validate every assignment against the admin's tenant and optional course."""
+    unique_ids = list(dict.fromkeys(str(subject_id) for subject_id in subject_ids))
+    if not unique_ids and require_subject:
+        raise HTTPException(status_code=400, detail="Select at least one subject.")
+    if not unique_ids:
+        return []
+
+    if course_id is not None:
+        course = (
+            service.table("courses")
+            .select("id")
+            .eq("id", course_id)
+            .eq("tenant_id", tenant_id)
+            .maybe_single()
+            .execute()
+        )
+        if course is None or not course.data:
+            raise HTTPException(status_code=400, detail="Course not found.")
+
+    subjects = (
+        service.table("subjects")
+        .select("id, course_id")
         .eq("tenant_id", tenant_id)
+        .in_("id", unique_ids)
         .execute()
         .data
         or []
     )
-    if not courses:
+    if {str(subject["id"]) for subject in subjects} != set(unique_ids):
         raise HTTPException(
             status_code=400,
-            detail="Create at least one course before adding a teacher.",
+            detail="One or more subjects do not belong to this institution.",
         )
-    return str(courses[0]["id"])
+    if course_id is not None and any(
+        str(subject["course_id"]) != course_id for subject in subjects
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="Every selected subject must belong to the selected course.",
+        )
+    return unique_ids
+
+
+def _tenant_course_exists(service, tenant_id: str, course_id: str) -> str:
+    course = (
+        service.table("courses")
+        .select("id")
+        .eq("id", course_id)
+        .eq("tenant_id", tenant_id)
+        .maybe_single()
+        .execute()
+    )
+    if course is None or not course.data:
+        raise HTTPException(
+            status_code=400,
+            detail="Course not found.",
+        )
+    return str(course.data["id"])
 
 
 @router.post("/users")
@@ -225,8 +283,14 @@ def create_user(
 
     if not body.full_name.strip():
         raise HTTPException(status_code=400, detail="Full name is required.")
-    provisioning_course_id = _teacher_provisioning_course_id(
-        service, profile.tenant_id
+    provisioning_course_id = _tenant_course_exists(
+        service, profile.tenant_id, body.course_id
+    )
+    subject_ids = _validated_subject_ids(
+        service,
+        tenant_id=profile.tenant_id,
+        course_id=provisioning_course_id,
+        subject_ids=body.subject_ids,
     )
 
     meta: dict = {
@@ -255,9 +319,12 @@ def create_user(
             role="teacher",
             full_name=body.full_name,
         )
-        service.table("enrollments").delete().eq("profile_id", created.user.id).eq(
-            "tenant_id", profile.tenant_id
-        ).eq("course_id", provisioning_course_id).execute()
+        replace_teacher_subjects(
+            service,
+            tenant_id=profile.tenant_id,
+            teacher_id=created.user.id,
+            subject_ids=subject_ids,
+        )
     except Exception as exc:  # noqa: BLE001
         if "created" in locals() and created.user:
             _delete_auth_user_quietly(service, created.user.id)
@@ -294,10 +361,10 @@ def delete_user(
     return {"deleted": user_id}
 
 
-def _assert_tenant_teacher(service, *, teacher_id: str, tenant_id: str) -> None:
+def _assert_tenant_teacher(service, *, teacher_id: str, tenant_id: str) -> dict:
     teacher = (
         service.table("profiles")
-        .select("id")
+        .select("id, full_name")
         .eq("id", teacher_id)
         .eq("tenant_id", tenant_id)
         .eq("role", "teacher")
@@ -306,6 +373,123 @@ def _assert_tenant_teacher(service, *, teacher_id: str, tenant_id: str) -> None:
     )
     if teacher is None or not teacher.data:
         raise HTTPException(status_code=404, detail="Teacher not found.")
+    return teacher.data
+
+
+@router.put("/users/{user_id}")
+def update_user(
+    user_id: str,
+    body: TeacherUpdate,
+    profile: CurrentProfile = Depends(get_current_profile),
+) -> dict:
+    """Update a tenant teacher's identity and subject/course assignments."""
+    _require_admin(profile)
+    service = get_service_client()
+    existing_profile = _assert_tenant_teacher(
+        service, teacher_id=user_id, tenant_id=profile.tenant_id
+    )
+    full_name = body.full_name.strip()
+    email = body.email.strip()
+    if not full_name:
+        raise HTTPException(status_code=400, detail="Full name is required.")
+    if not email:
+        raise HTTPException(status_code=400, detail="Email is required.")
+    subject_ids = _validated_subject_ids(
+        service,
+        tenant_id=profile.tenant_id,
+        subject_ids=body.subject_ids,
+        require_subject=False,
+    )
+    previous_assignments = (
+        service.table("teacher_subjects")
+        .select("subject_id")
+        .eq("teacher_id", user_id)
+        .eq("tenant_id", profile.tenant_id)
+        .execute()
+        .data
+        or []
+    )
+    previous_subject_ids = [str(row["subject_id"]) for row in previous_assignments]
+
+    try:
+        auth_response = service.auth.admin.get_user_by_id(user_id)
+    except Exception:  # noqa: BLE001
+        raise HTTPException(
+            status_code=400,
+            detail="Could not load the teacher's sign-in account.",
+        )
+    auth_user = getattr(auth_response, "user", auth_response)
+    previous_email = getattr(auth_user, "email", None)
+    previous_metadata = dict(getattr(auth_user, "user_metadata", None) or {})
+    updated_metadata = {**previous_metadata, "full_name": full_name}
+
+    auth_updated = False
+    profile_updated = False
+    try:
+        service.auth.admin.update_user_by_id(
+            user_id,
+            {
+                "email": email,
+                "email_confirm": True,
+                "user_metadata": updated_metadata,
+            },
+        )
+        auth_updated = True
+        updated_profile = (
+            service.table("profiles")
+            .update({"full_name": full_name})
+            .eq("id", user_id)
+            .eq("tenant_id", profile.tenant_id)
+            .eq("role", "teacher")
+            .execute()
+        )
+        if not updated_profile.data:
+            raise RuntimeError("The teacher profile could not be updated.")
+        profile_updated = True
+        assigned = replace_teacher_subjects(
+            service,
+            tenant_id=profile.tenant_id,
+            teacher_id=user_id,
+            subject_ids=subject_ids,
+        )
+    except Exception as exc:  # noqa: BLE001
+        # Best-effort compensation keeps the three stores aligned if a later
+        # step fails after Supabase Auth has already accepted the new email.
+        if profile_updated:
+            try:
+                service.table("profiles").update(
+                    {"full_name": existing_profile.get("full_name")}
+                ).eq("id", user_id).eq("tenant_id", profile.tenant_id).eq(
+                    "role", "teacher"
+                ).execute()
+            except Exception:  # noqa: BLE001
+                pass
+        if auth_updated:
+            try:
+                rollback_attributes: dict = {"user_metadata": previous_metadata}
+                if previous_email:
+                    rollback_attributes["email"] = previous_email
+                    rollback_attributes["email_confirm"] = True
+                service.auth.admin.update_user_by_id(user_id, rollback_attributes)
+            except Exception:  # noqa: BLE001
+                pass
+        try:
+            replace_teacher_subjects(
+                service,
+                tenant_id=profile.tenant_id,
+                teacher_id=user_id,
+                subject_ids=previous_subject_ids,
+            )
+        except Exception:  # noqa: BLE001
+            pass
+        raise HTTPException(status_code=400, detail=f"Could not update teacher: {exc}")
+
+    return {
+        "id": user_id,
+        "full_name": full_name,
+        "email": email,
+        "subject_ids": assigned,
+    }
 
 
 def _assert_tenant_course(service, *, course_id: str, tenant_id: str) -> dict:

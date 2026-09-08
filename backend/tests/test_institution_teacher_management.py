@@ -9,11 +9,14 @@ from pydantic import ValidationError
 
 from app.api.admin import (
     TeacherCreate,
-    _teacher_provisioning_course_id,
+    TeacherUpdate,
+    _tenant_course_exists,
+    _validated_subject_ids,
     delete_user,
     list_course_students,
     list_teacher_courses,
     list_users,
+    update_user,
 )
 from app.lib.auth import CurrentProfile
 
@@ -24,6 +27,7 @@ class _Query:
         self.filters: list[tuple[str, object]] = []
         self.in_filters: list[tuple[str, set[object]]] = []
         self.single = False
+        self.updates: dict | None = None
 
     def select(self, _columns: str):
         return self
@@ -40,13 +44,21 @@ class _Query:
         self.single = True
         return self
 
+    def update(self, values: dict):
+        self.updates = values
+        return self
+
     def execute(self):
-        rows = [dict(row) for row in self.rows]
+        rows = self.rows
         for column, value in self.filters:
             rows = [row for row in rows if row.get(column) == value]
         for column, values in self.in_filters:
             rows = [row for row in rows if row.get(column) in values]
-        return SimpleNamespace(data=(rows[0] if rows else None) if self.single else rows)
+        if self.updates is not None:
+            for row in rows:
+                row.update(self.updates)
+        result = [dict(row) for row in rows]
+        return SimpleNamespace(data=(result[0] if result else None) if self.single else result)
 
 
 class _AuthAdmin:
@@ -57,14 +69,34 @@ class _AuthAdmin:
         start = (page - 1) * per_page
         return self.users[start : start + per_page]
 
+    def get_user_by_id(self, user_id: str):
+        user = next(user for user in self.users if user.id == user_id)
+        return SimpleNamespace(user=user)
+
+    def update_user_by_id(self, user_id: str, attributes: dict):
+        user = next(user for user in self.users if user.id == user_id)
+        if "email" in attributes:
+            user.email = attributes["email"]
+        if "user_metadata" in attributes:
+            user.user_metadata = attributes["user_metadata"]
+        return SimpleNamespace(user=user)
+
+
+class _Rpc:
+    def __init__(self, data: list[str]) -> None:
+        self.data = data
+
+    def execute(self):
+        return SimpleNamespace(data=self.data)
+
 
 class _Service:
     def __init__(self) -> None:
         self.tables = {
             "profiles": [
-                {"id": "teacher-a", "tenant_id": "tenant-a", "role": "teacher", "full_name": "Ada Teacher"},
+                {"id": "teacher-a", "tenant_id": "tenant-a", "role": "teacher", "full_name": "Ada Teacher", "created_at": "2026-09-07T10:00:00Z"},
                 {"id": "student-a", "tenant_id": "tenant-a", "role": "student", "full_name": "Sam Student"},
-                {"id": "teacher-enrolled", "tenant_id": "tenant-a", "role": "teacher", "full_name": "Terry Teacher"},
+                {"id": "teacher-enrolled", "tenant_id": "tenant-a", "role": "teacher", "full_name": "Terry Teacher", "created_at": "2026-09-08T10:00:00Z"},
                 {"id": "teacher-b", "tenant_id": "tenant-b", "role": "teacher", "full_name": "Other Teacher"},
                 {"id": "student-b", "tenant_id": "tenant-b", "role": "student", "full_name": "Other Student"},
             ],
@@ -87,13 +119,22 @@ class _Service:
             ],
         }
         users = [
-            SimpleNamespace(id=row["id"], email=f'{row["id"]}@example.com')
+            SimpleNamespace(
+                id=row["id"],
+                email=f'{row["id"]}@example.com',
+                user_metadata={"tenant_id": row["tenant_id"]},
+            )
             for row in self.tables["profiles"]
         ]
         self.auth = SimpleNamespace(admin=_AuthAdmin(users))
 
     def table(self, name: str) -> _Query:
         return _Query(self.tables[name])
+
+    def rpc(self, name: str, params: dict) -> _Rpc:
+        if name != "replace_teacher_subjects":
+            raise AssertionError(f"Unexpected RPC: {name}")
+        return _Rpc(params["p_subject_ids"])
 
 
 class InstitutionTeacherManagementTests(unittest.TestCase):
@@ -117,6 +158,7 @@ class InstitutionTeacherManagementTests(unittest.TestCase):
         assigned = next(teacher for teacher in teachers if teacher["id"] == "teacher-a")
         self.assertEqual(assigned["courses"], ["First Year"])
         self.assertEqual(assigned["subject_count"], 1)
+        self.assertEqual(teachers[0]["id"], "teacher-enrolled")
 
     def test_teacher_course_counts_only_student_enrollments(self) -> None:
         courses = list_teacher_courses("teacher-a", self.profile)
@@ -150,18 +192,72 @@ class InstitutionTeacherManagementTests(unittest.TestCase):
                 password="password",
                 role="student",
                 course_id="course-a",
+                subject_ids=["subject-a"],
             )
 
-    def test_teacher_provisioning_uses_only_a_course_from_the_admin_tenant(self) -> None:
-        course_id = _teacher_provisioning_course_id(self.service, "tenant-a")
+    def test_teacher_provisioning_uses_selected_course_from_admin_tenant(self) -> None:
+        course_id = _tenant_course_exists(self.service, "tenant-a", "course-a")
 
         self.assertEqual(course_id, "course-a")
 
-    def test_teacher_provisioning_requires_an_existing_tenant_course(self) -> None:
+    def test_teacher_provisioning_rejects_cross_tenant_course(self) -> None:
         with self.assertRaises(HTTPException) as error:
-            _teacher_provisioning_course_id(self.service, "tenant-without-courses")
+            _tenant_course_exists(self.service, "tenant-a", "course-b")
 
         self.assertEqual(error.exception.status_code, 400)
+
+    def test_create_assignments_must_match_selected_course_and_tenant(self) -> None:
+        self.assertEqual(
+            _validated_subject_ids(
+                self.service,
+                tenant_id="tenant-a",
+                course_id="course-a",
+                subject_ids=["subject-a", "subject-a"],
+            ),
+            ["subject-a"],
+        )
+        with self.assertRaises(HTTPException) as tenant_error:
+            _validated_subject_ids(
+                self.service,
+                tenant_id="tenant-a",
+                course_id="course-a",
+                subject_ids=["subject-b"],
+            )
+        self.assertEqual(tenant_error.exception.status_code, 400)
+
+    def test_cross_tenant_teacher_cannot_be_edited(self) -> None:
+        with self.assertRaises(HTTPException) as error:
+            update_user(
+                "teacher-b",
+                TeacherUpdate(
+                    full_name="Changed",
+                    email="changed@example.com",
+                    subject_ids=["subject-a"],
+                ),
+                self.profile,
+            )
+
+        self.assertEqual(error.exception.status_code, 404)
+
+    def test_teacher_identity_and_assignments_can_be_edited(self) -> None:
+        result = update_user(
+            "teacher-a",
+            TeacherUpdate(
+                full_name="Ada Updated",
+                email="ada.updated@example.com",
+                subject_ids=["subject-a"],
+            ),
+            self.profile,
+        )
+
+        self.assertEqual(result["full_name"], "Ada Updated")
+        self.assertEqual(result["email"], "ada.updated@example.com")
+        profile = next(row for row in self.service.tables["profiles"] if row["id"] == "teacher-a")
+        self.assertEqual(profile["full_name"], "Ada Updated")
+        auth_user = self.service.auth.admin.get_user_by_id("teacher-a").user
+        self.assertEqual(auth_user.email, "ada.updated@example.com")
+        self.assertEqual(auth_user.user_metadata["tenant_id"], "tenant-a")
+        self.assertEqual(auth_user.user_metadata["full_name"], "Ada Updated")
 
     def test_student_cannot_be_deleted_through_teacher_management(self) -> None:
         with self.assertRaises(HTTPException) as error:

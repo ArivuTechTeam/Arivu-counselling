@@ -12,7 +12,7 @@ import {
 } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { ErrorCard } from "@/components/ui/error-card";
-import { BookOpen, ChevronDown, Copy, Eye, EyeOff, Sparkles, Trash, Users, X } from "@/components/ui/icons";
+import { BookOpen, Check, ChevronDown, Copy, Eye, EyeOff, Pencil, Sparkles, Trash, Users, X } from "@/components/ui/icons";
 import { Input } from "@/components/ui/input";
 import { PageHeader } from "@/components/ui/page-header";
 import { SkeletonList } from "@/components/ui/skeleton";
@@ -28,12 +28,13 @@ import {
   listCourses,
   listTeacherCourses,
   listUsers,
-  setTeacherSubjects,
+  updateTeacher,
 } from "@/lib/api";
 
 const TEACHERS_PER_PAGE = 12;
 
 type TemporaryCredential = { email: string; password: string };
+type Notice = { type: "success" | "error"; message: string };
 
 function generateTemporaryPassword(): string {
   const groups = ["ABCDEFGHJKLMNPQRSTUVWXYZ", "abcdefghijkmnopqrstuvwxyz", "23456789", "!@#$%"];
@@ -68,12 +69,15 @@ export default function UsersPage() {
     full_name: "",
     email: "",
     password: "",
+    course_id: "",
+    subject_ids: [] as string[],
   });
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [showPw, setShowPw] = useState(false);
   const [confirmDel, setConfirmDel] = useState<AdminUser | null>(null);
   const [manageTeacher, setManageTeacher] = useState<AdminUser | null>(null);
+  const [editIdentity, setEditIdentity] = useState({ full_name: "", email: "" });
   const [assignedSubjects, setAssignedSubjects] = useState<Set<string>>(new Set());
   const [loadingSubjects, setLoadingSubjects] = useState(false);
   const [savingSubjects, setSavingSubjects] = useState(false);
@@ -90,6 +94,16 @@ export default function UsersPage() {
   const [rosterError, setRosterError] = useState<string | null>(null);
   const [temporaryCredentials, setTemporaryCredentials] = useState<Record<string, TemporaryCredential>>({});
   const [copiedTeacherId, setCopiedTeacherId] = useState<string | null>(null);
+  const [notice, setNotice] = useState<Notice | null>(null);
+
+  const selectedCourse = courses.find((course) => course.id === form.course_id);
+
+  function showNotice(type: Notice["type"], message: string) {
+    setNotice({ type, message });
+    window.setTimeout(() => {
+      setNotice((current) => current?.message === message ? null : current);
+    }, 4000);
+  }
 
   const filteredUsers = useMemo(() => {
     if (!teachers) return [];
@@ -127,15 +141,21 @@ export default function UsersPage() {
         full_name: form.full_name,
         email: form.email,
         password: form.password,
+        course_id: form.course_id,
+        subject_ids: form.subject_ids,
       });
       setTemporaryCredentials((current) => ({
         ...current,
         [created.id]: { email: created.email, password: form.password },
       }));
-      setForm({ full_name: "", email: "", password: "" });
-      refresh();
+      setForm({ full_name: "", email: "", password: "", course_id: "", subject_ids: [] });
+      setPage(1);
+      await listUsers().then(setTeachers);
+      showNotice("success", "Teacher added successfully.");
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to add teacher");
+      const message = e instanceof Error ? e.message : "Failed to add teacher";
+      setError(message);
+      showNotice("error", message);
     } finally {
       setBusy(false);
     }
@@ -216,6 +236,10 @@ export default function UsersPage() {
 
   async function openSubjectAssignments(teacher: AdminUser) {
     setManageTeacher(teacher);
+    setEditIdentity({
+      full_name: teacher.full_name || "",
+      email: teacher.email || "",
+    });
     setAssignedSubjects(new Set());
     setAssignmentError(null);
     setLoadingSubjects(true);
@@ -245,7 +269,11 @@ export default function UsersPage() {
     setSavingSubjects(true);
     setAssignmentError(null);
     try {
-      await setTeacherSubjects(manageTeacher.id, Array.from(assignedSubjects));
+      await updateTeacher(manageTeacher.id, {
+        full_name: editIdentity.full_name,
+        email: editIdentity.email,
+        subject_ids: Array.from(assignedSubjects),
+      });
       setTeacherCourses((current) => {
         const next = { ...current };
         delete next[manageTeacher.id];
@@ -254,11 +282,12 @@ export default function UsersPage() {
       setExpandedTeacherId(null);
       setExpandedCourseId(null);
       setManageTeacher(null);
-      refresh();
+      await listUsers().then(setTeachers);
+      showNotice("success", "Teacher updated successfully.");
     } catch (e) {
-      setAssignmentError(
-        e instanceof Error ? e.message : "Failed to save subject assignments.",
-      );
+      const message = e instanceof Error ? e.message : "Failed to update teacher.";
+      setAssignmentError(message);
+      showNotice("error", message);
     } finally {
       setSavingSubjects(false);
     }
@@ -266,6 +295,23 @@ export default function UsersPage() {
 
   return (
     <div className="flex flex-col gap-6">
+      {notice && (
+        <div
+          role={notice.type === "error" ? "alert" : "status"}
+          aria-live="polite"
+          className={`fixed right-4 top-20 z-[60] flex max-w-sm items-center gap-3 rounded-xl border px-4 py-3 shadow-xl ${
+            notice.type === "success"
+              ? "border-primary/25 bg-primary text-primary-foreground"
+              : "border-destructive/25 bg-destructive text-destructive-foreground"
+          }`}
+        >
+          {notice.type === "success" ? <Check size={18} /> : <X size={18} />}
+          <span className="text-sm font-semibold">{notice.message}</span>
+          <button type="button" aria-label="Dismiss notification" onClick={() => setNotice(null)}>
+            <X size={16} />
+          </button>
+        </div>
+      )}
       <PageHeader
         title="Teachers"
         description="Add teachers, assign their subjects, and view course student rosters."
@@ -281,6 +327,53 @@ export default function UsersPage() {
         <CardContent className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <Input autoComplete="name" placeholder="Teacher name" value={form.full_name} onChange={(e) => setForm((f) => ({ ...f, full_name: e.target.value }))} />
           <Input autoComplete="email" placeholder="teacher@example.com" type="email" value={form.email} onChange={(e) => setForm((f) => ({ ...f, email: e.target.value }))} />
+          <label className="flex flex-col gap-1.5 text-sm font-medium text-foreground">
+            Course
+            <select
+              value={form.course_id}
+              onChange={(event) => setForm((current) => ({
+                ...current,
+                course_id: event.target.value,
+                subject_ids: [],
+              }))}
+              className="h-10 rounded-lg border border-input bg-background px-3 text-sm outline-none focus:ring-2 focus:ring-ring"
+            >
+              <option value="">Select a course</option>
+              {courses.map((course) => (
+                <option key={course.id} value={course.id}>{course.name}</option>
+              ))}
+            </select>
+          </label>
+          <fieldset className="rounded-xl border border-border p-3">
+            <legend className="px-1 text-sm font-medium text-foreground">Subjects</legend>
+            {!selectedCourse ? (
+              <p className="text-sm text-muted-foreground">Select a course first.</p>
+            ) : selectedCourse.subjects.length === 0 ? (
+              <p className="text-sm text-muted-foreground">This course has no subjects yet.</p>
+            ) : (
+              <div className="flex max-h-28 flex-wrap gap-2 overflow-y-auto">
+                {selectedCourse.subjects.map((subject) => {
+                  const checked = form.subject_ids.includes(subject.id);
+                  return (
+                    <label key={subject.id} className={`cursor-pointer rounded-full border px-3 py-1.5 text-xs font-semibold transition ${checked ? "border-primary bg-primary/10 text-primary" : "border-border text-muted-foreground hover:border-primary/40"}`}>
+                      <input
+                        type="checkbox"
+                        className="sr-only"
+                        checked={checked}
+                        onChange={() => setForm((current) => ({
+                          ...current,
+                          subject_ids: checked
+                            ? current.subject_ids.filter((id) => id !== subject.id)
+                            : [...current.subject_ids, subject.id],
+                        }))}
+                      />
+                      {subject.name}
+                    </label>
+                  );
+                })}
+              </div>
+            )}
+          </fieldset>
           <div className="flex flex-col gap-2 sm:flex-row">
             <div className="relative flex-1">
               <Input
@@ -305,7 +398,7 @@ export default function UsersPage() {
               Generate
             </Button>
           </div>
-          <Button disabled={busy || !form.full_name.trim() || !form.email.trim() || !form.password} onClick={add}>
+          <Button disabled={busy || !form.full_name.trim() || !form.email.trim() || !form.password || !form.course_id || form.subject_ids.length === 0} onClick={add}>
             {busy ? "Adding…" : "Add teacher"}
           </Button>
           {error && (
@@ -384,7 +477,15 @@ export default function UsersPage() {
                             <Copy size={14} className="mr-1.5" />
                             {copiedTeacherId === teacher.id ? "Copied" : "Copy login"}
                           </Button>
-                          <Button size="sm" variant="outline" onClick={() => void openSubjectAssignments(teacher)}>Assign</Button>
+                          <button
+                            type="button"
+                            className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-input text-muted-foreground transition hover:bg-accent hover:text-primary"
+                            aria-label={`Edit ${name}`}
+                            title="Edit teacher"
+                            onClick={() => void openSubjectAssignments(teacher)}
+                          >
+                            <Pencil size={16} />
+                          </button>
                           <button type="button" className="inline-flex h-9 w-9 items-center justify-center rounded-lg text-muted-foreground hover:bg-destructive/10 hover:text-destructive" disabled={busy} aria-label={`Remove ${name}`} onClick={() => setConfirmDel(teacher)}><Trash size={16} /></button>
                         </div>
                       </div>
@@ -396,7 +497,7 @@ export default function UsersPage() {
                           ) : teacherCourseError ? (
                             <ErrorCard message={teacherCourseError} />
                           ) : !assignedCourses?.length ? (
-                            <EmptyState icon={<BookOpen />} title="No courses assigned" message="Use Assign to give this teacher access to course subjects." />
+                            <EmptyState icon={<BookOpen />} title="No courses assigned" message="Use Edit to give this teacher access to course subjects." />
                           ) : (
                             <div className="flex flex-col gap-2">
                               {assignedCourses.map((course) => {
@@ -466,23 +567,22 @@ export default function UsersPage() {
           <div
             role="dialog"
             aria-modal="true"
-            aria-labelledby="subject-assignment-title"
-            className="animate-rise flex max-h-[85vh] w-full max-w-md flex-col rounded-2xl border border-border bg-card shadow-2xl"
+            aria-labelledby="teacher-edit-title"
+            className="animate-rise flex max-h-[90vh] w-full max-w-lg flex-col rounded-2xl border border-border bg-card shadow-2xl"
           >
             <div className="flex items-start justify-between gap-3 border-b p-5">
               <div>
-                <h3 id="subject-assignment-title" className="text-base font-bold text-foreground">
-                  Assign subjects
+                <h3 id="teacher-edit-title" className="text-base font-bold text-foreground">
+                  Edit teacher
                 </h3>
                 <p className="mt-0.5 text-xs text-muted-foreground">
-                  Choose the subjects that {manageTeacher.full_name || manageTeacher.email} can
-                  access and manage.
+                  Update the teacher&apos;s name, email, courses, and subjects.
                 </p>
               </div>
               <button
                 type="button"
                 onClick={() => !savingSubjects && setManageTeacher(null)}
-                aria-label="Close subject assignments"
+                aria-label="Close teacher editor"
                 className="text-muted-foreground transition-colors hover:text-foreground"
               >
                 <X size={18} />
@@ -499,6 +599,28 @@ export default function UsersPage() {
                 />
               ) : (
                 <div className="flex flex-col gap-4">
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <label className="flex flex-col gap-1.5 text-sm font-medium text-foreground">
+                      Name
+                      <Input
+                        autoComplete="name"
+                        value={editIdentity.full_name}
+                        onChange={(event) => setEditIdentity((current) => ({ ...current, full_name: event.target.value }))}
+                      />
+                    </label>
+                    <label className="flex flex-col gap-1.5 text-sm font-medium text-foreground">
+                      Email
+                      <Input
+                        autoComplete="email"
+                        type="email"
+                        value={editIdentity.email}
+                        onChange={(event) => setEditIdentity((current) => ({ ...current, email: event.target.value }))}
+                      />
+                    </label>
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    Selecting subjects under a course assigns that course to the teacher.
+                  </p>
                   {courses.map((course) => (
                     <div key={course.id}>
                       <div className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
@@ -548,9 +670,9 @@ export default function UsersPage() {
               </button>
               <Button
                 onClick={saveSubjectAssignments}
-                disabled={savingSubjects || loadingSubjects || Boolean(assignmentError)}
+                disabled={savingSubjects || loadingSubjects || !editIdentity.full_name.trim() || !editIdentity.email.trim()}
               >
-                {savingSubjects ? "Saving…" : "Save subjects"}
+                {savingSubjects ? "Saving…" : "Save changes"}
               </Button>
             </div>
           </div>

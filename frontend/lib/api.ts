@@ -710,12 +710,21 @@ export type AdminUser = {
   email: string | null;
   courses: string[];
   subject_count: number;
+  created_at: string | null;
 };
 
 export type TeacherCreateInput = {
   full_name: string;
   email: string;
   password: string;
+  course_id: string;
+  subject_ids: string[];
+};
+
+export type TeacherUpdateInput = {
+  full_name: string;
+  email: string;
+  subject_ids: string[];
 };
 
 export type TeacherCourse = {
@@ -756,6 +765,12 @@ export type PlatformStats = {
 export const listUsers = () => jsonRequest<AdminUser[]>("/api/v1/users", "GET");
 export const createTeacher = (input: TeacherCreateInput) =>
   jsonRequest<{ id: string; email: string }>("/api/v1/users", "POST", input);
+export const updateTeacher = (id: string, input: TeacherUpdateInput) =>
+  jsonRequest<{ id: string; full_name: string; email: string; subject_ids: string[] }>(
+    `/api/v1/users/${id}`,
+    "PUT",
+    input,
+  );
 export const deleteUser = (id: string) =>
   jsonRequest<{ deleted: string }>(`/api/v1/users/${id}`, "DELETE");
 export const listTeacherCourses = (teacherId: string) =>
