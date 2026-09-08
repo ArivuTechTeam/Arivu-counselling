@@ -232,7 +232,7 @@ def create_user(
             _delete_auth_user_quietly(service, created.user.id)
         raise HTTPException(status_code=400, detail=f"Could not create user: {exc}")
 
-    return {"id": created.user.id, "email": body.email}
+    return {"id": created.user.id, "email": body.email.strip()}
 
 
 @router.delete("/users/{user_id}")

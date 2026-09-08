@@ -12,7 +12,7 @@ import {
 } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { ErrorCard } from "@/components/ui/error-card";
-import { BookOpen, ChevronDown, Eye, EyeOff, Trash, Users, X } from "@/components/ui/icons";
+import { BookOpen, ChevronDown, Copy, Eye, EyeOff, Sparkles, Trash, Users, X } from "@/components/ui/icons";
 import { Input } from "@/components/ui/input";
 import { PageHeader } from "@/components/ui/page-header";
 import { SkeletonList } from "@/components/ui/skeleton";
@@ -32,6 +32,23 @@ import {
 } from "@/lib/api";
 
 const TEACHERS_PER_PAGE = 12;
+
+type TemporaryCredential = { email: string; password: string };
+
+function generateTemporaryPassword(): string {
+  const groups = ["ABCDEFGHJKLMNPQRSTUVWXYZ", "abcdefghijkmnopqrstuvwxyz", "23456789", "!@#$%"];
+  const alphabet = groups.join("");
+  const random = crypto.getRandomValues(new Uint32Array(28));
+  const characters = groups.map((group, index) => group[random[index] % group.length]);
+  for (let index = characters.length; index < 14; index += 1) {
+    characters.push(alphabet[random[index] % alphabet.length]);
+  }
+  for (let index = characters.length - 1; index > 0; index -= 1) {
+    const swapIndex = random[index + 14] % (index + 1);
+    [characters[index], characters[swapIndex]] = [characters[swapIndex], characters[index]];
+  }
+  return characters.join("");
+}
 
 function initials(text: string): string {
   return (
@@ -71,6 +88,8 @@ export default function UsersPage() {
   const [loadingCourseId, setLoadingCourseId] = useState<string | null>(null);
   const [teacherCourseError, setTeacherCourseError] = useState<string | null>(null);
   const [rosterError, setRosterError] = useState<string | null>(null);
+  const [temporaryCredentials, setTemporaryCredentials] = useState<Record<string, TemporaryCredential>>({});
+  const [copiedTeacherId, setCopiedTeacherId] = useState<string | null>(null);
 
   const filteredUsers = useMemo(() => {
     if (!teachers) return [];
@@ -104,17 +123,40 @@ export default function UsersPage() {
     setBusy(true);
     setError(null);
     try {
-      await createTeacher({
+      const created = await createTeacher({
         full_name: form.full_name,
         email: form.email,
         password: form.password,
       });
+      setTemporaryCredentials((current) => ({
+        ...current,
+        [created.id]: { email: created.email, password: form.password },
+      }));
       setForm({ full_name: "", email: "", password: "" });
       refresh();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to add teacher");
     } finally {
       setBusy(false);
+    }
+  }
+
+  function generatePassword() {
+    setForm((current) => ({ ...current, password: generateTemporaryPassword() }));
+    setShowPw(true);
+  }
+
+  async function copyTeacherLogin(teacher: AdminUser) {
+    const credential = temporaryCredentials[teacher.id];
+    if (!credential) return;
+    try {
+      await navigator.clipboard.writeText(
+        `Email: ${credential.email}\nTemporary password: ${credential.password}`,
+      );
+      setCopiedTeacherId(teacher.id);
+      window.setTimeout(() => setCopiedTeacherId(null), 2000);
+    } catch {
+      setError("Could not copy the teacher login. Please copy it manually from the form.");
     }
   }
 
@@ -239,23 +281,29 @@ export default function UsersPage() {
         <CardContent className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <Input autoComplete="name" placeholder="Teacher name" value={form.full_name} onChange={(e) => setForm((f) => ({ ...f, full_name: e.target.value }))} />
           <Input autoComplete="email" placeholder="teacher@example.com" type="email" value={form.email} onChange={(e) => setForm((f) => ({ ...f, email: e.target.value }))} />
-          <div className="relative">
-            <Input
-              placeholder="Temporary password"
-              autoComplete="new-password"
-              type={showPw ? "text" : "password"}
-              className="pr-10"
-              value={form.password}
-              onChange={(e) => setForm((f) => ({ ...f, password: e.target.value }))}
-            />
-            <button
-              type="button"
-              onClick={() => setShowPw((v) => !v)}
-              aria-label={showPw ? "Hide password" : "Show password"}
-              className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground transition-colors hover:text-foreground"
-            >
-              {showPw ? <EyeOff size={16} /> : <Eye size={16} />}
-            </button>
+          <div className="flex flex-col gap-2 sm:flex-row">
+            <div className="relative flex-1">
+              <Input
+                placeholder="Temporary password"
+                autoComplete="new-password"
+                type={showPw ? "text" : "password"}
+                className="pr-10"
+                value={form.password}
+                onChange={(e) => setForm((f) => ({ ...f, password: e.target.value }))}
+              />
+              <button
+                type="button"
+                onClick={() => setShowPw((v) => !v)}
+                aria-label={showPw ? "Hide password" : "Show password"}
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground transition-colors hover:text-foreground"
+              >
+                {showPw ? <EyeOff size={16} /> : <Eye size={16} />}
+              </button>
+            </div>
+            <Button type="button" variant="outline" onClick={generatePassword}>
+              <Sparkles size={15} className="mr-1.5" />
+              Generate
+            </Button>
           </div>
           <Button disabled={busy || !form.full_name.trim() || !form.email.trim() || !form.password} onClick={add}>
             {busy ? "Adding…" : "Add teacher"}
@@ -325,7 +373,17 @@ export default function UsersPage() {
                           </span>
                           <ChevronDown size={18} className={`mt-1 shrink-0 transition-transform ${isExpanded ? "rotate-180" : ""}`} />
                         </button>
-                        <div className="flex shrink-0 items-center gap-1">
+                        <div className="flex shrink-0 flex-col items-end gap-1 sm:flex-row sm:items-center">
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            disabled={!temporaryCredentials[teacher.id]}
+                            title={temporaryCredentials[teacher.id] ? "Copy email and temporary password" : "Temporary password is available only for teachers created in this page session"}
+                            onClick={() => void copyTeacherLogin(teacher)}
+                          >
+                            <Copy size={14} className="mr-1.5" />
+                            {copiedTeacherId === teacher.id ? "Copied" : "Copy login"}
+                          </Button>
                           <Button size="sm" variant="outline" onClick={() => void openSubjectAssignments(teacher)}>Assign</Button>
                           <button type="button" className="inline-flex h-9 w-9 items-center justify-center rounded-lg text-muted-foreground hover:bg-destructive/10 hover:text-destructive" disabled={busy} aria-label={`Remove ${name}`} onClick={() => setConfirmDel(teacher)}><Trash size={16} /></button>
                         </div>

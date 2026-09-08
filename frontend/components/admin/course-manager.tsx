@@ -121,10 +121,6 @@ function Modal({
 }
 
 // --- cards --------------------------------------------------------------------
-function ActionBar({ children }: { children: ReactNode }) {
-  return <div className="flex border-t border-border bg-background">{children}</div>;
-}
-
 function CourseCard({
   course,
   onOpen,
@@ -137,9 +133,18 @@ function CourseCard({
   const color = courseColor(course.id);
   const n = course.subjects.length;
   return (
-    <div className="animate-rise overflow-hidden rounded-[14px] border-[1.5px] border-border bg-card shadow-[0_2px_8px_rgba(16,40,28,0.04)] transition-shadow hover:shadow-[0_6px_24px_rgba(15,23,42,0.10)]">
-      <div className="h-1.5" style={{ background: color }} />
-      <div className="p-5">
+    <div className="animate-rise relative overflow-hidden rounded-[14px] border-[1.5px] border-border bg-card shadow-[0_2px_8px_rgba(16,40,28,0.04)] transition hover:-translate-y-0.5 hover:shadow-[0_8px_26px_rgba(15,23,42,0.12)]">
+      <button
+        type="button"
+        onClick={onDelete}
+        aria-label={`Delete ${course.name}`}
+        className="absolute right-3 top-4 z-10 inline-flex h-9 w-9 items-center justify-center rounded-lg text-muted-foreground transition hover:bg-destructive/10 hover:text-destructive"
+      >
+        <Trash size={16} />
+      </button>
+      <button type="button" onClick={onOpen} className="block w-full text-left">
+        <div className="h-1.5" style={{ background: color }} />
+        <div className="p-5 pr-14">
         <div className="flex items-center gap-3">
           <span
             className="flex h-12 w-12 shrink-0 items-center justify-center rounded-[14px] text-base font-black text-white"
@@ -163,23 +168,12 @@ function CourseCard({
           >
             {n} subject{n === 1 ? "" : "s"}
           </span>
+          <span className="inline-flex items-center gap-1 text-[0.72rem] font-semibold text-muted-foreground">
+            View subjects <span aria-hidden="true">→</span>
+          </span>
         </div>
-      </div>
-      <ActionBar>
-        <button
-          onClick={onOpen}
-          className="flex flex-1 items-center justify-center gap-1.5 border-r border-border py-3 text-[0.78rem] font-bold transition hover:bg-secondary"
-          style={{ color }}
-        >
-          Subjects →
-        </button>
-        <button
-          onClick={onDelete}
-          className="flex flex-1 items-center justify-center gap-1.5 py-3 text-[0.78rem] font-bold text-destructive transition hover:bg-destructive/10"
-        >
-          Delete
-        </button>
-      </ActionBar>
+        </div>
+      </button>
     </div>
   );
 }
@@ -194,19 +188,19 @@ function SubjectCard({
   onDelete: () => void;
 }) {
   return (
-    <div className="animate-rise overflow-hidden rounded-[14px] border-[1.5px] border-border bg-card shadow-[0_2px_8px_rgba(16,40,28,0.04)] transition-shadow hover:shadow-[0_6px_24px_rgba(15,23,42,0.10)]">
+    <div className="animate-rise relative overflow-hidden rounded-[14px] border-[1.5px] border-border bg-card shadow-[0_2px_8px_rgba(16,40,28,0.04)] transition-shadow hover:shadow-[0_6px_24px_rgba(15,23,42,0.10)]">
+      <button
+        type="button"
+        onClick={onDelete}
+        aria-label={`Delete ${name}`}
+        className="absolute right-3 top-3 z-10 inline-flex h-9 w-9 items-center justify-center rounded-lg text-muted-foreground transition hover:bg-destructive/10 hover:text-destructive"
+      >
+        <Trash size={16} />
+      </button>
       <div className="h-1" style={{ background: color }} />
-      <div className="p-4">
+      <div className="min-h-20 p-4 pr-14">
         <p className="break-words text-[0.97rem] font-bold text-foreground">{name}</p>
       </div>
-      <ActionBar>
-        <button
-          onClick={onDelete}
-          className="flex flex-1 items-center justify-center gap-1.5 py-2.5 text-[0.78rem] font-bold text-destructive transition hover:bg-destructive/10"
-        >
-          Delete
-        </button>
-      </ActionBar>
     </div>
   );
 }
