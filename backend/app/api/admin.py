@@ -18,7 +18,7 @@ from __future__ import annotations
 import secrets
 import string
 from collections import Counter
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -2344,6 +2344,7 @@ class AdminQuizSet(BaseModel):
 @router.get("/admin/quiz-sets", response_model=list[AdminQuizSet])
 def admin_quiz_sets(
     profile: CurrentProfile = Depends(get_current_profile),
+    teacher_id: str | None = None,
 ) -> list[AdminQuizSet]:
     """
     Every quiz set in the institution, enriched with course/subject/teacher and a
@@ -2353,17 +2354,16 @@ def admin_quiz_sets(
     service = get_service_client()
     t = profile.tenant_id
 
-    sets = (
+    sets_query = (
         service.table("quiz_sets")
         .select(
             "id, title, status, subject_id, created_by, created_at, published_at"
         )
         .eq("tenant_id", t)
-        .order("created_at", desc=True)
-        .execute()
-        .data
-        or []
     )
+    if teacher_id:
+        sets_query = sets_query.eq("created_by", teacher_id)
+    sets = sets_query.order("created_at", desc=True).execute().data or []
     if not sets:
         return []
 
@@ -2527,6 +2527,220 @@ def admin_quiz_sets(
             )
         )
     return out
+
+
+class TeacherAnalyticsDetail(BaseModel):
+    teacher_id: str
+    teacher_name: str
+    quiz_sets_created: int
+    quiz_sets_published: int
+    total_attempts: int
+    avg_accuracy: float
+    last_quiz_created: datetime | None
+    is_active: bool
+    course_names: list[str]
+
+
+class TeacherAnalyticsSummary(BaseModel):
+    total_teachers: int
+    active_teachers: int
+    avg_accuracy: float
+    total_quiz_sets: int
+    total_published: int
+    total_attempts: int
+
+
+class TeacherAnalyticsResponse(BaseModel):
+    teachers: list[TeacherAnalyticsDetail]
+    summary: TeacherAnalyticsSummary
+
+
+@router.get("/admin/teachers/analytics", response_model=TeacherAnalyticsResponse)
+def admin_teacher_analytics(
+    profile: CurrentProfile = Depends(get_current_profile),
+) -> TeacherAnalyticsResponse:
+    """Tenant-wide faculty activity, engagement, and student outcomes."""
+    _require_admin(profile)
+    service = get_service_client()
+    tenant_id = profile.tenant_id
+
+    teachers = (
+        service.table("profiles")
+        .select("id, full_name")
+        .eq("tenant_id", tenant_id)
+        .eq("role", "teacher")
+        .execute()
+        .data
+        or []
+    )
+    quiz_sets = (
+        service.table("quiz_sets")
+        .select("id, created_by, subject_id, status, created_at")
+        .eq("tenant_id", tenant_id)
+        .execute()
+        .data
+        or []
+    )
+    subject_ids = list(
+        {row["subject_id"] for row in quiz_sets if row.get("subject_id")}
+    )
+    subjects = (
+        service.table("subjects")
+        .select("id, course_id")
+        .eq("tenant_id", tenant_id)
+        .in_("id", subject_ids)
+        .execute()
+        .data
+        if subject_ids
+        else []
+    )
+    subject_course = {row["id"]: row.get("course_id") for row in subjects}
+    course_ids = list(
+        {course_id for course_id in subject_course.values() if course_id}
+    )
+    courses = (
+        service.table("courses")
+        .select("id, name")
+        .eq("tenant_id", tenant_id)
+        .in_("id", course_ids)
+        .execute()
+        .data
+        if course_ids
+        else []
+    )
+    course_names = {row["id"]: row["name"] for row in courses}
+
+    quiz_set_ids = [row["id"] for row in quiz_sets]
+    variants = (
+        service.table("quiz_variants")
+        .select("id, quiz_set_id, total_marks")
+        .eq("tenant_id", tenant_id)
+        .in_("quiz_set_id", quiz_set_ids)
+        .execute()
+        .data
+        if quiz_set_ids
+        else []
+    )
+    variant_quiz_set = {row["id"]: row["quiz_set_id"] for row in variants}
+    variant_marks = {
+        row["id"]: float(row.get("total_marks") or 0) for row in variants
+    }
+    variant_ids = list(variant_quiz_set)
+    attempts = (
+        service.table("quiz_attempts")
+        .select("variant_id, status, total_score")
+        .eq("tenant_id", tenant_id)
+        .in_("variant_id", variant_ids)
+        .execute()
+        .data
+        if variant_ids
+        else []
+    )
+
+    quiz_set_teacher = {
+        row["id"]: row.get("created_by") for row in quiz_sets
+    }
+    sets_by_teacher: dict[str, list[dict]] = {}
+    for row in quiz_sets:
+        teacher_id = row.get("created_by")
+        if teacher_id:
+            sets_by_teacher.setdefault(teacher_id, []).append(row)
+
+    attempts_by_teacher: Counter = Counter()
+    score_by_teacher: Counter = Counter()
+    maximum_by_teacher: Counter = Counter()
+    for attempt in attempts:
+        variant_id = attempt.get("variant_id")
+        quiz_set_id = variant_quiz_set.get(variant_id)
+        teacher_id = quiz_set_teacher.get(quiz_set_id)
+        if not teacher_id:
+            continue
+        attempts_by_teacher[teacher_id] += 1
+        maximum = variant_marks.get(variant_id, 0)
+        if attempt.get("status") == "graded" and maximum > 0:
+            score_by_teacher[teacher_id] += float(attempt.get("total_score") or 0)
+            maximum_by_teacher[teacher_id] += maximum
+
+    active_since = datetime.now(timezone.utc) - timedelta(days=30)
+    details: list[TeacherAnalyticsDetail] = []
+    for teacher in teachers:
+        teacher_id = teacher["id"]
+        teacher_sets = sets_by_teacher.get(teacher_id, [])
+        created_values = [row.get("created_at") for row in teacher_sets if row.get("created_at")]
+        last_created_value = max(created_values) if created_values else None
+        last_created = (
+            datetime.fromisoformat(last_created_value.replace("Z", "+00:00"))
+            if last_created_value
+            else None
+        )
+        if last_created and last_created.tzinfo is None:
+            last_created = last_created.replace(tzinfo=timezone.utc)
+        maximum = float(maximum_by_teacher.get(teacher_id, 0))
+        teacher_course_names = sorted(
+            {
+                course_names[course_id]
+                for row in teacher_sets
+                if (course_id := subject_course.get(row.get("subject_id")))
+                and course_id in course_names
+            }
+        )
+        details.append(
+            TeacherAnalyticsDetail(
+                teacher_id=str(teacher_id),
+                teacher_name=teacher.get("full_name") or "Unnamed teacher",
+                quiz_sets_created=len(teacher_sets),
+                quiz_sets_published=sum(
+                    1 for row in teacher_sets if row.get("status") == "published"
+                ),
+                total_attempts=int(attempts_by_teacher.get(teacher_id, 0)),
+                avg_accuracy=(
+                    round(
+                        max(
+                            0,
+                            min(
+                                100,
+                                float(score_by_teacher.get(teacher_id, 0))
+                                / maximum
+                                * 100,
+                            ),
+                        ),
+                        1,
+                    )
+                    if maximum
+                    else 0
+                ),
+                last_quiz_created=last_created,
+                is_active=bool(last_created and last_created >= active_since),
+                course_names=teacher_course_names,
+            )
+        )
+
+    details.sort(
+        key=lambda row: (
+            -row.total_attempts,
+            -row.quiz_sets_created,
+            row.teacher_name.lower(),
+        )
+    )
+    total_score = float(sum(score_by_teacher.values()))
+    total_maximum = float(sum(maximum_by_teacher.values()))
+    return TeacherAnalyticsResponse(
+        teachers=details,
+        summary=TeacherAnalyticsSummary(
+            total_teachers=len(details),
+            active_teachers=sum(1 for row in details if row.is_active),
+            avg_accuracy=(
+                round(max(0, min(100, total_score / total_maximum * 100)), 1)
+                if total_maximum
+                else 0
+            ),
+            total_quiz_sets=len(quiz_sets),
+            total_published=sum(
+                1 for row in quiz_sets if row.get("status") == "published"
+            ),
+            total_attempts=len(attempts),
+        ),
+    )
 
 
 @router.get("/admin/quiz-sets/{quiz_set_id}")

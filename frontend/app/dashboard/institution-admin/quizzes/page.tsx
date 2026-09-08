@@ -2,6 +2,8 @@
 
 import { useEffect, useMemo, useState } from "react";
 
+import { FacultyAnalysisCard } from "@/components/institution-admin/faculty-analysis-card";
+import { FacultyAnalysisModal } from "@/components/institution-admin/faculty-analysis-modal";
 import { QuestionPaperButtons } from "@/components/shared/pdf-buttons";
 import { Card, CardContent } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -9,7 +11,7 @@ import { ErrorCard } from "@/components/ui/error-card";
 import { ChevronDown, Inbox } from "@/components/ui/icons";
 import { PageHeader } from "@/components/ui/page-header";
 import { SkeletonList } from "@/components/ui/skeleton";
-import { AdminQuizSet, getAdminQuizSets } from "@/lib/api";
+import { AdminQuizSet, TeacherAnalytics, getAdminQuizSets, getTeacherAnalytics } from "@/lib/api";
 
 import { QuizPerformanceModal } from "./_components/quiz-performance-modal";
 
@@ -40,10 +42,18 @@ export default function AdminQuizzesPage() {
   const [sort, setSort] = useState<SortKey>("created_desc");
   const [filtersReady, setFiltersReady] = useState(false);
   const [selectedQuiz, setSelectedQuiz] = useState<AdminQuizSet | null>(null);
+  const [faculty, setFaculty] = useState<TeacherAnalytics | null>(null);
+  const [facultyOpen, setFacultyOpen] = useState(false);
+  const [teacherRows, setTeacherRows] = useState<{ teacherId: string; rows: AdminQuizSet[] } | null>(null);
 
   function load() {
     setError(null);
-    getAdminQuizSets().then(setRows).catch((reason) => setError(reason.message));
+    Promise.all([getAdminQuizSets(), getTeacherAnalytics()])
+      .then(([quizRows, teacherAnalytics]) => {
+        setRows(quizRows);
+        setFaculty(teacherAnalytics);
+      })
+      .catch((reason) => setError(reason.message));
   }
 
   useEffect(load, []);
@@ -82,7 +92,8 @@ export default function AdminQuizzesPage() {
 
   const filtered = useMemo(() => {
     const normalized = query.trim().toLowerCase();
-    const result = (rows ?? []).filter((row) => {
+    const source = teacherId && teacherRows?.teacherId === teacherId ? teacherRows.rows : (rows ?? []);
+    const result = source.filter((row) => {
       const matchesSearch = !normalized || [row.title, row.course, row.subject, row.teacher]
         .filter(Boolean)
         .some((value) => (value as string).toLowerCase().includes(normalized));
@@ -95,10 +106,20 @@ export default function AdminQuizzesPage() {
       const dates = new Date(a.created_at ?? 0).getTime() - new Date(b.created_at ?? 0).getTime();
       return dates * (sort === "created_asc" ? 1 : -1);
     });
-  }, [courseId, query, rows, sort, status, teacherId]);
+  }, [courseId, query, rows, sort, status, teacherId, teacherRows]);
+
+  function filterByTeacher(nextTeacherId: string) {
+    setError(null);
+    setTeacherId(nextTeacherId);
+    setTeacherRows(null);
+    if (!nextTeacherId) return;
+    getAdminQuizSets(nextTeacherId)
+      .then((quizRows) => setTeacherRows({ teacherId: nextTeacherId, rows: quizRows }))
+      .catch((reason) => setError(reason.message));
+  }
 
   function clearFilters() {
-    setQuery(""); setTeacherId(""); setCourseId(""); setStatus(""); setSort("created_desc");
+    setQuery(""); setTeacherId(""); setTeacherRows(null); setCourseId(""); setStatus(""); setSort("created_desc");
   }
 
   return (
@@ -106,10 +127,12 @@ export default function AdminQuizzesPage() {
       <PageHeader title="Quiz performance" description="Find low-engagement quizzes, compare results, and inspect student and question performance." />
       {error && <ErrorCard message={error} onRetry={load} />}
 
+      <FacultyAnalysisCard analytics={faculty} onOpen={() => setFacultyOpen(true)} />
+
       <Card className="animate-rise">
         <CardContent className="grid gap-3 p-4 sm:grid-cols-2 xl:grid-cols-[minmax(220px,1fr)_180px_180px_160px_210px]">
           <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search title, course, subject or teacher…" aria-label="Search quizzes" className="h-11 rounded-xl border border-input bg-background px-4 text-sm shadow-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/20" />
-          <select value={teacherId} onChange={(event) => setTeacherId(event.target.value)} aria-label="Filter by teacher" className={SELECT_CLASS}><option value="">All teachers</option>{teachers.map((teacher) => <option key={teacher.id} value={teacher.id}>{teacher.name}</option>)}</select>
+          <select value={teacherId} onChange={(event) => filterByTeacher(event.target.value)} aria-label="Filter by teacher" className={SELECT_CLASS}><option value="">All teachers</option>{teachers.map((teacher) => <option key={teacher.id} value={teacher.id}>{teacher.name}</option>)}</select>
           <select value={courseId} onChange={(event) => setCourseId(event.target.value)} aria-label="Filter by course" className={SELECT_CLASS}><option value="">All courses</option>{courses.map((course) => <option key={course.id} value={course.id}>{course.name}</option>)}</select>
           <select value={status} onChange={(event) => setStatus(event.target.value)} aria-label="Filter by status" className={SELECT_CLASS}><option value="">All statuses</option><option value="published">Published</option><option value="draft">Draft</option></select>
           <select value={sort} onChange={(event) => setSort(event.target.value as SortKey)} aria-label="Sort quizzes" className={SELECT_CLASS}><option value="created_desc">Newest created</option><option value="created_asc">Oldest created</option><option value="attempts_desc">Most attempts</option><option value="attempts_asc">Fewest attempts</option><option value="accuracy_desc">Highest accuracy</option><option value="accuracy_asc">Lowest accuracy</option><option value="published_first">Published first</option></select>
@@ -146,6 +169,15 @@ export default function AdminQuizzesPage() {
             );
           })}
         </div>
+      )}
+      {facultyOpen && faculty && (
+        <FacultyAnalysisModal
+          analytics={faculty}
+          quizzes={rows ?? []}
+          onClose={() => setFacultyOpen(false)}
+          onFilterTeacher={filterByTeacher}
+          onOpenQuiz={(quiz) => { setFacultyOpen(false); setSelectedQuiz(quiz); }}
+        />
       )}
       {selectedQuiz && <QuizPerformanceModal quiz={selectedQuiz} onClose={() => setSelectedQuiz(null)} />}
     </div>

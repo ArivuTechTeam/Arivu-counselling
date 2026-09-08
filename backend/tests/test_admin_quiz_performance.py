@@ -4,7 +4,11 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from app.api.admin import admin_quiz_set_detail, admin_quiz_sets
+from app.api.admin import (
+    admin_quiz_set_detail,
+    admin_quiz_sets,
+    admin_teacher_analytics,
+)
 from app.api.institution_admin import router as institution_admin_router
 from app.lib.auth import CurrentProfile
 
@@ -63,6 +67,7 @@ class _Service:
             ],
             "profiles": [
                 {"id": "teacher-a", "tenant_id": "tenant-a", "role": "teacher", "full_name": "Ada"},
+                {"id": "teacher-inactive", "tenant_id": "tenant-a", "role": "teacher", "full_name": "No quizzes"},
                 {"id": "student-a", "tenant_id": "tenant-a", "role": "student", "full_name": "Sam"},
                 {"id": "teacher-b", "tenant_id": "tenant-b", "role": "teacher", "full_name": "Hidden"},
             ],
@@ -132,6 +137,42 @@ class AdminQuizPerformanceTests(unittest.TestCase):
         self.assertEqual(detail["weak_questions"][0]["question_id"], "question-a2")
         self.assertEqual(detail["weak_questions"][0]["accuracy"], 0.0)
 
+    def test_teacher_analytics_aggregates_activity_and_weighted_accuracy(self) -> None:
+        result = admin_teacher_analytics(self.profile)
+
+        self.assertEqual(result.summary.total_teachers, 2)
+        self.assertEqual(result.summary.active_teachers, 1)
+        self.assertEqual(result.summary.total_quiz_sets, 1)
+        self.assertEqual(result.summary.total_published, 1)
+        self.assertEqual(result.summary.total_attempts, 3)
+        self.assertEqual(result.summary.avg_accuracy, 43.3)
+        teacher = result.teachers[0]
+        self.assertEqual(teacher.teacher_id, "teacher-a")
+        self.assertEqual(teacher.quiz_sets_created, 1)
+        self.assertEqual(teacher.quiz_sets_published, 1)
+        self.assertEqual(teacher.total_attempts, 3)
+        self.assertEqual(teacher.avg_accuracy, 43.3)
+        self.assertEqual(teacher.course_names, ["B.Sc"])
+        inactive = result.teachers[1]
+        self.assertEqual(inactive.teacher_id, "teacher-inactive")
+        self.assertFalse(inactive.is_active)
+        self.assertEqual(inactive.quiz_sets_created, 0)
+        self.assertEqual(inactive.total_attempts, 0)
+
+    def test_quiz_set_teacher_filter_cannot_cross_tenants(self) -> None:
+        own_rows = admin_quiz_sets(self.profile, teacher_id="teacher-a")
+        other_rows = admin_quiz_sets(self.profile, teacher_id="teacher-b")
+
+        self.assertEqual([row.id for row in own_rows], ["set-a"])
+        self.assertEqual(other_rows, [])
+
+    def test_every_teacher_analytics_query_is_tenant_scoped(self) -> None:
+        admin_teacher_analytics(self.profile)
+
+        for table, filters in self.service.executed:
+            with self.subTest(table=table):
+                self.assertIn(("tenant_id", "tenant-a"), filters)
+
     def test_every_performance_query_is_tenant_scoped(self) -> None:
         admin_quiz_set_detail("set-a", self.profile)
 
@@ -147,6 +188,7 @@ class AdminQuizPerformanceTests(unittest.TestCase):
         }
 
         self.assertIn(("/api/v1/admin/quiz-sets", "GET"), registered)
+        self.assertIn(("/api/v1/admin/teachers/analytics", "GET"), registered)
         self.assertIn(
             ("/api/v1/admin/quiz-sets/{quiz_set_id}", "GET"),
             registered,

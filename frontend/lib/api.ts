@@ -1103,8 +1103,40 @@ export type AdminQuizSet = {
     needs_edit: number;
   };
 };
-export const getAdminQuizSets = () =>
-  jsonRequest<AdminQuizSet[]>("/api/v1/admin/quiz-sets", "GET");
+export const getAdminQuizSets = (teacherId?: string) =>
+  jsonRequest<AdminQuizSet[]>(
+    `/api/v1/admin/quiz-sets${teacherId ? `?teacher_id=${encodeURIComponent(teacherId)}` : ""}`,
+    "GET",
+  );
+
+export type TeacherAnalyticsSummary = {
+  total_teachers: number;
+  active_teachers: number;
+  avg_accuracy: number;
+  total_quiz_sets: number;
+  total_published: number;
+  total_attempts: number;
+};
+
+export type TeacherAnalyticsDetail = {
+  teacher_id: string;
+  teacher_name: string;
+  quiz_sets_created: number;
+  quiz_sets_published: number;
+  total_attempts: number;
+  avg_accuracy: number;
+  last_quiz_created: string | null;
+  is_active: boolean;
+  course_names: string[];
+};
+
+export type TeacherAnalytics = {
+  teachers: TeacherAnalyticsDetail[];
+  summary: TeacherAnalyticsSummary;
+};
+
+export const getTeacherAnalytics = () =>
+  jsonRequest<TeacherAnalytics>("/api/v1/admin/teachers/analytics", "GET");
 
 export type AdminQuizSetDetail = {
   quiz: AdminQuizSet;
