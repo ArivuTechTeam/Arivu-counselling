@@ -484,7 +484,7 @@ create trigger on_auth_user_created
 -- selection. It derives the tenant from the course and can only create a
 -- student profile; existing profiles are returned unchanged.
 create or replace function complete_google_signup(p_course_id uuid)
-returns table (tenant_id uuid, role public.user_role, course_id uuid)
+returns table (out_tenant_id uuid, out_role public.user_role, out_course_id uuid)
 language plpgsql
 security definer
 set search_path = ''
