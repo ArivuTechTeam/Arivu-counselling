@@ -5,6 +5,7 @@ platform analytics.
   GET    /api/v1/users          — institution's teachers
   POST   /api/v1/users          — admin creates a teacher
   PUT    /api/v1/users/{id}     — admin edits a teacher and assignments
+  POST   /api/v1/users/{id}/temporary-password — reset and copy a login
   DELETE /api/v1/users/{id}     — admin removes a teacher
   GET    /api/v1/teachers/{id}/courses — a teacher's assigned courses
   GET    /api/v1/courses/{id}/students — students enrolled in a course
@@ -14,6 +15,8 @@ platform analytics.
 
 from __future__ import annotations
 
+import secrets
+import string
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -377,6 +380,54 @@ def _assert_tenant_teacher(service, *, teacher_id: str, tenant_id: str) -> dict:
     if teacher is None or not teacher.data:
         raise HTTPException(status_code=404, detail="Teacher not found.")
     return teacher.data
+
+
+def _generate_temporary_password(length: int = 14) -> str:
+    """Create a strong temporary password without storing it in plaintext."""
+    groups = (string.ascii_uppercase, string.ascii_lowercase, string.digits, "!@#$%")
+    characters = [secrets.choice(group) for group in groups]
+    alphabet = "".join(groups)
+    characters.extend(secrets.choice(alphabet) for _ in range(length - len(groups)))
+    secrets.SystemRandom().shuffle(characters)
+    return "".join(characters)
+
+
+@router.post("/users/{user_id}/temporary-password")
+def reset_teacher_temporary_password(
+    user_id: str,
+    profile: CurrentProfile = Depends(get_current_profile),
+) -> dict:
+    """Reset a tenant teacher's password and return it once for immediate copying."""
+    _require_admin(profile)
+    service = get_service_client()
+    _assert_tenant_teacher(
+        service, teacher_id=user_id, tenant_id=profile.tenant_id
+    )
+    temporary_password = _generate_temporary_password()
+    try:
+        updated_profile = (
+            service.table("profiles")
+            .update({"must_change_password": True})
+            .eq("id", user_id)
+            .eq("tenant_id", profile.tenant_id)
+            .eq("role", "teacher")
+            .execute()
+        )
+        if not updated_profile.data:
+            raise RuntimeError("The teacher profile could not be updated.")
+        auth_response = service.auth.admin.update_user_by_id(
+            user_id, {"password": temporary_password}
+        )
+    except Exception:  # noqa: BLE001
+        raise HTTPException(
+            status_code=400,
+            detail="Could not generate a new temporary teacher login.",
+        )
+    auth_user = getattr(auth_response, "user", auth_response)
+    return {
+        "email": getattr(auth_user, "email", None),
+        "password": temporary_password,
+    }
 
 
 @router.put("/users/{user_id}")

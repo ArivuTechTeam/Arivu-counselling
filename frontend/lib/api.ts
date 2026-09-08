@@ -771,6 +771,11 @@ export const updateTeacher = (id: string, input: TeacherUpdateInput) =>
     "PUT",
     input,
   );
+export const resetTeacherTemporaryPassword = (id: string) =>
+  jsonRequest<{ email: string; password: string }>(
+    `/api/v1/users/${id}/temporary-password`,
+    "POST",
+  );
 export const deleteUser = (id: string) =>
   jsonRequest<{ deleted: string }>(`/api/v1/users/${id}`, "DELETE");
 export const listTeacherCourses = (teacherId: string) =>

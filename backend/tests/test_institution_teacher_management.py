@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -10,14 +11,17 @@ from pydantic import ValidationError
 from app.api.admin import (
     TeacherCreate,
     TeacherUpdate,
+    _generate_temporary_password,
     _tenant_course_exists,
     _validated_subject_ids,
     delete_user,
     list_course_students,
     list_teacher_courses,
     list_users,
+    reset_teacher_temporary_password,
     update_user,
 )
+from app.api.institution_admin import router as institution_admin_router
 from app.lib.auth import CurrentProfile
 
 
@@ -79,6 +83,8 @@ class _AuthAdmin:
             user.email = attributes["email"]
         if "user_metadata" in attributes:
             user.user_metadata = attributes["user_metadata"]
+        if "password" in attributes:
+            user.password = attributes["password"]
         return SimpleNamespace(user=user)
 
 
@@ -258,6 +264,38 @@ class InstitutionTeacherManagementTests(unittest.TestCase):
         self.assertEqual(auth_user.email, "ada.updated@example.com")
         self.assertEqual(auth_user.user_metadata["tenant_id"], "tenant-a")
         self.assertEqual(auth_user.user_metadata["full_name"], "Ada Updated")
+
+    def test_temporary_password_is_strong_and_reset_for_tenant_teacher(self) -> None:
+        generated = _generate_temporary_password()
+        self.assertEqual(len(generated), 14)
+        for pattern in (r"[A-Z]", r"[a-z]", r"[0-9]", r"[!@#$%]"):
+            self.assertRegex(generated, pattern)
+
+        result = reset_teacher_temporary_password("teacher-a", self.profile)
+
+        self.assertEqual(result["email"], "teacher-a@example.com")
+        self.assertEqual(len(result["password"]), 14)
+        auth_user = self.service.auth.admin.get_user_by_id("teacher-a").user
+        self.assertEqual(auth_user.password, result["password"])
+        teacher = next(row for row in self.service.tables["profiles"] if row["id"] == "teacher-a")
+        self.assertTrue(teacher["must_change_password"])
+
+    def test_cross_tenant_teacher_password_cannot_be_reset(self) -> None:
+        with self.assertRaises(HTTPException) as error:
+            reset_teacher_temporary_password("teacher-b", self.profile)
+
+        self.assertEqual(error.exception.status_code, 404)
+
+    def test_temporary_password_endpoint_is_registered(self) -> None:
+        registered = {
+            (route.path, method)
+            for route in institution_admin_router.routes
+            for method in getattr(route, "methods", set())
+        }
+        self.assertIn(
+            ("/api/v1/users/{user_id}/temporary-password", "POST"),
+            registered,
+        )
 
     def test_student_cannot_be_deleted_through_teacher_management(self) -> None:
         with self.assertRaises(HTTPException) as error:

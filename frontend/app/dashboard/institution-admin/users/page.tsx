@@ -28,6 +28,7 @@ import {
   listCourses,
   listTeacherCourses,
   listUsers,
+  resetTeacherTemporaryPassword,
   updateTeacher,
 } from "@/lib/api";
 
@@ -94,6 +95,8 @@ export default function UsersPage() {
   const [rosterError, setRosterError] = useState<string | null>(null);
   const [temporaryCredentials, setTemporaryCredentials] = useState<Record<string, TemporaryCredential>>({});
   const [copiedTeacherId, setCopiedTeacherId] = useState<string | null>(null);
+  const [credentialResetTeacher, setCredentialResetTeacher] = useState<AdminUser | null>(null);
+  const [resettingCredential, setResettingCredential] = useState(false);
   const [notice, setNotice] = useState<Notice | null>(null);
 
   const selectedCourse = courses.find((course) => course.id === form.course_id);
@@ -168,7 +171,10 @@ export default function UsersPage() {
 
   async function copyTeacherLogin(teacher: AdminUser) {
     const credential = temporaryCredentials[teacher.id];
-    if (!credential) return;
+    if (!credential) {
+      setCredentialResetTeacher(teacher);
+      return;
+    }
     try {
       await navigator.clipboard.writeText(
         `Email: ${credential.email}\nTemporary password: ${credential.password}`,
@@ -177,6 +183,43 @@ export default function UsersPage() {
       window.setTimeout(() => setCopiedTeacherId(null), 2000);
     } catch {
       showNotice("error", "Could not copy the teacher login. Please copy it manually.");
+    }
+  }
+
+  async function resetAndCopyTeacherLogin() {
+    if (!credentialResetTeacher) return;
+    setResettingCredential(true);
+    let credential: TemporaryCredential;
+    try {
+      credential = await resetTeacherTemporaryPassword(credentialResetTeacher.id);
+      setTemporaryCredentials((current) => ({
+        ...current,
+        [credentialResetTeacher.id]: credential,
+      }));
+    } catch (e) {
+      showNotice(
+        "error",
+        e instanceof Error ? e.message : "Could not generate a new login.",
+      );
+      setResettingCredential(false);
+      return;
+    }
+
+    const teacherId = credentialResetTeacher.id;
+    setCredentialResetTeacher(null);
+    setResettingCredential(false);
+    try {
+      await navigator.clipboard.writeText(
+        `Email: ${credential.email}\nTemporary password: ${credential.password}`,
+      );
+      setCopiedTeacherId(teacherId);
+      showNotice("success", "New temporary login generated and copied.");
+      window.setTimeout(() => setCopiedTeacherId(null), 2000);
+    } catch {
+      showNotice(
+        "error",
+        "New login generated. Click Copy login again to copy it.",
+      );
     }
   }
 
@@ -474,8 +517,7 @@ export default function UsersPage() {
                           <Button
                             size="sm"
                             variant="outline"
-                            disabled={!temporaryCredentials[teacher.id]}
-                            title={temporaryCredentials[teacher.id] ? "Copy email and temporary password" : "Temporary password is available only for teachers created in this page session"}
+                            title={temporaryCredentials[teacher.id] ? "Copy email and temporary password" : "Generate a new temporary password and copy the login"}
                             onClick={() => void copyTeacherLogin(teacher)}
                           >
                             <Copy size={14} className="mr-1.5" />
@@ -722,6 +764,31 @@ export default function UsersPage() {
                 <Trash size={15} />
                 {busy ? "Removing…" : "Remove"}
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {credentialResetTeacher && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+          onClick={(event) => event.target === event.currentTarget && !resettingCredential && setCredentialResetTeacher(null)}
+        >
+          <div role="dialog" aria-modal="true" aria-labelledby="reset-login-title" className="animate-rise w-full max-w-md rounded-2xl border border-border bg-card p-6 shadow-2xl">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h3 id="reset-login-title" className="text-base font-bold text-foreground">Generate a new login?</h3>
+                <p className="mt-2 text-sm text-muted-foreground">
+                  The original password cannot be retrieved after a refresh. This will replace the password for {credentialResetTeacher.full_name || credentialResetTeacher.email} and copy the new email and temporary password.
+                </p>
+              </div>
+              <button type="button" aria-label="Close" disabled={resettingCredential} onClick={() => setCredentialResetTeacher(null)} className="text-muted-foreground hover:text-foreground disabled:opacity-50"><X size={18} /></button>
+            </div>
+            <div className="mt-6 flex justify-end gap-2">
+              <Button type="button" variant="outline" disabled={resettingCredential} onClick={() => setCredentialResetTeacher(null)}>Cancel</Button>
+              <Button type="button" disabled={resettingCredential} onClick={() => void resetAndCopyTeacherLogin()}>
+                {resettingCredential ? "Generating…" : "Generate and copy"}
+              </Button>
             </div>
           </div>
         </div>

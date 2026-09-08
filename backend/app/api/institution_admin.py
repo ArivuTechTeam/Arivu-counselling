@@ -11,6 +11,7 @@ from app.api.admin import router as handler_router
 _PATHS = {
     "/api/v1/users",
     "/api/v1/users/{user_id}",
+    "/api/v1/users/{user_id}/temporary-password",
     "/api/v1/teachers/{teacher_id}/courses",
     "/api/v1/courses/{course_id}/students",
     "/api/v1/admin/stats",
