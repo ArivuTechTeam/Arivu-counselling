@@ -18,6 +18,7 @@ _PATHS = {
     "/api/v1/admin/overview",
     "/api/v1/admin/analytics",
     "/api/v1/admin/quiz-sets",
+    "/api/v1/admin/quiz-sets/{quiz_set_id}",
 }
 
 router = APIRouter()

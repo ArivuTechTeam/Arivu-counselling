@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   Area,
   AreaChart,
@@ -20,10 +20,15 @@ import {
 import { ErrorCard } from "@/components/ui/error-card";
 import { PageHeader } from "@/components/ui/page-header";
 import {
+  AdminQuizSet,
   InstitutionAnalytics,
   QualityFinding,
+  getAdminQuizSets,
   getInstitutionAnalytics,
 } from "@/lib/api";
+
+import { QuizDrilldownModal } from "./_components/quiz-drilldown-modal";
+import { QuizPerformanceModal } from "../quizzes/_components/quiz-performance-modal";
 
 const BRAND = "#15603d";
 
@@ -112,15 +117,25 @@ export default function InstitutionAnalyticsPage() {
   const [d, setD] = useState<InstitutionAnalytics | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [quizzes, setQuizzes] = useState<AdminQuizSet[]>([]);
+  const [drilldown, setDrilldown] = useState<{ type: "course" | "teacher"; id: string; name: string } | null>(null);
+  const [selectedQuiz, setSelectedQuiz] = useState<AdminQuizSet | null>(null);
 
   function load() {
     setLoading(true);
-    getInstitutionAnalytics()
-      .then(setD)
+    Promise.all([getInstitutionAnalytics(), getAdminQuizSets()])
+      .then(([analytics, quizRows]) => { setD(analytics); setQuizzes(quizRows); })
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false));
   }
   useEffect(load, []);
+
+  const drilldownQuizzes = useMemo(() => {
+    if (!drilldown) return [];
+    return quizzes
+      .filter((quiz) => drilldown.type === "course" ? quiz.course_id === drilldown.id : quiz.teacher_id === drilldown.id)
+      .sort((a, b) => b.attempts_count - a.attempts_count || a.avg_accuracy - b.avg_accuracy);
+  }, [drilldown, quizzes]);
 
   if (error) {
     return (
@@ -362,7 +377,14 @@ export default function InstitutionAnalyticsPage() {
                     </thead>
                     <tbody>
                       {d.course_perf.map((c, i) => (
-                        <tr key={i} className="border-b last:border-0">
+                        <tr
+                          key={i}
+                          role="button"
+                          tabIndex={0}
+                          className="cursor-pointer border-b transition hover:bg-accent focus:bg-accent focus:outline-none last:border-0"
+                          onClick={() => setDrilldown({ type: "course", id: c.course_id, name: c.name })}
+                          onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") setDrilldown({ type: "course", id: c.course_id, name: c.name }); }}
+                        >
                           <td className="px-2 py-2.5 font-medium text-foreground">
                             {c.name}
                           </td>
@@ -401,12 +423,12 @@ export default function InstitutionAnalyticsPage() {
                 <p className="text-sm text-muted-foreground">No teachers yet.</p>
               ) : (
                 d.teacher_activity.map((tc, i) => (
-                  <div key={i} className="flex flex-col gap-1">
+                  <button key={i} type="button" onClick={() => setDrilldown({ type: "teacher", id: tc.teacher_id, name: tc.name })} className="flex flex-col gap-1 rounded-lg p-2 text-left transition hover:bg-accent">
                     <div className="flex items-center justify-between gap-3 text-sm">
                       <span className="truncate text-foreground">{tc.name}</span>
                       <span className="shrink-0 text-muted-foreground">
                         {tc.quiz_sets} set{tc.quiz_sets === 1 ? "" : "s"} · {tc.published}{" "}
-                        published · {tc.approved} approved
+                        published · {tc.attempts} attempts · {tc.attempts ? `${tc.accuracy}% accuracy` : "no attempts"}
                       </span>
                     </div>
                     <div className="h-2 w-full overflow-hidden rounded-full bg-muted">
@@ -415,11 +437,22 @@ export default function InstitutionAnalyticsPage() {
                         style={{ width: `${(tc.quiz_sets / maxTeacher) * 100}%` }}
                       />
                     </div>
-                  </div>
+                  </button>
                 ))
               )}
             </CardContent>
           </Card>
+
+          {drilldown && (
+            <QuizDrilldownModal
+              title={`${drilldown.name} quizzes`}
+              description={drilldown.type === "course" ? "Course quizzes sorted by engagement, then lowest accuracy." : "Teacher quizzes sorted by engagement, then lowest accuracy."}
+              quizzes={drilldownQuizzes}
+              onClose={() => setDrilldown(null)}
+              onSelect={(quiz) => { setDrilldown(null); setSelectedQuiz(quiz); }}
+            />
+          )}
+          {selectedQuiz && <QuizPerformanceModal quiz={selectedQuiz} onClose={() => setSelectedQuiz(null)} />}
         </>
       )}
     </div>

@@ -17,6 +17,8 @@ from __future__ import annotations
 
 import secrets
 import string
+from collections import Counter
+from datetime import datetime
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -1278,6 +1280,7 @@ def institution_analytics(
     graded = [a for a in attempts if a["status"] == "graded"]
     stu_pcts: dict = defaultdict(list)
     course_pcts: dict = defaultdict(list)
+    quizset_pcts: dict = defaultdict(list)
     active_ids: set = set()
     attempts_last7 = attempts_prev7 = 0
     for a in graded:
@@ -1287,7 +1290,10 @@ def institution_analytics(
         if p is not None:
             if sid:
                 stu_pcts[sid].append(p)
-            cid = quizset_course.get(var_quizset.get(a["variant_id"]))
+            quiz_set_id = var_quizset.get(a["variant_id"])
+            if quiz_set_id:
+                quizset_pcts[quiz_set_id].append(p)
+            cid = quizset_course.get(quiz_set_id)
             if cid:
                 course_pcts[cid].append(p)
         if sa:
@@ -1337,6 +1343,7 @@ def institution_analytics(
     course_perf = sorted(
         [
             {
+                "course_id": c["id"],
                 "name": course_name.get(c["id"], "Course"),
                 "students": enr_by_course.get(c["id"], 0),
                 "published": published_by_course.get(c["id"], 0),
@@ -1364,13 +1371,28 @@ def institution_analytics(
         for q in questions
         if q.get("review_status") == "approved" and q.get("reviewed_by")
     )
+    teacher_pcts: dict = defaultdict(list)
+    for quiz_set in quiz_sets:
+        teacher_id = quiz_set.get("created_by")
+        if teacher_id:
+            teacher_pcts[teacher_id].extend(quizset_pcts.get(quiz_set["id"], []))
     teacher_activity = sorted(
         [
             {
+                "teacher_id": tt["id"],
                 "name": tt.get("full_name") or "—",
                 "quiz_sets": qs_by_teacher.get(tt["id"], {}).get("sets", 0),
                 "published": qs_by_teacher.get(tt["id"], {}).get("published", 0),
                 "approved": approved_by_teacher.get(tt["id"], 0),
+                "attempts": len(teacher_pcts.get(tt["id"], [])),
+                "accuracy": (
+                    round(
+                        sum(teacher_pcts[tt["id"]])
+                        / len(teacher_pcts[tt["id"]])
+                    )
+                    if teacher_pcts.get(tt["id"])
+                    else 0
+                ),
             }
             for tt in teachers
         ],
@@ -2292,25 +2314,50 @@ def platform_ai_monitoring(
     }
 
 
-# ── Institution admin: browse ALL quizzes (any course/subject) ───────────────
-@router.get("/admin/quiz-sets")
+# ── Institution admin: quiz performance ─────────────────────────────────────
+class ReviewStatusCounts(BaseModel):
+    pending: int = 0
+    approved: int = 0
+    rejected: int = 0
+    needs_edit: int = 0
+
+
+class AdminQuizSet(BaseModel):
+    id: str
+    title: str
+    status: str
+    subject: str | None
+    subject_id: str | None
+    course: str | None
+    course_id: str | None
+    teacher: str | None
+    teacher_id: str | None
+    questions: int
+    attempts_count: int
+    avg_accuracy: float
+    created_at: datetime | None
+    published_at: datetime | None
+    last_attempted_at: datetime | None
+    review_status: ReviewStatusCounts
+
+
+@router.get("/admin/quiz-sets", response_model=list[AdminQuizSet])
 def admin_quiz_sets(
     profile: CurrentProfile = Depends(get_current_profile),
-) -> list[dict]:
+) -> list[AdminQuizSet]:
     """
     Every quiz set in the institution, enriched with course/subject/teacher and a
-    question count — so an institution admin can browse and download any quiz's
-    question paper. (Question content is read via GET /quiz-sets/{id}.)
+    question/review counts and graded-attempt performance.
     """
-    from collections import Counter
-
     _require_admin(profile)
     service = get_service_client()
     t = profile.tenant_id
 
     sets = (
         service.table("quiz_sets")
-        .select("id, title, status, subject_id, created_by, created_at")
+        .select(
+            "id, title, status, subject_id, created_by, created_at, published_at"
+        )
         .eq("tenant_id", t)
         .order("created_at", desc=True)
         .execute()
@@ -2325,7 +2372,12 @@ def admin_quiz_sets(
         {
             s["id"]: s
             for s in (
-                service.table("subjects").select("id, name, course_id").in_("id", subject_ids).execute().data
+                service.table("subjects")
+                .select("id, name, course_id")
+                .eq("tenant_id", t)
+                .in_("id", subject_ids)
+                .execute()
+                .data
                 or []
             )
         }
@@ -2336,7 +2388,15 @@ def admin_quiz_sets(
     courses = (
         {
             c["id"]: c["name"]
-            for c in (service.table("courses").select("id, name").in_("id", course_ids).execute().data or [])
+            for c in (
+                service.table("courses")
+                .select("id, name")
+                .eq("tenant_id", t)
+                .in_("id", course_ids)
+                .execute()
+                .data
+                or []
+            )
         }
         if course_ids
         else {}
@@ -2345,7 +2405,16 @@ def admin_quiz_sets(
     teachers = (
         {
             p["id"]: p.get("full_name")
-            for p in (service.table("profiles").select("id, full_name").in_("id", teacher_ids).execute().data or [])
+            for p in (
+                service.table("profiles")
+                .select("id, full_name")
+                .eq("tenant_id", t)
+                .eq("role", "teacher")
+                .in_("id", teacher_ids)
+                .execute()
+                .data
+                or []
+            )
         }
         if teacher_ids
         else {}
@@ -2353,30 +2422,259 @@ def admin_quiz_sets(
 
     set_ids = [s["id"] for s in sets]
     variants = (
-        service.table("quiz_variants").select("id, quiz_set_id").in_("quiz_set_id", set_ids).execute().data
+        service.table("quiz_variants")
+        .select("id, quiz_set_id, total_marks")
+        .eq("tenant_id", t)
+        .in_("quiz_set_id", set_ids)
+        .execute()
+        .data
         or []
     )
     var_to_set = {v["id"]: v["quiz_set_id"] for v in variants}
+    var_marks = {v["id"]: float(v.get("total_marks") or 0) for v in variants}
     vq = (
-        service.table("quiz_variant_questions").select("variant_id").in_("variant_id", list(var_to_set)).execute().data
+        service.table("quiz_variant_questions")
+        .select("variant_id, question_id")
+        .eq("tenant_id", t)
+        .in_("variant_id", list(var_to_set))
+        .execute()
+        .data
         if var_to_set
         else []
     )
-    qcount = Counter(var_to_set[r["variant_id"]] for r in vq if r["variant_id"] in var_to_set)
+    question_ids_by_set: dict[str, set[str]] = {}
+    for row in vq:
+        quiz_set_id = var_to_set.get(row["variant_id"])
+        if quiz_set_id:
+            question_ids_by_set.setdefault(quiz_set_id, set()).add(row["question_id"])
+    question_ids = list({question_id for ids in question_ids_by_set.values() for question_id in ids})
+    questions = (
+        service.table("questions")
+        .select("id, review_status")
+        .eq("tenant_id", t)
+        .in_("id", question_ids)
+        .execute()
+        .data
+        if question_ids
+        else []
+    )
+    review_by_question = {
+        question["id"]: question.get("review_status") for question in questions
+    }
 
-    out = []
+    attempts = (
+        service.table("quiz_attempts")
+        .select("id, variant_id, total_score, submitted_at")
+        .eq("tenant_id", t)
+        .eq("status", "graded")
+        .in_("variant_id", list(var_to_set))
+        .execute()
+        .data
+        if var_to_set
+        else []
+    )
+    attempt_stats: dict[str, dict] = {}
+    for attempt in attempts:
+        quiz_set_id = var_to_set.get(attempt["variant_id"])
+        maximum = var_marks.get(attempt["variant_id"], 0)
+        if not quiz_set_id:
+            continue
+        bucket = attempt_stats.setdefault(
+            quiz_set_id,
+            {"count": 0, "score": 0.0, "maximum": 0.0, "last": None},
+        )
+        bucket["count"] += 1
+        submitted_at = attempt.get("submitted_at")
+        if submitted_at and (bucket["last"] is None or submitted_at > bucket["last"]):
+            bucket["last"] = submitted_at
+        if maximum > 0:
+            bucket["score"] += float(attempt.get("total_score") or 0)
+            bucket["maximum"] += maximum
+
+    out: list[AdminQuizSet] = []
     for s in sets:
         sub = subjects.get(s.get("subject_id"))
+        quiz_question_ids = question_ids_by_set.get(s["id"], set())
+        reviews = Counter(review_by_question.get(question_id) for question_id in quiz_question_ids)
+        stats = attempt_stats.get(s["id"], {})
+        score = float(stats.get("score", 0))
+        maximum = float(stats.get("maximum", 0))
         out.append(
-            {
-                "id": s["id"],
-                "title": s["title"],
-                "status": s["status"],
-                "subject": sub["name"] if sub else None,
-                "course": courses.get(sub["course_id"]) if sub else None,
-                "teacher": teachers.get(s.get("created_by")),
-                "questions": qcount.get(s["id"], 0),
-                "created_at": s.get("created_at"),
-            }
+            AdminQuizSet(
+                id=str(s["id"]),
+                title=s["title"],
+                status=s["status"],
+                subject=sub["name"] if sub else None,
+                subject_id=str(s["subject_id"]) if s.get("subject_id") else None,
+                course=courses.get(sub["course_id"]) if sub else None,
+                course_id=str(sub["course_id"]) if sub and sub.get("course_id") else None,
+                teacher=teachers.get(s.get("created_by")),
+                teacher_id=str(s["created_by"]) if s.get("created_by") else None,
+                questions=len(quiz_question_ids),
+                attempts_count=int(stats.get("count", 0)),
+                avg_accuracy=round(max(0, min(100, score / maximum * 100)), 1)
+                if maximum
+                else 0,
+                created_at=s.get("created_at"),
+                published_at=s.get("published_at"),
+                last_attempted_at=stats.get("last"),
+                review_status=ReviewStatusCounts(
+                    pending=reviews.get("pending_review", 0),
+                    approved=reviews.get("approved", 0),
+                    rejected=reviews.get("rejected", 0),
+                    needs_edit=reviews.get("needs_edit", 0),
+                ),
+            )
         )
     return out
+
+
+@router.get("/admin/quiz-sets/{quiz_set_id}")
+def admin_quiz_set_detail(
+    quiz_set_id: str,
+    profile: CurrentProfile = Depends(get_current_profile),
+) -> dict:
+    """Detailed question and student performance for one tenant quiz set."""
+    _require_admin(profile)
+    service = get_service_client()
+    tenant_id = profile.tenant_id
+    summary = next(
+        (row for row in admin_quiz_sets(profile) if row.id == quiz_set_id),
+        None,
+    )
+    if summary is None:
+        raise HTTPException(status_code=404, detail="Quiz set not found.")
+
+    variants = (
+        service.table("quiz_variants")
+        .select("id, total_marks")
+        .eq("tenant_id", tenant_id)
+        .eq("quiz_set_id", quiz_set_id)
+        .execute()
+        .data
+        or []
+    )
+    variant_ids = [row["id"] for row in variants]
+    variant_marks = {
+        row["id"]: float(row.get("total_marks") or 0) for row in variants
+    }
+    links = (
+        service.table("quiz_variant_questions")
+        .select("variant_id, question_id")
+        .eq("tenant_id", tenant_id)
+        .in_("variant_id", variant_ids)
+        .execute()
+        .data
+        if variant_ids
+        else []
+    )
+    question_ids = list({row["question_id"] for row in links})
+    questions = (
+        service.table("questions")
+        .select("id, question_text, type, difficulty, review_status")
+        .eq("tenant_id", tenant_id)
+        .in_("id", question_ids)
+        .execute()
+        .data
+        if question_ids
+        else []
+    )
+    attempts = (
+        service.table("quiz_attempts")
+        .select("id, student_id, variant_id, total_score, submitted_at")
+        .eq("tenant_id", tenant_id)
+        .eq("status", "graded")
+        .in_("variant_id", variant_ids)
+        .execute()
+        .data
+        if variant_ids
+        else []
+    )
+    student_ids = list({row["student_id"] for row in attempts if row.get("student_id")})
+    students = (
+        service.table("profiles")
+        .select("id, full_name")
+        .eq("tenant_id", tenant_id)
+        .eq("role", "student")
+        .in_("id", student_ids)
+        .execute()
+        .data
+        if student_ids
+        else []
+    )
+    student_names = {
+        row["id"]: row.get("full_name") or "Unnamed student" for row in students
+    }
+    attempt_ids = [row["id"] for row in attempts]
+    answers = (
+        service.table("attempt_answers")
+        .select("attempt_id, question_id, is_correct")
+        .eq("tenant_id", tenant_id)
+        .in_("attempt_id", attempt_ids)
+        .in_("question_id", question_ids)
+        .execute()
+        .data
+        if attempt_ids and question_ids
+        else []
+    )
+
+    by_type = Counter(question.get("type") or "unspecified" for question in questions)
+    by_difficulty = Counter(
+        question.get("difficulty") or "unspecified" for question in questions
+    )
+    student_performance = []
+    for attempt in attempts:
+        maximum = variant_marks.get(attempt["variant_id"], 0)
+        score = float(attempt.get("total_score") or 0)
+        student_performance.append(
+            {
+                "attempt_id": str(attempt["id"]),
+                "student_id": str(attempt["student_id"]),
+                "student_name": student_names.get(
+                    attempt["student_id"], "Former student"
+                ),
+                "score": score,
+                "max_score": maximum,
+                "accuracy": round(max(0, min(100, score / maximum * 100)), 1)
+                if maximum
+                else 0,
+                "submitted_at": attempt.get("submitted_at"),
+            }
+        )
+    student_performance.sort(
+        key=lambda row: row.get("submitted_at") or "", reverse=True
+    )
+
+    answer_counts: dict[str, dict[str, int]] = {}
+    for answer in answers:
+        bucket = answer_counts.setdefault(
+            answer["question_id"], {"answered": 0, "correct": 0}
+        )
+        bucket["answered"] += 1
+        if answer.get("is_correct") is True:
+            bucket["correct"] += 1
+    question_by_id = {row["id"]: row for row in questions}
+    weak_questions = []
+    for question_id, counts in answer_counts.items():
+        question = question_by_id.get(question_id)
+        if question is None:
+            continue
+        weak_questions.append(
+            {
+                "question_id": str(question_id),
+                "question_text": question.get("question_text") or "Question",
+                "answered": counts["answered"],
+                "accuracy": round(counts["correct"] / counts["answered"] * 100, 1),
+            }
+        )
+    weak_questions.sort(key=lambda row: (row["accuracy"], -row["answered"]))
+
+    return {
+        "quiz": summary.model_dump(mode="json"),
+        "question_breakdown": {
+            "by_type": dict(sorted(by_type.items())),
+            "by_difficulty": dict(sorted(by_difficulty.items())),
+        },
+        "student_performance": student_performance,
+        "weak_questions": weak_questions[:5],
+    }

@@ -830,6 +830,7 @@ export type InstitutionAnalytics = {
   activity: { date: string; attempts: number }[];
   pipeline: { pending_review: number; approved: number; rejected: number };
   course_perf: {
+    course_id: string;
     name: string;
     students: number;
     published: number;
@@ -837,10 +838,13 @@ export type InstitutionAnalytics = {
     attempts: number;
   }[];
   teacher_activity: {
+    teacher_id: string;
     name: string;
     quiz_sets: number;
     published: number;
     approved: number;
+    attempts: number;
+    accuracy: number;
   }[];
   at_risk_students: { name: string; accuracy: number; attempts: number }[];
   findings: QualityFinding[];
@@ -1081,13 +1085,51 @@ export type AdminQuizSet = {
   title: string;
   status: string;
   subject: string | null;
+  subject_id: string | null;
   course: string | null;
+  course_id: string | null;
   teacher: string | null;
+  teacher_id: string | null;
   questions: number;
+  attempts_count: number;
+  avg_accuracy: number;
   created_at: string | null;
+  published_at: string | null;
+  last_attempted_at: string | null;
+  review_status: {
+    pending: number;
+    approved: number;
+    rejected: number;
+    needs_edit: number;
+  };
 };
 export const getAdminQuizSets = () =>
   jsonRequest<AdminQuizSet[]>("/api/v1/admin/quiz-sets", "GET");
+
+export type AdminQuizSetDetail = {
+  quiz: AdminQuizSet;
+  question_breakdown: {
+    by_type: Record<string, number>;
+    by_difficulty: Record<string, number>;
+  };
+  student_performance: {
+    attempt_id: string;
+    student_id: string;
+    student_name: string;
+    score: number;
+    max_score: number;
+    accuracy: number;
+    submitted_at: string | null;
+  }[];
+  weak_questions: {
+    question_id: string;
+    question_text: string;
+    answered: number;
+    accuracy: number;
+  }[];
+};
+export const getAdminQuizSetDetail = (id: string) =>
+  jsonRequest<AdminQuizSetDetail>(`/api/v1/admin/quiz-sets/${id}`, "GET");
 
 // ---------------------------------------------------------------------------
 // Blueprint quiz — topic extraction (Slice 6)
