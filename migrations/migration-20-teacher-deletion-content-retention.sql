@@ -28,4 +28,3 @@ alter table public.quiz_sets
     foreign key (created_by) references public.profiles(id) on delete set null;
 
 commit;
-
