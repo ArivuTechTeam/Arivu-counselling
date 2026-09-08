@@ -191,6 +191,30 @@ class TeacherCreate(BaseModel):
     password: str
 
 
+def _teacher_provisioning_course_id(service, tenant_id: str) -> str:
+    """Pick a tenant-owned course used only while the Auth trigger runs.
+
+    Supabase applies custom app_metadata after inserting auth.users, so the
+    insert trigger cannot see our protected provisioning marker. A validated
+    course lets the existing trigger derive the tenant safely; the temporary
+    enrollment is removed immediately after the profile is promoted.
+    """
+    courses = (
+        service.table("courses")
+        .select("id")
+        .eq("tenant_id", tenant_id)
+        .execute()
+        .data
+        or []
+    )
+    if not courses:
+        raise HTTPException(
+            status_code=400,
+            detail="Create at least one course before adding a teacher.",
+        )
+    return str(courses[0]["id"])
+
+
 @router.post("/users")
 def create_user(
     body: TeacherCreate, profile: CurrentProfile = Depends(get_current_profile)
@@ -201,6 +225,9 @@ def create_user(
 
     if not body.full_name.strip():
         raise HTTPException(status_code=400, detail="Full name is required.")
+    provisioning_course_id = _teacher_provisioning_course_id(
+        service, profile.tenant_id
+    )
 
     meta: dict = {
         "tenant_id": profile.tenant_id,
@@ -208,6 +235,7 @@ def create_user(
         "full_name": body.full_name.strip(),
         # Admin set a temp password → prompt them to change it on first login.
         "must_change_password": True,
+        "course_id": provisioning_course_id,
     }
 
     try:
@@ -227,6 +255,9 @@ def create_user(
             role="teacher",
             full_name=body.full_name,
         )
+        service.table("enrollments").delete().eq("profile_id", created.user.id).eq(
+            "tenant_id", profile.tenant_id
+        ).eq("course_id", provisioning_course_id).execute()
     except Exception as exc:  # noqa: BLE001
         if "created" in locals() and created.user:
             _delete_auth_user_quietly(service, created.user.id)

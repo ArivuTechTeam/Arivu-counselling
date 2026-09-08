@@ -9,6 +9,7 @@ from pydantic import ValidationError
 
 from app.api.admin import (
     TeacherCreate,
+    _teacher_provisioning_course_id,
     delete_user,
     list_course_students,
     list_teacher_courses,
@@ -150,6 +151,17 @@ class InstitutionTeacherManagementTests(unittest.TestCase):
                 role="student",
                 course_id="course-a",
             )
+
+    def test_teacher_provisioning_uses_only_a_course_from_the_admin_tenant(self) -> None:
+        course_id = _teacher_provisioning_course_id(self.service, "tenant-a")
+
+        self.assertEqual(course_id, "course-a")
+
+    def test_teacher_provisioning_requires_an_existing_tenant_course(self) -> None:
+        with self.assertRaises(HTTPException) as error:
+            _teacher_provisioning_course_id(self.service, "tenant-without-courses")
+
+        self.assertEqual(error.exception.status_code, 400)
 
     def test_student_cannot_be_deleted_through_teacher_management(self) -> None:
         with self.assertRaises(HTTPException) as error:
