@@ -53,21 +53,31 @@ const useSessionStorage =
   process.env.NODE_ENV !== "production" ||
   process.env.NEXT_PUBLIC_DEV_SESSION_STORAGE === "true";
 
+// Cached like createBrowserClient below caches its own instance. A browser
+// tab has its own JS module scope (separate from every other tab), so this
+// stays exactly as tab-isolated as the sessionStorage it reads/writes —
+// caching it just avoids re-constructing a whole GoTrueClient (auto-refresh
+// timers, storage parsing, etc.) on every single API call.
+let cachedDevClient: ReturnType<typeof createSupabaseClient> | undefined;
+
 export function createClient() {
   if (useSessionStorage) {
-    return createSupabaseClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-      {
-        auth: {
-          storage: window.sessionStorage,
-          persistSession: true,
-          autoRefreshToken: true,
-          flowType: "pkce",
-          detectSessionInUrl: false,
+    if (!cachedDevClient) {
+      cachedDevClient = createSupabaseClient(
+        process.env.NEXT_PUBLIC_SUPABASE_URL!,
+        process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+        {
+          auth: {
+            storage: window.sessionStorage,
+            persistSession: true,
+            autoRefreshToken: true,
+            flowType: "pkce",
+            detectSessionInUrl: false,
+          },
         },
-      },
-    );
+      );
+    }
+    return cachedDevClient;
   }
   return createBrowserClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
