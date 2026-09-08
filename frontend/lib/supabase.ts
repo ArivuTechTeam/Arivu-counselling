@@ -22,9 +22,11 @@ import { createClient as createSupabaseClient } from "@supabase/supabase-js";
  * tab and a student in another overwrites the same cookie, so both tabs
  * eventually collapse onto whichever login happened most recently — this is
  * the session-collision bug. This app never reads the session on the server
- * (no middleware.ts, no createServerClient) and only uses plain email/password
- * sign-in (no OAuth/magic-link redirect flow), so the cookie-sharing behavior
- * `@supabase/ssr` exists for isn't actually used here. For local testing, we
+ * (no middleware.ts, no createServerClient). Email/password sign-in doesn't
+ * need a redirect at all, and Google sign-in (a real OAuth redirect flow) is
+ * handled entirely client-side: `/auth/callback` exchanges the `?code=`
+ * param itself via `exchangeCodeForSession`, so the cookie-vs-tab-session
+ * split below doesn't need to special-case it. For local testing, we
  * use the plain `@supabase/supabase-js` client instead and point it at
  * `sessionStorage`, which the browser keeps separate per tab — so each tab
  * can hold its own logged-in test account. Production keeps the normal
@@ -37,28 +39,53 @@ import { createClient as createSupabaseClient } from "@supabase/supabase-js";
  * it's only used for local testing. `NEXT_PUBLIC_DEV_SESSION_STORAGE` is the
  * explicit signal instead — set only in docker-compose.yml, never in the
  * real Vercel prod env.
+ *
+ * `detectSessionInUrl` is disabled below in both branches. It defaults to
+ * true in a browser, which makes GoTrue auto-detect a `?code=` param and
+ * exchange it in the background as soon as a client is constructed. Since
+ * `/auth/callback` also exchanges that same code manually
+ * (`exchangeCodeForSession`), the two would race for the same PKCE code
+ * verifier — whichever runs second fails with "PKCE code verifier not found
+ * in storage". Disabling auto-detection makes `/auth/callback` the sole,
+ * deliberate exchanger.
  */
 const useSessionStorage =
   process.env.NODE_ENV !== "production" ||
   process.env.NEXT_PUBLIC_DEV_SESSION_STORAGE === "true";
 
+// Cached like createBrowserClient below caches its own instance. A browser
+// tab has its own JS module scope (separate from every other tab), so this
+// stays exactly as tab-isolated as the sessionStorage it reads/writes —
+// caching it just avoids re-constructing a whole GoTrueClient (auto-refresh
+// timers, storage parsing, etc.) on every single API call.
+let cachedDevClient: ReturnType<typeof createSupabaseClient> | undefined;
+
 export function createClient() {
   if (useSessionStorage) {
-    return createSupabaseClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-      {
-        auth: {
-          storage: window.sessionStorage,
-          persistSession: true,
-          autoRefreshToken: true,
-          flowType: "pkce",
+    if (!cachedDevClient) {
+      cachedDevClient = createSupabaseClient(
+        process.env.NEXT_PUBLIC_SUPABASE_URL!,
+        process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+        {
+          auth: {
+            storage: window.sessionStorage,
+            persistSession: true,
+            autoRefreshToken: true,
+            flowType: "pkce",
+            detectSessionInUrl: false,
+          },
         },
-      },
-    );
+      );
+    }
+    return cachedDevClient;
   }
   return createBrowserClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    {
+      auth: {
+        detectSessionInUrl: false,
+      },
+    },
   );
 }

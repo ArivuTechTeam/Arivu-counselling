@@ -68,6 +68,7 @@ async def class_overview(
         return (
             service.table("quiz_variants")
             .select("id, quiz_set_id, total_marks")
+            .eq("tenant_id", tid)
             .in_("quiz_set_id", set_ids)
             .execute()
             .data
@@ -87,6 +88,7 @@ async def class_overview(
         return (
             service.table("quiz_attempts")
             .select("student_id, variant_id, total_score")
+            .eq("tenant_id", tid)
             .in_("variant_id", variant_ids)
             .eq("status", "graded")
             .execute()
@@ -98,6 +100,7 @@ async def class_overview(
         return (
             service.table("quiz_variant_questions")
             .select("question_id")
+            .eq("tenant_id", tid)
             .in_("variant_id", variant_ids)
             .execute()
             .data
@@ -107,29 +110,31 @@ async def class_overview(
     attempts = await asyncio.to_thread(fetch_attempts)
     vq = await asyncio.to_thread(fetch_variant_questions)
 
-    by_set: dict[str, list[int]] = {}
-    by_student: dict[str, list[int]] = {}
-    all_pcts: list[int] = []
+    by_set: dict[str, list[float]] = {}
+    by_student: dict[str, list[float]] = {}
+    total_score = total_maximum = 0.0
     for a in attempts:
         vm = var_marks.get(a["variant_id"])
         if not vm:
             continue
-        pct = max(0, min(100, round((a.get("total_score") or 0) / vm * 100)))
+        maximum = float(vm)
+        score = max(0.0, min(maximum, float(a.get("total_score") or 0)))
+        total_score += score
+        total_maximum += maximum
         sid = var_set.get(a["variant_id"])
         if sid:
-            s = by_set.get(sid, [0, 0])
-            by_set[sid] = [s[0] + pct, s[1] + 1]
-        st = by_student.get(a["student_id"], [0, 0])
-        by_student[a["student_id"]] = [st[0] + pct, st[1] + 1]
-        all_pcts.append(pct)
+            s = by_set.get(sid, [0.0, 0.0, 0.0])
+            by_set[sid] = [s[0] + score, s[1] + maximum, s[2] + 1]
+        st = by_student.get(a["student_id"], [0.0, 0.0, 0.0])
+        by_student[a["student_id"]] = [st[0] + score, st[1] + maximum, st[2] + 1]
 
     accuracy_by_quiz = sorted(
         [
             {
                 "set_id": sid,
                 "title": title_by_set.get(sid, "Quiz"),
-                "accuracy": round(v[0] / v[1]),
-                "attempts": v[1],
+                "accuracy": round(v[0] / v[1] * 100),
+                "attempts": int(v[2]),
             }
             for sid, v in by_set.items()
         ],
@@ -145,6 +150,8 @@ async def class_overview(
         return (
             service.table("profiles")
             .select("id, full_name")
+            .eq("tenant_id", tid)
+            .eq("role", "student")
             .in_("id", list(by_student.keys()))
             .execute()
             .data
@@ -157,6 +164,7 @@ async def class_overview(
         return (
             service.table("questions")
             .select("review_status")
+            .eq("tenant_id", tid)
             .in_("id", qids)
             .execute()
             .data
@@ -169,14 +177,14 @@ async def class_overview(
 
     students = []
     for sid, v in by_student.items():
-        acc = round(v[0] / v[1])
+        acc = round(v[0] / v[1] * 100)
         name = names.get(sid) or "Student"
         students.append(
             {
                 "name": name,
                 "initials": _initials(name),
                 "accuracy": acc,
-                "note": f"{v[1]} test{'s' if v[1] != 1 else ''} · {acc}% avg",
+                "note": f"{int(v[2])} test{'s' if v[2] != 1 else ''} · {acc}% avg",
             }
         )
     needs_attention = sorted(
@@ -192,12 +200,12 @@ async def class_overview(
         if st in pipeline:
             pipeline[st] += 1
 
-    class_accuracy = round(sum(all_pcts) / len(all_pcts)) if all_pcts else 0
+    class_accuracy = round(total_score / total_maximum * 100) if total_maximum else 0
     return {
         "class_accuracy": class_accuracy,
         "students": len(by_student),
         "at_risk": len(needs_attention),
-        "total_attempts": len(all_pcts),
+        "total_attempts": len(attempts),
         "accuracy_by_quiz": accuracy_by_quiz,
         "needs_attention": needs_attention,
         "top_performers": top_performers,
@@ -260,7 +268,7 @@ async def class_monitor(
         if not subject_ids:
             return []
         return (
-            service.table("subjects").select("id, course_id").in_("id", subject_ids).execute().data
+            service.table("subjects").select("id, course_id").eq("tenant_id", tid).in_("id", subject_ids).execute().data
             or []
         )
 
@@ -268,6 +276,7 @@ async def class_monitor(
         return (
             service.table("quiz_variants")
             .select("id, total_marks")
+            .eq("tenant_id", tid)
             .in_("quiz_set_id", set_ids)
             .execute()
             .data
@@ -300,6 +309,7 @@ async def class_monitor(
         return (
             service.table("quiz_attempts")
             .select("student_id, variant_id, total_score, submitted_at")
+            .eq("tenant_id", tid)
             .in_("variant_id", variant_ids)
             .eq("status", "graded")
             .execute()
@@ -321,9 +331,13 @@ async def class_monitor(
         m = var_marks.get(a["variant_id"])
         if not m:
             continue
-        pct = max(0, min(100, round((a.get("total_score") or 0) / m * 100)))
-        d = agg.setdefault(a["student_id"], {"pcts": [], "last": None, "best": 0})
+        maximum = float(m)
+        score = max(0.0, min(maximum, float(a.get("total_score") or 0)))
+        pct = score / maximum * 100
+        d = agg.setdefault(a["student_id"], {"pcts": [], "score": 0.0, "maximum": 0.0, "last": None, "best": 0})
         d["pcts"].append(pct)
+        d["score"] += score
+        d["maximum"] += maximum
         d["best"] = max(d["best"], pct)
         sa = a.get("submitted_at")
         if sa and (d["last"] is None or sa > d["last"]):
@@ -334,6 +348,7 @@ async def class_monitor(
         return (
             service.table("profiles")
             .select("id, full_name, role")
+            .eq("tenant_id", tid)
             .in_("id", list(roster))
             .execute()
             .data
@@ -350,7 +365,7 @@ async def class_monitor(
     week_ago = (date.today() - timedelta(days=7)).isoformat()
 
     engaged, not_started_rows = [], []
-    all_pcts: list[int] = []
+    total_score = total_maximum = 0.0
     active = at_risk = 0
     for sid in roster:
         name = names.get(sid) or "Student"
@@ -369,8 +384,9 @@ async def class_monitor(
                 }
             )
             continue
-        acc = round(sum(d["pcts"]) / len(d["pcts"]))
-        all_pcts.extend(d["pcts"])
+        acc = round(d["score"] / d["maximum"] * 100)
+        total_score += d["score"]
+        total_maximum += d["maximum"]
         if d["last"] and d["last"][:10] >= week_ago:
             active += 1
         if acc < 60:
@@ -400,10 +416,10 @@ async def class_monitor(
         "summary": {
             "students": len(roster),
             "active_week": active,
-            "class_accuracy": round(sum(all_pcts) / len(all_pcts)) if all_pcts else 0,
+            "class_accuracy": round(total_score / total_maximum * 100) if total_maximum else 0,
             "at_risk": at_risk,
             "not_started": len(not_started_rows),
-            "total_attempts": len(all_pcts),
+            "total_attempts": len(attempts),
         },
         "students": engaged + not_started_rows,
     }
@@ -455,6 +471,7 @@ def student_report(
     variants = (
         service.table("quiz_variants")
         .select("id, quiz_set_id, total_marks")
+        .eq("tenant_id", tid)
         .in_("quiz_set_id", [s["id"] for s in sets])
         .execute()
         .data
@@ -469,6 +486,7 @@ def student_report(
     attempts = (
         service.table("quiz_attempts")
         .select("id, variant_id, total_score, submitted_at")
+        .eq("tenant_id", tid)
         .in_("variant_id", variant_ids)
         .eq("student_id", student_id)
         .eq("status", "graded")
@@ -476,10 +494,18 @@ def student_report(
         .data
         or []
     )
-    per_quiz, all_pcts, attempt_ids = [], [], []
+    per_quiz, attempt_ids = [], []
+    total_score = total_maximum = 0.0
     for a in attempts:
         m = var_marks.get(a["variant_id"])
-        pct = max(0, min(100, round((a.get("total_score") or 0) / m * 100))) if m else 0
+        if m:
+            maximum = float(m)
+            score = max(0.0, min(maximum, float(a.get("total_score") or 0)))
+            pct = round(score / maximum * 100)
+            total_score += score
+            total_maximum += maximum
+        else:
+            pct = 0
         per_quiz.append(
             {
                 "title": title_by_set.get(var_set.get(a["variant_id"]), "Quiz"),
@@ -487,7 +513,6 @@ def student_report(
                 "date": a.get("submitted_at"),
             }
         )
-        all_pcts.append(pct)
         attempt_ids.append(a["id"])
     per_quiz.sort(key=lambda x: x["date"] or "", reverse=True)
 
@@ -497,6 +522,7 @@ def student_report(
         answers = (
             service.table("attempt_answers")
             .select("question_id, is_correct")
+            .eq("tenant_id", tid)
             .in_("attempt_id", attempt_ids)
             .execute()
             .data
@@ -505,7 +531,13 @@ def student_report(
         answered = len(answers)
         qids = list({a["question_id"] for a in answers})
         qrows = (
-            service.table("questions").select("id, topic_id").in_("id", qids).execute().data or []
+            service.table("questions")
+            .select("id, topic_id")
+            .eq("tenant_id", tid)
+            .in_("id", qids)
+            .execute()
+            .data
+            or []
         )
         topic_of = {q["id"]: q.get("topic_id") for q in qrows}
         agg: dict = {}
@@ -519,7 +551,12 @@ def student_report(
             names = {
                 n["id"]: n["name"]
                 for n in (
-                    service.table("topics").select("id, name").in_("id", list(agg.keys())).execute().data
+                    service.table("topics")
+                    .select("id, name")
+                    .eq("tenant_id", tid)
+                    .in_("id", list(agg.keys()))
+                    .execute()
+                    .data
                     or []
                 )
             }
@@ -534,7 +571,9 @@ def student_report(
     return {
         "student": student,
         "overall": {
-            "accuracy": round(sum(all_pcts) / len(all_pcts)) if all_pcts else 0,
+            "accuracy": round(total_score / total_maximum * 100)
+            if total_maximum
+            else 0,
             "quizzes_taken": len(attempts),
             "questions_answered": answered,
         },

@@ -132,14 +132,13 @@ export default function SignupPage() {
       setError("Institution not configured (missing NEXT_PUBLIC_DEFAULT_TENANT_ID).");
       return;
     }
-    if (!courseId) {
-      setError("Please select your course before continuing with Google.");
-      return;
-    }
     setGoogleLoading(true);
     try {
-      // The course is only a pending choice here. The database callback
-      // validates it and derives the tenant before creating a student profile.
+      // Course selection is optional here. If the student already picked one
+      // from the form above we carry it through, but /auth/callback prompts
+      // for it after Google sign-in when they haven't — the database
+      // callback validates whichever course arrives and derives the tenant
+      // before creating a student profile.
       await signInWithGoogle(courseId);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Google sign-in could not start.");
@@ -348,7 +347,8 @@ export default function SignupPage() {
                 onClick={handleGoogleSignup}
               />
               <p className="oauth-help">
-                Select your course first. Google supplies your verified name and email.
+                Google supplies your verified name and email — you&apos;ll pick your
+                course next.
               </p>
             </form>
 

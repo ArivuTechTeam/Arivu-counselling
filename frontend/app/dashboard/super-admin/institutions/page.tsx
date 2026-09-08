@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 
 import { AdminManager } from "@/components/admin/admin-manager";
 import { Button } from "@/components/ui/button";
@@ -237,7 +238,9 @@ export default function InstitutionsPage() {
                   {rows.map((r) => (
                     <tr key={r.id} className="border-b last:border-0 hover:bg-accent">
                       <td className="px-2 py-2.5">
-                        <div className="font-medium text-foreground">{r.name}</div>
+                        <Link href={`/dashboard/super-admin/institutions/${r.id}`} className="font-medium text-primary hover:underline">
+                          {r.name} →
+                        </Link>
                         <div className="text-xs text-muted-foreground">{r.subdomain}</div>
                       </td>
                       <td className="px-2 py-2.5 text-right text-muted-foreground">{r.admins}</td>

@@ -639,7 +639,12 @@ export const getLeaderboard = (courseId?: string) =>
 // ---------------------------------------------------------------------------
 
 export type Subject = { id: string; name: string };
-export type Course = { id: string; name: string; subjects: Subject[] };
+export type Course = {
+  id: string;
+  name: string;
+  subjects: Subject[];
+  student_count?: number;
+};
 
 export const listCourses = () => jsonRequest<Course[]>("/api/v1/courses", "GET");
 
@@ -706,17 +711,44 @@ export const deleteChapter = (id: string) =>
 export type AdminUser = {
   id: string;
   full_name: string | null;
-  role: string;
+  role: "teacher";
   email: string | null;
   courses: string[];
+  subject_count: number;
+  created_at: string | null;
 };
 
-export type UserCreateInput = {
+export type TeacherCreateInput = {
   full_name: string;
   email: string;
   password: string;
-  role: "teacher" | "student";
-  course_id?: string;
+  course_id: string;
+  subject_ids: string[];
+};
+
+export type TeacherUpdateInput = {
+  full_name: string;
+  email: string;
+  subject_ids: string[];
+};
+
+export type TeacherCourse = {
+  id: string;
+  name: string;
+  subjects: { id: string; name: string }[];
+  student_count: number;
+};
+
+export type CourseStudent = {
+  id: string;
+  full_name: string | null;
+  email: string | null;
+};
+
+export type CourseRoster = {
+  course: { id: string; name: string };
+  count: number;
+  students: CourseStudent[];
 };
 
 export type AdminStats = {
@@ -736,10 +768,25 @@ export type PlatformStats = {
 };
 
 export const listUsers = () => jsonRequest<AdminUser[]>("/api/v1/users", "GET");
-export const createUser = (input: UserCreateInput) =>
+export const createTeacher = (input: TeacherCreateInput) =>
   jsonRequest<{ id: string; email: string }>("/api/v1/users", "POST", input);
+export const updateTeacher = (id: string, input: TeacherUpdateInput) =>
+  jsonRequest<{ id: string; full_name: string; email: string; subject_ids: string[] }>(
+    `/api/v1/users/${id}`,
+    "PUT",
+    input,
+  );
+export const resetTeacherTemporaryPassword = (id: string) =>
+  jsonRequest<{ email: string; password: string }>(
+    `/api/v1/users/${id}/temporary-password`,
+    "POST",
+  );
 export const deleteUser = (id: string) =>
   jsonRequest<{ deleted: string }>(`/api/v1/users/${id}`, "DELETE");
+export const listTeacherCourses = (teacherId: string) =>
+  jsonRequest<TeacherCourse[]>(`/api/v1/teachers/${teacherId}/courses`, "GET");
+export const listCourseStudents = (courseId: string) =>
+  jsonRequest<CourseRoster>(`/api/v1/courses/${courseId}/students`, "GET");
 export const getAdminStats = () =>
   jsonRequest<AdminStats>("/api/v1/admin/stats", "GET");
 
@@ -777,30 +824,58 @@ export type InstitutionAnalytics = {
     avg_accuracy: number;
     graded_attempts: number;
     published_quizzes: number;
+    quiz_sets: number;
     courses: number;
   };
   trend: {
     attempts_last7: number;
     attempts_prev7: number;
     delta: number;
+    percentage_change: number;
     has_trend: boolean;
   };
   activity: { date: string; attempts: number }[];
   pipeline: { pending_review: number; approved: number; rejected: number };
   course_perf: {
+    course_id: string;
     name: string;
     students: number;
     published: number;
+    pending_review: number;
     accuracy: number;
     attempts: number;
   }[];
   teacher_activity: {
+    teacher_id: string;
     name: string;
     quiz_sets: number;
     published: number;
     approved: number;
+    attempts: number;
+    accuracy: number;
+    last_quiz_created: string | null;
+    is_active: boolean;
   }[];
-  at_risk_students: { name: string; accuracy: number; attempts: number }[];
+  at_risk_students: {
+    student_id: string;
+    name: string;
+    accuracy: number;
+    attempts: number;
+    worst_quiz: {
+      quiz_set_id: string;
+      title: string;
+      accuracy: number;
+      attempts: number;
+      last_attempted_at: string | null;
+    } | null;
+    quizzes: {
+      quiz_set_id: string;
+      title: string;
+      accuracy: number;
+      attempts: number;
+      last_attempted_at: string | null;
+    }[];
+  }[];
   findings: QualityFinding[];
 };
 export const getInstitutionAnalytics = () =>
@@ -909,6 +984,9 @@ export type QualityFinding = {
   title: string;
   detail: string;
   action: string;
+  action_type?: "pending_review" | "at_risk" | "course" | "teacher" | null;
+  action_id?: string | null;
+  action_label?: string | null;
 };
 export type QualityTrend = {
   keep_rate_last7: number;
@@ -1039,13 +1117,83 @@ export type AdminQuizSet = {
   title: string;
   status: string;
   subject: string | null;
+  subject_id: string | null;
   course: string | null;
+  course_id: string | null;
   teacher: string | null;
+  teacher_id: string | null;
   questions: number;
+  attempts_count: number;
+  avg_accuracy: number;
   created_at: string | null;
+  published_at: string | null;
+  last_attempted_at: string | null;
+  review_status: {
+    pending: number;
+    approved: number;
+    rejected: number;
+    needs_edit: number;
+  };
 };
-export const getAdminQuizSets = () =>
-  jsonRequest<AdminQuizSet[]>("/api/v1/admin/quiz-sets", "GET");
+export const getAdminQuizSets = (teacherId?: string) =>
+  jsonRequest<AdminQuizSet[]>(
+    `/api/v1/admin/quiz-sets${teacherId ? `?teacher_id=${encodeURIComponent(teacherId)}` : ""}`,
+    "GET",
+  );
+
+export type TeacherAnalyticsSummary = {
+  total_teachers: number;
+  active_teachers: number;
+  avg_accuracy: number;
+  total_quiz_sets: number;
+  total_published: number;
+  total_attempts: number;
+};
+
+export type TeacherAnalyticsDetail = {
+  teacher_id: string;
+  teacher_name: string;
+  quiz_sets_created: number;
+  quiz_sets_published: number;
+  total_attempts: number;
+  avg_accuracy: number;
+  last_quiz_created: string | null;
+  is_active: boolean;
+  course_names: string[];
+};
+
+export type TeacherAnalytics = {
+  teachers: TeacherAnalyticsDetail[];
+  summary: TeacherAnalyticsSummary;
+};
+
+export const getTeacherAnalytics = () =>
+  jsonRequest<TeacherAnalytics>("/api/v1/admin/teachers/analytics", "GET");
+
+export type AdminQuizSetDetail = {
+  quiz: AdminQuizSet;
+  question_breakdown: {
+    by_type: Record<string, number>;
+    by_difficulty: Record<string, number>;
+  };
+  student_performance: {
+    attempt_id: string;
+    student_id: string;
+    student_name: string;
+    score: number;
+    max_score: number;
+    accuracy: number;
+    submitted_at: string | null;
+  }[];
+  weak_questions: {
+    question_id: string;
+    question_text: string;
+    answered: number;
+    accuracy: number;
+  }[];
+};
+export const getAdminQuizSetDetail = (id: string) =>
+  jsonRequest<AdminQuizSetDetail>(`/api/v1/admin/quiz-sets/${id}`, "GET");
 
 // ---------------------------------------------------------------------------
 // Blueprint quiz — topic extraction (Slice 6)

@@ -11,10 +11,15 @@ from app.api.admin import router as handler_router
 _PATHS = {
     "/api/v1/users",
     "/api/v1/users/{user_id}",
+    "/api/v1/users/{user_id}/temporary-password",
+    "/api/v1/teachers/{teacher_id}/courses",
+    "/api/v1/courses/{course_id}/students",
     "/api/v1/admin/stats",
     "/api/v1/admin/overview",
     "/api/v1/admin/analytics",
+    "/api/v1/admin/teachers/analytics",
     "/api/v1/admin/quiz-sets",
+    "/api/v1/admin/quiz-sets/{quiz_set_id}",
 }
 
 router = APIRouter()

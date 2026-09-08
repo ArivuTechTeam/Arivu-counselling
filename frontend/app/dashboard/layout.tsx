@@ -8,6 +8,13 @@ import { Brand } from "@/components/ui/brand";
 import { Skeleton } from "@/components/ui/skeleton";
 import { createClient } from "@/lib/supabase";
 
+const HOME_BY_ROLE: Record<string, string> = {
+  super_admin: "/dashboard/super-admin",
+  institution_admin: "/dashboard/institution-admin",
+  teacher: "/dashboard/teacher",
+  student: "/dashboard/student",
+};
+
 /**
  * Wraps every /dashboard/* page in the ArivuPro shell (sidebar + topbar).
  * It reads the logged-in user's role to build the right sidebar nav.
@@ -26,9 +33,16 @@ export default function DashboardLayout({
   // before the role resolves.
   const [ready, setReady] = useState(false);
 
+  // Resolve the logged-in user's role ONCE per session, not on every
+  // navigation. supabase.auth.getUser() always revalidates against the Auth
+  // server (unlike getSession(), which is local), so re-running this on every
+  // pathname change fired two avoidable network calls on every single click
+  // between dashboard pages.
   useEffect(() => {
+    let cancelled = false;
     const supabase = createClient();
     supabase.auth.getUser().then(async ({ data: { user } }) => {
+      if (cancelled) return;
       if (!user) {
         // No session — send them to sign in rather than rendering an empty shell.
         router.replace("/login");
@@ -41,33 +55,44 @@ export default function DashboardLayout({
         .select("role")
         .eq("id", user.id)
         .single();
+      if (cancelled) return;
       if (!data) {
         // Logged in but no profile — the dashboard router handles this case.
         router.replace("/login");
         return;
       }
       const resolvedRole = (data.role as string) ?? "";
-      const homeByRole: Record<string, string> = {
-        super_admin: "/dashboard/super-admin",
-        institution_admin: "/dashboard/institution-admin",
-        teacher: "/dashboard/teacher",
-        student: "/dashboard/student",
-      };
-      const allowedHome = homeByRole[resolvedRole];
-      if (!allowedHome) {
+      if (!HOME_BY_ROLE[resolvedRole]) {
         router.replace("/login");
-        return;
-      }
-      if (pathname !== "/dashboard" && !pathname.startsWith(`${allowedHome}/`) && pathname !== allowedHome) {
-        router.replace(allowedHome);
         return;
       }
       setRole(resolvedRole);
       setReady(true);
     });
-  }, [pathname, router]);
+    return () => {
+      cancelled = true;
+    };
+    // Deliberately runs once per mount — role doesn't change mid-session.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-  if (!ready) {
+  // Cheap, local-only guard: keeps the URL in sync with the resolved role
+  // (e.g. a student who navigates to a teacher route gets sent home) on every
+  // navigation, without any network calls.
+  const allowedHome = role ? HOME_BY_ROLE[role] : undefined;
+  const pathValid =
+    !!allowedHome &&
+    (pathname === "/dashboard" ||
+      pathname === allowedHome ||
+      pathname.startsWith(`${allowedHome}/`));
+
+  useEffect(() => {
+    if (ready && allowedHome && !pathValid) {
+      router.replace(allowedHome);
+    }
+  }, [ready, allowedHome, pathValid, router]);
+
+  if (!ready || !pathValid) {
     return (
       <main className="flex min-h-screen flex-col items-center justify-center gap-6 p-4">
         <Brand height={40} />

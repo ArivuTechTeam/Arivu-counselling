@@ -124,75 +124,92 @@ export default function AuthCallbackPage() {
     void finishOAuth();
   }, [completeGoogleSignup, router, tenantId]);
 
+  // While exchanging the code / checking for an existing profile, show only a
+  // brief, low-ceremony spinner — existing users never see anything past this.
+  // `error` implies loading and saving are already both false in every path
+  // below, but a failed `completeGoogleSignup` attempt leaves `courses`
+  // populated so the course selector stays visible for retry alongside it.
+  const isProcessing = loading || saving;
+  const needsCourse = !isProcessing && courses.length > 0;
+  const noCoursesAvailable = !isProcessing && courses.length === 0 && !error;
+
   return (
-    <main className="flex min-h-screen items-center justify-center bg-gradient-to-br from-emerald-50 via-white to-green-50 p-4">
-      <section className="w-full max-w-md rounded-2xl border border-emerald-100 bg-white p-7 shadow-xl shadow-emerald-950/10">
-        <div className="mb-6 flex justify-center">
-          <Brand height={38} />
+    <div className="fixed inset-0 z-50 flex min-h-screen items-center justify-center bg-muted/40 p-4">
+      {isProcessing && (
+        <div className="animate-rise flex flex-col items-center gap-3 rounded-2xl bg-card px-8 py-7 shadow-xl">
+          <div className="h-7 w-7 animate-spin rounded-full border-4 border-emerald-100 border-t-emerald-700" aria-label="Loading" />
+          <p className="text-sm text-muted-foreground">Finishing Google sign-in…</p>
         </div>
+      )}
 
-        <h1 className="text-center text-2xl font-semibold text-foreground">
-          {loading || saving ? "Finishing Google sign-in" : "Choose your course"}
-        </h1>
-        <p className="mt-2 text-center text-sm leading-6 text-muted-foreground">
-          {loading || saving
-            ? "Please wait while we securely prepare your account."
-            : "Your course determines your institution. New Google accounts are always created as students."}
-        </p>
+      {(needsCourse || noCoursesAvailable || error) && (
+        <section className="animate-rise w-full max-w-sm rounded-2xl bg-card p-6 shadow-xl">
+          <div className="mb-4 flex justify-center">
+            <Brand height={30} />
+          </div>
 
-        {(loading || saving) && (
-          <div className="mx-auto mt-7 h-8 w-8 animate-spin rounded-full border-4 border-emerald-100 border-t-emerald-700" aria-label="Loading" />
-        )}
+          {needsCourse && (
+            <>
+              <h1 className="text-center text-lg font-semibold text-foreground">
+                One more step
+              </h1>
+              <p className="mt-1.5 text-center text-sm leading-6 text-muted-foreground">
+                Pick your course to finish setting up your student account.
+              </p>
+            </>
+          )}
 
-        {!loading && !saving && courses.length > 0 && (
-          <div className="mt-6 space-y-4">
-            <label className="block text-sm font-medium text-foreground">
-              Course
-              <select
-                className="mt-2 h-11 w-full rounded-lg border border-input bg-background px-3 text-sm"
-                value={courseId}
-                onChange={(event) => setCourseId(event.target.value)}
+          {needsCourse && (
+            <div className="mt-5 space-y-3">
+              <label className="block text-sm font-medium text-foreground">
+                Course
+                <select
+                  className="mt-2 h-11 w-full rounded-lg border border-input bg-background px-3 text-sm"
+                  value={courseId}
+                  onChange={(event) => setCourseId(event.target.value)}
+                  autoFocus
+                >
+                  <option value="">Select your course…</option>
+                  {courses.map((course) => (
+                    <option key={course.id} value={course.id}>
+                      {course.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <button
+                type="button"
+                className="w-full rounded-xl bg-emerald-700 px-4 py-3 text-sm font-semibold text-white transition hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-60"
+                disabled={!courseId}
+                onClick={() => completeGoogleSignup(courseId)}
               >
-                <option value="">Select your course…</option>
-                {courses.map((course) => (
-                  <option key={course.id} value={course.id}>
-                    {course.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <button
-              type="button"
-              className="w-full rounded-xl bg-emerald-700 px-4 py-3 text-sm font-semibold text-white transition hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-60"
-              disabled={!courseId}
-              onClick={() => completeGoogleSignup(courseId)}
+                Continue to dashboard
+              </button>
+            </div>
+          )}
+
+          {noCoursesAvailable && (
+            <p className="mt-5 rounded-lg bg-amber-50 p-3 text-sm text-amber-800">
+              No courses are available yet. Please contact your institution administrator.
+            </p>
+          )}
+
+          {error && (
+            <div className="mt-1 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700" role="alert">
+              {error}
+            </div>
+          )}
+
+          {error && (
+            <Link
+              href="/login"
+              className="mt-5 block text-center text-sm font-medium text-emerald-700 hover:underline"
             >
-              Continue to dashboard
-            </button>
-          </div>
-        )}
-
-        {!loading && !saving && courses.length === 0 && !error && (
-          <p className="mt-6 rounded-lg bg-amber-50 p-3 text-sm text-amber-800">
-            No courses are available yet. Please contact your institution administrator.
-          </p>
-        )}
-
-        {error && (
-          <div className="mt-6 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700" role="alert">
-            {error}
-          </div>
-        )}
-
-        {error && (
-          <Link
-            href="/login"
-            className="mt-5 block text-center text-sm font-medium text-emerald-700 hover:underline"
-          >
-            Return to sign in
-          </Link>
-        )}
-      </section>
-    </main>
+              Return to sign in
+            </Link>
+          )}
+        </section>
+      )}
+    </div>
   );
 }

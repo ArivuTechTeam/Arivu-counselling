@@ -92,7 +92,7 @@ const NAV: Record<string, NavItem[]> = {
       icon: LayoutDashboard,
     },
     {
-      label: "Users",
+      label: "Teachers",
       href: "/dashboard/institution-admin/users",
       section: "Management",
       icon: Users,
