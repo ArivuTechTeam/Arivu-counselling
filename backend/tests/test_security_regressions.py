@@ -110,6 +110,18 @@ class MigrationSecurityTests(unittest.TestCase):
         self.assertIn("grant execute on function public.complete_google_signup(uuid)", sql)
         self.assertNotIn("new.raw_user_meta_data->>'role'", sql)
 
+    def test_teacher_deletion_preserves_academic_content(self) -> None:
+        root = Path(__file__).resolve().parents[2]
+        sql = (
+            root / "migrations/migration-20-teacher-deletion-content-retention.sql"
+        ).read_text().lower()
+        self.assertEqual(sql.count("on delete set null"), 4)
+        self.assertIn("alter table public.documents", sql)
+        self.assertIn("alter column uploaded_by drop not null", sql)
+        self.assertIn("alter table public.questions", sql)
+        self.assertIn("alter table public.quiz_sets", sql)
+        self.assertIn("alter column created_by drop not null", sql)
+
 
 class _RowsQuery:
     def __init__(self, rows: list[dict]) -> None:

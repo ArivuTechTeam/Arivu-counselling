@@ -176,7 +176,7 @@ export default function UsersPage() {
       setCopiedTeacherId(teacher.id);
       window.setTimeout(() => setCopiedTeacherId(null), 2000);
     } catch {
-      setError("Could not copy the teacher login. Please copy it manually from the form.");
+      showNotice("error", "Could not copy the teacher login. Please copy it manually.");
     }
   }
 
@@ -186,9 +186,13 @@ export default function UsersPage() {
     try {
       await deleteUser(id);
       setConfirmDel(null);
-      refresh();
+      await listUsers().then(setTeachers);
+      showNotice("success", "Teacher removed successfully.");
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to remove teacher");
+      showNotice(
+        "error",
+        e instanceof Error ? e.message : "Failed to remove teacher.",
+      );
     } finally {
       setBusy(false);
     }

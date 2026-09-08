@@ -144,7 +144,7 @@ create index idx_topics_chapter on topics(chapter_id);
 create table documents (
   id uuid primary key default gen_random_uuid(),
   tenant_id uuid not null references tenants(id),
-  uploaded_by uuid not null references profiles(id),
+  uploaded_by uuid references profiles(id) on delete set null,
   chapter_id uuid references chapters(id),
   storage_path text not null,              -- path inside the Supabase Storage bucket
   original_filename text,
@@ -197,10 +197,10 @@ create table questions (
   source question_source not null default 'manual',
   confidence_score numeric,                 -- null for manual questions
   review_status review_status not null default 'approved',
-  reviewed_by uuid references profiles(id),
+  reviewed_by uuid references profiles(id) on delete set null,
   reviewed_at timestamptz,
   embedding vector(1536),                   -- for semantic duplicate detection
-  created_by uuid references profiles(id),
+  created_by uuid references profiles(id) on delete set null,
   created_at timestamptz not null default now()
 );
 create index idx_questions_tenant on questions(tenant_id);
@@ -222,7 +222,7 @@ create table quiz_sets (
   title text not null,
   description text,
   status quiz_status not null default 'draft',
-  created_by uuid not null references profiles(id),
+  created_by uuid references profiles(id) on delete set null,
   created_at timestamptz not null default now(),
   published_at timestamptz
 );

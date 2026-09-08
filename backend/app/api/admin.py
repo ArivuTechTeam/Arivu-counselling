@@ -356,8 +356,11 @@ def delete_user(
         raise HTTPException(status_code=400, detail="You cannot remove your own account.")
     try:
         service.auth.admin.delete_user(user_id)
-    except Exception as exc:  # noqa: BLE001
-        raise HTTPException(status_code=400, detail=f"Could not delete user: {exc}")
+    except Exception:  # noqa: BLE001
+        raise HTTPException(
+            status_code=400,
+            detail="Could not remove teacher. Their academic records were preserved.",
+        )
     return {"deleted": user_id}
 
 
