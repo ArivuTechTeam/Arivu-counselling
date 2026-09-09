@@ -138,7 +138,7 @@ def generate_blueprint_quiz(
 
     # 1) Fetch the document + extract text.
     doc = (
-        service.table("documents").select("*")
+        service.table("documents").select("storage_path,file_type")
         .eq("id", document_id)
         .eq("tenant_id", tid)
         .eq("uploaded_by", profile.user_id)

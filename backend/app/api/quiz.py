@@ -16,6 +16,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 
 from app.lib.auth import CurrentProfile, get_current_profile
+from app.lib.api_errors import public_error
 from app.lib.config import get_settings
 from app.lib.supabase import get_service_client
 from app.services.blueprint import generate_blueprint_quiz
@@ -80,16 +81,19 @@ def generate(
             profile=profile,
         )
     except ValueError as exc:
-        # Bad input (document missing, no extractable text).
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
-        )
+        raise public_error(
+            status.HTTP_400_BAD_REQUEST,
+            "The selected document or subject could not be used to generate this quiz.",
+            operation="prepare quiz generation",
+            exception=exc,
+        ) from exc
     except LLMError as exc:
-        # The model call or its output failed.
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"Quiz generation failed: {exc}",
-        )
+        raise public_error(
+            status.HTTP_502_BAD_GATEWAY,
+            "We couldn't generate the quiz right now. Please try again.",
+            operation="generate quiz with AI",
+            exception=exc,
+        ) from exc
 
 
 class BlueprintTopicIn(BaseModel):
@@ -169,12 +173,19 @@ def generate_blueprint(
             profile=profile,
         )
     except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+        raise public_error(
+            status.HTTP_400_BAD_REQUEST,
+            "The selected document, subject, or blueprint could not be used.",
+            operation="prepare blueprint generation",
+            exception=exc,
+        ) from exc
     except LLMError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"Quiz generation failed: {exc}",
-        )
+        raise public_error(
+            status.HTTP_502_BAD_GATEWAY,
+            "We couldn't generate the blueprint quiz right now. Please try again.",
+            operation="generate blueprint quiz with AI",
+            exception=exc,
+        ) from exc
 
 
 def _require_teacher(profile: CurrentProfile) -> None:
@@ -231,7 +242,12 @@ def get_quiz_set(
     try:
         return get_quiz_set_detail(quiz_set_id, profile.tenant_id)
     except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
+        raise public_error(
+            404,
+            "Quiz set not found.",
+            operation="load quiz set detail",
+            exception=exc,
+        ) from exc
 
 
 @router.post("/{quiz_set_id}/publish")

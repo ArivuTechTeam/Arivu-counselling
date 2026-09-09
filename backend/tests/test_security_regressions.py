@@ -15,6 +15,7 @@ from app.api.practice import _exam_deadline_passed
 from app.api.questions import _require_teacher as require_question_teacher
 from app.api.quiz import _require_teacher as require_quiz_teacher
 from app.lib.auth import CurrentProfile, CurrentUser, get_current_profile
+from app.lib.api_errors import public_error
 from app.services.blueprint import generate_blueprint_quiz
 from app.services.generation import generate_quiz
 from app.services.teacher_access import teacher_has_subject
@@ -121,6 +122,50 @@ class MigrationSecurityTests(unittest.TestCase):
         self.assertIn("alter table public.questions", sql)
         self.assertIn("alter table public.quiz_sets", sql)
         self.assertIn("alter column created_by drop not null", sql)
+
+    def test_browser_data_api_cannot_expose_quiz_answers(self) -> None:
+        root = Path(__file__).resolve().parents[2]
+        sql = (
+            root / "migrations/migration-22-browser-data-api-hardening.sql"
+        ).read_text().lower()
+
+        self.assertIn('create policy "read own profile"', sql)
+        self.assertIn("using (id = auth.uid())", sql)
+        self.assertIn("revoke all on table public.profiles", sql)
+        self.assertIn("grant select on table public.profiles to authenticated", sql)
+        for table in (
+            "public.questions",
+            "public.quiz_sets",
+            "public.quiz_variants",
+            "public.quiz_variant_questions",
+            "public.quiz_attempts",
+            "public.attempt_answers",
+            "public.ai_explanations",
+            "public.v_student_topic_accuracy",
+            "public.v_quiz_question_analysis",
+        ):
+            self.assertIn(table, sql)
+        self.assertIn("from anon, authenticated", sql)
+        self.assertEqual(sql.count("security_invoker = true"), 2)
+        self.assertIn(
+            "revoke all on function public.handle_new_user() from public, anon, authenticated",
+            sql,
+        )
+        self.assertIn(
+            "grant execute on function public.complete_google_signup(uuid) to authenticated",
+            sql,
+        )
+
+    def test_public_error_never_returns_internal_exception_text(self) -> None:
+        error = public_error(
+            502,
+            "Please try again.",
+            operation="security regression test",
+            exception=RuntimeError("private provider response"),
+        )
+        self.assertEqual(error.status_code, 502)
+        self.assertEqual(error.detail, "Please try again.")
+        self.assertNotIn("private provider response", error.detail)
 
 
 class _RowsQuery:

@@ -754,8 +754,8 @@ create policy "only super admin creates tenants" on tenants
   for insert with check (is_super_admin());
 
 -- ---------- profiles ----------
-create policy "see own tenant's profiles" on profiles
-  for select using (tenant_id = current_tenant_id() or is_super_admin());
+create policy "read own profile" on profiles
+  for select to authenticated using (id = auth.uid());
 
 create policy "update own safe profile fields" on profiles
   for update using (id = auth.uid())
@@ -931,6 +931,27 @@ create policy "anyone can read plan limits" on plan_limits
 -- No client-facing write policy — pricing/quota tiers change via a new
 -- migration (service_role), never from an anon/authenticated client.
 
+-- ---------- browser Data API boundary ----------
+-- The frontend talks directly to Supabase only for Auth, its own profile row,
+-- and complete_google_signup(). Quiz/content access goes through FastAPI so
+-- students cannot bypass answer stripping by querying PostgREST themselves.
+revoke all on table profiles from anon, authenticated;
+grant select on table profiles to authenticated;
+grant update (full_name, avatar_url) on table profiles to authenticated;
+
+revoke all on table
+  tenants, courses, subjects, enrollments, teacher_subjects, chapters, topics,
+  documents, ai_extraction_jobs, questions, quiz_sets, quiz_variants,
+  quiz_variant_questions, quiz_attempts, attempt_answers, ai_explanations,
+  tenant_usage, plan_limits, ai_rate_limits
+from anon, authenticated;
+
+alter default privileges in schema public
+  revoke all on tables from anon, authenticated;
+
+revoke all on function complete_google_signup(uuid) from public, anon;
+grant execute on function complete_google_signup(uuid) to authenticated;
+
 
 -- ============================================================================
 -- OPTIONAL: lightweight analytics as VIEWS, not tables (Sprint 5 requirement,
@@ -938,7 +959,7 @@ create policy "anyone can read plan limits" on plan_limits
 -- that already exists). RLS on the underlying tables still applies.
 -- ============================================================================
 
-create view v_student_topic_accuracy as
+create view v_student_topic_accuracy with (security_invoker = true) as
 select
   aa.tenant_id,
   qa.student_id,
@@ -951,7 +972,7 @@ join quiz_attempts qa on qa.id = aa.attempt_id
 join questions q on q.id = aa.question_id
 group by aa.tenant_id, qa.student_id, q.topic_id;
 
-create view v_quiz_question_analysis as
+create view v_quiz_question_analysis with (security_invoker = true) as
 select
   vq.tenant_id,
   vq.variant_id,
@@ -962,6 +983,12 @@ from attempt_answers aa
 join quiz_attempts qa on qa.id = aa.attempt_id
 join quiz_variant_questions vq on vq.variant_id = qa.variant_id and vq.question_id = aa.question_id
 group by vq.tenant_id, vq.variant_id, aa.question_id;
+
+-- Analytics are exposed through the tenant-scoped backend, not PostgREST.
+revoke all on table
+  v_student_topic_accuracy,
+  v_quiz_question_analysis
+from anon, authenticated;
 
 -- ============================================================================
 -- END OF SCHEMA

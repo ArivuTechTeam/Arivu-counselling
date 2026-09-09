@@ -8,12 +8,12 @@ import { createClient } from "@/lib/supabase";
  * DEV-ONLY quick account switcher.
  *
  * Lets you hop between test accounts (super admin / institution admin / teacher
- * / student) without logging out and retyping credentials.
+ * / student) without retyping email addresses.
  *
  * Production safety: Next.js hard-codes process.env.NODE_ENV at build time. On
- * Vercel it is "production", so this component returns null and the minifier
- * drops the inner component + the test credentials from the deployed bundle.
- * These are throwaway TEST accounts only — never put a real user's password here.
+ * Vercel it is "production", so this component returns null. The public config
+ * contains labels and emails only; passwords are always entered at runtime and
+ * are never compiled into browser JavaScript.
  */
 export function DevAccountSwitcher({ currentEmail }: { currentEmail: string }) {
   if (process.env.NODE_ENV === "production") return null;
@@ -24,18 +24,23 @@ type DevAccount = {
   label: string;
   role: string;
   email: string;
-  password: string;
 };
 
-// Populate NEXT_PUBLIC_DEV_ACCOUNTS_JSON in .env.local (gitignored) to use this
-// switcher locally — see frontend/.env.local.example. Never commit real
-// credentials here; this array must stay empty in the checked-in source.
+// NEXT_PUBLIC values are browser-readable by definition. This configuration is
+// deliberately limited to non-secret labels/emails; never add passwords here.
 function readDevAccounts(): DevAccount[] {
-  const raw = process.env.NEXT_PUBLIC_DEV_ACCOUNTS_JSON;
+  const raw = process.env.NEXT_PUBLIC_DEV_ACCOUNT_EMAILS_JSON;
   if (!raw) return [];
   try {
     const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed : [];
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter(
+      (account): account is DevAccount =>
+        !!account &&
+        typeof account.label === "string" &&
+        typeof account.role === "string" &&
+        typeof account.email === "string",
+    );
   } catch {
     return [];
   }
@@ -57,19 +62,17 @@ function DevSwitcherInner({ currentEmail }: { currentEmail: string }) {
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [selected, setSelected] = useState<DevAccount | null>(null);
+  const [password, setPassword] = useState("");
 
-  async function switchTo(acc: DevAccount) {
-    if (acc.email === currentEmail) {
-      setOpen(false);
-      return;
-    }
-    setBusy(acc.email);
+  async function switchTo() {
+    if (!selected || !password) return;
+    setBusy(selected.email);
     setError(null);
     const supabase = createClient();
-    await supabase.auth.signOut();
     const { error } = await supabase.auth.signInWithPassword({
-      email: acc.email,
-      password: acc.password,
+      email: selected.email,
+      password,
     });
     if (error) {
       setError(error.message);
@@ -104,7 +107,15 @@ function DevSwitcherInner({ currentEmail }: { currentEmail: string }) {
               return (
                 <button
                   key={acc.email}
-                  onClick={() => switchTo(acc)}
+                  onClick={() => {
+                    if (current) {
+                      setOpen(false);
+                      return;
+                    }
+                    setSelected(acc);
+                    setPassword("");
+                    setError(null);
+                  }}
                   disabled={!!busy}
                   className={`flex w-full items-center justify-between gap-2 px-4 py-2.5 text-left transition-colors hover:bg-accent disabled:opacity-60 ${
                     current ? "bg-primary/5" : ""
@@ -130,6 +141,34 @@ function DevSwitcherInner({ currentEmail }: { currentEmail: string }) {
                 </button>
               );
             })}
+            {selected && (
+              <form
+                className="space-y-2 border-t p-3"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  void switchTo();
+                }}
+              >
+                <label className="block text-xs font-medium text-foreground">
+                  Password for {selected.label}
+                  <input
+                    className="mt-1 h-9 w-full rounded-md border bg-background px-3 text-sm outline-none focus:ring-2 focus:ring-primary/30"
+                    type="password"
+                    value={password}
+                    onChange={(event) => setPassword(event.target.value)}
+                    autoComplete="current-password"
+                    autoFocus
+                  />
+                </label>
+                <button
+                  className="h-9 w-full rounded-md bg-primary text-sm font-medium text-primary-foreground disabled:opacity-50"
+                  type="submit"
+                  disabled={!password || !!busy}
+                >
+                  {busy ? "Switching…" : "Switch account"}
+                </button>
+              </form>
+            )}
             {error && (
               <div className="border-t px-4 py-2 text-xs text-red-600">{error}</div>
             )}
