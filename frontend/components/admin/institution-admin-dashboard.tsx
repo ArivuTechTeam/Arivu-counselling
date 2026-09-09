@@ -154,7 +154,7 @@ export function InstitutionAdminDashboard() {
               <span className="text-xs text-white/60">Updated {updated.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
             </div>
             <h1 className="mt-3 text-2xl font-bold sm:text-3xl">
-              <span className="text-[#9ff0a6]">{teachers}</span> teachers and <span className="text-[#9ff0a6]">{students}</span> students · {analytics.summary.avg_accuracy}% average accuracy
+              <span className="text-[#9ff0a6]">{teachers}</span> teachers and <span className="text-[#9ff0a6]">{students}</span> students · {analytics.summary.avg_accuracy}% overall institute accuracy
             </h1>
             <p className="mt-2 text-sm text-white/80">{overview.courses} courses · {overview.subjects} subjects · {overview.documents} documents</p>
             <p className={`mt-4 inline-flex rounded-full px-3 py-1.5 text-sm font-semibold ${trendUp ? "bg-emerald-300/15 text-emerald-100" : "bg-rose-300/15 text-rose-100"}`}>
@@ -164,7 +164,7 @@ export function InstitutionAdminDashboard() {
           <div className="flex h-28 w-28 items-center justify-center rounded-full" style={{ background: `conic-gradient(#7ae582 ${analytics.summary.avg_accuracy * 3.6}deg, rgba(255,255,255,.16) 0)` }}>
             <div className="flex h-[94px] w-[94px] flex-col items-center justify-center rounded-full bg-[#15603d]">
               <strong className="text-3xl">{analytics.summary.avg_accuracy}%</strong>
-              <span className="text-[9px] uppercase tracking-widest text-white/70">accuracy</span>
+              <span className="text-center text-[9px] uppercase leading-tight tracking-widest text-white/70">institute accuracy</span>
             </div>
           </div>
         </div>

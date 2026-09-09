@@ -104,7 +104,7 @@ export function QuizPerformanceModal({
                 </section>
 
                 <section className="rounded-xl border p-4">
-                  <h3 className="font-bold text-foreground">Weak questions</h3>
+                  <h3 className="font-bold text-foreground">Questions students are struggling with</h3>
                   {detail.weak_questions.length === 0 ? (
                     <p className="mt-3 text-sm text-muted-foreground">No answered questions to compare yet.</p>
                   ) : (
