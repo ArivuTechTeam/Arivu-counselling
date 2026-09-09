@@ -6,8 +6,9 @@ import { Area, AreaChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "rec
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { ErrorCard } from "@/components/ui/error-card";
 import { PageHeader } from "@/components/ui/page-header";
-import { AdminQuizSet, InstitutionAnalytics, QualityFinding, getAdminQuizSets, getInstitutionAnalytics } from "@/lib/api";
+import { AdminQuizSet, Course as AcademicCourse, InstitutionAnalytics, QualityFinding, getAdminQuizSets, getInstitutionAnalytics, listCourses } from "@/lib/api";
 import { QuizPerformanceModal } from "../quizzes/_components/quiz-performance-modal";
+import { CourseSubjectDrilldownModal } from "./_components/course-subject-drilldown-modal";
 import { QuizDrilldownModal } from "./_components/quiz-drilldown-modal";
 import { StudentPerformanceModal } from "./_components/student-performance-modal";
 
@@ -43,12 +44,14 @@ function Skeleton() {
 export default function InstitutionAnalyticsPage() {
   const [data, setData] = useState<InstitutionAnalytics | null>(null);
   const [quizzes, setQuizzes] = useState<AdminQuizSet[]>([]);
+  const [courses, setCourses] = useState<AcademicCourse[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [teacherSort, setTeacherSort] = useState<TeacherSort>("attempts");
   const [showInactive, setShowInactive] = useState(false);
   const [courseSort, setCourseSort] = useState<{ key: CourseSort; direction: "asc" | "desc" }>({ key: "attempts", direction: "desc" });
-  const [drilldown, setDrilldown] = useState<{ type: "course" | "teacher"; id: string; name: string } | null>(null);
+  const [teacherDrilldown, setTeacherDrilldown] = useState<{ id: string; name: string } | null>(null);
+  const [courseDrilldown, setCourseDrilldown] = useState<AcademicCourse | null>(null);
   const [pendingOpen, setPendingOpen] = useState(false);
   const [atRiskOpen, setAtRiskOpen] = useState(false);
   const [selectedStudent, setSelectedStudent] = useState<Student | null>(null);
@@ -56,8 +59,8 @@ export default function InstitutionAnalyticsPage() {
 
   function load() {
     setLoading(true); setError(null);
-    Promise.all([getInstitutionAnalytics(), getAdminQuizSets()])
-      .then(([analytics, rows]) => { setData(analytics); setQuizzes(rows); })
+    Promise.all([getInstitutionAnalytics(), getAdminQuizSets(), listCourses()])
+      .then(([analytics, rows, courseRows]) => { setData(analytics); setQuizzes(rows); setCourses(courseRows); })
       .catch((reason) => setError(reason.message)).finally(() => setLoading(false));
   }
   useEffect(load, []);
@@ -74,7 +77,8 @@ export default function InstitutionAnalyticsPage() {
     const result = typeof left === "string" ? left.localeCompare(String(right)) : Number(left) - Number(right);
     return courseSort.direction === "asc" ? result : -result;
   }), [data, courseSort]);
-  const drilldownQuizzes = useMemo(() => !drilldown ? [] : quizzes.filter((quiz) => drilldown.type === "course" ? quiz.course_id === drilldown.id : quiz.teacher_id === drilldown.id).sort((a, b) => b.attempts_count - a.attempts_count || a.avg_accuracy - b.avg_accuracy), [drilldown, quizzes]);
+  const teacherDrilldownQuizzes = useMemo(() => !teacherDrilldown ? [] : quizzes.filter((quiz) => quiz.teacher_id === teacherDrilldown.id).sort((a, b) => b.attempts_count - a.attempts_count || a.avg_accuracy - b.avg_accuracy), [teacherDrilldown, quizzes]);
+  const courseDrilldownQuizzes = useMemo(() => !courseDrilldown ? [] : quizzes.filter((quiz) => quiz.course_id === courseDrilldown.id), [courseDrilldown, quizzes]);
   const pendingQuizzes = useMemo(() => quizzes.filter((quiz) => quiz.review_status.pending + quiz.review_status.needs_edit > 0).sort((a, b) => b.review_status.pending - a.review_status.pending), [quizzes]);
 
   function toggleCourseSort(key: CourseSort) { setCourseSort((current) => ({ key, direction: current.key === key && current.direction === "desc" ? "asc" : "desc" })); }
@@ -83,7 +87,11 @@ export default function InstitutionAnalyticsPage() {
     if (finding.action_type === "at_risk") { setSelectedStudent(null); setAtRiskOpen(true); }
     if ((finding.action_type === "course" || finding.action_type === "teacher") && finding.action_id) {
       const name = finding.action_type === "course" ? data?.course_perf.find((row) => row.course_id === finding.action_id)?.name : data?.teacher_activity.find((row) => row.teacher_id === finding.action_id)?.name;
-      setDrilldown({ type: finding.action_type, id: finding.action_id, name: name ?? "Selected" });
+      if (finding.action_type === "course") {
+        setCourseDrilldown(courses.find((course) => course.id === finding.action_id) ?? { id: finding.action_id, name: name ?? "Selected course", subjects: [] });
+      } else {
+        setTeacherDrilldown({ id: finding.action_id, name: name ?? "Selected teacher" });
+      }
     }
   }
 
@@ -110,11 +118,33 @@ export default function InstitutionAnalyticsPage() {
       <Card><CardHeader><CardTitle>Students needing help</CardTitle><CardDescription>Average accuracy below 40%.</CardDescription></CardHeader><CardContent>{data.at_risk_students.length === 0 ? <p className="text-sm text-muted-foreground">No struggling students right now.</p> : <div className="flex flex-col gap-2">{data.at_risk_students.slice(0, 5).map((student) => <button key={student.student_id} type="button" onClick={() => { setSelectedStudent(student); setAtRiskOpen(true); }} className="grid grid-cols-[1fr_auto] gap-2 rounded-xl border p-3 text-left hover:bg-accent"><div className="min-w-0"><p className="truncate font-semibold">{student.name}</p><p className="truncate text-xs text-muted-foreground">Worst: {student.worst_quiz?.title ?? "No quiz data"} {student.worst_quiz ? `(${student.worst_quiz.accuracy}%)` : ""}</p><p className="mt-1 text-xs text-muted-foreground">{student.attempts} attempt{student.attempts === 1 ? "" : "s"}</p></div><strong className="text-rose-600">{student.accuracy}% →</strong></button>)}<button type="button" onClick={() => { setSelectedStudent(null); setAtRiskOpen(true); }} className="mt-2 text-left text-sm font-semibold text-primary hover:underline">View all {data.at_risk_students.length} at-risk students ↗</button></div>}</CardContent></Card>
     </div>
 
-    <div id="course-performance"><CourseTable courses={sortedCourses} sort={courseSort} onSort={toggleCourseSort} onOpen={(course) => setDrilldown({ type: "course", id: course.course_id, name: course.name })}/></div>
+    <div id="course-performance"><CourseTable courses={sortedCourses} sort={courseSort} onSort={toggleCourseSort} onOpen={(course) => setCourseDrilldown(courses.find((item) => item.id === course.course_id) ?? { id: course.course_id, name: course.name, subjects: [] })}/></div>
 
-    <Card><CardHeader className="gap-3 sm:flex-row sm:items-center sm:justify-between"><div><CardTitle>Teacher performance</CardTitle><CardDescription>Compare participation and accuracy separately, then open a teacher&apos;s quizzes.</CardDescription></div><select value={teacherSort} onChange={(event) => setTeacherSort(event.target.value as TeacherSort)} className="h-10 rounded-lg border bg-background px-3 text-sm"><option value="attempts">Sort: Attempts</option><option value="accuracy">Sort: Accuracy</option><option value="last_active">Sort: Last activity</option></select></CardHeader><CardContent className="space-y-3">{activeTeachers.map((teacher) => <TeacherRow key={teacher.teacher_id} teacher={teacher} maxAttempts={maxAttempts} onClick={() => setDrilldown({ type: "teacher", id: teacher.teacher_id, name: teacher.name })}/>) }{inactiveTeachers.length > 0 && <div className="border-t pt-3"><button type="button" onClick={() => setShowInactive((value) => !value)} className="flex w-full items-center justify-between rounded-lg px-2 py-2 text-sm font-semibold hover:bg-accent"><span>Inactive teachers</span><span className="text-muted-foreground">{inactiveTeachers.length} {showInactive ? "▲" : "▼"}</span></button>{showInactive && <div className="mt-2 space-y-2">{inactiveTeachers.map((teacher) => <TeacherRow key={teacher.teacher_id} teacher={teacher} maxAttempts={maxAttempts} onClick={() => setDrilldown({ type: "teacher", id: teacher.teacher_id, name: teacher.name })}/>)}</div>}</div>}</CardContent></Card>
+    <Card><CardHeader className="gap-3 sm:flex-row sm:items-center sm:justify-between"><div><CardTitle>Teacher performance</CardTitle><CardDescription>Compare participation and accuracy separately, then open a teacher&apos;s quizzes.</CardDescription></div><select value={teacherSort} onChange={(event) => setTeacherSort(event.target.value as TeacherSort)} className="h-10 rounded-lg border bg-background px-3 text-sm"><option value="attempts">Sort: Attempts</option><option value="accuracy">Sort: Accuracy</option><option value="last_active">Sort: Last activity</option></select></CardHeader><CardContent className="space-y-3">{activeTeachers.map((teacher) => <TeacherRow key={teacher.teacher_id} teacher={teacher} maxAttempts={maxAttempts} onClick={() => setTeacherDrilldown({ id: teacher.teacher_id, name: teacher.name })}/>) }{inactiveTeachers.length > 0 && <div className="border-t pt-3"><button type="button" onClick={() => setShowInactive((value) => !value)} className="flex w-full items-center justify-between rounded-lg px-2 py-2 text-sm font-semibold hover:bg-accent"><span>Inactive teachers</span><span className="text-muted-foreground">{inactiveTeachers.length} {showInactive ? "▲" : "▼"}</span></button>{showInactive && <div className="mt-2 space-y-2">{inactiveTeachers.map((teacher) => <TeacherRow key={teacher.teacher_id} teacher={teacher} maxAttempts={maxAttempts} onClick={() => setTeacherDrilldown({ id: teacher.teacher_id, name: teacher.name })}/>)}</div>}</div>}</CardContent></Card>
 
-    {drilldown && <QuizDrilldownModal title={`${drilldown.name} quizzes`} description={`${drilldown.type === "course" ? "Course" : "Teacher"} quizzes sorted by attempts, then lowest accuracy.`} quizzes={drilldownQuizzes} onClose={() => setDrilldown(null)} onSelect={(quiz) => { setDrilldown(null); setSelectedQuiz(quiz); }}/>}
+    {courseDrilldown && (
+      <CourseSubjectDrilldownModal
+        course={courseDrilldown}
+        quizzes={courseDrilldownQuizzes}
+        onClose={() => setCourseDrilldown(null)}
+        onSelectQuiz={(quiz) => {
+          setCourseDrilldown(null);
+          setSelectedQuiz(quiz);
+        }}
+      />
+    )}
+    {teacherDrilldown && (
+      <QuizDrilldownModal
+        title={`${teacherDrilldown.name} quizzes`}
+        description="Teacher quizzes sorted by attempts, then lowest accuracy."
+        quizzes={teacherDrilldownQuizzes}
+        onClose={() => setTeacherDrilldown(null)}
+        onSelect={(quiz) => {
+          setTeacherDrilldown(null);
+          setSelectedQuiz(quiz);
+        }}
+      />
+    )}
     {pendingOpen && <QuizDrilldownModal title="Quizzes awaiting review" description="Quizzes with pending or needs-edit questions, highest backlog first." quizzes={pendingQuizzes} onClose={() => setPendingOpen(false)} onSelect={(quiz) => { setPendingOpen(false); setSelectedQuiz(quiz); }}/>}
     {atRiskOpen && <StudentPerformanceModal students={data.at_risk_students} initialStudent={selectedStudent} onClose={() => { setAtRiskOpen(false); setSelectedStudent(null); }}/>}
     {selectedQuiz && <QuizPerformanceModal quiz={selectedQuiz} onClose={() => setSelectedQuiz(null)}/>}
@@ -134,5 +164,5 @@ function PerformanceBar({ label, value, width, color }: { label: string; value: 
 
 function CourseTable({ courses, sort, onSort, onOpen }: { courses: Course[]; sort: { key: CourseSort; direction: "asc" | "desc" }; onSort: (key: CourseSort) => void; onOpen: (course: Course) => void }) {
   const headings: [CourseSort, string][] = [["name", "Course"], ["students", "Students"], ["published", "Published"], ["pending_review", "Pending review"], ["attempts", "Attempts"], ["accuracy", "Accuracy"]];
-  return <Card><CardHeader><CardTitle>Course performance</CardTitle><CardDescription>Click any row to inspect its quizzes. Select a heading to sort.</CardDescription></CardHeader><CardContent>{courses.length === 0 ? <p className="text-sm text-muted-foreground">No courses yet.</p> : <div className="overflow-x-auto"><table className="w-full min-w-[760px] text-sm"><thead><tr className="border-b text-left text-xs uppercase tracking-wide text-muted-foreground">{headings.map(([key, label]) => <th key={key} className={`px-3 py-3 font-medium ${key !== "name" ? "text-right" : ""}`}><button type="button" onClick={() => onSort(key)} className="hover:text-foreground">{label} {sort.key === key ? (sort.direction === "desc" ? "↓" : "↑") : "↕"}</button></th>)}<th className="px-3 py-3 text-right font-medium">Action</th></tr></thead><tbody>{courses.map((course) => <tr key={course.course_id} tabIndex={0} className="cursor-pointer border-b hover:bg-accent focus:bg-accent focus:outline-none last:border-0" onClick={() => onOpen(course)} onKeyDown={(event) => (event.key === "Enter" || event.key === " ") && onOpen(course)}><td className="px-3 py-3 font-semibold">{course.name}</td><td className="px-3 py-3 text-right text-muted-foreground">{course.students}</td><td className="px-3 py-3 text-right text-muted-foreground">{course.published}</td><td className="px-3 py-3 text-right">{course.pending_review ? <span className="rounded-full bg-amber-100 px-2 py-1 text-xs font-semibold text-amber-700">{course.pending_review} pending</span> : <span className="text-muted-foreground">0</span>}</td><td className="px-3 py-3 text-right text-muted-foreground">{course.attempts}</td><td className="px-3 py-3 text-right font-semibold" style={{ color: course.attempts ? accuracyColor(course.accuracy) : "#94a3b8" }}>{course.attempts ? `${course.accuracy}%` : "—"}</td><td className="px-3 py-3 text-right font-semibold text-primary">View →</td></tr>)}</tbody></table></div>}</CardContent></Card>;
+  return <Card><CardHeader><CardTitle>Course performance</CardTitle><CardDescription>Click any row to browse its subjects, then select a subject to inspect its quizzes. Select a heading to sort.</CardDescription></CardHeader><CardContent>{courses.length === 0 ? <p className="text-sm text-muted-foreground">No courses yet.</p> : <div className="overflow-x-auto"><table className="w-full min-w-[760px] text-sm"><thead><tr className="border-b text-left text-xs uppercase tracking-wide text-muted-foreground">{headings.map(([key, label]) => <th key={key} className={`px-3 py-3 font-medium ${key !== "name" ? "text-right" : ""}`}><button type="button" onClick={() => onSort(key)} className="hover:text-foreground">{label} {sort.key === key ? (sort.direction === "desc" ? "↓" : "↑") : "↕"}</button></th>)}<th className="px-3 py-3 text-right font-medium">Action</th></tr></thead><tbody>{courses.map((course) => <tr key={course.course_id} tabIndex={0} className="cursor-pointer border-b hover:bg-accent focus:bg-accent focus:outline-none last:border-0" onClick={() => onOpen(course)} onKeyDown={(event) => (event.key === "Enter" || event.key === " ") && onOpen(course)}><td className="px-3 py-3 font-semibold">{course.name}</td><td className="px-3 py-3 text-right text-muted-foreground">{course.students}</td><td className="px-3 py-3 text-right text-muted-foreground">{course.published}</td><td className="px-3 py-3 text-right">{course.pending_review ? <span className="rounded-full bg-amber-100 px-2 py-1 text-xs font-semibold text-amber-700">{course.pending_review} pending</span> : <span className="text-muted-foreground">0</span>}</td><td className="px-3 py-3 text-right text-muted-foreground">{course.attempts}</td><td className="px-3 py-3 text-right font-semibold" style={{ color: course.attempts ? accuracyColor(course.accuracy) : "#94a3b8" }}>{course.attempts ? `${course.accuracy}%` : "—"}</td><td className="px-3 py-3 text-right font-semibold text-primary">View subjects →</td></tr>)}</tbody></table></div>}</CardContent></Card>;
 }

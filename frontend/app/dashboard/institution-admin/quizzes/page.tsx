@@ -3,7 +3,6 @@
 import { useEffect, useMemo, useState } from "react";
 
 import { FacultyAnalysisCard } from "@/components/institution-admin/faculty-analysis-card";
-import { QuestionPaperButtons } from "@/components/shared/pdf-buttons";
 import { Card, CardContent } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { ErrorCard } from "@/components/ui/error-card";
@@ -418,14 +417,9 @@ export default function AdminQuizzesPage() {
                         <span className="text-xs text-muted-foreground">
                           Created {quiz.created_at ? new Date(quiz.created_at).toLocaleDateString() : "date unavailable"}
                         </span>
-                        <div className="flex flex-wrap items-center gap-3">
-                          <div onClick={(event) => event.stopPropagation()}>
-                            <QuestionPaperButtons quizSetId={quiz.id} title={quiz.title} meta={[quiz.course, quiz.subject].filter(Boolean).join(" · ")} compact />
-                          </div>
-                          <span className="inline-flex items-center gap-1 text-xs font-semibold text-primary">
-                            View performance <ChevronDown size={15} className="-rotate-90" />
-                          </span>
-                        </div>
+                        <span className="inline-flex items-center gap-1 text-xs font-semibold text-primary">
+                          View performance <ChevronDown size={15} className="-rotate-90" />
+                        </span>
                       </div>
                     </CardContent>
                   </Card>

@@ -4,7 +4,6 @@ import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Area, AreaChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 
-import { AlertBanner } from "@/app/dashboard/institution-admin/_components/alert-banner";
 import { AtRiskStudentsCard } from "@/app/dashboard/institution-admin/_components/at-risk-students-card";
 import { CourseHealthCard } from "@/app/dashboard/institution-admin/_components/course-health-card";
 import { QuickActionsBar } from "@/app/dashboard/institution-admin/_components/quick-actions-bar";
@@ -20,7 +19,6 @@ import {
   AdminQuizSet,
   InstitutionAnalytics,
   InstitutionOverview,
-  QualityFinding,
   getAdminQuizSets,
   getInstitutionAnalytics,
   getInstitutionOverview,
@@ -66,9 +64,7 @@ export function InstitutionAdminDashboard() {
   const [analytics, setAnalytics] = useState<InstitutionAnalytics | null>(null);
   const [quizzes, setQuizzes] = useState<AdminQuizSet[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const [alertsVisible, setAlertsVisible] = useState(true);
   const [drilldown, setDrilldown] = useState<Drilldown | null>(null);
-  const [pendingOpen, setPendingOpen] = useState(false);
   const [atRiskOpen, setAtRiskOpen] = useState(false);
   const [selectedStudent, setSelectedStudent] = useState<AtRiskStudent | null>(null);
   const [selectedQuiz, setSelectedQuiz] = useState<AdminQuizSet | null>(null);
@@ -101,39 +97,12 @@ export function InstitutionAdminDashboard() {
       .sort((a, b) => b.attempts_count - a.attempts_count || a.avg_accuracy - b.avg_accuracy);
   }, [drilldown, quizzes]);
 
-  const pendingQuizzes = useMemo(
-    () => quizzes
-      .filter((quiz) => quiz.review_status.pending + quiz.review_status.needs_edit > 0)
-      .sort((a, b) => b.review_status.pending + b.review_status.needs_edit - (a.review_status.pending + a.review_status.needs_edit)),
-    [quizzes],
-  );
-
   const recentQuizzes = useMemo(
     () => [...quizzes]
       .sort((a, b) => Date.parse(b.created_at ?? "1970-01-01") - Date.parse(a.created_at ?? "1970-01-01"))
       .slice(0, 5),
     [quizzes],
   );
-
-  function openFinding(finding: QualityFinding) {
-    if (finding.action_type === "pending_review") {
-      setPendingOpen(true);
-      return;
-    }
-    if (finding.action_type === "at_risk") {
-      setSelectedStudent(null);
-      setAtRiskOpen(true);
-      return;
-    }
-    if ((finding.action_type === "course" || finding.action_type === "teacher") && finding.action_id) {
-      const name = finding.action_type === "course"
-        ? analytics?.course_perf.find((course) => course.course_id === finding.action_id)?.name
-        : analytics?.teacher_activity.find((teacher) => teacher.teacher_id === finding.action_id)?.name;
-      setDrilldown({ type: finding.action_type, id: finding.action_id, name: name ?? "Selected" });
-      return;
-    }
-    router.push("/dashboard/institution-admin/analytics");
-  }
 
   if (error) return <ErrorCard message={error} onRetry={load} />;
   if (!overview || !analytics) return <DashboardSkeleton />;
@@ -154,7 +123,7 @@ export function InstitutionAdminDashboard() {
               <span className="text-xs text-white/60">Updated {updated.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
             </div>
             <h1 className="mt-3 text-2xl font-bold sm:text-3xl">
-              <span className="text-[#9ff0a6]">{teachers}</span> teachers and <span className="text-[#9ff0a6]">{students}</span> students · {analytics.summary.avg_accuracy}% average accuracy
+              <span className="text-[#9ff0a6]">{teachers}</span> teachers and <span className="text-[#9ff0a6]">{students}</span> students · {analytics.summary.avg_accuracy}% overall institute accuracy
             </h1>
             <p className="mt-2 text-sm text-white/80">{overview.courses} courses · {overview.subjects} subjects · {overview.documents} documents</p>
             <p className={`mt-4 inline-flex rounded-full px-3 py-1.5 text-sm font-semibold ${trendUp ? "bg-emerald-300/15 text-emerald-100" : "bg-rose-300/15 text-rose-100"}`}>
@@ -164,13 +133,11 @@ export function InstitutionAdminDashboard() {
           <div className="flex h-28 w-28 items-center justify-center rounded-full" style={{ background: `conic-gradient(#7ae582 ${analytics.summary.avg_accuracy * 3.6}deg, rgba(255,255,255,.16) 0)` }}>
             <div className="flex h-[94px] w-[94px] flex-col items-center justify-center rounded-full bg-[#15603d]">
               <strong className="text-3xl">{analytics.summary.avg_accuracy}%</strong>
-              <span className="text-[9px] uppercase tracking-widest text-white/70">accuracy</span>
+              <span className="text-center text-[9px] uppercase leading-tight tracking-widest text-white/70">institute accuracy</span>
             </div>
           </div>
         </div>
       </section>
-
-      {alertsVisible && <div id="dashboard-findings"><AlertBanner findings={analytics.findings} onAction={openFinding} onDismiss={() => setAlertsVisible(false)} /></div>}
 
       <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
         <MetricTile label="Students" value={students} gradient="from-card to-emerald-50/70" chip="bg-emerald-500/10 text-emerald-600" icon={<GradIcon />} />
@@ -181,14 +148,7 @@ export function InstitutionAdminDashboard() {
         <MetricTile label="Active this week" value={activeStudents} gradient="from-card to-teal-50/70" chip="bg-teal-500/10 text-teal-600" icon={<UsersIcon />} delay={200} />
       </div>
 
-      <QuickActionsBar
-        pendingReviewCount={analytics.pipeline.pending_review}
-        onPending={() => setPendingOpen(true)}
-        onFindings={() => {
-          setAlertsVisible(true);
-          window.setTimeout(() => document.getElementById("dashboard-findings")?.scrollIntoView({ behavior: "smooth" }), 0);
-        }}
-      />
+      <QuickActionsBar />
 
       <Card>
         <CardHeader>
@@ -253,7 +213,6 @@ export function InstitutionAdminDashboard() {
       </Card>
 
       {drilldown && <QuizDrilldownModal title={`${drilldown.name} quizzes`} description={`${drilldown.type === "course" ? "Course" : "Teacher"} quizzes, ordered by engagement and then lowest accuracy.`} quizzes={drilldownQuizzes} onClose={() => setDrilldown(null)} onSelect={(quiz) => { setDrilldown(null); setSelectedQuiz(quiz); }} />}
-      {pendingOpen && <QuizDrilldownModal title="Quizzes awaiting review" description="Quizzes with pending or needs-edit questions, highest backlog first." quizzes={pendingQuizzes} onClose={() => setPendingOpen(false)} onSelect={(quiz) => { setPendingOpen(false); setSelectedQuiz(quiz); }} />}
       {atRiskOpen && <StudentPerformanceModal students={analytics.at_risk_students} initialStudent={selectedStudent} onClose={() => { setAtRiskOpen(false); setSelectedStudent(null); }} />}
       {selectedQuiz && <QuizPerformanceModal quiz={selectedQuiz} onClose={() => setSelectedQuiz(null)} />}
     </div>
