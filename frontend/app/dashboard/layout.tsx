@@ -52,8 +52,13 @@ export default function DashboardLayout({
       }
       setEmail(user.email ?? "");
       setMustChangePassword(Boolean(user.user_metadata?.must_change_password));
+      const providers = user.app_metadata?.providers;
       setCanChangePassword(
-        Boolean(user.identities?.some((identity) => identity.provider === "email")),
+        Boolean(
+          user.identities?.some((identity) => identity.provider === "email") ||
+            (Array.isArray(providers) && providers.includes("email")) ||
+            user.app_metadata?.provider === "email",
+        ),
       );
       const { data } = await supabase
         .from("profiles")
