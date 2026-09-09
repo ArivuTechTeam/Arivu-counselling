@@ -4,7 +4,6 @@ import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Area, AreaChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 
-import { AlertBanner } from "@/app/dashboard/institution-admin/_components/alert-banner";
 import { AtRiskStudentsCard } from "@/app/dashboard/institution-admin/_components/at-risk-students-card";
 import { CourseHealthCard } from "@/app/dashboard/institution-admin/_components/course-health-card";
 import { QuickActionsBar } from "@/app/dashboard/institution-admin/_components/quick-actions-bar";
@@ -20,7 +19,6 @@ import {
   AdminQuizSet,
   InstitutionAnalytics,
   InstitutionOverview,
-  QualityFinding,
   getAdminQuizSets,
   getInstitutionAnalytics,
   getInstitutionOverview,
@@ -66,7 +64,6 @@ export function InstitutionAdminDashboard() {
   const [analytics, setAnalytics] = useState<InstitutionAnalytics | null>(null);
   const [quizzes, setQuizzes] = useState<AdminQuizSet[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const [alertsVisible, setAlertsVisible] = useState(true);
   const [drilldown, setDrilldown] = useState<Drilldown | null>(null);
   const [pendingOpen, setPendingOpen] = useState(false);
   const [atRiskOpen, setAtRiskOpen] = useState(false);
@@ -115,26 +112,6 @@ export function InstitutionAdminDashboard() {
     [quizzes],
   );
 
-  function openFinding(finding: QualityFinding) {
-    if (finding.action_type === "pending_review") {
-      setPendingOpen(true);
-      return;
-    }
-    if (finding.action_type === "at_risk") {
-      setSelectedStudent(null);
-      setAtRiskOpen(true);
-      return;
-    }
-    if ((finding.action_type === "course" || finding.action_type === "teacher") && finding.action_id) {
-      const name = finding.action_type === "course"
-        ? analytics?.course_perf.find((course) => course.course_id === finding.action_id)?.name
-        : analytics?.teacher_activity.find((teacher) => teacher.teacher_id === finding.action_id)?.name;
-      setDrilldown({ type: finding.action_type, id: finding.action_id, name: name ?? "Selected" });
-      return;
-    }
-    router.push("/dashboard/institution-admin/analytics");
-  }
-
   if (error) return <ErrorCard message={error} onRetry={load} />;
   if (!overview || !analytics) return <DashboardSkeleton />;
 
@@ -170,8 +147,6 @@ export function InstitutionAdminDashboard() {
         </div>
       </section>
 
-      {alertsVisible && <div id="dashboard-findings"><AlertBanner findings={analytics.findings} onAction={openFinding} onDismiss={() => setAlertsVisible(false)} /></div>}
-
       <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
         <MetricTile label="Students" value={students} gradient="from-card to-emerald-50/70" chip="bg-emerald-500/10 text-emerald-600" icon={<GradIcon />} />
         <MetricTile label="Teachers" value={teachers} gradient="from-card to-blue-50/70" chip="bg-blue-500/10 text-blue-600" icon={<UsersIcon />} delay={40} />
@@ -184,10 +159,7 @@ export function InstitutionAdminDashboard() {
       <QuickActionsBar
         pendingReviewCount={analytics.pipeline.pending_review}
         onPending={() => setPendingOpen(true)}
-        onFindings={() => {
-          setAlertsVisible(true);
-          window.setTimeout(() => document.getElementById("dashboard-findings")?.scrollIntoView({ behavior: "smooth" }), 0);
-        }}
+        onFindings={() => router.push("/dashboard/institution-admin/analytics")}
       />
 
       <Card>
