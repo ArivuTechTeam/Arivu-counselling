@@ -20,6 +20,7 @@ from app.lib.api_errors import public_error
 from app.lib.config import get_settings
 from app.lib.supabase import get_service_client
 from app.services.blueprint import generate_blueprint_quiz
+from app.services.events import QUIZ_PUBLISHED, log_event
 from app.services.generation import generate_quiz
 from app.services.llm import LLMError
 from app.services.rate_limit import (
@@ -319,6 +320,14 @@ def publish_quiz_set(
     )
     if not updated.data:
         raise HTTPException(status_code=404, detail="Quiz set not found.")
+    log_event(
+        tenant_id=profile.tenant_id,
+        event_type=QUIZ_PUBLISHED,
+        actor_id=profile.user_id,
+        actor_role=profile.role,
+        subject_type="quiz_set",
+        subject_id=quiz_set_id,
+    )
     return updated.data[0]
 
 

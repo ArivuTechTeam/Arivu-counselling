@@ -33,6 +33,7 @@ from app.services.teacher_access import replace_teacher_subjects
 router = APIRouter(prefix="/api/v1", tags=["admin"])
 
 AUTH_USERS_PAGE_SIZE = 1000
+POSTGREST_PAGE_SIZE = 1000
 
 
 def _require_admin(profile: CurrentProfile) -> None:
@@ -50,14 +51,6 @@ def _count(service, table: str, tenant_id: str, **filters) -> int:
     for k, v in filters.items():
         q = q.eq(k, v)
     return len(q.execute().data or [])
-
-
-def _delete_auth_user_quietly(service, user_id: str) -> None:
-    """Best-effort compensation for a failed multi-step provisioning flow."""
-    try:
-        service.auth.admin.delete_user(user_id)
-    except Exception:  # noqa: BLE001
-        pass
 
 
 def _list_all_auth_users(service, *, per_page: int = AUTH_USERS_PAGE_SIZE) -> list:
@@ -81,6 +74,33 @@ def _email_by_auth_user_id(service) -> dict[str, str | None]:
     }
 
 
+def _select_all(
+    service,
+    table: str,
+    columns: str,
+    *,
+    configure: Callable | None = None,
+) -> list[dict]:
+    """Read a complete PostgREST collection without the 1,000-row truncation."""
+    rows: list[dict] = []
+    start = 0
+    while True:
+        query = service.table(table).select(columns)
+        if configure is not None:
+            query = configure(query)
+        page = (
+            query.order("id")
+            .range(start, start + POSTGREST_PAGE_SIZE - 1)
+            .execute()
+            .data
+            or []
+        )
+        rows.extend(page)
+        if len(page) < POSTGREST_PAGE_SIZE:
+            return rows
+        start += POSTGREST_PAGE_SIZE
+
+
 def _set_provisioned_profile(
     service, *, user_id: str, tenant_id: str, role: str, full_name: str
 ) -> None:
@@ -91,6 +111,7 @@ def _set_provisioned_profile(
                 "tenant_id": tenant_id,
                 "role": role,
                 "full_name": full_name.strip(),
+                "must_change_password": True,
             }
         )
         .eq("id", user_id)
@@ -98,15 +119,24 @@ def _set_provisioned_profile(
     )
     if not updated.data:
         raise RuntimeError("The authorization profile was not created.")
-    # Migration 11 makes this authoritative. Keep provisioning compatible
-    # during a rolling deployment where API code may start just before DDL.
+
+
+def _rollback_provisioned_user(service, user_id: str) -> None:
+    """Remove a failed provisioned identity or fail loudly for operator action."""
+    service.auth.admin.delete_user(user_id)
+
+
+def _rollback_tenant(service, tenant_id: str) -> None:
+    """Remove a failed tenant, deactivating it if deletion cannot complete."""
     try:
-        service.table("profiles").update({"must_change_password": True}).eq(
-            "id", user_id
+        service.table("tenants").delete().eq("id", tenant_id).execute()
+    except Exception:
+        # A failed Auth cleanup may leave a profile FK behind. Quarantine the
+        # tenant so no public signup or new provisioning can use it.
+        service.table("tenants").update({"is_active": False}).eq(
+            "id", tenant_id
         ).execute()
-    except Exception as exc:  # noqa: BLE001
-        if "must_change_password" not in str(exc):
-            raise
+        raise
 
 
 # ── Institution teacher management ──────────────────────────────────────────
@@ -339,7 +369,15 @@ def create_user(
         )
     except Exception as exc:  # noqa: BLE001
         if "created" in locals() and created.user:
-            _delete_auth_user_quietly(service, created.user.id)
+            try:
+                _rollback_provisioned_user(service, created.user.id)
+            except Exception as rollback_exc:  # noqa: BLE001
+                raise public_error(
+                    500,
+                    "The teacher could not be created cleanly and requires operator review.",
+                    operation="roll back teacher provisioning",
+                    exception=rollback_exc,
+                ) from exc
         raise public_error(
             400,
             "We couldn't create this teacher. Check the account details and try again.",
@@ -753,8 +791,9 @@ def list_tenants(
     """Institutions (tenants) the super-admin can assign an admin to."""
     _require_super(profile)
     service = get_service_client()
-    return (
-        service.table("tenants").select("id, name").order("name").execute().data or []
+    return sorted(
+        _select_all(service, "tenants", "id, name"),
+        key=lambda tenant: (tenant.get("name") or "").lower(),
     )
 
 
@@ -765,16 +804,14 @@ def list_admins(
     """Every institution admin across the platform, with their institution."""
     _require_super(profile)
     service = get_service_client()
-    admins = (
-        service.table("profiles")
-        .select("id, full_name, tenant_id")
-        .eq("role", "institution_admin")
-        .execute()
-        .data
-        or []
+    admins = _select_all(
+        service,
+        "profiles",
+        "id, full_name, tenant_id",
+        configure=lambda query: query.eq("role", "institution_admin"),
     )
     email_by_id = _email_by_auth_user_id(service)
-    tenants = service.table("tenants").select("id, name").execute().data or []
+    tenants = _select_all(service, "tenants", "id, name")
     tname = {t["id"]: t["name"] for t in tenants}
     return [
         {
@@ -829,7 +866,15 @@ def create_admin(
         )
     except Exception as exc:  # noqa: BLE001
         if "created" in locals() and created.user:
-            _delete_auth_user_quietly(service, created.user.id)
+            try:
+                _rollback_provisioned_user(service, created.user.id)
+            except Exception as rollback_exc:  # noqa: BLE001
+                raise public_error(
+                    500,
+                    "The administrator could not be created cleanly and requires operator review.",
+                    operation="roll back institution administrator",
+                    exception=rollback_exc,
+                ) from exc
         raise public_error(
             400,
             "We couldn't create this institution administrator. Check the details and try again.",
@@ -1725,12 +1770,11 @@ def platform_stats(profile: CurrentProfile = Depends(get_current_profile)) -> di
     _require_super(profile)
     service = get_service_client()
 
-    tenants = (
-        service.table("tenants").select("id, name").order("name").execute().data or []
+    tenants = sorted(
+        _select_all(service, "tenants", "id, name"),
+        key=lambda tenant: (tenant.get("name") or "").lower(),
     )
-    all_profiles = (
-        service.table("profiles").select("tenant_id, role").execute().data or []
-    )
+    all_profiles = _select_all(service, "profiles", "id, tenant_id, role")
 
     per_tenant = []
     total_teachers = total_students = 0
@@ -1771,36 +1815,26 @@ def platform_overview(
     _require_super(profile)
     service = get_service_client()
 
-    tenants = (
-        service.table("tenants")
-        .select("id, name, subdomain, plan_tier, is_active, created_at")
-        .order("name")
-        .execute()
-        .data
-        or []
+    tenants = _select_all(
+        service,
+        "tenants",
+        "id, name, subdomain, plan_tier, is_active, created_at",
     )
-
-    profiles = (
-        service.table("profiles").select("tenant_id, role").execute().data or []
+    profiles = _select_all(service, "profiles", "id, tenant_id, role")
+    quiz_sets = _select_all(service, "quiz_sets", "id, tenant_id, status")
+    questions = _select_all(
+        service, "questions", "id, tenant_id, review_status"
     )
-    quiz_sets = (
-        service.table("quiz_sets").select("tenant_id, status").execute().data or []
-    )
-    questions = (
-        service.table("questions").select("tenant_id, review_status").execute().data or []
-    )
-    variants = (
-        service.table("quiz_variants").select("id, tenant_id, total_marks").execute().data or []
+    variants = _select_all(
+        service, "quiz_variants", "id, tenant_id, total_marks"
     )
     var_marks = {v["id"]: v.get("total_marks") for v in variants}
-    attempts = (
-        service.table("quiz_attempts")
-        .select("tenant_id, status, total_score, variant_id, submitted_at")
-        .execute()
-        .data
-        or []
+    attempts = _select_all(
+        service,
+        "quiz_attempts",
+        "id, tenant_id, status, total_score, variant_id, submitted_at",
     )
-    documents = service.table("documents").select("tenant_id").execute().data or []
+    documents = _select_all(service, "documents", "id, tenant_id")
 
     # ---- Per-tenant aggregation -------------------------------------------
     def blank() -> dict:
@@ -2016,9 +2050,23 @@ def onboard_institution(
             )
             admin = {"id": u.user.id, "email": body.admin_email.strip()}
         except Exception as exc:  # noqa: BLE001
+            rollback_error = None
             if "u" in locals() and u.user:
-                _delete_auth_user_quietly(service, u.user.id)
-            service.table("tenants").delete().eq("id", tenant_id).execute()
+                try:
+                    _rollback_provisioned_user(service, u.user.id)
+                except Exception as cleanup_exc:  # noqa: BLE001
+                    rollback_error = cleanup_exc
+            try:
+                _rollback_tenant(service, tenant_id)
+            except Exception as cleanup_exc:  # noqa: BLE001
+                rollback_error = rollback_error or cleanup_exc
+            if rollback_error is not None:
+                raise public_error(
+                    500,
+                    "Institution setup could not be completed cleanly. The tenant has been disabled for operator review.",
+                    operation="roll back institution onboarding",
+                    exception=rollback_error,
+                ) from exc
             raise public_error(
                 400,
                 "The institution was not created because its administrator account could not be set up.",
@@ -2040,32 +2088,28 @@ def platform_question_bank(
     _require_super(profile)
     service = get_service_client()
 
-    questions = (
-        service.table("questions")
-        .select("chapter_id, difficulty, type")
-        .execute()
-        .data
-        or []
+    questions = _select_all(
+        service, "questions", "id, chapter_id, difficulty, type"
     )
     chapters = {
         c["id"]: c
-        for c in (service.table("chapters").select("id, subject_id").execute().data or [])
+        for c in _select_all(service, "chapters", "id, subject_id")
     }
     subjects = {
         s["id"]: s
         for s in (
-            service.table("subjects").select("id, course_id").execute().data or []
+            _select_all(service, "subjects", "id, course_id")
         )
     }
     courses = {
         c["id"]: c
         for c in (
-            service.table("courses").select("id, name, tenant_id").execute().data or []
+            _select_all(service, "courses", "id, name, tenant_id")
         )
     }
     tenants = {
         t["id"]: t["name"]
-        for t in (service.table("tenants").select("id, name").execute().data or [])
+        for t in _select_all(service, "tenants", "id, name")
     }
 
     agg: dict = defaultdict(
@@ -2356,12 +2400,10 @@ def platform_ai_monitoring(
     _require_super(profile)
     service = get_service_client()
 
-    rows = (
-        service.table("questions")
-        .select("type, difficulty, review_status, source, created_at")
-        .execute()
-        .data
-        or []
+    rows = _select_all(
+        service,
+        "questions",
+        "id, type, difficulty, review_status, source, created_at",
     )
     ai = [q for q in rows if q.get("source") == "ai_generated"]
     status = Counter(q.get("review_status") for q in ai)
@@ -2414,32 +2456,33 @@ def platform_ai_monitoring(
         QUIZ_PUBLISHED,
     )
 
-    evs = (
-        service.table("events")
-        .select("event_type, subject_id, metadata, created_at")
-        .in_(
-            "event_type",
-            [
-                QUESTION_GENERATED,
-                QUESTION_EDITED,
-                QUESTION_APPROVED,
-                QUESTION_REJECTED,
-                QUESTION_REGENERATED,
-                QUIZ_PUBLISHED,
-                GENERATION_FAILED,
-            ],
+    monitored_events = [
+        QUESTION_GENERATED,
+        QUESTION_EDITED,
+        QUESTION_APPROVED,
+        QUESTION_REJECTED,
+        QUESTION_REGENERATED,
+        QUIZ_PUBLISHED,
+        GENERATION_FAILED,
+    ]
+    evs = _select_all(
+        service,
+        "events",
+        "id, event_type, subject_id, metadata, created_at",
+        configure=lambda query: query.in_("event_type", monitored_events),
+    )
+    published_n = len(
+        _select_all(
+            service,
+            "quiz_sets",
+            "id",
+            configure=lambda query: query.eq("status", "published"),
         )
-        .execute()
-        .data
-        or []
     )
     gen_type: dict = {}
     edited_ids: set = set()
-    approved_ids: set = set()
-    approved_at: dict = {}
-    rejected_ids: set = set()
+    latest_decision: dict[str, tuple[str, str]] = {}
     regenerated = 0
-    published_n = 0
     failed_dates: list = []
     edited_fields: Counter = Counter()
     first_ev = None
@@ -2456,19 +2499,28 @@ def platform_ai_monitoring(
                 edited_ids.add(sid)
             for f in md.get("edited_fields") or []:
                 edited_fields[f] += 1
-        elif et == QUESTION_APPROVED and sid:
-            approved_ids.add(sid)
-            if ca:
-                approved_at[sid] = ca
-        elif et == QUESTION_REJECTED and sid:
-            rejected_ids.add(sid)
+        elif et in (QUESTION_APPROVED, QUESTION_REJECTED) and sid:
+            previous = latest_decision.get(sid)
+            timestamp = ca or ""
+            if previous is None or timestamp >= previous[0]:
+                latest_decision[sid] = (timestamp, et)
         elif et == QUESTION_REGENERATED:
             regenerated += 1
-        elif et == QUIZ_PUBLISHED:
-            published_n += 1
         elif et == GENERATION_FAILED and ca:
             failed_dates.append(ca)
 
+    approved_ids = {
+        sid for sid, (_, event_type) in latest_decision.items()
+        if event_type == QUESTION_APPROVED
+    }
+    rejected_ids = {
+        sid for sid, (_, event_type) in latest_decision.items()
+        if event_type == QUESTION_REJECTED
+    }
+    approved_at = {
+        sid: timestamp for sid, (timestamp, event_type) in latest_decision.items()
+        if event_type == QUESTION_APPROVED and timestamp
+    }
     approved_n, rejected_n = len(approved_ids), len(rejected_ids)
     reviewed_n = approved_n + rejected_n
     kept_as_is = len(approved_ids - edited_ids)

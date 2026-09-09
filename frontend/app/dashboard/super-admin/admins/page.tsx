@@ -1,5 +1,5 @@
-import { redirect } from "next/navigation";
+import { AdminManager } from "@/components/admin/admin-manager";
 
 export default function SuperAdminAdminsPage() {
-  redirect("/dashboard/super-admin/institutions");
+  return <AdminManager />;
 }
