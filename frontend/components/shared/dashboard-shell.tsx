@@ -136,6 +136,18 @@ const NAV: Record<string, NavItem[]> = {
       icon: Building2,
     },
     {
+      label: "Institution Admins",
+      href: "/dashboard/super-admin/admins",
+      section: "Management",
+      icon: Users,
+    },
+    {
+      label: "Question Bank",
+      href: "/dashboard/super-admin/courses",
+      section: "Monitoring",
+      icon: BookOpen,
+    },
+    {
       label: "Question Quality",
       href: "/dashboard/super-admin/ai-monitoring",
       section: "Monitoring",
