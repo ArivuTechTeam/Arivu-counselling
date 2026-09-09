@@ -6,6 +6,8 @@ import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { ErrorCard } from "@/components/ui/error-card";
 import { Skeleton, SkeletonCards } from "@/components/ui/skeleton";
+import { SparkBurst } from "@/components/ui/spark-burst";
+import { useToast } from "@/components/ui/toast";
 import { QuestionPaperButtons } from "@/components/shared/pdf-buttons";
 import { QuestionReviewCard } from "@/components/teacher/question-review-card";
 import { statusLabel, variantLabel } from "@/lib/format";
@@ -29,10 +31,18 @@ function Stat({ label, value, color }: { label: string; value: number; color: st
 }
 
 export default function ReviewDetailPage({ params }: { params: { id: string } }) {
+  const { notify } = useToast();
   const [detail, setDetail] = useState<QuizSetDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [publishing, setPublishing] = useState(false);
   const [approving, setApproving] = useState(false);
+  // One-shot spark burst on the big "win" actions (publish / approve-all).
+  const [celebrate, setCelebrate] = useState(false);
+
+  function celebrateBurst() {
+    setCelebrate(true);
+    window.setTimeout(() => setCelebrate(false), 900);
+  }
 
   function load() {
     setError(null);
@@ -68,6 +78,8 @@ export default function ReviewDetailPage({ params }: { params: { id: string } })
     try {
       const s = await publishQuizSet(params.id);
       setDetail((d) => (d ? { ...d, status: s.status } : d));
+      celebrateBurst();
+      notify("🎉 Quiz published — students can now see it", "success");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Publish failed");
     } finally {
@@ -78,9 +90,21 @@ export default function ReviewDetailPage({ params }: { params: { id: string } })
   async function handleApproveAll() {
     setError(null);
     setApproving(true);
+    const count = detail
+      ? detail.variants
+          .flatMap((v) => v.questions)
+          .filter((q) => q.review_status === "pending_review").length
+      : 0;
     try {
       await approveAllQuestions(params.id);
       setDetail(await getQuizSet(params.id));
+      celebrateBurst();
+      notify(
+        count > 0
+          ? `✓ ${count} question${count === 1 ? "" : "s"} approved`
+          : "✓ All questions approved",
+        "success",
+      );
     } catch (e) {
       setError(e instanceof Error ? e.message : "Approve all failed");
     } finally {
@@ -128,7 +152,8 @@ export default function ReviewDetailPage({ params }: { params: { id: string } })
       </div>
 
       {/* Stat header (screenshot-2 style) */}
-      <div className="animate-rise flex flex-wrap items-center justify-between gap-4 rounded-2xl border bg-card p-5 shadow-sm">
+      <div className="animate-rise relative flex flex-wrap items-center justify-between gap-4 rounded-2xl border bg-card p-5 shadow-sm">
+        {celebrate && <SparkBurst count={24} />}
         <div className="flex flex-wrap items-center gap-8">
           <Stat label="Pending" value={pending} color="text-amber-600" />
           <Stat label="Approved" value={approved} color="text-emerald-600" />

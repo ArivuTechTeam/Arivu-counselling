@@ -1,17 +1,23 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 
 import { Button } from "@/components/ui/button";
-import { AlertTriangle } from "@/components/ui/icons";
+import { AlertTriangle, Check } from "@/components/ui/icons";
 import { changePassword } from "@/lib/api";
 
 /**
- * In-dashboard "change your password" modal. The user is already logged in, so
- * we set the new password directly (no email round-trip) and clear the
- * `must_change_password` flag in the same call.
+ * In-dashboard "change your password" modal. Shown forced on first login for
+ * every admin-created account (super-admin → institution-admin → teacher →
+ * student all get a temp password), and on demand from the account menu.
  *
- * `forced` = shown because the account still has an admin-set temp password.
+ * Production-grade flow: the user proves the CURRENT password, and the NEW one
+ * must pass the strong policy (≥8 chars incl. upper/lower/number, different
+ * from the current one). The same rules are re-checked on the server — this
+ * checklist is just live guidance.
+ *
+ * `forced` = shown because the account still has an admin-set temp password
+ * (no Cancel; they must set a real password to continue).
  */
 export function ChangePasswordModal({
   open,
@@ -24,34 +30,54 @@ export function ChangePasswordModal({
   onClose: () => void;
   onDone: () => void;
 }) {
+  const [current, setCurrent] = useState("");
   const [pw, setPw] = useState("");
   const [confirm, setConfirm] = useState("");
   const [show, setShow] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Live strength rules — must mirror the server (auth_account._validate_new_password).
+  const rules = useMemo(
+    () => [
+      { label: "At least 8 characters", ok: pw.length >= 8 },
+      { label: "An uppercase letter (A–Z)", ok: /[A-Z]/.test(pw) },
+      { label: "A lowercase letter (a–z)", ok: /[a-z]/.test(pw) },
+      { label: "A number (0–9)", ok: /[0-9]/.test(pw) },
+      {
+        label: "Different from your current password",
+        ok: pw.length > 0 && pw !== current,
+      },
+    ],
+    [pw, current],
+  );
+  const allRulesOk = rules.every((r) => r.ok);
+  const matches = pw.length > 0 && pw === confirm;
+  const canSubmit = current.length > 0 && allRulesOk && matches && !busy;
+
   if (!open) return null;
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
-    if (pw.length < 8) {
-      setError("Use at least 8 characters.");
+    if (!allRulesOk) {
+      setError("Your new password doesn't meet all the requirements yet.");
       return;
     }
-    if (pw !== confirm) {
-      setError("The two passwords don't match.");
+    if (!matches) {
+      setError("The two new passwords don't match.");
       return;
     }
     setBusy(true);
     try {
-      await changePassword(pw);
+      await changePassword(current, pw);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not change password.");
       setBusy(false);
       return;
     }
     setBusy(false);
+    setCurrent("");
     setPw("");
     setConfirm("");
     onDone();
@@ -74,6 +100,21 @@ export function ChangePasswordModal({
 
         <form onSubmit={submit} className="mt-4 flex flex-col gap-3">
           <label className="flex flex-col gap-1.5 text-sm font-medium">
+            Current password
+            <input
+              className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm shadow-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+              type={show ? "text" : "password"}
+              value={current}
+              onChange={(e) => setCurrent(e.target.value)}
+              placeholder={
+                forced ? "The password your admin gave you" : "Your current password"
+              }
+              autoFocus
+              autoComplete="current-password"
+            />
+          </label>
+
+          <label className="flex flex-col gap-1.5 text-sm font-medium">
             New password
             <div className="relative">
               <input
@@ -81,8 +122,8 @@ export function ChangePasswordModal({
                 type={show ? "text" : "password"}
                 value={pw}
                 onChange={(e) => setPw(e.target.value)}
-                placeholder="At least 8 characters"
-                autoFocus
+                placeholder="Choose a strong password"
+                autoComplete="new-password"
               />
               <button
                 type="button"
@@ -94,6 +135,29 @@ export function ChangePasswordModal({
             </div>
           </label>
 
+          {/* Live requirements checklist */}
+          <ul className="flex flex-col gap-1 rounded-lg bg-muted/50 p-3">
+            {rules.map((r) => (
+              <li
+                key={r.label}
+                className={`flex items-center gap-2 text-xs transition-colors ${
+                  r.ok ? "text-emerald-600" : "text-muted-foreground"
+                }`}
+              >
+                <span
+                  className={`flex h-4 w-4 shrink-0 items-center justify-center rounded-full border transition-colors ${
+                    r.ok
+                      ? "border-emerald-500 bg-emerald-500 text-white"
+                      : "border-muted-foreground/40"
+                  }`}
+                >
+                  {r.ok && <Check size={11} />}
+                </span>
+                {r.label}
+              </li>
+            ))}
+          </ul>
+
           <label className="flex flex-col gap-1.5 text-sm font-medium">
             Confirm new password
             <input
@@ -101,8 +165,14 @@ export function ChangePasswordModal({
               type={show ? "text" : "password"}
               value={confirm}
               onChange={(e) => setConfirm(e.target.value)}
-              placeholder="Enter the password again"
+              placeholder="Enter the new password again"
+              autoComplete="new-password"
             />
+            {confirm.length > 0 && !matches && (
+              <span className="text-xs text-destructive">
+                These don&apos;t match yet.
+              </span>
+            )}
           </label>
 
           {error && (
@@ -118,7 +188,7 @@ export function ChangePasswordModal({
                 Cancel
               </Button>
             )}
-            <Button type="submit" disabled={busy}>
+            <Button type="submit" disabled={!canSubmit}>
               {busy ? "Saving…" : "Change password"}
             </Button>
           </div>

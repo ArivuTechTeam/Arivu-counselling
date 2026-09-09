@@ -12,6 +12,7 @@ import {
 } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { AlertTriangle, Check, Sparkles, Zap } from "@/components/ui/icons";
+import { useToast } from "@/components/ui/toast";
 import {
   Chapter,
   Course,
@@ -114,6 +115,7 @@ function StepBar({ step }: { step: number }) {
  */
 export function BlueprintGenerator() {
   const router = useRouter();
+  const { notify } = useToast();
 
   const [documents, setDocuments] = useState<DocumentOut[]>([]);
   const [documentId, setDocumentId] = useState("");
@@ -276,6 +278,7 @@ export function BlueprintGenerator() {
         cognitive_level: level,
         difficulty,
       });
+      notify("✓ Quiz generated — opening your review queue", "success");
       // → page 2/3: review + publish
       router.push(`/dashboard/teacher/review/${res.quiz_set_id}`);
     } catch (e) {

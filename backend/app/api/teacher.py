@@ -42,6 +42,8 @@ async def class_overview(
         "needs_attention": [],
         "top_performers": [],
         "pipeline": {"pending_review": 0, "approved": 0, "rejected": 0},
+        "activity_trend": [],
+        "score_distribution": [],
     }
 
     # Stage 1: quiz_sets — every later query needs `set_ids` from this, so it
@@ -87,7 +89,7 @@ async def class_overview(
     def fetch_attempts():
         return (
             service.table("quiz_attempts")
-            .select("student_id, variant_id, total_score")
+            .select("student_id, variant_id, total_score, submitted_at")
             .eq("tenant_id", tid)
             .in_("variant_id", variant_ids)
             .eq("status", "graded")
@@ -113,12 +115,15 @@ async def class_overview(
     by_set: dict[str, list[float]] = {}
     by_student: dict[str, list[float]] = {}
     total_score = total_maximum = 0.0
+    attempt_pcts: list[float] = []
+    day_counts: dict[str, int] = {}  # submitted date (YYYY-MM-DD) -> attempts
     for a in attempts:
         vm = var_marks.get(a["variant_id"])
         if not vm:
             continue
         maximum = float(vm)
         score = max(0.0, min(maximum, float(a.get("total_score") or 0)))
+        pct = score / maximum * 100
         total_score += score
         total_maximum += maximum
         sid = var_set.get(a["variant_id"])
@@ -127,6 +132,11 @@ async def class_overview(
             by_set[sid] = [s[0] + score, s[1] + maximum, s[2] + 1]
         st = by_student.get(a["student_id"], [0.0, 0.0, 0.0])
         by_student[a["student_id"]] = [st[0] + score, st[1] + maximum, st[2] + 1]
+        attempt_pcts.append(pct)
+        submitted = a.get("submitted_at")
+        if submitted:
+            day = str(submitted)[:10]
+            day_counts[day] = day_counts.get(day, 0) + 1
 
     accuracy_by_quiz = sorted(
         [
@@ -201,6 +211,26 @@ async def class_overview(
             pipeline[st] += 1
 
     class_accuracy = round(total_score / total_maximum * 100) if total_maximum else 0
+
+    # Activity trend: quizzes taken per day over the last 14 days (zero-filled),
+    # so the frontend can draw a clean bar chart without gaps.
+    from datetime import date, timedelta
+
+    today = date.today()
+    activity_trend = [
+        {
+            "date": (today - timedelta(days=offset)).isoformat(),
+            "count": day_counts.get((today - timedelta(days=offset)).isoformat(), 0),
+        }
+        for offset in range(13, -1, -1)
+    ]
+
+    # Score distribution: how many graded attempts fall in each score band.
+    bands = [("0–39", 0, 40), ("40–59", 40, 60), ("60–79", 60, 80), ("80–100", 80, 101)]
+    score_distribution = [
+        {"label": label, "count": sum(1 for p in attempt_pcts if lo <= p < hi)}
+        for label, lo, hi in bands
+    ]
     return {
         "class_accuracy": class_accuracy,
         "students": len(by_student),
@@ -210,6 +240,8 @@ async def class_overview(
         "needs_attention": needs_attention,
         "top_performers": top_performers,
         "pipeline": pipeline,
+        "activity_trend": activity_trend,
+        "score_distribution": score_distribution,
     }
 
 

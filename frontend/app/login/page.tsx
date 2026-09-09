@@ -82,8 +82,13 @@ export default function LoginPage() {
 
   useEffect(() => {
     const url = new URL(window.location.href);
-    if (url.searchParams.get("reason") === "session-expired") {
+    const reason = url.searchParams.get("reason");
+    if (reason === "session-expired") {
       setNotice("Your session expired. Please log in again.");
+    } else if (reason === "password-changed") {
+      setNotice("Your password has been changed. Please sign in with your new password.");
+    }
+    if (reason) {
       url.searchParams.delete("reason");
       window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
     }

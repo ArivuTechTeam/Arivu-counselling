@@ -12,6 +12,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { AlertTriangle, FileText, Sparkles } from "@/components/ui/icons";
+import { useToast } from "@/components/ui/toast";
 import {
   Chapter,
   Course,
@@ -72,6 +73,7 @@ function InlineError({ message }: { message: string }) {
 
 export function QuizExtractor() {
   const router = useRouter();
+  const { notify } = useToast();
   const [courses, setCourses] = useState<Course[]>([]);
   const [subjectId, setSubjectId] = useState("");
 
@@ -124,6 +126,7 @@ export function QuizExtractor() {
         chapterId = chapter.id;
       }
       const res = await extractQuiz(file, subjectId, chapterId, force);
+      notify("✓ Quiz extracted — opening your review queue", "success");
       // Hand off to the existing review screen to check/edit/publish.
       router.push(`/dashboard/teacher/review/${res.quiz_set_id}`);
     } catch (e) {

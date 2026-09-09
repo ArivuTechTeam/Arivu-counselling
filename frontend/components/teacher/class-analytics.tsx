@@ -65,6 +65,95 @@ function StudentRow({ s }: { s: AttentionStudent }) {
   );
 }
 
+// Quizzes-taken-per-day over the last 14 days (zero-filled by the backend).
+function ActivityTrendChart({
+  data,
+}: {
+  data: { date: string; count: number }[];
+}) {
+  const max = Math.max(1, ...data.map((d) => d.count));
+  const total = data.reduce((a, d) => a + d.count, 0);
+  return (
+    <Card className="animate-rise lg:col-span-2">
+      <CardHeader>
+        <CardTitle>Activity — last 14 days</CardTitle>
+        <CardDescription>Quizzes taken by your students each day.</CardDescription>
+      </CardHeader>
+      <CardContent>
+        {total === 0 ? (
+          <EmptyState message="No quizzes taken in the last 14 days." />
+        ) : (
+          <div className="flex h-44 items-end gap-1.5">
+            {data.map((d) => {
+              const day = new Date(`${d.date}T00:00:00`);
+              const h = d.count ? Math.max(6, Math.round((d.count / max) * 150)) : 2;
+              return (
+                <div
+                  key={d.date}
+                  className="group flex flex-1 flex-col items-center gap-1"
+                >
+                  <div
+                    title={`${d.count} quiz${d.count === 1 ? "" : "zes"} taken · ${d.date}`}
+                    className={`w-full rounded-t transition-all duration-500 ${
+                      d.count ? "bg-primary/80 group-hover:bg-primary" : "bg-muted"
+                    }`}
+                    style={{ height: `${h}px` }}
+                  />
+                  <span className="text-[9px] leading-none text-muted-foreground">
+                    {day.getDate()}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+const BAND_COLOR = ["bg-rose-500", "bg-amber-500", "bg-lime-500", "bg-emerald-500"];
+
+// How graded attempts spread across score bands (0–40 … 80–100).
+function ScoreDistributionChart({
+  data,
+}: {
+  data: { label: string; count: number }[];
+}) {
+  const max = Math.max(1, ...data.map((d) => d.count));
+  const total = data.reduce((a, d) => a + d.count, 0);
+  return (
+    <Card className="animate-rise" style={{ animationDelay: "60ms" }}>
+      <CardHeader>
+        <CardTitle>Score distribution</CardTitle>
+        <CardDescription>How your graded attempts scored.</CardDescription>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-3">
+        {total === 0 ? (
+          <EmptyState message="No graded attempts yet." />
+        ) : (
+          data.map((d, i) => (
+            <div key={d.label} className="flex items-center gap-3">
+              <span className="w-14 shrink-0 text-xs font-medium text-muted-foreground">
+                {d.label}%
+              </span>
+              <div className="h-3 flex-1 overflow-hidden rounded-full bg-muted">
+                <div
+                  className={`h-full rounded-full ${BAND_COLOR[i]} transition-all duration-700`}
+                  style={{ width: `${Math.round((d.count / max) * 100)}%` }}
+                />
+              </div>
+              <span className="w-6 shrink-0 text-right text-sm font-semibold text-foreground">
+                {d.count}
+              </span>
+            </div>
+          ))
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 export function ClassAnalytics() {
   const router = useRouter();
   const [data, setData] = useState<TeacherClassOverview | null>(null);
@@ -94,6 +183,8 @@ export function ClassAnalytics() {
   const students = data?.students ?? 0;
   const attempts = data?.total_attempts ?? 0;
   const atRisk = data?.at_risk ?? 0;
+  const trend = data?.activity_trend ?? [];
+  const distribution = data?.score_distribution ?? [];
 
   const accA = useCountUp(classAccuracy, loaded);
   const hasData = attempts > 0;
@@ -175,6 +266,12 @@ export function ClassAnalytics() {
           </div>
         </CardContent>
       </Card>
+
+      {/* Data-viz: activity trend + score distribution */}
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
+        <ActivityTrendChart data={trend} />
+        <ScoreDistributionChart data={distribution} />
+      </div>
 
       {/* Accuracy by quiz + review pipeline */}
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">

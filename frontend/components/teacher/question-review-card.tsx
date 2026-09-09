@@ -5,6 +5,7 @@ import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { SparkBurst } from "@/components/ui/spark-burst";
 import { formatAnswerValue, statusLabel, typeLabel } from "@/lib/format";
 import {
   QuestionPatch,
@@ -39,10 +40,14 @@ const STATUS_TONE: Record<string, string> = {
   pending_review: "bg-muted text-muted-foreground",
 };
 
-function StatusBadge({ status }: { status: string }) {
+function StatusBadge({ status, pop }: { status: string; pop?: boolean }) {
   const tone = STATUS_TONE[status] ?? "bg-muted text-muted-foreground";
   return (
-    <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${tone}`}>
+    <span
+      className={`inline-block rounded-full px-2 py-0.5 text-xs font-medium transition-colors duration-300 ${tone} ${
+        pop ? "animate-badge-pop" : ""
+      }`}
+    >
       {statusLabel(status)}
     </span>
   );
@@ -92,12 +97,25 @@ export function QuestionReviewCard({
   const [editing, setEditing] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Drives the one-shot in-card feedback: sparks on approve, a red shake on
+  // reject. Cleared after the animation so a later action can replay it.
+  const [celebrate, setCelebrate] = useState(false);
+  const [flash, setFlash] = useState<null | "approve" | "reject">(null);
 
   async function run(label: string, fn: () => Promise<ReviewQuestion>) {
     setError(null);
     setBusy(label);
     try {
       onChange(await fn());
+      if (label === "approve") {
+        setFlash("approve");
+        setCelebrate(true);
+        window.setTimeout(() => setCelebrate(false), 800);
+        window.setTimeout(() => setFlash(null), 1000);
+      } else if (label === "reject") {
+        setFlash("reject");
+        window.setTimeout(() => setFlash(null), 900);
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Action failed");
     } finally {
@@ -108,15 +126,27 @@ export function QuestionReviewCard({
   const correct = correctIds(question);
 
   const accent = ACCENT[question.review_status] ?? "#cbd5e1";
+  const isApproved = question.review_status === "approved";
+  const isRejected = question.review_status === "rejected";
+  const flashClass =
+    flash === "approve"
+      ? "animate-approve"
+      : flash === "reject"
+        ? "animate-reject"
+        : "";
 
   return (
-    <div className="relative overflow-hidden rounded-xl border bg-card pl-5 pr-4 py-4 text-sm shadow-sm transition-shadow hover:shadow-md">
+    <div
+      className={`relative overflow-hidden rounded-xl border bg-card pl-5 pr-4 py-4 text-sm shadow-sm transition-shadow hover:shadow-md ${flashClass}`}
+    >
       {/* status accent strip */}
       <span
-        className="absolute inset-y-0 left-0 w-1.5"
-        style={{ background: accent }}
+        className="absolute inset-y-0 left-0 w-1.5 transition-colors duration-500"
+        style={{ backgroundColor: accent }}
         aria-hidden="true"
       />
+
+      {celebrate && <SparkBurst />}
 
       <div className="mb-3 flex flex-wrap items-center gap-2">
         <span className="flex h-7 w-7 items-center justify-center rounded-full bg-primary/10 text-xs font-semibold text-primary">
@@ -141,7 +171,7 @@ export function QuestionReviewCard({
           </span>
         )}
         <span className="ml-auto">
-          <StatusBadge status={question.review_status} />
+          <StatusBadge status={question.review_status} pop={flash !== null} />
         </span>
       </div>
 
@@ -201,17 +231,35 @@ export function QuestionReviewCard({
             <Button
               size="sm"
               onClick={() => run("approve", () => approveQuestion(question.id))}
-              disabled={!!busy}
+              disabled={!!busy || isApproved}
+              className={
+                isApproved
+                  ? "bg-emerald-600 text-white hover:bg-emerald-600 disabled:opacity-100"
+                  : ""
+              }
             >
-              Approve
+              {isApproved ? (
+                <span className="flex items-center gap-1.5">
+                  <CheckIcon className="h-3.5 w-3.5" /> Approved
+                </span>
+              ) : busy === "approve" ? (
+                "Approving…"
+              ) : (
+                "Approve"
+              )}
             </Button>
             <Button
               size="sm"
               variant="outline"
               onClick={() => run("reject", () => rejectQuestion(question.id))}
-              disabled={!!busy}
+              disabled={!!busy || isRejected}
+              className={
+                isRejected
+                  ? "border-rose-300 bg-rose-50 text-rose-700 hover:bg-rose-50 disabled:opacity-100"
+                  : ""
+              }
             >
-              Reject
+              {isRejected ? "Rejected" : busy === "reject" ? "Rejecting…" : "Reject"}
             </Button>
             <Button
               size="sm"

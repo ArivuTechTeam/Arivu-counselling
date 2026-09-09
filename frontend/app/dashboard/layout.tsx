@@ -6,6 +6,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { DashboardShell } from "@/components/shared/dashboard-shell";
 import { Brand } from "@/components/ui/brand";
 import { Skeleton } from "@/components/ui/skeleton";
+import { ToastProvider } from "@/components/ui/toast";
 import { createClient } from "@/lib/supabase";
 
 const HOME_BY_ROLE: Record<string, string> = {
@@ -29,6 +30,7 @@ export default function DashboardLayout({
   const [role, setRole] = useState<string | null>(null);
   const [email, setEmail] = useState("");
   const [mustChangePassword, setMustChangePassword] = useState(false);
+  const [canChangePassword, setCanChangePassword] = useState(false);
   // `ready` gates the shell so we never flash a blank sidebar / "?" avatar
   // before the role resolves.
   const [ready, setReady] = useState(false);
@@ -50,6 +52,9 @@ export default function DashboardLayout({
       }
       setEmail(user.email ?? "");
       setMustChangePassword(Boolean(user.user_metadata?.must_change_password));
+      setCanChangePassword(
+        Boolean(user.identities?.some((identity) => identity.provider === "email")),
+      );
       const { data } = await supabase
         .from("profiles")
         .select("role")
@@ -103,12 +108,15 @@ export default function DashboardLayout({
   }
 
   return (
-    <DashboardShell
-      role={role}
-      email={email}
-      mustChangePassword={mustChangePassword}
-    >
-      {children}
-    </DashboardShell>
+    <ToastProvider>
+      <DashboardShell
+        role={role}
+        email={email}
+        mustChangePassword={mustChangePassword}
+        canChangePassword={canChangePassword}
+      >
+        {children}
+      </DashboardShell>
+    </ToastProvider>
   );
 }

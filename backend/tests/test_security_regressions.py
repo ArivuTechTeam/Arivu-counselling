@@ -10,6 +10,7 @@ from fastapi import HTTPException
 from starlette.requests import Request
 
 from app.api.academics import _require_admin
+from app.api.auth_account import _validate_new_password
 from app.api.documents import _require_teacher as require_document_teacher
 from app.api.practice import _exam_deadline_passed
 from app.api.questions import _require_teacher as require_question_teacher
@@ -277,6 +278,31 @@ class PasswordGateTests(unittest.TestCase):
             change_request = Request({"type": "http", "method": "POST", "path": "/api/v1/auth/change-password", "headers": []})
             profile = get_current_profile(change_request, user)
             self.assertTrue(profile.must_change_password)
+
+
+class PasswordPolicyTests(unittest.TestCase):
+    EMAIL = "teacher@example.com"
+
+    def _rejects(self, new: str, current: str = "OldPass1", email: str | None = None):
+        with self.assertRaises(HTTPException) as caught:
+            _validate_new_password(new, current, email or self.EMAIL)
+        self.assertEqual(caught.exception.status_code, 400)
+
+    def test_strong_password_is_accepted(self) -> None:
+        # No exception == accepted.
+        _validate_new_password("Str0ngPass", "OldPass1", self.EMAIL)
+
+    def test_rejects_weak_or_reused_passwords(self) -> None:
+        self._rejects("Ab1cdef")  # too short (7)
+        self._rejects("lowercase1")  # no uppercase
+        self._rejects("UPPERCASE1")  # no lowercase
+        self._rejects("NoDigitsHere")  # no number
+        self._rejects("password1")  # common denylist
+        self._rejects("Str0ngPass", current="Str0ngPass")  # same as current
+
+    def test_rejects_email_derived_passwords(self) -> None:
+        self._rejects("Teacher123")  # contains the email local part "teacher"
+        self._rejects(self.EMAIL)  # is the email itself
 
 
 if __name__ == "__main__":

@@ -253,11 +253,13 @@ export function DashboardShell({
   role,
   email,
   mustChangePassword = false,
+  canChangePassword = true,
   children,
 }: {
   role: string | null;
   email: string;
   mustChangePassword?: boolean;
+  canChangePassword?: boolean;
   children: React.ReactNode;
 }) {
   const pathname = usePathname();
@@ -475,15 +477,17 @@ export function DashboardShell({
                       {role ? role.replace("_", " ") : ""}
                     </div>
                   </div>
-                  <button
-                    onClick={() => {
-                      setMenuOpen(false);
-                      setPwOpen(true);
-                    }}
-                    className="w-full border-b px-4 py-2.5 text-left text-sm font-medium text-foreground hover:bg-accent"
-                  >
-                    Change password
-                  </button>
+                  {canChangePassword && (
+                    <button
+                      onClick={() => {
+                        setMenuOpen(false);
+                        setPwOpen(true);
+                      }}
+                      className="w-full border-b px-4 py-2.5 text-left text-sm font-medium text-foreground hover:bg-accent"
+                    >
+                      Change password
+                    </button>
+                  )}
                   <button
                     onClick={signOut}
                     className="w-full px-4 py-2.5 text-left text-sm font-medium text-destructive hover:bg-accent"
@@ -500,12 +504,22 @@ export function DashboardShell({
       </div>
 
       <ChangePasswordModal
-        open={pwOpen}
+        open={pwOpen && (canChangePassword || mustChangePassword)}
         forced={mustChangePassword && !pwDone}
         onClose={() => setPwOpen(false)}
-        onDone={() => {
+        onDone={async () => {
           setPwDone(true);
           setPwOpen(false);
+          // First-login accounts: re-authenticate with the new password for a
+          // clean session. Their old token/state is stale, so staying in the
+          // dashboard shows empty/error data — send them to sign in fresh.
+          if (mustChangePassword) {
+            try {
+              await createClient().auth.signOut();
+            } finally {
+              router.replace("/login?reason=password-changed");
+            }
+          }
         }}
       />
     </div>

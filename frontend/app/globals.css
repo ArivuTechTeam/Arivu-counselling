@@ -118,3 +118,139 @@
     animation: none;
   }
 }
+
+/* ==========================================================================
+   Review-queue feedback motion (notify-pavyaa)
+   Per-question approve/reject reads loudly IN the card (no pop-up spam), and
+   one-off actions (publish/extract/generate) use the toast system instead.
+   ========================================================================== */
+
+/* Celebratory spark particle — flies out from its origin, then fades. Direction
+   is supplied per-particle via the --dx / --dy custom properties. */
+@keyframes spark-fly {
+  0% {
+    opacity: 1;
+    transform: translate(0, 0) scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: translate(var(--dx), var(--dy)) scale(0.2);
+  }
+}
+.spark {
+  position: absolute;
+  top: 0;
+  left: 0;
+  border-radius: 9999px;
+  animation: spark-fly 0.72s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+/* Approve: a gentle "pop" plus a green ring pulse around the whole card. */
+@keyframes approve-pop {
+  0% {
+    transform: scale(1);
+  }
+  35% {
+    transform: scale(1.015);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+@keyframes approve-ring {
+  0% {
+    box-shadow: 0 0 0 0 rgba(16, 185, 129, 0);
+  }
+  25% {
+    box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.55);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(16, 185, 129, 0);
+  }
+}
+.animate-approve {
+  animation:
+    approve-pop 0.5s ease-out,
+    approve-ring 1s ease-out;
+}
+
+/* Reject: a quick shake plus a red ring pulse. */
+@keyframes reject-shake {
+  0%,
+  100% {
+    transform: translateX(0);
+  }
+  20% {
+    transform: translateX(-5px);
+  }
+  40% {
+    transform: translateX(5px);
+  }
+  60% {
+    transform: translateX(-3px);
+  }
+  80% {
+    transform: translateX(3px);
+  }
+}
+@keyframes reject-ring {
+  0% {
+    box-shadow: 0 0 0 0 rgba(244, 63, 94, 0);
+  }
+  25% {
+    box-shadow: 0 0 0 3px rgba(244, 63, 94, 0.5);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(244, 63, 94, 0);
+  }
+}
+.animate-reject {
+  animation:
+    reject-shake 0.5s ease-in-out,
+    reject-ring 1s ease-out;
+}
+
+/* Status badge pops in when it changes. */
+@keyframes badge-pop {
+  0% {
+    transform: scale(0.55);
+    opacity: 0;
+  }
+  60% {
+    transform: scale(1.18);
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+.animate-badge-pop {
+  animation: badge-pop 0.45s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* Toast (pop-up) enter / exit. */
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(14px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.animate-toast-in {
+  animation: toast-in 0.3s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spark {
+    display: none;
+  }
+  .animate-approve,
+  .animate-reject,
+  .animate-badge-pop,
+  .animate-toast-in {
+    animation: none;
+  }
+}

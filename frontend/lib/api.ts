@@ -394,8 +394,9 @@ export const explainQuestion = (id: string) =>
     60_000,
   );
 
-export const changePassword = (password: string) =>
+export const changePassword = (currentPassword: string, password: string) =>
   jsonRequest<{ changed: boolean }>("/api/v1/auth/change-password", "POST", {
+    current_password: currentPassword,
     password,
   });
 
@@ -771,6 +772,26 @@ export const createChapter = (subjectId: string, name: string) =>
 export const deleteChapter = (id: string) =>
   jsonRequest<{ deleted: string }>(`/api/v1/chapters/${id}`, "DELETE");
 
+// Per-subject teaching metrics for the Subjects dashboard.
+export type SubjectMetrics = {
+  id: string;
+  name: string;
+  course_name: string;
+  chapters: number;
+  quizzes_total: number;
+  quizzes_published: number;
+  quizzes_draft: number;
+  questions: number;
+  pending_review: number;
+  attempts: number;
+  students: number;
+  avg_score_pct: number | null;
+  score_earned: number;
+  score_possible: number;
+};
+export const listSubjectMetrics = () =>
+  jsonRequest<SubjectMetrics[]>("/api/v1/teacher/subject-metrics", "GET");
+
 // ---------------------------------------------------------------------------
 // Admin: users + analytics
 // ---------------------------------------------------------------------------
@@ -1129,6 +1150,8 @@ export type ReviewPipeline = {
   approved: number;
   rejected: number;
 };
+export type ActivityPoint = { date: string; count: number };
+export type ScoreBand = { label: string; count: number };
 export type TeacherClassOverview = {
   class_accuracy: number;
   students: number;
@@ -1138,6 +1161,8 @@ export type TeacherClassOverview = {
   needs_attention: AttentionStudent[];
   top_performers: AttentionStudent[];
   pipeline: ReviewPipeline;
+  activity_trend: ActivityPoint[];
+  score_distribution: ScoreBand[];
 };
 
 export const getTeacherClassOverview = () =>

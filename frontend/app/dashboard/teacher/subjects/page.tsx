@@ -11,85 +11,298 @@ import {
 } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { ErrorCard } from "@/components/ui/error-card";
-import { AlertTriangle, BookOpen, Check } from "@/components/ui/icons";
+import {
+  AlertTriangle,
+  BookOpen,
+  Check,
+  FileText,
+  Sparkles,
+  TrendingUp,
+  Users,
+} from "@/components/ui/icons";
 import { PageHeader } from "@/components/ui/page-header";
 import { Skeleton, SkeletonCards, SkeletonList } from "@/components/ui/skeleton";
 import {
   Chapter,
-  Course,
+  SubjectMetrics,
   createChapter,
   deleteChapter,
   listChapters,
-  listCourses,
+  listSubjectMetrics,
 } from "@/lib/api";
 
 type SubjectRow = { id: string; name: string; course: string };
 
+type IconComponent = (p: { size?: number; className?: string }) => React.JSX.Element;
+
+// ── Score band colouring (design-system tones) ───────────────────────────────
+function scoreTone(pct: number): { bar: string; text: string } {
+  if (pct >= 70) return { bar: "bg-emerald-500", text: "text-emerald-600" };
+  if (pct >= 40) return { bar: "bg-amber-500", text: "text-amber-600" };
+  return { bar: "bg-rose-500", text: "text-rose-500" };
+}
+
+// ── Top KPI card ─────────────────────────────────────────────────────────────
+function StatCard({
+  icon: Icon,
+  label,
+  value,
+  accent,
+}: {
+  icon: IconComponent;
+  label: string;
+  value: string | number;
+  accent: string;
+}) {
+  return (
+    <div className="animate-rise flex items-center gap-3 rounded-2xl border bg-card p-4 shadow-sm">
+      <span
+        className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-xl ${accent}`}
+      >
+        <Icon size={20} />
+      </span>
+      <div className="min-w-0">
+        <div className="text-2xl font-bold leading-tight tracking-tight text-foreground">
+          {value}
+        </div>
+        <div className="truncate text-xs font-medium uppercase tracking-wide text-muted-foreground">
+          {label}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Compact labelled metric inside a subject card ────────────────────────────
+function Metric({
+  icon: Icon,
+  value,
+  label,
+}: {
+  icon: IconComponent;
+  value: number;
+  label: string;
+}) {
+  return (
+    <div className="flex items-center gap-2">
+      <Icon size={15} className="shrink-0 text-muted-foreground" />
+      <span className="text-sm font-semibold text-foreground">{value}</span>
+      <span className="text-xs text-muted-foreground">{label}</span>
+    </div>
+  );
+}
+
+function SubjectCard({
+  m,
+  onOpen,
+}: {
+  m: SubjectMetrics;
+  onOpen: () => void;
+}) {
+  const hasScore = m.avg_score_pct !== null;
+  const pct = m.avg_score_pct ?? 0;
+  const tone = scoreTone(pct);
+
+  return (
+    <div className="animate-rise flex flex-col gap-4 rounded-2xl border bg-card p-5 shadow-sm transition-all hover:-translate-y-0.5 hover:border-primary/40 hover:shadow-md">
+      {/* Header: course + subject, and the headline score */}
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <span className="text-[11px] font-semibold uppercase tracking-widest text-muted-foreground">
+            {m.course_name || "Subject"}
+          </span>
+          <h3 className="truncate text-lg font-bold text-foreground">{m.name}</h3>
+        </div>
+        <div className="shrink-0 text-right">
+          <div className={`text-2xl font-bold leading-none ${hasScore ? tone.text : "text-muted-foreground"}`}>
+            {hasScore ? `${Math.round(pct)}%` : "—"}
+          </div>
+          <div className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+            avg score
+          </div>
+        </div>
+      </div>
+
+      {/* Average-score bar */}
+      <div>
+        <div className="h-2 w-full overflow-hidden rounded-full bg-muted">
+          {hasScore ? (
+            <div
+              className={`h-full rounded-full ${tone.bar} transition-all duration-700`}
+              style={{ width: `${Math.max(4, Math.min(100, pct))}%` }}
+            />
+          ) : null}
+        </div>
+        <p className="mt-1 text-[11px] text-muted-foreground">
+          {hasScore
+            ? `${m.attempts} attempt${m.attempts === 1 ? "" : "s"} by ${m.students} student${m.students === 1 ? "" : "s"}`
+            : "No student attempts yet"}
+        </p>
+      </div>
+
+      {/* Metric grid */}
+      <div className="grid grid-cols-2 gap-x-3 gap-y-2.5 border-t pt-3">
+        <Metric icon={BookOpen} value={m.chapters} label="chapters" />
+        <Metric icon={FileText} value={m.quizzes_total} label="quizzes" />
+        <Metric icon={Sparkles} value={m.questions} label="questions" />
+        <Metric icon={Users} value={m.attempts} label="attempts" />
+      </div>
+
+      {/* Quiz status + pending-review actionable chips */}
+      <div className="flex flex-wrap items-center gap-2">
+        {m.quizzes_published > 0 && (
+          <span className="rounded-full bg-emerald-100 px-2.5 py-0.5 text-[11px] font-medium text-emerald-700">
+            {m.quizzes_published} published
+          </span>
+        )}
+        {m.quizzes_draft > 0 && (
+          <span className="rounded-full bg-muted px-2.5 py-0.5 text-[11px] font-medium text-muted-foreground">
+            {m.quizzes_draft} draft
+          </span>
+        )}
+        {m.pending_review > 0 && (
+          <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2.5 py-0.5 text-[11px] font-semibold text-amber-700">
+            <AlertTriangle size={11} />
+            {m.pending_review} to review
+          </span>
+        )}
+      </div>
+
+      <button
+        onClick={onOpen}
+        className="mt-auto w-fit text-sm font-semibold text-primary transition-colors hover:text-primary/80"
+      >
+        Manage chapters →
+      </button>
+    </div>
+  );
+}
+
 export default function TeacherSubjectsPage() {
-  const [courses, setCourses] = useState<Course[] | null>(null);
+  const [metrics, setMetrics] = useState<SubjectMetrics[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [active, setActive] = useState<SubjectRow | null>(null);
 
   function load() {
     setError(null);
-    listCourses()
-      .then(setCourses)
-      .catch((e) => setError(e.message));
+    listSubjectMetrics()
+      .then(setMetrics)
+      .catch((e) => setError(e instanceof Error ? e.message : "Failed to load."));
   }
 
   useEffect(() => {
     load();
   }, []);
 
-  const subjects: SubjectRow[] = useMemo(() => {
-    const out: SubjectRow[] = [];
-    for (const c of courses ?? []) {
-      for (const s of c.subjects) out.push({ id: s.id, name: s.name, course: c.name });
-    }
-    return out;
-  }, [courses]);
+  // Rolled-up KPIs for the top strip.
+  const totals = useMemo(() => {
+    const m = metrics ?? [];
+    const scored = m.filter((s) => s.avg_score_pct !== null);
+    return {
+      subjects: m.length,
+      quizzes: m.reduce((a, s) => a + s.quizzes_total, 0),
+      questions: m.reduce((a, s) => a + s.questions, 0),
+      attempts: m.reduce((a, s) => a + s.attempts, 0),
+      pending: m.reduce((a, s) => a + s.pending_review, 0),
+      avg:
+        scored.reduce((a, s) => a + s.score_possible, 0) > 0
+          ? Math.round(
+              (scored.reduce((a, s) => a + s.score_earned, 0) /
+                scored.reduce((a, s) => a + s.score_possible, 0)) *
+                100,
+            )
+          : null,
+    };
+  }, [metrics]);
 
   if (active) {
-    return (
-      <ChapterManager subject={active} onBack={() => setActive(null)} />
-    );
+    return <ChapterManager subject={active} onBack={() => setActive(null)} />;
   }
 
   return (
     <div className="flex flex-col gap-6">
       <PageHeader
         title="Subjects"
-        description="Your subjects. Open one to add or remove its chapters — chapters show up when you generate a quiz and in your students' subject view."
+        description="Your teaching at a glance — quizzes, student activity and scores per subject. Open one to manage its chapters."
       />
 
       {error ? (
         <ErrorCard message={error} onRetry={load} />
-      ) : courses === null ? (
-        <SkeletonCards count={3} />
-      ) : subjects.length === 0 ? (
+      ) : metrics === null ? (
+        <>
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+            {Array.from({ length: 5 }).map((_, i) => (
+              <Skeleton key={i} className="h-[76px] rounded-2xl" />
+            ))}
+          </div>
+          <SkeletonCards count={3} />
+        </>
+      ) : metrics.length === 0 ? (
         <EmptyState
           icon={<BookOpen />}
           title="No subjects yet"
           message="You haven't been assigned to any subjects yet. Ask your institution admin to add you to a course."
         />
       ) : (
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {subjects.map((s) => (
-            <button
-              key={s.id}
-              onClick={() => setActive(s)}
-              className="animate-rise flex flex-col items-start gap-1 rounded-2xl border bg-card p-5 text-left shadow-sm transition-all hover:-translate-y-0.5 hover:border-primary/40 hover:shadow-md"
-            >
-              <span className="text-[11px] font-semibold uppercase tracking-widest text-muted-foreground">
-                {s.course}
+        <>
+          {/* KPI strip */}
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+            <StatCard
+              icon={BookOpen}
+              label="Subjects"
+              value={totals.subjects}
+              accent="bg-primary/10 text-primary"
+            />
+            <StatCard
+              icon={FileText}
+              label="Quizzes"
+              value={totals.quizzes}
+              accent="bg-blue-100 text-blue-600"
+            />
+            <StatCard
+              icon={Sparkles}
+              label="Questions"
+              value={totals.questions}
+              accent="bg-violet-100 text-violet-600"
+            />
+            <StatCard
+              icon={Users}
+              label="Attempts"
+              value={totals.attempts}
+              accent="bg-amber-100 text-amber-600"
+            />
+            <StatCard
+              icon={TrendingUp}
+              label="Avg score"
+              value={totals.avg === null ? "—" : `${totals.avg}%`}
+              accent="bg-emerald-100 text-emerald-600"
+            />
+          </div>
+
+          {totals.pending > 0 && (
+            <div className="flex items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-4 py-2.5 text-sm text-amber-800">
+              <AlertTriangle size={16} className="shrink-0" />
+              <span>
+                <strong>{totals.pending}</strong> question
+                {totals.pending === 1 ? "" : "s"} across your subjects are waiting
+                for review.
               </span>
-              <span className="text-lg font-bold text-foreground">{s.name}</span>
-              <span className="mt-2 text-xs font-medium text-primary">
-                Manage chapters →
-              </span>
-            </button>
-          ))}
-        </div>
+            </div>
+          )}
+
+          {/* Per-subject cards */}
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+            {metrics.map((m) => (
+              <SubjectCard
+                key={m.id}
+                m={m}
+                onOpen={() =>
+                  setActive({ id: m.id, name: m.name, course: m.course_name })
+                }
+              />
+            ))}
+          </div>
+        </>
       )}
     </div>
   );
