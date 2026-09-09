@@ -65,7 +65,6 @@ export function InstitutionAdminDashboard() {
   const [quizzes, setQuizzes] = useState<AdminQuizSet[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [drilldown, setDrilldown] = useState<Drilldown | null>(null);
-  const [pendingOpen, setPendingOpen] = useState(false);
   const [atRiskOpen, setAtRiskOpen] = useState(false);
   const [selectedStudent, setSelectedStudent] = useState<AtRiskStudent | null>(null);
   const [selectedQuiz, setSelectedQuiz] = useState<AdminQuizSet | null>(null);
@@ -97,13 +96,6 @@ export function InstitutionAdminDashboard() {
       .filter((quiz) => drilldown.type === "course" ? quiz.course_id === drilldown.id : quiz.teacher_id === drilldown.id)
       .sort((a, b) => b.attempts_count - a.attempts_count || a.avg_accuracy - b.avg_accuracy);
   }, [drilldown, quizzes]);
-
-  const pendingQuizzes = useMemo(
-    () => quizzes
-      .filter((quiz) => quiz.review_status.pending + quiz.review_status.needs_edit > 0)
-      .sort((a, b) => b.review_status.pending + b.review_status.needs_edit - (a.review_status.pending + a.review_status.needs_edit)),
-    [quizzes],
-  );
 
   const recentQuizzes = useMemo(
     () => [...quizzes]
@@ -156,11 +148,7 @@ export function InstitutionAdminDashboard() {
         <MetricTile label="Active this week" value={activeStudents} gradient="from-card to-teal-50/70" chip="bg-teal-500/10 text-teal-600" icon={<UsersIcon />} delay={200} />
       </div>
 
-      <QuickActionsBar
-        pendingReviewCount={analytics.pipeline.pending_review}
-        onPending={() => setPendingOpen(true)}
-        onFindings={() => router.push("/dashboard/institution-admin/analytics")}
-      />
+      <QuickActionsBar />
 
       <Card>
         <CardHeader>
@@ -225,7 +213,6 @@ export function InstitutionAdminDashboard() {
       </Card>
 
       {drilldown && <QuizDrilldownModal title={`${drilldown.name} quizzes`} description={`${drilldown.type === "course" ? "Course" : "Teacher"} quizzes, ordered by engagement and then lowest accuracy.`} quizzes={drilldownQuizzes} onClose={() => setDrilldown(null)} onSelect={(quiz) => { setDrilldown(null); setSelectedQuiz(quiz); }} />}
-      {pendingOpen && <QuizDrilldownModal title="Quizzes awaiting review" description="Quizzes with pending or needs-edit questions, highest backlog first." quizzes={pendingQuizzes} onClose={() => setPendingOpen(false)} onSelect={(quiz) => { setPendingOpen(false); setSelectedQuiz(quiz); }} />}
       {atRiskOpen && <StudentPerformanceModal students={analytics.at_risk_students} initialStudent={selectedStudent} onClose={() => { setAtRiskOpen(false); setSelectedStudent(null); }} />}
       {selectedQuiz && <QuizPerformanceModal quiz={selectedQuiz} onClose={() => setSelectedQuiz(null)} />}
     </div>
