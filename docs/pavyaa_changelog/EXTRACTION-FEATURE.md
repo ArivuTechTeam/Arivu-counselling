@@ -107,6 +107,7 @@ All are **additive** (no existing column/row changed). Run any dup-check queries
 | `migrations/migration-17-document-hash.sql` | Adds `documents.content_hash` + index (duplicate-file detection). | **Required** — extraction writes/queries `content_hash`. |
 | `migrations/migration-18-course-subject-uniqueness.sql` | Unique indexes on `courses(tenant_id,name)` and `subjects(tenant_id,course_id,name)`. | Recommended (DB backstop for catalog dedup). |
 | `migrations/migration-19-quiz-extraction-rate-limit.sql` | Adds `quiz_extraction` to the shared per-user AI rate limiter. | **Required** — the endpoint fails closed if rate limiting is unavailable. |
+| `migrations/migration-23-quiz-set-document-link.sql` | Links each new quiz set to its source document for log status and retry tracking. | **Required** — generation and extraction write `quiz_sets.document_id`. |
 
 > **Reuses existing schema (no change):** `questions.chapter_id`, `questions.confidence_score`, `questions.extraction_job_id`, and the `ai_extraction_jobs` table already existed — extraction just started populating them.
 
@@ -125,7 +126,7 @@ cd backend; .\.venv\Scripts\Activate.ps1; uvicorn app.main:app --reload --port 8
 # Frontend (port 3001)
 cd frontend; pnpm install; pnpm dev --port 3001
 ```
-1. Run migrations **15–19** in order. Run the duplicate prechecks in 16 and 18 before their indexes.
+1. Run migrations **15–19**, then **23**, in order. Run the duplicate prechecks in 16 and 18 before their indexes.
 2. Log in as a teacher who has an assigned subject → sidebar **Extract quiz**.
 3. Pick subject + chapter (or add a new chapter), upload an MCQ file → **Extract quiz** → lands on the Review screen.
 4. Approve/publish → switch to a student → the quiz shows its **chapter name** + `Subject · Chapter`.

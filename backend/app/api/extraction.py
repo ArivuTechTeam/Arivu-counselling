@@ -128,6 +128,7 @@ async def extract_quiz_endpoint(
             service.table("documents")
             .select("original_filename, created_at")
             .eq("tenant_id", profile.tenant_id)
+            .eq("uploaded_by", profile.user_id)
             .eq("content_hash", content_hash)
             .order("created_at", desc=True)
             .limit(1)
@@ -207,6 +208,93 @@ async def extract_quiz_endpoint(
         ) from exc
     except Exception as exc:  # noqa: BLE001
         logger.exception("Unexpected quiz extraction failure")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="We couldn't finish extracting this quiz. Please try again.",
+        ) from exc
+
+    return result
+
+
+@router.post("/{document_id}/re-extract")
+async def re_extract_quiz_endpoint(
+    document_id: str,
+    profile: CurrentProfile = Depends(get_current_profile),
+) -> dict:
+    """Retry extraction on an ALREADY-uploaded document — no re-upload.
+
+    Reuses the file already in storage and the chapter the document was filed
+    under, so a teacher whose extraction failed (e.g. the AI timed out) can try
+    again in one click. Because nothing is re-uploaded, the duplicate-file guard
+    never triggers.
+    """
+    _require_teacher(profile)
+    service = get_service_client()
+
+    # Own document only, tenant-scoped (service client bypasses RLS).
+    doc = (
+        service.table("documents")
+        .select("chapter_id")
+        .eq("id", document_id)
+        .eq("tenant_id", profile.tenant_id)
+        .eq("uploaded_by", profile.user_id)
+        .maybe_single()
+        .execute()
+    )
+    if doc is None or not doc.data:
+        raise HTTPException(status_code=404, detail="Document not found.")
+    chapter_id = doc.data.get("chapter_id")
+    if not chapter_id:
+        raise HTTPException(
+            status_code=400,
+            detail="This document isn't filed under a chapter yet. "
+            "Please extract it from the Extract tab.",
+        )
+
+    chapter = (
+        service.table("chapters")
+        .select("subject_id")
+        .eq("id", chapter_id)
+        .eq("tenant_id", profile.tenant_id)
+        .maybe_single()
+        .execute()
+    )
+    if chapter is None or not chapter.data:
+        raise HTTPException(status_code=404, detail="Chapter not found.")
+    subject_id = chapter.data["subject_id"]
+
+    enforce_ai_rate_limit(
+        profile=profile,
+        endpoint=QUIZ_EXTRACTION,
+        hourly_limit=get_settings().rate_limit_quiz_extraction_per_hour,
+        action_label="quiz extraction",
+    )
+
+    try:
+        result = await run_in_threadpool(
+            extract_quiz,
+            document_id=document_id,
+            subject_id=subject_id,
+            chapter_id=chapter_id,
+            profile=profile,
+        )
+    except ValueError as exc:
+        raise public_error(
+            400,
+            "The stored document or its academic selection could not be used "
+            "for extraction.",
+            operation="prepare quiz re-extraction",
+            exception=exc,
+        ) from exc
+    except LLMError as exc:
+        raise public_error(
+            502,
+            "We couldn't extract this quiz right now. Please try again.",
+            operation="re-extract quiz with AI",
+            exception=exc,
+        ) from exc
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Unexpected quiz re-extraction failure")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="We couldn't finish extracting this quiz. Please try again.",

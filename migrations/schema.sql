@@ -219,6 +219,7 @@ create table quiz_sets (
   tenant_id uuid not null references tenants(id),
   chapter_id uuid references chapters(id),
   subject_id uuid references subjects(id),
+  document_id uuid references documents(id) on delete set null,
   title text not null,
   description text,
   status quiz_status not null default 'draft',
@@ -228,6 +229,7 @@ create table quiz_sets (
 );
 create index idx_quizsets_tenant on quiz_sets(tenant_id);
 create index idx_quizsets_subject on quiz_sets(subject_id);
+create index idx_quizsets_tenant_document on quiz_sets(tenant_id, document_id);
 
 create table quiz_variants (
   id uuid primary key default gen_random_uuid(),

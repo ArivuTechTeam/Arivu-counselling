@@ -151,6 +151,12 @@ def gemini_json_multimodal(
         "generationConfig": {
             "temperature": temperature,
             "responseMimeType": "application/json",
+            # Extraction is verbatim parsing, not reasoning — turn OFF Gemini
+            # 2.5's default "thinking" so it doesn't waste latency or eat the
+            # output budget. This is the single biggest latency win here.
+            "thinkingConfig": {"thinkingBudget": 0},
+            # Headroom so a long paper's questions aren't truncated mid-JSON.
+            "maxOutputTokens": settings.gemini_extraction_max_output_tokens,
         },
     }
     headers = {
@@ -159,7 +165,12 @@ def gemini_json_multimodal(
     }
 
     try:
-        resp = httpx.post(url, json=payload, headers=headers, timeout=180.0)
+        resp = httpx.post(
+            url,
+            json=payload,
+            headers=headers,
+            timeout=settings.gemini_vision_timeout_seconds,
+        )
         resp.raise_for_status()
     except httpx.HTTPStatusError as exc:
         raise LLMError(

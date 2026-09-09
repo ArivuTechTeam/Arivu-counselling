@@ -20,7 +20,7 @@ from pydantic import BaseModel
 from starlette.concurrency import run_in_threadpool
 
 from app.lib.auth import CurrentProfile, get_current_profile
-from app.lib.storage import upload_bytes
+from app.lib.storage import signed_url, upload_bytes
 from app.lib.supabase import get_service_client
 from app.services.extraction import extract_text
 
@@ -31,6 +31,8 @@ ALLOWED_EXT = {"pdf", "docx"}
 MAX_MB = 150
 MAX_BYTES = MAX_MB * 1024 * 1024
 PREVIEW_CHARS = 5000
+# A "view" link for a private document is short-lived to limit leakage.
+SIGNED_URL_TTL_SECONDS = 300  # 5 minutes
 CONTENT_TYPES = {
     "pdf": "application/pdf",
     "docx": (
@@ -53,6 +55,36 @@ class UploadResult(BaseModel):
     text_preview: str
     char_count: int
     truncated: bool
+
+
+class DocumentLogItem(BaseModel):
+    """One row in the teacher's Document Log — a readable record of an upload
+    plus the subject/chapter it was filed under (when known) and the status of
+    the quiz produced from it."""
+
+    id: str
+    original_filename: str | None
+    file_type: str | None
+    status: str
+    created_at: str
+    subject_name: str | None = None
+    chapter_name: str | None = None
+    # What happened to this document. quiz_status is one of:
+    #   "published"  - a quiz from this doc is live to students
+    #   "draft"      - a quiz exists, awaiting review (not published yet)
+    #   "extracting" - an extraction is running right now
+    #   "failed"     - the last extraction (or upload) failed; safe to retry
+    #   "none"       - nothing has been generated/extracted yet
+    quiz_status: str = "none"
+
+
+class DocumentFileUrl(BaseModel):
+    """A short-lived link to open/download the original uploaded file."""
+
+    url: str
+    original_filename: str | None
+    file_type: str | None
+    expires_in: int
 
 
 def _ext_of(filename: str) -> str:
@@ -179,3 +211,173 @@ def list_documents(
         )
         for r in rows.data
     ]
+
+
+@router.get("/log", response_model=list[DocumentLogItem])
+def document_log(
+    profile: CurrentProfile = Depends(get_current_profile),
+) -> list[DocumentLogItem]:
+    """The teacher's Document Log: their own uploads, newest first, with the
+    subject/chapter each was filed under when that is recorded."""
+    _require_teacher(profile)
+    service = get_service_client()
+
+    # Own uploads only, tenant-scoped. Both filters are required — the service
+    # client bypasses RLS, so isolation lives here.
+    docs = (
+        service.table("documents")
+        .select("id, original_filename, file_type, status, created_at, chapter_id")
+        .eq("tenant_id", profile.tenant_id)
+        .eq("uploaded_by", profile.user_id)
+        .order("created_at", desc=True)
+        .execute()
+        .data
+        or []
+    )
+    if not docs:
+        return []
+
+    # Resolve subject + chapter names for docs that carry a chapter, in bulk
+    # (no per-row query). Every lookup stays tenant-scoped.
+    chapter_ids = list({d["chapter_id"] for d in docs if d.get("chapter_id")})
+    chapter_name: dict[str, str] = {}
+    chapter_to_subject: dict[str, str] = {}
+    subject_name: dict[str, str] = {}
+    if chapter_ids:
+        chapters = (
+            service.table("chapters")
+            .select("id, name, subject_id")
+            .in_("id", chapter_ids)
+            .eq("tenant_id", profile.tenant_id)
+            .execute()
+            .data
+            or []
+        )
+        chapter_name = {c["id"]: c["name"] for c in chapters}
+        chapter_to_subject = {
+            c["id"]: c["subject_id"] for c in chapters if c.get("subject_id")
+        }
+        subject_ids = list(set(chapter_to_subject.values()))
+        if subject_ids:
+            subjects = (
+                service.table("subjects")
+                .select("id, name")
+                .in_("id", subject_ids)
+                .eq("tenant_id", profile.tenant_id)
+                .execute()
+                .data
+                or []
+            )
+            subject_name = {s["id"]: s["name"] for s in subjects}
+
+    doc_ids = [d["id"] for d in docs]
+
+    # Quizzes produced from these documents (migration-23 links quiz_sets back to
+    # their source). Tenant-scoped. Quizzes made before that link existed carry a
+    # NULL document_id and simply don't match.
+    quiz_by_doc: dict[str, set[str]] = {}
+    for q in (
+        service.table("quiz_sets")
+        .select("document_id, status")
+        .in_("document_id", doc_ids)
+        .eq("tenant_id", profile.tenant_id)
+        .execute()
+        .data
+        or []
+    ):
+        did = q.get("document_id")
+        if did:
+            quiz_by_doc.setdefault(did, set()).add(q.get("status") or "draft")
+
+    # Latest extraction job per document, so a running/failed attempt is visible
+    # even when it produced no quiz (rows are newest-first; keep the first seen).
+    latest_job: dict[str, str] = {}
+    for j in (
+        service.table("ai_extraction_jobs")
+        .select("document_id, status, created_at")
+        .in_("document_id", doc_ids)
+        .eq("tenant_id", profile.tenant_id)
+        .order("created_at", desc=True)
+        .execute()
+        .data
+        or []
+    ):
+        did = j.get("document_id")
+        if did and did not in latest_job:
+            latest_job[did] = j.get("status") or ""
+
+    def _quiz_status(doc_id: str, doc_status: str) -> str:
+        quizzes = quiz_by_doc.get(doc_id, set())
+        if "published" in quizzes:
+            return "published"
+        if "draft" in quizzes:
+            return "draft"
+        if latest_job.get(doc_id) == "running":
+            return "extracting"
+        if latest_job.get(doc_id) == "failed" or doc_status == "failed":
+            return "failed"
+        return "none"
+
+    items: list[DocumentLogItem] = []
+    for d in docs:
+        cid = d.get("chapter_id")
+        chap = chapter_name.get(cid) if cid else None
+        sub = subject_name.get(chapter_to_subject.get(cid, "")) if cid else None
+        items.append(
+            DocumentLogItem(
+                id=d["id"],
+                original_filename=d.get("original_filename"),
+                file_type=d.get("file_type"),
+                status=d["status"],
+                created_at=str(d["created_at"]),
+                subject_name=sub,
+                chapter_name=chap,
+                quiz_status=_quiz_status(d["id"], d["status"]),
+            )
+        )
+    return items
+
+
+@router.get("/{document_id}/file-url", response_model=DocumentFileUrl)
+def document_file_url(
+    document_id: str,
+    profile: CurrentProfile = Depends(get_current_profile),
+) -> DocumentFileUrl:
+    """Return a short-lived signed URL to open the teacher's own uploaded file.
+
+    The document is looked up filtered by BOTH tenant_id and uploaded_by, so a
+    teacher can never obtain a link for another tenant's (or another teacher's)
+    document. The raw storage path is never returned.
+    """
+    _require_teacher(profile)
+    service = get_service_client()
+
+    doc = (
+        service.table("documents")
+        .select("storage_path, original_filename, file_type")
+        .eq("id", document_id)
+        .eq("tenant_id", profile.tenant_id)
+        .eq("uploaded_by", profile.user_id)
+        .maybe_single()
+        .execute()
+    )
+    if doc is None or not doc.data:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Document not found.",
+        )
+
+    try:
+        url = signed_url(doc.data["storage_path"], SIGNED_URL_TTL_SECONDS)
+    except Exception:  # noqa: BLE001
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Could not create a view link for this document. Please try again.",
+        )
+
+    return DocumentFileUrl(
+        url=url,
+        original_filename=doc.data.get("original_filename"),
+        file_type=doc.data.get("file_type"),
+        expires_in=SIGNED_URL_TTL_SECONDS,
+    )

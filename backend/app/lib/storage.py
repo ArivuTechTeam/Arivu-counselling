@@ -39,3 +39,18 @@ def delete_bytes(path: str) -> None:
     """Delete a stored object when a later database operation cannot reference it."""
     client = get_service_client()
     client.storage.from_(BUCKET).remove([path])
+
+
+def signed_url(path: str, expires_in: int) -> str:
+    """
+    Return a time-limited signed URL for a PRIVATE object, valid for
+    `expires_in` seconds. The storage3 client returns a full absolute URL under
+    the project's Storage host, so the browser can open it directly — we never
+    expose the raw storage path or any service-role credential to the client.
+    """
+    client = get_service_client()
+    result = client.storage.from_(BUCKET).create_signed_url(path, expires_in)
+    url = result.get("signedURL") or result.get("signed_url")
+    if not isinstance(url, str) or not url:
+        raise RuntimeError("Storage did not return a signed URL.")
+    return url

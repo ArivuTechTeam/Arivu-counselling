@@ -7,7 +7,7 @@ const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL!;
 const DEFAULT_TIMEOUT_MS = 20_000;
 // 150 MB takes about 10 minutes at 2 Mbps before server-side extraction time.
 const DOCUMENT_UPLOAD_TIMEOUT_MS = 15 * 60_000;
-// Includes a 180-second model call plus upload and database processing time.
+// Includes the default 240-second vision call plus upload/database processing.
 const QUIZ_EXTRACTION_TIMEOUT_MS = 5 * 60_000;
 
 async function apiFetch(
@@ -165,6 +165,73 @@ export async function listDocuments(): Promise<DocumentOut[]> {
   const res = await apiFetch(`${API_BASE}/api/v1/documents`, { headers });
   if (!res.ok) {
     return apiError(res, "We couldn't load your documents. Please try again.");
+  }
+  return res.json();
+}
+
+// ---------------------------------------------------------------------------
+// Document log — a teacher's readable history of their uploads
+// ---------------------------------------------------------------------------
+
+export type DocumentLogItem = {
+  id: string;
+  original_filename: string | null;
+  file_type: string | null;
+  status: string;
+  created_at: string;
+  subject_name: string | null;
+  chapter_name: string | null;
+  // What happened to this document:
+  // "published" | "draft" | "extracting" | "failed" | "none"
+  quiz_status: string;
+};
+
+/** The teacher's own uploaded documents, newest first (for the Document Log). */
+export async function listDocumentLog(): Promise<DocumentLogItem[]> {
+  const headers = await authHeader();
+  const res = await apiFetch(`${API_BASE}/api/v1/documents/log`, { headers });
+  if (!res.ok) {
+    return apiError(res, "We couldn't load your document log. Please try again.");
+  }
+  return res.json();
+}
+
+export type DocumentFileUrl = {
+  url: string;
+  original_filename: string | null;
+  file_type: string | null;
+  expires_in: number;
+};
+
+/** Get a short-lived link to open/download one of your uploaded documents. */
+export async function getDocumentFileUrl(id: string): Promise<DocumentFileUrl> {
+  const headers = await authHeader();
+  const res = await apiFetch(
+    `${API_BASE}/api/v1/documents/${id}/file-url`,
+    { headers },
+  );
+  if (!res.ok) {
+    return apiError(res, "We couldn't open this document. Please try again.");
+  }
+  return res.json();
+}
+
+/**
+ * Retry extraction on a document that's already uploaded (e.g. a previous
+ * attempt where the AI timed out). Reuses the stored file and chapter, so
+ * there's no re-upload and no duplicate warning. Returns the new draft's id.
+ */
+export async function reExtractDocument(
+  documentId: string,
+): Promise<{ quiz_set_id: string }> {
+  const headers = await authHeader();
+  const res = await apiFetch(
+    `${API_BASE}/api/v1/quiz-sets/${documentId}/re-extract`,
+    { method: "POST", headers },
+    QUIZ_EXTRACTION_TIMEOUT_MS,
+  );
+  if (!res.ok) {
+    return apiError(res, "We couldn't extract this document. Please try again.");
   }
   return res.json();
 }

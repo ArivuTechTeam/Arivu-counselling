@@ -78,6 +78,12 @@ const NAV: Record<string, NavItem[]> = {
       icon: FileText,
     },
     {
+      label: "Document log",
+      href: "/dashboard/teacher/documents",
+      section: "Content",
+      icon: Clock,
+    },
+    {
       label: "Class monitor",
       href: "/dashboard/teacher/class-monitor",
       section: "Monitoring",

@@ -37,6 +37,18 @@ def _positive_int(name: str, default: int) -> int:
     return value
 
 
+def _positive_float(name: str, default: float) -> float:
+    """Read a positive floating-point setting and fail fast if invalid."""
+    raw_value = os.getenv(name, str(default))
+    try:
+        value = float(raw_value)
+    except ValueError as exc:
+        raise RuntimeError(f"{name} must be a positive number.") from exc
+    if value <= 0:
+        raise RuntimeError(f"{name} must be a positive number.")
+    return value
+
+
 class Settings:
     """Typed, validated view of our environment variables."""
 
@@ -88,6 +100,35 @@ class Settings:
         # default to the current cheapest tier, gemini-3.5-flash-lite.
         self.gemini_blueprint_model: str = os.getenv(
             "GEMINI_BLUEPRINT_MODEL", "gemini-3.5-flash-lite"
+        )
+
+        # Quiz EXTRACTION via Gemini vision (scanned PDFs / images only — typed
+        # docs go the cheap text path). These are the two levers behind the
+        # "read operation timed out" failures, both tunable from Railway with no
+        # code change:
+        #   * timeout — how long we wait for the vision response. Keep it BELOW
+        #     the frontend's own extraction timeout so the server fails first.
+        #   * max output tokens — headroom so a long paper isn't truncated. We
+        #     also disable "thinking" for extraction (pure parsing needs none),
+        #     which cuts latency and frees the whole budget for questions.
+        self.gemini_vision_timeout_seconds: float = _positive_float(
+            "GEMINI_VISION_TIMEOUT_SECONDS", 240
+        )
+        self.gemini_extraction_max_output_tokens: int = _positive_int(
+            "GEMINI_EXTRACTION_MAX_OUTPUT_TOKENS", 65536
+        )
+
+        # Large typed documents (120-150+ pages) are split into text chunks so
+        # each model call has a small, bounded output — the real cause of the
+        # "timed out" failures. Chunks run with limited concurrency and the
+        # questions are merged + de-duplicated. Both tunable from Railway.
+        #   * chunk size — chars per chunk (smaller = faster/safer per call)
+        #   * concurrency — how many chunks are extracted at once
+        self.extraction_text_chunk_chars: int = _positive_int(
+            "EXTRACTION_TEXT_CHUNK_CHARS", 18000
+        )
+        self.extraction_chunk_concurrency: int = _positive_int(
+            "EXTRACTION_CHUNK_CONCURRENCY", 4
         )
 
         # How much document text to feed the model per generation. Larger =

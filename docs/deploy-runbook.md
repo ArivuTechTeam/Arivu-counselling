@@ -55,6 +55,10 @@ migration-16-chapter-uniqueness.sql
 migration-17-document-hash.sql
 migration-18-course-subject-uniqueness.sql
 migration-19-quiz-extraction-rate-limit.sql
+migration-20-teacher-deletion-content-retention.sql
+migration-21-fix-google-signup-ambiguous-column.sql
+migration-22-browser-data-api-hardening.sql
+migration-23-quiz-set-document-link.sql
 ```
 
 The repository does not prove which migrations are applied to a deployed
@@ -63,6 +67,9 @@ Supabase project. Check the target project before skipping any file. Migration
 Migration 13 must be applied before deploying backend code with AI rate limits.
 Migrations 15–19 must be applied in order before deploying quiz extraction;
 run the duplicate checks documented in migrations 16 and 18 first.
+Migration 22 must be applied to close direct browser access to backend-owned
+tables and analytics views. Migration 23 must be applied before deploying the
+document log because quiz creation starts writing `quiz_sets.document_id`.
 
 ---
 

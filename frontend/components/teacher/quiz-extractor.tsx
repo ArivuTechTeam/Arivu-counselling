@@ -83,6 +83,9 @@ export function QuizExtractor() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [dupMessage, setDupMessage] = useState<string | null>(null);
+  // True after an extraction attempt fails (e.g. the AI timed out), so we can
+  // offer a one-click retry instead of a dead-end error.
+  const [canRetry, setCanRetry] = useState(false);
 
   useEffect(() => {
     listCourses()
@@ -112,6 +115,7 @@ export function QuizExtractor() {
     setBusy(true);
     setError(null);
     setDupMessage(null);
+    setCanRetry(false);
     try {
       // Resolve the chapter: create a new one (get-or-create) or use the picked id.
       let chapterId = chapterSel;
@@ -127,6 +131,7 @@ export function QuizExtractor() {
         setDupMessage(e.message); // offer "extract anyway"
       } else {
         setError(e instanceof Error ? e.message : "Extraction failed. Please try again.");
+        setCanRetry(true); // the file is still selected — allow a retry
       }
       setBusy(false);
     }
@@ -242,6 +247,7 @@ export function QuizExtractor() {
                   setError(null);
                 }
                 setDupMessage(null);
+                setCanRetry(false);
               }}
             />
           </label>
@@ -274,6 +280,15 @@ export function QuizExtractor() {
               </button>
             </div>
           </div>
+        ) : canRetry ? (
+          <Button
+            onClick={() => handleExtract(true)}
+            disabled={!file || !subjectId || !chapterReady}
+            className="w-fit"
+          >
+            <Sparkles size={16} />
+            Try again
+          </Button>
         ) : (
           <Button onClick={() => handleExtract()} disabled={!canExtract} className="w-fit">
             <Sparkles size={16} />
