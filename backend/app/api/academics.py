@@ -18,6 +18,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 
 from app.lib.auth import CurrentProfile, get_current_profile
+from app.lib.api_errors import public_error
 from app.lib.supabase import get_service_client
 from app.services.teacher_access import (
     replace_teacher_subjects,
@@ -275,10 +276,12 @@ def delete_course(
             "tenant_id", profile.tenant_id
         ).execute()
     except Exception as exc:  # noqa: BLE001
-        raise HTTPException(
-            status_code=409,
-            detail=f"Could not delete course (is it still in use?): {exc}",
-        )
+        raise public_error(
+            409,
+            "This course could not be deleted because it is still in use.",
+            operation="delete course",
+            exception=exc,
+        ) from exc
     if not deleted.data:
         raise HTTPException(status_code=404, detail="Course not found.")
     return {"deleted": course_id}
@@ -295,10 +298,12 @@ def delete_subject(
             "tenant_id", profile.tenant_id
         ).execute()
     except Exception as exc:  # noqa: BLE001
-        raise HTTPException(
-            status_code=409,
-            detail=f"Could not delete subject (is it used by a quiz?): {exc}",
-        )
+        raise public_error(
+            409,
+            "This subject could not be deleted because it is still in use.",
+            operation="delete subject",
+            exception=exc,
+        ) from exc
     if not deleted.data:
         raise HTTPException(status_code=404, detail="Subject not found.")
     return {"deleted": subject_id}

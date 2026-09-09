@@ -18,6 +18,7 @@ API layer maps those to HTTP status codes.
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 
 from pydantic import BaseModel, Field, ValidationError
@@ -39,6 +40,8 @@ from app.services.llm.structured import (
     gemini_json_multimodal,
 )
 from app.services.teacher_access import teacher_has_subject
+
+logger = logging.getLogger(__name__)
 
 # Which uploads the extractor accepts, and how to hand each to Gemini.
 _IMAGE_MIME = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg"}
@@ -277,6 +280,7 @@ def extract_quiz(
         }
 
     except Exception as exc:  # noqa: BLE001
+        logger.warning("Quiz extraction failed (%s)", type(exc).__name__)
         # Compensate across PostgREST calls: no orphaned draft sets/questions.
         if quiz_set_id:
             service.table("quiz_sets").delete().eq("id", quiz_set_id).execute()
@@ -287,7 +291,7 @@ def extract_quiz(
         service.table("ai_extraction_jobs").update(
             {
                 "status": "failed",
-                "error_message": str(exc)[:500],
+                "error_message": "Quiz extraction failed.",
                 "completed_at": _now(),
             }
         ).eq("id", job_id).execute()

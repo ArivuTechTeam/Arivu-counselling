@@ -24,6 +24,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, s
 from starlette.concurrency import run_in_threadpool
 
 from app.lib.auth import CurrentProfile, get_current_profile
+from app.lib.api_errors import public_error
 from app.lib.config import get_settings
 from app.lib.storage import delete_bytes, upload_bytes
 from app.lib.supabase import get_service_client
@@ -191,12 +192,19 @@ async def extract_quiz_endpoint(
             profile=profile,
         )
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise public_error(
+            400,
+            "The selected file or academic selection could not be used for extraction.",
+            operation="prepare quiz extraction",
+            exception=exc,
+        ) from exc
     except LLMError as exc:
-        raise HTTPException(
-            status_code=502,
-            detail=f"Could not extract the quiz: {exc}",
-        )
+        raise public_error(
+            502,
+            "We couldn't extract this quiz right now. Please try again.",
+            operation="extract quiz with AI",
+            exception=exc,
+        ) from exc
     except Exception as exc:  # noqa: BLE001
         logger.exception("Unexpected quiz extraction failure")
         raise HTTPException(

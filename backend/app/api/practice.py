@@ -20,6 +20,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 
 from app.lib.auth import CurrentProfile, get_current_profile
+from app.lib.api_errors import public_error
 from app.lib.supabase import get_service_client
 from app.services.grading import grade_answer
 from app.services.selector import select_question_ids
@@ -371,7 +372,12 @@ def submit_practice(
                 "submitted_at": None,
             }
         ).eq("id", session_id).eq("student_id", profile.user_id).execute()
-        raise HTTPException(status_code=500, detail=f"Could not save answers: {exc}")
+        raise public_error(
+            500,
+            "We couldn't save your answers. Your practice session is still open; please try again.",
+            operation="save submitted practice answers",
+            exception=exc,
+        ) from exc
 
     return {
         "attempt_id": session_id,

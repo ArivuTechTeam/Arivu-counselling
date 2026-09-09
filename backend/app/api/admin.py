@@ -22,10 +22,11 @@ from collections import Counter
 from datetime import datetime, timedelta, timezone
 from typing import Callable, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.lib.auth import CurrentProfile, get_current_profile
+from app.lib.api_errors import public_error
 from app.lib.supabase import get_service_client
 from app.services.teacher_access import replace_teacher_subjects
 
@@ -211,6 +212,11 @@ class TeacherUpdate(BaseModel):
     subject_ids: list[str] = Field(max_length=500)
 
 
+class TemporaryTeacherLogin(BaseModel):
+    email: str | None
+    password: str
+
+
 def _validated_subject_ids(
     service,
     *,
@@ -334,7 +340,12 @@ def create_user(
     except Exception as exc:  # noqa: BLE001
         if "created" in locals() and created.user:
             _delete_auth_user_quietly(service, created.user.id)
-        raise HTTPException(status_code=400, detail=f"Could not create user: {exc}")
+        raise public_error(
+            400,
+            "We couldn't create this teacher. Check the account details and try again.",
+            operation="create teacher",
+            exception=exc,
+        ) from exc
 
     return {"id": created.user.id, "email": body.email.strip()}
 
@@ -395,11 +406,15 @@ def _generate_temporary_password(length: int = 14) -> str:
     return "".join(characters)
 
 
-@router.post("/users/{user_id}/temporary-password")
+@router.post(
+    "/users/{user_id}/temporary-password",
+    response_model=TemporaryTeacherLogin,
+)
 def reset_teacher_temporary_password(
     user_id: str,
+    response: Response,
     profile: CurrentProfile = Depends(get_current_profile),
-) -> dict:
+) -> TemporaryTeacherLogin:
     """Reset a tenant teacher's password and return it once for immediate copying."""
     _require_admin(profile)
     service = get_service_client()
@@ -427,10 +442,12 @@ def reset_teacher_temporary_password(
             detail="Could not generate a new temporary teacher login.",
         )
     auth_user = getattr(auth_response, "user", auth_response)
-    return {
-        "email": getattr(auth_user, "email", None),
-        "password": temporary_password,
-    }
+    response.headers["Cache-Control"] = "no-store, private"
+    response.headers["Pragma"] = "no-cache"
+    return TemporaryTeacherLogin(
+        email=getattr(auth_user, "email", None),
+        password=temporary_password,
+    )
 
 
 @router.put("/users/{user_id}")
@@ -539,7 +556,12 @@ def update_user(
             )
         except Exception:  # noqa: BLE001
             pass
-        raise HTTPException(status_code=400, detail=f"Could not update teacher: {exc}")
+        raise public_error(
+            400,
+            "We couldn't update this teacher. Check the account details and try again.",
+            operation="update teacher",
+            exception=exc,
+        ) from exc
 
     return {
         "id": user_id,
@@ -808,7 +830,12 @@ def create_admin(
     except Exception as exc:  # noqa: BLE001
         if "created" in locals() and created.user:
             _delete_auth_user_quietly(service, created.user.id)
-        raise HTTPException(status_code=400, detail=f"Could not create admin: {exc}")
+        raise public_error(
+            400,
+            "We couldn't create this institution administrator. Check the details and try again.",
+            operation="create institution administrator",
+            exception=exc,
+        ) from exc
 
     return {"id": created.user.id, "email": body.email}
 
@@ -840,7 +867,12 @@ def remove_admin(
     try:
         service.auth.admin.delete_user(user_id)
     except Exception as exc:  # noqa: BLE001
-        raise HTTPException(status_code=400, detail=f"Could not remove admin: {exc}")
+        raise public_error(
+            400,
+            "We couldn't remove this institution administrator. Please try again.",
+            operation="remove institution administrator",
+            exception=exc,
+        ) from exc
     service.table("profiles").delete().eq("id", user_id).execute()
 
     return {"deleted": user_id}
@@ -1950,7 +1982,12 @@ def onboard_institution(
             .execute()
         )
     except Exception as exc:  # noqa: BLE001
-        raise HTTPException(status_code=400, detail=f"Could not create institution: {exc}")
+        raise public_error(
+            400,
+            "We couldn't create this institution. Check the details and try again.",
+            operation="create institution",
+            exception=exc,
+        ) from exc
     tenant_id = created.data[0]["id"]
 
     admin = None
@@ -1982,10 +2019,12 @@ def onboard_institution(
             if "u" in locals() and u.user:
                 _delete_auth_user_quietly(service, u.user.id)
             service.table("tenants").delete().eq("id", tenant_id).execute()
-            raise HTTPException(
-                status_code=400,
-                detail=f"Could not create institution admin: {exc}",
-            )
+            raise public_error(
+                400,
+                "The institution was not created because its administrator account could not be set up.",
+                operation="create first institution administrator",
+                exception=exc,
+            ) from exc
 
     return {"id": tenant_id, "name": name, "subdomain": subdomain, "admin": admin}
 

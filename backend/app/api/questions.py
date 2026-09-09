@@ -16,6 +16,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 
 from app.lib.auth import CurrentProfile, get_current_profile
+from app.lib.api_errors import public_error
 from app.lib.config import get_settings
 from app.lib.supabase import get_service_client
 from app.services.events import (
@@ -251,12 +252,19 @@ def regenerate(
         )
         return result
     except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
+        raise public_error(
+            404,
+            "Question not found.",
+            operation="regenerate question lookup",
+            exception=exc,
+        ) from exc
     except LLMError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"Regeneration failed: {exc}",
-        )
+        raise public_error(
+            status.HTTP_502_BAD_GATEWAY,
+            "We couldn't regenerate this question right now. Please try again.",
+            operation="regenerate question with AI",
+            exception=exc,
+        ) from exc
 
 
 @router.post("/{question_id}/explain")
@@ -288,9 +296,16 @@ def explain(
     try:
         return explain_question(question_id, profile.tenant_id)
     except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
+        raise public_error(
+            404,
+            "Question not found.",
+            operation="explain question lookup",
+            exception=exc,
+        ) from exc
     except LLMError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"Explanation failed: {exc}",
-        )
+        raise public_error(
+            status.HTTP_502_BAD_GATEWAY,
+            "We couldn't generate an explanation right now. Please try again.",
+            operation="explain question with AI",
+            exception=exc,
+        ) from exc

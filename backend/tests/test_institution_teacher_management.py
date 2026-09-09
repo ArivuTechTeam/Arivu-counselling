@@ -5,7 +5,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from fastapi import HTTPException
+from fastapi import HTTPException, Response
 from pydantic import ValidationError
 
 from app.api.admin import (
@@ -271,18 +271,23 @@ class InstitutionTeacherManagementTests(unittest.TestCase):
         for pattern in (r"[A-Z]", r"[a-z]", r"[0-9]", r"[!@#$%]"):
             self.assertRegex(generated, pattern)
 
-        result = reset_teacher_temporary_password("teacher-a", self.profile)
+        response = Response()
+        result = reset_teacher_temporary_password(
+            "teacher-a", response, self.profile
+        )
 
-        self.assertEqual(result["email"], "teacher-a@example.com")
-        self.assertEqual(len(result["password"]), 14)
+        self.assertEqual(result.email, "teacher-a@example.com")
+        self.assertEqual(len(result.password), 14)
+        self.assertEqual(response.headers["cache-control"], "no-store, private")
+        self.assertEqual(response.headers["pragma"], "no-cache")
         auth_user = self.service.auth.admin.get_user_by_id("teacher-a").user
-        self.assertEqual(auth_user.password, result["password"])
+        self.assertEqual(auth_user.password, result.password)
         teacher = next(row for row in self.service.tables["profiles"] if row["id"] == "teacher-a")
         self.assertTrue(teacher["must_change_password"])
 
     def test_cross_tenant_teacher_password_cannot_be_reset(self) -> None:
         with self.assertRaises(HTTPException) as error:
-            reset_teacher_temporary_password("teacher-b", self.profile)
+            reset_teacher_temporary_password("teacher-b", Response(), self.profile)
 
         self.assertEqual(error.exception.status_code, 404)
 

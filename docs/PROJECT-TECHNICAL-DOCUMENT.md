@@ -264,7 +264,7 @@ backend/app/
 ├── lib/               config.py, supabase.py, auth.py, storage.py
 └── models/            (empty — no ORM models; see §13)
 ```
-- **CORS** allows the configured `FRONTEND_ORIGIN` plus any localhost port (dev). It is the only middleware; **authorization is per-endpoint** via FastAPI dependencies.
+- **CORS** allows the configured `FRONTEND_ORIGIN`. Any localhost port is accepted only when that configured origin is itself localhost; production also disables public FastAPI docs. API responses are marked `no-store`, and **authorization is per-endpoint** via FastAPI dependencies.
 
 ### 6.2 API surface (grouped)
 Guards: **public** / **student** / **staff** (teacher+admin+super) / **admin** (institution_admin+super) / **super_admin**.

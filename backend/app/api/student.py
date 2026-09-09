@@ -18,6 +18,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 
 from app.lib.auth import CurrentProfile, get_current_profile
+from app.lib.api_errors import public_error
 from app.lib.supabase import get_service_client
 from app.services.events import ATTEMPT_SUBMITTED, log_event
 from app.services.grading import grade_answer
@@ -478,7 +479,12 @@ def submit_attempt(
                 "submitted_at": None,
             }
         ).eq("id", attempt_id).eq("student_id", profile.user_id).execute()
-        raise HTTPException(status_code=500, detail=f"Could not save answers: {exc}")
+        raise public_error(
+            500,
+            "We couldn't save your answers. Your attempt is still open; please try again.",
+            operation="save submitted quiz answers",
+            exception=exc,
+        ) from exc
 
     max_score = sum(float(q.get("marks") or 1) for q in questions)
     # Instrument: a graded attempt (powers student-outcome trends).

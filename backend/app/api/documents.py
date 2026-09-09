@@ -12,6 +12,7 @@ Flow for POST /api/v1/documents/upload:
 
 from __future__ import annotations
 
+import logging
 import uuid
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
@@ -24,6 +25,7 @@ from app.lib.supabase import get_service_client
 from app.services.extraction import extract_text
 
 router = APIRouter(prefix="/api/v1/documents", tags=["documents"])
+logger = logging.getLogger(__name__)
 
 ALLOWED_EXT = {"pdf", "docx"}
 MAX_MB = 150
@@ -124,8 +126,9 @@ async def upload_document(
     try:
         text = await run_in_threadpool(extract_text, content, ext)
     except Exception as exc:  # noqa: BLE001 - surface any parse failure to the row
+        logger.warning("Document extraction failed (%s)", type(exc).__name__)
         service.table("documents").update(
-            {"status": "failed", "error_message": str(exc)}
+            {"status": "failed", "error_message": "Document extraction failed."}
         ).eq("id", doc_id).execute()
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,

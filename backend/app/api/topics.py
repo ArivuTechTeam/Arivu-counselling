@@ -12,6 +12,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from app.lib.auth import CurrentProfile, get_current_profile
+from app.lib.api_errors import public_error
 from app.lib.config import get_settings
 from app.lib.supabase import get_service_client
 from app.services.llm import LLMError
@@ -52,11 +53,17 @@ def extract_document_topics(
     try:
         topics = extract_topics_for_document(document_id, profile.tenant_id)
     except ValueError as exc:
-        # bad input: document missing / no extractable text
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+        raise public_error(
+            status.HTTP_400_BAD_REQUEST,
+            "This document could not be used for topic extraction. Check the file and try again.",
+            operation="prepare document for topic extraction",
+            exception=exc,
+        ) from exc
     except LLMError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"Topic extraction failed: {exc}",
-        )
+        raise public_error(
+            status.HTTP_502_BAD_GATEWAY,
+            "We couldn't extract topics right now. Please try again.",
+            operation="extract document topics with AI",
+            exception=exc,
+        ) from exc
     return {"document_id": document_id, "topics": topics}

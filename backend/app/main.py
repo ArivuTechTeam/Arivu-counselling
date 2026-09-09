@@ -12,8 +12,10 @@ Slice 1 endpoints:
 
 from __future__ import annotations
 
-from fastapi import Depends, FastAPI
+from fastapi import Depends, FastAPI, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from app.api import (
     academics,
@@ -38,9 +40,13 @@ from app.lib.auth import (
 )
 from app.lib.config import get_settings
 
+settings = get_settings()
 app = FastAPI(
     title="quiz-generator-v1 API",
     version="0.1.0",
+    docs_url="/docs" if settings.is_local_development else None,
+    redoc_url=None,
+    openapi_url="/openapi.json" if settings.is_local_development else None,
 )
 
 # --- CORS ---------------------------------------------------------------
@@ -48,18 +54,57 @@ app = FastAPI(
 # different origin (http://localhost:8000) unless the API explicitly says
 # "I allow that origin". This middleware adds those permission headers.
 # In production we'll list the real Vercel domain instead of localhost.
-settings = get_settings()
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[settings.frontend_origin],
     # Dev convenience: the Next dev server hops to :3001, :3002 … when a port is
     # already taken. Allow any localhost / 127.0.0.1 port so the browser isn't
     # blocked by CORS. In production, FRONTEND_ORIGIN pins the real domain.
-    allow_origin_regex=r"http://(localhost|127\.0\.0\.1):\d+",
+    allow_origin_regex=(
+        r"http://(localhost|127\.0\.0\.1):\d+"
+        if settings.is_local_development
+        else None
+    ),
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type"],
 )
+
+
+@app.middleware("http")
+async def prevent_api_response_caching(request: Request, call_next):
+    """Keep authenticated payloads and one-time credentials out of caches."""
+    response = await call_next(request)
+    if request.url.path.startswith("/api/v1/"):
+        response.headers["Cache-Control"] = "no-store, private"
+        response.headers["Pragma"] = "no-cache"
+    return response
+
+
+@app.exception_handler(RequestValidationError)
+async def safe_validation_error(
+    _request: Request, exception: RequestValidationError
+) -> JSONResponse:
+    """Return useful field errors without echoing submitted passwords or text."""
+    errors = [
+        {
+            "location": list(error.get("loc", ())),
+            "message": error.get("msg", "Invalid value."),
+            "type": error.get("type", "value_error"),
+        }
+        for error in exception.errors()
+    ]
+    return JSONResponse(
+        status_code=422,
+        content={
+            "detail": "Please check the submitted fields and try again.",
+            "errors": errors,
+        },
+        headers={
+            "Cache-Control": "no-store, private",
+            "Pragma": "no-cache",
+        },
+    )
 
 # --- Routers ------------------------------------------------------------
 app.include_router(academics.router)

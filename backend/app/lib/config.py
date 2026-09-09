@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import os
 from functools import lru_cache
+from urllib.parse import urlparse
 
 from dotenv import load_dotenv
 
@@ -55,7 +56,12 @@ class Settings:
         # Which frontend origin is allowed to call this API from the browser.
         self.frontend_origin: str = os.getenv(
             "FRONTEND_ORIGIN", "http://localhost:3000"
-        )
+        ).rstrip("/")
+        frontend_host = urlparse(self.frontend_origin).hostname
+        self.is_local_development: bool = frontend_host in {
+            "localhost",
+            "127.0.0.1",
+        }
 
         # --- AI / LLM (Slice 3) ---
         # Optional: the app boots without these, but quiz generation fails with

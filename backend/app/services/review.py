@@ -20,7 +20,7 @@ def get_quiz_set_detail(quiz_set_id: str, tenant_id: str) -> dict:
 
     qs = (
         service.table("quiz_sets")
-        .select("*")
+        .select("id, title, status, created_at, published_at")
         .eq("id", quiz_set_id)
         .eq("tenant_id", tenant_id)
         .maybe_single()
@@ -31,7 +31,7 @@ def get_quiz_set_detail(quiz_set_id: str, tenant_id: str) -> dict:
 
     variants = (
         service.table("quiz_variants")
-        .select("*")
+        .select("id, variant_type, total_marks")
         .eq("quiz_set_id", quiz_set_id)
         .eq("tenant_id", tenant_id)
         .order("created_at")
@@ -46,6 +46,7 @@ def get_quiz_set_detail(quiz_set_id: str, tenant_id: str) -> dict:
             service.table("quiz_variant_questions")
             .select("question_id, order_index")
             .eq("variant_id", variant["id"])
+            .eq("tenant_id", tenant_id)
             .order("order_index")
             .execute()
             .data
@@ -56,8 +57,12 @@ def get_quiz_set_detail(quiz_set_id: str, tenant_id: str) -> dict:
         if question_ids:
             rows = (
                 service.table("questions")
-                .select("*")
+                .select(
+                    "id, type, question_text, options, correct_answer, explanation, "
+                    "difficulty, marks, review_status"
+                )
                 .in_("id", question_ids)
+                .eq("tenant_id", tenant_id)
                 .execute()
                 .data
                 or []
