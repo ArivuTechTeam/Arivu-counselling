@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
+import { SWRConfig } from "swr";
 
 import { DashboardShell } from "@/components/shared/dashboard-shell";
 import { Brand } from "@/components/ui/brand";
@@ -31,6 +32,7 @@ export default function DashboardLayout({
   const [email, setEmail] = useState("");
   const [mustChangePassword, setMustChangePassword] = useState(false);
   const [canChangePassword, setCanChangePassword] = useState(false);
+  const cacheProvider = useMemo(() => () => new Map(), []);
   // `ready` gates the shell so we never flash a blank sidebar / "?" avatar
   // before the role resolves.
   const [ready, setReady] = useState(false);
@@ -113,15 +115,24 @@ export default function DashboardLayout({
   }
 
   return (
-    <ToastProvider>
-      <DashboardShell
-        role={role}
-        email={email}
-        mustChangePassword={mustChangePassword}
-        canChangePassword={canChangePassword}
-      >
-        {children}
-      </DashboardShell>
-    </ToastProvider>
+    <SWRConfig
+      value={{
+        provider: cacheProvider,
+        dedupingInterval: 60_000,
+        revalidateOnFocus: false,
+        keepPreviousData: true,
+      }}
+    >
+      <ToastProvider>
+        <DashboardShell
+          role={role}
+          email={email}
+          mustChangePassword={mustChangePassword}
+          canChangePassword={canChangePassword}
+        >
+          {children}
+        </DashboardShell>
+      </ToastProvider>
+    </SWRConfig>
   );
 }

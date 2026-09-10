@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import useSWR from "swr";
 import {
   Area,
   AreaChart,
@@ -56,17 +56,10 @@ function PipeRow({
 }
 
 export default function PlatformOverviewPage() {
-  const [s, setS] = useState<PlatformOverview | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  function load() {
-    setError(null);
-    getPlatformOverview()
-      .then(setS)
-      .catch((e) => setError(e.message));
-  }
-
-  useEffect(load, []);
+  const { data: s = null, error, mutate } = useSWR<PlatformOverview>(
+    "dashboard:super-admin",
+    getPlatformOverview,
+  );
 
   const ready = s !== null;
   const inst = useCountUp(s?.institutions ?? 0, ready);
@@ -75,7 +68,8 @@ export default function PlatformOverviewPage() {
   const quizSets = useCountUp(s?.quiz_sets ?? 0, ready);
   const approval = useCountUp(s?.approval_rate ?? 0, ready);
 
-  if (error) return <ErrorCard message={error} onRetry={load} />;
+  if (error)
+    return <ErrorCard message={error.message} onRetry={() => void mutate()} />;
 
   if (!ready) {
     return (

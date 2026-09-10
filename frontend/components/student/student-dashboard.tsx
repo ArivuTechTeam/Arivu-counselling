@@ -4,6 +4,7 @@ import * as React from "react";
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
+import useSWR from "swr";
 import {
   Area,
   AreaChart,
@@ -308,25 +309,18 @@ function masteryColor(pct: number) {
 
 export function StudentDashboard() {
   const router = useRouter();
-  const [stats, setStats] = useState<StudentStats | null>(null);
-  const [attempts, setAttempts] = useState<AttemptHistoryItem[]>([]);
-  const [error, setError] = useState<string | null>(null);
-
-  function load() {
-    setError(null);
-    Promise.all([getStudentStats(), listStudentAttempts()])
-      .then(([s, a]) => {
-        setStats(s);
-        setAttempts(a);
-      })
-      .catch((e) =>
-        setError(e instanceof Error ? e.message : "Could not load your dashboard."),
-      );
-  }
-
-  useEffect(() => {
-    load();
-  }, []);
+  const { data, error, mutate } = useSWR<{
+    stats: StudentStats;
+    attempts: AttemptHistoryItem[];
+  }>("dashboard:student", async () => {
+    const [stats, attempts] = await Promise.all([
+      getStudentStats(),
+      listStudentAttempts(),
+    ]);
+    return { stats, attempts };
+  });
+  const stats = data?.stats ?? null;
+  const attempts = data?.attempts ?? [];
 
   const ready = stats !== null;
   const acc = stats?.overall_accuracy ?? 0;
@@ -368,7 +362,7 @@ export function StudentDashboard() {
 
   // Both fetches failed — show a retryable error instead of a zeroed dashboard.
   if (error) {
-    return <ErrorCard message={error} onRetry={load} />;
+    return <ErrorCard message={error.message} onRetry={() => void mutate()} />;
   }
 
   // First paint before stats arrive — skeleton the hero + tile grid.

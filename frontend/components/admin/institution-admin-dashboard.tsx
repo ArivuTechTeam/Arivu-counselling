@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
+import useSWR from "swr";
 import { Area, AreaChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 
 import { AtRiskStudentsCard } from "@/app/dashboard/institution-admin/_components/at-risk-students-card";
@@ -25,6 +26,7 @@ import {
 } from "@/lib/api";
 
 const BRAND = "#15603d";
+const EMPTY_QUIZZES: AdminQuizSet[] = [];
 type Drilldown = { type: "course" | "teacher"; id: string; name: string };
 type AtRiskStudent = InstitutionAnalytics["at_risk_students"][number];
 
@@ -60,27 +62,26 @@ function DashboardSkeleton() {
 
 export function InstitutionAdminDashboard() {
   const router = useRouter();
-  const [overview, setOverview] = useState<InstitutionOverview | null>(null);
-  const [analytics, setAnalytics] = useState<InstitutionAnalytics | null>(null);
-  const [quizzes, setQuizzes] = useState<AdminQuizSet[]>([]);
-  const [error, setError] = useState<string | null>(null);
   const [drilldown, setDrilldown] = useState<Drilldown | null>(null);
   const [atRiskOpen, setAtRiskOpen] = useState(false);
   const [selectedStudent, setSelectedStudent] = useState<AtRiskStudent | null>(null);
   const [selectedQuiz, setSelectedQuiz] = useState<AdminQuizSet | null>(null);
 
-  function load() {
-    setError(null);
-    Promise.all([getInstitutionOverview(), getInstitutionAnalytics(), getAdminQuizSets()])
-      .then(([overviewData, analyticsData, quizRows]) => {
-        setOverview(overviewData);
-        setAnalytics(analyticsData);
-        setQuizzes(quizRows);
-      })
-      .catch((reason) => setError(reason.message));
-  }
-
-  useEffect(load, []);
+  const { data, error, mutate } = useSWR<{
+    overview: InstitutionOverview;
+    analytics: InstitutionAnalytics;
+    quizzes: AdminQuizSet[];
+  }>("dashboard:institution-admin", async () => {
+    const [overview, analytics, quizzes] = await Promise.all([
+      getInstitutionOverview(),
+      getInstitutionAnalytics(),
+      getAdminQuizSets(),
+    ]);
+    return { overview, analytics, quizzes };
+  });
+  const overview = data?.overview ?? null;
+  const analytics = data?.analytics ?? null;
+  const quizzes = data?.quizzes ?? EMPTY_QUIZZES;
 
   const ready = overview !== null && analytics !== null;
   const teachers = useCountUp(overview?.teachers ?? 0, ready);
@@ -104,7 +105,8 @@ export function InstitutionAdminDashboard() {
     [quizzes],
   );
 
-  if (error) return <ErrorCard message={error} onRetry={load} />;
+  if (error)
+    return <ErrorCard message={error.message} onRetry={() => void mutate()} />;
   if (!overview || !analytics) return <DashboardSkeleton />;
 
   const trend = analytics.trend;

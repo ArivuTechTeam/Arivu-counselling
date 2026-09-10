@@ -3,6 +3,7 @@
 import * as React from "react";
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
+import useSWR from "swr";
 
 import { Skeleton, SkeletonStats } from "@/components/ui/skeleton";
 import { ErrorCard } from "@/components/ui/error-card";
@@ -109,25 +110,20 @@ function MetricTile({
 }
 
 export function TeacherStats() {
-  const [docs, setDocs] = useState<number | null>(null);
-  const [sets, setSets] = useState<number | null>(null);
-  const [published, setPublished] = useState<number | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  function load() {
-    setError(null);
-    Promise.all([listDocuments(), listQuizSets()])
-      .then(([documents, s]) => {
-        setDocs(documents.length);
-        setSets(s.length);
-        setPublished(s.filter((x) => x.status === "published").length);
-      })
-      .catch((e) => setError(e.message));
-  }
-
-  useEffect(() => {
-    load();
-  }, []);
+  const { data, error, mutate } = useSWR("dashboard:teacher:stats", async () => {
+    const [documents, quizSets] = await Promise.all([
+      listDocuments(),
+      listQuizSets(),
+    ]);
+    return {
+      docs: documents.length,
+      sets: quizSets.length,
+      published: quizSets.filter((quiz) => quiz.status === "published").length,
+    };
+  });
+  const docs = data?.docs ?? null;
+  const sets = data?.sets ?? null;
+  const published = data?.published ?? null;
 
   const ready = docs !== null && sets !== null;
   const drafts = Math.max(0, (sets ?? 0) - (published ?? 0));
@@ -138,7 +134,8 @@ export function TeacherStats() {
   const pubA = useCountUp(published ?? 0, ready);
   const draftsA = useCountUp(drafts, ready);
 
-  if (error) return <ErrorCard message={error} onRetry={load} />;
+  if (error)
+    return <ErrorCard message={error.message} onRetry={() => void mutate()} />;
   if (!ready) {
     return (
       <div className="flex flex-col gap-6">
