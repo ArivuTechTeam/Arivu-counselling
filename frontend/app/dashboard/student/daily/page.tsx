@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useRouter } from "next/navigation";
 
 import {
@@ -12,7 +12,8 @@ import {
 } from "@/components/ui/card";
 import { PageHeader } from "@/components/ui/page-header";
 import { ErrorCard } from "@/components/ui/error-card";
-import { DailyInfo, getDaily, startDaily } from "@/lib/api";
+import { startDaily } from "@/lib/api";
+import { useStudentDaily } from "@/lib/student-queries";
 
 // Fixed calendar week, always Sunday → Saturday.
 const WEEKDAYS = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"];
@@ -34,40 +35,33 @@ function dayNum(iso: string): number {
 
 export default function DailyPage() {
   const router = useRouter();
-  const [info, setInfo] = useState<DailyInfo | null>(null);
+  const { data: info, error: loadError, mutate } = useStudentDaily();
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  function load() {
-    setError(null);
-    setInfo(null);
-    getDaily()
-      .then(setInfo)
-      .catch((e) => setError(e.message));
-  }
-
-  useEffect(load, []);
+  const [actionError, setActionError] = useState<string | null>(null);
 
   async function start() {
     setBusy(true);
-    setError(null);
+    setActionError(null);
     try {
       const { session_id } = await startDaily();
+      await mutate(undefined, { revalidate: false });
       router.push(`/dashboard/student/practice/${session_id}`);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not start today's challenge.");
+      setActionError(
+        e instanceof Error ? e.message : "Could not start today's challenge.",
+      );
       setBusy(false);
     }
   }
 
-  if (error)
+  if (loadError)
     return (
       <div className="flex flex-col gap-6">
         <PageHeader
           title="Daily Challenge"
           description="A fresh 10-question quiz every day — keep your streak alive. 🔥"
         />
-        <ErrorCard message={error} onRetry={load} />
+        <ErrorCard message={loadError.message} onRetry={() => void mutate()} />
       </div>
     );
   if (!info) return <p className="text-sm text-muted-foreground">Loading…</p>;
@@ -107,6 +101,12 @@ export default function DailyPage() {
         title="Daily Challenge"
         description="A fresh 10-question quiz every day — keep your streak alive. 🔥"
       />
+
+      {actionError && (
+        <p className="rounded-lg border border-destructive/20 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+          {actionError}
+        </p>
+      )}
 
       {/* Streak hero */}
       <div className="animate-rise relative overflow-hidden rounded-2xl bg-gradient-to-br from-[#1a6942] via-[#15603d] to-[#0f4e33] p-6 text-white shadow-lg sm:p-8">

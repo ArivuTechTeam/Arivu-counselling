@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 
@@ -14,8 +14,9 @@ import {
 import { PageHeader } from "@/components/ui/page-header";
 import { ErrorCard } from "@/components/ui/error-card";
 import { Skeleton, SkeletonList } from "@/components/ui/skeleton";
-import { ChallengeInfo, acceptChallenge, getChallenge } from "@/lib/api";
+import { acceptChallenge } from "@/lib/api";
 import { downloadCardImage } from "@/lib/share-card";
+import { useStudentChallenge } from "@/lib/student-queries";
 
 const MEDAL = ["#e8b923", "#9aa4ad", "#c17d4a"]; // gold / silver / bronze
 
@@ -26,33 +27,25 @@ export default function ChallengeHubPage({
 }) {
   const token = params.token;
   const router = useRouter();
-  const [info, setInfo] = useState<ChallengeInfo | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const { data: info, error: loadError, mutate } = useStudentChallenge(token);
+  const [actionError, setActionError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const cardRef = useRef<HTMLDivElement>(null);
 
-  function load() {
-    setError(null);
-    setInfo(null);
-    getChallenge(token)
-      .then(setInfo)
-      .catch((e) => setError(e.message));
-  }
-  useEffect(load, [token]);
-
   async function accept() {
     setBusy(true);
-    setError(null);
+    setActionError(null);
     try {
       const { session_id } = await acceptChallenge(token);
+      await mutate(undefined, { revalidate: false });
       router.push(`/dashboard/student/practice/${session_id}`);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not start the challenge.");
+      setActionError(e instanceof Error ? e.message : "Could not start the challenge.");
       setBusy(false);
     }
   }
 
-  if (error) {
+  if (loadError) {
     return (
       <div className="flex flex-col gap-4">
         <PageHeader
@@ -61,8 +54,8 @@ export default function ChallengeHubPage({
         />
         <ErrorCard
           title="Challenge unavailable"
-          message={error}
-          onRetry={load}
+          message={loadError.message}
+          onRetry={() => void mutate()}
         />
         <Link
           href="/dashboard/student/challenge"
@@ -105,6 +98,12 @@ export default function ChallengeHubPage({
         title="Challenge"
         description={`${info.questions} questions · created by ${info.creator_name}`}
       />
+
+      {actionError && (
+        <p className="rounded-lg border border-destructive/20 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+          {actionError}
+        </p>
+      )}
 
       {/* Not done yet → invite to play / continue */}
       {info.my_status !== "done" && (

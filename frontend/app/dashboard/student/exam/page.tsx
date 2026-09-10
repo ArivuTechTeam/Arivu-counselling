@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useRouter } from "next/navigation";
 
 import {
@@ -13,7 +13,8 @@ import {
 import { PageHeader } from "@/components/ui/page-header";
 import { ErrorCard } from "@/components/ui/error-card";
 import { Skeleton } from "@/components/ui/skeleton";
-import { ExamConfig, getExamConfig, startExam } from "@/lib/api";
+import { startExam } from "@/lib/api";
+import { useStudentExamConfig } from "@/lib/student-queries";
 
 function Stat({ value, label }: { value: string; label: string }) {
   return (
@@ -28,20 +29,9 @@ function Stat({ value, label }: { value: string; label: string }) {
 
 export default function ExamPage() {
   const router = useRouter();
-  const [cfg, setCfg] = useState<ExamConfig | null>(null);
+  const { data: cfg, error: loadError, mutate } = useStudentExamConfig();
   const [busy, setBusy] = useState(false);
-  const [loadError, setLoadError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
-
-  function load() {
-    setLoadError(null);
-    setCfg(null);
-    getExamConfig()
-      .then(setCfg)
-      .catch((e) => setLoadError(e.message));
-  }
-
-  useEffect(load, []);
 
   async function begin() {
     setBusy(true);
@@ -62,7 +52,7 @@ export default function ExamPage() {
           title="Exam Simulator"
           description="A full, timed exam under real conditions — the closest thing to the real day."
         />
-        <ErrorCard message={loadError} onRetry={load} />
+        <ErrorCard message={loadError.message} onRetry={() => void mutate()} />
       </div>
     );
   }

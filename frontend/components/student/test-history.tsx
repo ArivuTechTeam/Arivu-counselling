@@ -8,28 +8,16 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { ErrorCard } from "@/components/ui/error-card";
 import { SkeletonList } from "@/components/ui/skeleton";
 import { Inbox } from "@/components/ui/icons";
-import { AttemptHistoryItem, listStudentAttempts } from "@/lib/api";
 import { variantLabel } from "@/lib/format";
+import { useStudentAttempts } from "@/lib/student-queries";
 
 function hexFor(pct: number) {
   return pct >= 70 ? "#00a651" : pct >= 40 ? "#f5a623" : "#ff6b7a";
 }
 
 export function TestHistory() {
-  const [items, setItems] = useState<AttemptHistoryItem[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const { data: items, error, mutate } = useStudentAttempts();
   const [mounted, setMounted] = useState(false);
-
-  function load() {
-    setError(null);
-    listStudentAttempts()
-      .then(setItems)
-      .catch((e) => setError(e.message));
-  }
-
-  useEffect(() => {
-    load();
-  }, []);
 
   // Let the bars/rings animate from 0 once the list is in.
   useEffect(() => {
@@ -47,8 +35,8 @@ export function TestHistory() {
       />
 
       {error ? (
-        <ErrorCard message={error} onRetry={load} />
-      ) : items === null ? (
+        <ErrorCard message={error.message} onRetry={() => void mutate()} />
+      ) : items === undefined ? (
         <SkeletonList />
       ) : items.length === 0 ? (
         <EmptyState

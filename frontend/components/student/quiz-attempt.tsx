@@ -28,8 +28,15 @@ import {
   submitPracticeSession,
 } from "@/lib/api";
 import {
-  STUDENT_DASHBOARD_KEY,
+  STUDENT_ATTEMPTS_KEY,
+  STUDENT_BOOKMARKS_KEY,
+  STUDENT_CHALLENGE_KEY_PREFIX,
+  STUDENT_DAILY_KEY,
+  STUDENT_LEADERBOARD_KEY_PREFIX,
   STUDENT_QUIZZES_KEY,
+  STUDENT_REVISION_TOPICS_KEY,
+  STUDENT_STATS_KEY,
+  STUDENT_WEAK_ANALYSIS_KEY,
 } from "@/lib/student-queries";
 
 function isAnswered(v: unknown): boolean {
@@ -170,11 +177,24 @@ export function QuizAttempt({
         source === "practice" ? submitPracticeSession : submitAttempt;
       const result = await submit(attemptId, payload);
       setState(result);
-      // The result changes attended state, history, score and weak-area totals.
-      // Clear cached summaries so the next dashboard/catalog mount reloads them.
+      // Grading changes every student summary derived from attempt results.
+      // Evict them without issuing requests while the results page is visible;
+      // their next mount will reload fresh data once.
       await Promise.all([
         mutateCache(STUDENT_QUIZZES_KEY, undefined, { revalidate: false }),
-        mutateCache(STUDENT_DASHBOARD_KEY, undefined, { revalidate: false }),
+        mutateCache(STUDENT_STATS_KEY, undefined, { revalidate: false }),
+        mutateCache(STUDENT_ATTEMPTS_KEY, undefined, { revalidate: false }),
+        mutateCache(STUDENT_WEAK_ANALYSIS_KEY, undefined, { revalidate: false }),
+        mutateCache(STUDENT_REVISION_TOPICS_KEY, undefined, { revalidate: false }),
+        mutateCache(STUDENT_DAILY_KEY, undefined, { revalidate: false }),
+        mutateCache(
+          (key) =>
+            typeof key === "string" &&
+            (key.startsWith(STUDENT_LEADERBOARD_KEY_PREFIX) ||
+              key.startsWith(STUDENT_CHALLENGE_KEY_PREFIX)),
+          undefined,
+          { revalidate: false },
+        ),
       ]);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Submit failed");
@@ -586,6 +606,7 @@ function Results({ result }: { result: AttemptResult }) {
 
 /** "Save to revision" toggle — adds the question to the student's bookmark list. */
 function BookmarkButton({ questionId }: { questionId: string }) {
+  const { mutate: mutateCache } = useSWRConfig();
   const [saved, setSaved] = useState(false);
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState(false);
@@ -596,6 +617,7 @@ function BookmarkButton({ questionId }: { questionId: string }) {
     try {
       await addBookmark(questionId);
       setSaved(true);
+      await mutateCache(STUDENT_BOOKMARKS_KEY, undefined, { revalidate: false });
     } catch {
       setFailed(true);
     } finally {

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 
 import {
   Card,
@@ -15,14 +15,11 @@ import { ErrorCard } from "@/components/ui/error-card";
 import { SkeletonList } from "@/components/ui/skeleton";
 import { Inbox, Trophy } from "@/components/ui/icons";
 import { formatAnswerValue } from "@/lib/format";
+import { markTopicRevised, removeBookmark } from "@/lib/api";
 import {
-  BookmarkedQuestion,
-  RevisionTopic,
-  getRevisionTopics,
-  listBookmarks,
-  markTopicRevised,
-  removeBookmark,
-} from "@/lib/api";
+  useStudentBookmarks,
+  useStudentRevisionTopics,
+} from "@/lib/student-queries";
 
 type Tab = "questions" | "topics";
 
@@ -73,43 +70,42 @@ function TabButton({
 
 export default function RevisionPage() {
   const [tab, setTab] = useState<Tab>("questions");
-  const [items, setItems] = useState<BookmarkedQuestion[] | null>(null);
-  const [topics, setTopics] = useState<RevisionTopic[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const bookmarksQuery = useStudentBookmarks();
+  const topicsQuery = useStudentRevisionTopics();
+  const items = bookmarksQuery.data;
+  const topics = topicsQuery.data;
+  const error = bookmarksQuery.error ?? topicsQuery.error;
   const [actionError, setActionError] = useState<string | null>(null);
 
   function load() {
-    setError(null);
-    setItems(null);
-    setTopics(null);
-    listBookmarks()
-      .then(setItems)
-      .catch((e) => setError(e.message));
-    getRevisionTopics()
-      .then(setTopics)
-      .catch((e) => setError(e.message));
+    void Promise.all([bookmarksQuery.mutate(), topicsQuery.mutate()]);
   }
-  useEffect(load, []);
 
   async function remove(id: string) {
     setActionError(null);
-    setItems((prev) => (prev ? prev.filter((q) => q.id !== id) : prev));
+    await bookmarksQuery.mutate(
+      (prev) => prev?.filter((q) => q.id !== id),
+      { revalidate: false },
+    );
     try {
       await removeBookmark(id);
     } catch {
       setActionError("Couldn't remove that question — please try again.");
-      load();
+      await bookmarksQuery.mutate();
     }
   }
 
   async function markRevised(key: string) {
     setActionError(null);
-    setTopics((prev) => (prev ? prev.filter((t) => t.key !== key) : prev));
+    await topicsQuery.mutate(
+      (prev) => prev?.filter((t) => t.key !== key),
+      { revalidate: false },
+    );
     try {
       await markTopicRevised(key);
     } catch {
       setActionError("Couldn't mark that topic revised — please try again.");
-      load();
+      await topicsQuery.mutate();
     }
   }
 
@@ -120,7 +116,7 @@ export default function RevisionPage() {
           title="Revision"
           description="Master your weak topics and revisit the questions you saved — clear each one as you go."
         />
-        <ErrorCard message={error} onRetry={load} />
+        <ErrorCard message={error.message} onRetry={load} />
       </div>
     );
   }
@@ -158,7 +154,7 @@ export default function RevisionPage() {
 
       {/* --- Questions tab --- */}
       {tab === "questions" &&
-        (items === null ? (
+        (items === undefined ? (
           <SkeletonList rows={4} />
         ) : items.length === 0 ? (
           <EmptyState
@@ -213,7 +209,7 @@ export default function RevisionPage() {
 
       {/* --- Topics tab --- */}
       {tab === "topics" &&
-        (topics === null ? (
+        (topics === undefined ? (
           <SkeletonList rows={4} />
         ) : topics.length === 0 ? (
           <EmptyState
