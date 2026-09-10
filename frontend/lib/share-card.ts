@@ -1,5 +1,3 @@
-import { toPng } from "html-to-image";
-
 /**
  * Render a DOM node to a high-res PNG and trigger a download.
  * Fails quietly — if capture ever hiccups (rare font/CORS case), the on-screen
@@ -10,6 +8,7 @@ export async function downloadCardImage(
   filename: string,
 ): Promise<void> {
   try {
+    const { toPng } = await import("html-to-image");
     const dataUrl = await toPng(node, {
       pixelRatio: 2, // crisp on retina / when zoomed
       cacheBust: true,
