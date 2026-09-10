@@ -233,9 +233,10 @@ export function QuizAttempt({
   submitRef.current = handleSubmit; // keep the timer's submit reference fresh
 
   const atLast = current === questions.length - 1;
+  const paletteLayout = getPaletteLayout(questions.length);
 
   return (
-    <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(20rem,22rem)] lg:items-start">
+    <div className={`grid gap-4 lg:items-start ${paletteLayout.pageColumns}`}>
       {/* Question panel — one at a time */}
       <div className="flex min-w-0 flex-1 flex-col gap-4">
         <div className="flex items-center justify-between gap-3 text-sm">
@@ -324,7 +325,9 @@ export function QuizAttempt({
               {current + 1} / {questions.length}
             </span>
           </div>
-          <div className="grid grid-cols-8 gap-1.5 sm:grid-cols-10 lg:grid-cols-10">
+          <div
+            className={`grid grid-cols-8 gap-1.5 sm:grid-cols-10 ${paletteLayout.paletteColumns}`}
+          >
             {questions.map((qq, i) => {
               const ans = isAnswered(answers[qq.id]);
               const mk = marked[qq.id];
@@ -417,6 +420,36 @@ function Legend({ cls, label }: { cls: string; label: string }) {
       {label}
     </div>
   );
+}
+
+/**
+ * Keep small quizzes visually compact while reserving enough palette space for
+ * large exams. Static class strings are intentional so Tailwind can discover
+ * every responsive variant during the production build.
+ */
+function getPaletteLayout(questionCount: number) {
+  if (questionCount <= 5) {
+    return {
+      pageColumns: "lg:grid-cols-[minmax(0,1fr)_14rem]",
+      paletteColumns: "lg:grid-cols-5",
+    };
+  }
+  if (questionCount <= 20) {
+    return {
+      pageColumns: "lg:grid-cols-[minmax(0,1fr)_16rem]",
+      paletteColumns: "lg:grid-cols-5",
+    };
+  }
+  if (questionCount <= 50) {
+    return {
+      pageColumns: "lg:grid-cols-[minmax(0,1fr)_20rem]",
+      paletteColumns: "lg:grid-cols-8",
+    };
+  }
+  return {
+    pageColumns: "lg:grid-cols-[minmax(0,1fr)_minmax(20rem,22rem)]",
+    paletteColumns: "lg:grid-cols-10",
+  };
 }
 
 function QuestionInput({
