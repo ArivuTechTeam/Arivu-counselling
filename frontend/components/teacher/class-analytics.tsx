@@ -2,6 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
+import useSWR from "swr";
 
 import {
   Card,
@@ -156,19 +157,10 @@ function ScoreDistributionChart({
 
 export function ClassAnalytics() {
   const router = useRouter();
-  const [data, setData] = useState<TeacherClassOverview | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  function load() {
-    setError(null);
-    getTeacherClassOverview()
-      .then(setData)
-      .catch((e) => setError(e.message));
-  }
-
-  useEffect(() => {
-    load();
-  }, []);
+  const { data = null, error, mutate } = useSWR<TeacherClassOverview>(
+    "dashboard:teacher:class-overview",
+    getTeacherClassOverview,
+  );
 
   const loaded = data !== null;
   const quizzes = data?.accuracy_by_quiz ?? [];
@@ -189,7 +181,8 @@ export function ClassAnalytics() {
   const accA = useCountUp(classAccuracy, loaded);
   const hasData = attempts > 0;
 
-  if (error) return <ErrorCard message={error} onRetry={load} />;
+  if (error)
+    return <ErrorCard message={error.message} onRetry={() => void mutate()} />;
   if (!loaded) {
     return (
       <div className="flex flex-col gap-6">
