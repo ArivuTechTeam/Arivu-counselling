@@ -28,11 +28,12 @@ def _require_student(profile: CurrentProfile) -> None:
         )
 
 
-def _display_name(service, user_id: str) -> str:
+def _display_name(service, user_id: str, tenant_id: str) -> str:
     row = (
         service.table("profiles")
         .select("full_name")
         .eq("id", user_id)
+        .eq("tenant_id", tenant_id)
         .maybe_single()
         .execute()
     )
@@ -45,6 +46,7 @@ def _load_challenge(service, token: str, profile: CurrentProfile) -> dict:
         service.table("challenges")
         .select("*")
         .eq("share_token", token)
+        .eq("tenant_id", profile.tenant_id)
         .maybe_single()
         .execute()
     )
@@ -81,7 +83,9 @@ def create_challenge(
             {
                 "tenant_id": profile.tenant_id,
                 "creator_id": profile.user_id,
-                "creator_name": _display_name(service, profile.user_id),
+                "creator_name": _display_name(
+                    service, profile.user_id, profile.tenant_id
+                ),
                 "question_ids": ids,
                 "share_token": token,
             }
@@ -134,6 +138,7 @@ def get_challenge(
             service.table("profiles")
             .select("id, full_name")
             .in_("id", sids)
+            .eq("tenant_id", profile.tenant_id)
             .execute()
             .data
             or []

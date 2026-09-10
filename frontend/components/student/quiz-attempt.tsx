@@ -118,6 +118,11 @@ export function QuizAttempt({
   }
 
   const questions = (state as { questions: TakingQuestion[] }).questions;
+  if (questions.length === 0) {
+    return (
+      <ErrorCard message="This quiz has no available questions. Please return to the dashboard and choose another quiz." />
+    );
+  }
   const q = questions[current];
   const answeredCount = questions.filter((x) => isAnswered(answers[x.id])).length;
 

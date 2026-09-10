@@ -34,11 +34,15 @@ export default function SmartQuizPage() {
   const [starting, setStarting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
+  function loadSubjects() {
+    setError(null);
+    setQuizzes(null);
     listStudentQuizzes()
       .then(setQuizzes)
       .catch((e) => setError(e.message));
-  }, []);
+  }
+
+  useEffect(loadSubjects, []);
 
   // Unique subjects the student has content in.
   const subjects = useMemo(() => {
@@ -133,7 +137,13 @@ export default function SmartQuizPage() {
             </label>
           </div>
 
-          {error && <ErrorCard message={error} className="text-left" />}
+          {error && (
+            <ErrorCard
+              message={error}
+              onRetry={quizzes === null ? loadSubjects : undefined}
+              className="text-left"
+            />
+          )}
 
           <div>
             <button

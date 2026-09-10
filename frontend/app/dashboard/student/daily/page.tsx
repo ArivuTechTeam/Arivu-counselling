@@ -11,6 +11,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { PageHeader } from "@/components/ui/page-header";
+import { ErrorCard } from "@/components/ui/error-card";
 import { DailyInfo, getDaily, startDaily } from "@/lib/api";
 
 // Fixed calendar week, always Sunday → Saturday.
@@ -37,11 +38,15 @@ export default function DailyPage() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
+  function load() {
+    setError(null);
+    setInfo(null);
     getDaily()
       .then(setInfo)
       .catch((e) => setError(e.message));
-  }, []);
+  }
+
+  useEffect(load, []);
 
   async function start() {
     setBusy(true);
@@ -55,7 +60,16 @@ export default function DailyPage() {
     }
   }
 
-  if (error) return <p className="text-red-600">{error}</p>;
+  if (error)
+    return (
+      <div className="flex flex-col gap-6">
+        <PageHeader
+          title="Daily Challenge"
+          description="A fresh 10-question quiz every day — keep your streak alive. 🔥"
+        />
+        <ErrorCard message={error} onRetry={load} />
+      </div>
+    );
   if (!info) return <p className="text-sm text-muted-foreground">Loading…</p>;
 
   // The server's last7 ends on "today" — anchor the calendar week on it so the

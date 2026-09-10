@@ -35,12 +35,15 @@ def _require_student(profile: CurrentProfile) -> None:
         )
 
 
-def _ordered_approved_questions(service, variant_id: str) -> list[dict]:
+def _ordered_approved_questions(
+    service, variant_id: str, tenant_id: str
+) -> list[dict]:
     """The variant's APPROVED questions, in the teacher's chosen order."""
     links = (
         service.table("quiz_variant_questions")
         .select("question_id, order_index")
         .eq("variant_id", variant_id)
+        .eq("tenant_id", tenant_id)
         .order("order_index")
         .execute()
         .data
@@ -53,6 +56,7 @@ def _ordered_approved_questions(service, variant_id: str) -> list[dict]:
         service.table("questions")
         .select("*")
         .in_("id", ids)
+        .eq("tenant_id", tenant_id)
         .eq("review_status", "approved")
         .execute()
         .data
@@ -71,6 +75,32 @@ def _strip_answer(q: dict) -> dict:
         "options": q.get("options"),
         "marks": q.get("marks"),
     }
+
+
+def _quiz_title_for_variant(
+    service, variant_id: str, tenant_id: str
+) -> str:
+    variant = (
+        service.table("quiz_variants")
+        .select("quiz_set_id")
+        .eq("id", variant_id)
+        .eq("tenant_id", tenant_id)
+        .maybe_single()
+        .execute()
+    )
+    if variant is None or not variant.data:
+        return "Quiz"
+    quiz_set = (
+        service.table("quiz_sets")
+        .select("title")
+        .eq("id", variant.data["quiz_set_id"])
+        .eq("tenant_id", tenant_id)
+        .maybe_single()
+        .execute()
+    )
+    if quiz_set and quiz_set.data and quiz_set.data.get("title"):
+        return quiz_set.data["title"]
+    return "Quiz"
 
 
 @router.get("/quizzes")
@@ -154,13 +184,16 @@ def list_quizzes(profile: CurrentProfile = Depends(get_current_profile)) -> list
             service.table("quiz_variants")
             .select("id, variant_type, total_marks, time_limit_minutes")
             .eq("quiz_set_id", s["id"])
+            .eq("tenant_id", profile.tenant_id)
             .execute()
             .data
             or []
         )
         takeable = []
         for v in variants:
-            count = len(_ordered_approved_questions(service, v["id"]))
+            count = len(
+                _ordered_approved_questions(service, v["id"], profile.tenant_id)
+            )
             if count > 0:  # only offer variants that actually have questions
                 takeable.append({**v, "question_count": count})
                 all_variant_ids.append(v["id"])
@@ -256,6 +289,12 @@ def start_attempt(
             detail="This quiz is not assigned to your course.",
         )
 
+    if not _ordered_approved_questions(service, body.variant_id, profile.tenant_id):
+        raise HTTPException(
+            status_code=400,
+            detail="This quiz does not have any approved questions yet.",
+        )
+
     attempt = (
         service.table("quiz_attempts")
         .insert(
@@ -294,7 +333,9 @@ def get_attempt(
     _require_student(profile)
     service = get_service_client()
     attempt = _load_attempt(service, attempt_id, profile)
-    questions = _ordered_approved_questions(service, attempt["variant_id"])
+    questions = _ordered_approved_questions(
+        service, attempt["variant_id"], profile.tenant_id
+    )
 
     if attempt["status"] == "in_progress":
         return {
@@ -309,6 +350,7 @@ def get_attempt(
         service.table("attempt_answers")
         .select("*")
         .eq("attempt_id", attempt_id)
+        .eq("tenant_id", profile.tenant_id)
         .execute()
         .data
         or []
@@ -333,24 +375,9 @@ def get_attempt(
         )
     max_score = sum(float(q.get("marks") or 1) for q in questions)
     # Quiz title (for the downloadable report card / question paper header).
-    quiz_title = "Quiz"
-    vrow = (
-        service.table("quiz_variants")
-        .select("quiz_set_id")
-        .eq("id", attempt["variant_id"])
-        .maybe_single()
-        .execute()
+    quiz_title = _quiz_title_for_variant(
+        service, attempt["variant_id"], profile.tenant_id
     )
-    if vrow and vrow.data:
-        srow = (
-            service.table("quiz_sets")
-            .select("title")
-            .eq("id", vrow.data["quiz_set_id"])
-            .maybe_single()
-            .execute()
-        )
-        if srow and srow.data and srow.data.get("title"):
-            quiz_title = srow.data["title"]
     return {
         "attempt_id": attempt_id,
         "status": attempt["status"],
@@ -386,7 +413,10 @@ def autosave_attempt(
     if attempt["status"] != "in_progress":
         raise HTTPException(status_code=400, detail="This attempt is already submitted.")
     allowed = {
-        q["id"] for q in _ordered_approved_questions(service, attempt["variant_id"])
+        q["id"]
+        for q in _ordered_approved_questions(
+            service, attempt["variant_id"], profile.tenant_id
+        )
     }
     answers = {key: value for key, value in body.answers.items() if key in allowed}
     service.table("quiz_attempts").update({"autosave_state": answers}).eq(
@@ -409,7 +439,9 @@ def submit_attempt(
     if attempt["status"] != "in_progress":
         raise HTTPException(status_code=400, detail="This attempt is already submitted.")
 
-    questions = _ordered_approved_questions(service, attempt["variant_id"])
+    questions = _ordered_approved_questions(
+        service, attempt["variant_id"], profile.tenant_id
+    )
     submitted = {a.question_id: a.student_answer for a in body.answers}
 
     total = 0.0
@@ -471,14 +503,18 @@ def submit_attempt(
     except Exception as exc:  # noqa: BLE001
         # Compensate so a failed answer write never leaves a graded attempt
         # with missing results. The status predicate also makes retries safe.
-        service.table("attempt_answers").delete().eq("attempt_id", attempt_id).execute()
+        service.table("attempt_answers").delete().eq("attempt_id", attempt_id).eq(
+            "tenant_id", profile.tenant_id
+        ).execute()
         service.table("quiz_attempts").update(
             {
                 "status": "in_progress",
                 "total_score": None,
                 "submitted_at": None,
             }
-        ).eq("id", attempt_id).eq("student_id", profile.user_id).execute()
+        ).eq("id", attempt_id).eq("tenant_id", profile.tenant_id).eq(
+            "student_id", profile.user_id
+        ).execute()
         raise public_error(
             500,
             "We couldn't save your answers. Your attempt is still open; please try again.",
@@ -507,10 +543,69 @@ def submit_attempt(
     return {
         "attempt_id": attempt_id,
         "status": "graded",
+        "quiz_title": _quiz_title_for_variant(
+            service, attempt["variant_id"], profile.tenant_id
+        ),
         "total_score": total,
         "max_score": max_score,
         "results": results,
     }
+
+
+def _student_graded_answers(
+    service, tenant_id: str, student_id: str
+) -> tuple[list[dict], int]:
+    """Return every graded answer for one student across both quiz engines.
+
+    Teacher-published quizzes use quiz_attempts/attempt_answers; Smart Quiz,
+    Daily, Exam, Challenge and Revision use practice_sessions/practice_answers.
+    Student analytics must combine both or the dashboard contradicts History.
+    """
+    quiz_attempts = (
+        service.table("quiz_attempts")
+        .select("id")
+        .eq("tenant_id", tenant_id)
+        .eq("student_id", student_id)
+        .eq("status", "graded")
+        .execute()
+        .data
+        or []
+    )
+    practice_sessions = (
+        service.table("practice_sessions")
+        .select("id")
+        .eq("tenant_id", tenant_id)
+        .eq("student_id", student_id)
+        .eq("status", "graded")
+        .execute()
+        .data
+        or []
+    )
+
+    answers: list[dict] = []
+    attempt_ids = [row["id"] for row in quiz_attempts]
+    if attempt_ids:
+        answers.extend(
+            service.table("attempt_answers")
+            .select("question_id, is_correct")
+            .in_("attempt_id", attempt_ids)
+            .eq("tenant_id", tenant_id)
+            .execute()
+            .data
+            or []
+        )
+    session_ids = [row["id"] for row in practice_sessions]
+    if session_ids:
+        answers.extend(
+            service.table("practice_answers")
+            .select("question_id, is_correct")
+            .in_("session_id", session_ids)
+            .eq("tenant_id", tenant_id)
+            .execute()
+            .data
+            or []
+        )
+    return answers, len(quiz_attempts) + len(practice_sessions)
 
 
 @router.get("/student/stats")
@@ -524,28 +619,7 @@ def student_stats(profile: CurrentProfile = Depends(get_current_profile)) -> dic
     service = get_service_client()
     tid, uid = profile.tenant_id, profile.user_id
 
-    attempts = (
-        service.table("quiz_attempts")
-        .select("id, status")
-        .eq("tenant_id", tid)
-        .eq("student_id", uid)
-        .execute()
-        .data
-        or []
-    )
-    graded = [a for a in attempts if a["status"] == "graded"]
-    attempt_ids = [a["id"] for a in graded]
-
-    answers: list[dict] = []
-    if attempt_ids:
-        answers = (
-            service.table("attempt_answers")
-            .select("question_id, is_correct")
-            .in_("attempt_id", attempt_ids)
-            .execute()
-            .data
-            or []
-        )
+    answers, graded_work_count = _student_graded_answers(service, tid, uid)
     total = len(answers)
     correct = sum(1 for a in answers if a.get("is_correct"))
     accuracy = round(correct / total * 100) if total else 0
@@ -558,6 +632,7 @@ def student_stats(profile: CurrentProfile = Depends(get_current_profile)) -> dic
             service.table("questions")
             .select("id, topic_id")
             .in_("id", qids)
+            .eq("tenant_id", tid)
             .execute()
             .data
             or []
@@ -575,6 +650,7 @@ def student_stats(profile: CurrentProfile = Depends(get_current_profile)) -> dic
                 service.table("topics")
                 .select("id, name")
                 .in_("id", list(agg.keys()))
+                .eq("tenant_id", tid)
                 .execute()
                 .data
                 or []
@@ -591,7 +667,7 @@ def student_stats(profile: CurrentProfile = Depends(get_current_profile)) -> dic
             topic_accuracy.sort(key=lambda x: x["accuracy"])
 
     return {
-        "quizzes_taken": len(graded),
+        "quizzes_taken": graded_work_count,
         "questions_solved": total,
         "overall_accuracy": accuracy,
         "weak_areas": topic_accuracy[:3],
@@ -616,28 +692,7 @@ def student_weak_analysis(
         "subjects": [],
     }
 
-    attempts = (
-        service.table("quiz_attempts")
-        .select("id")
-        .eq("tenant_id", tid)
-        .eq("student_id", uid)
-        .eq("status", "graded")
-        .execute()
-        .data
-        or []
-    )
-    attempt_ids = [a["id"] for a in attempts]
-    if not attempt_ids:
-        return empty
-
-    answers = (
-        service.table("attempt_answers")
-        .select("question_id, is_correct")
-        .in_("attempt_id", attempt_ids)
-        .execute()
-        .data
-        or []
-    )
+    answers, _ = _student_graded_answers(service, tid, uid)
     if not answers:
         return empty
 
@@ -646,6 +701,7 @@ def student_weak_analysis(
         service.table("questions")
         .select("id, chapter_id, topic_id")
         .in_("id", qids)
+        .eq("tenant_id", tid)
         .execute()
         .data
         or []
@@ -654,7 +710,7 @@ def student_weak_analysis(
 
     chapter_ids = list({q["chapter_id"] for q in qrows if q.get("chapter_id")})
     chapters = (
-        service.table("chapters").select("id, name, subject_id").in_("id", chapter_ids).execute().data
+        service.table("chapters").select("id, name, subject_id").in_("id", chapter_ids).eq("tenant_id", tid).execute().data
         if chapter_ids
         else []
     ) or []
@@ -664,7 +720,7 @@ def student_weak_analysis(
         {
             s["id"]: s["name"]
             for s in (
-                service.table("subjects").select("id, name").in_("id", subject_ids).execute().data
+                service.table("subjects").select("id, name").in_("id", subject_ids).eq("tenant_id", tid).execute().data
                 or []
             )
         }
@@ -676,7 +732,7 @@ def student_weak_analysis(
         {
             t["id"]: t["name"]
             for t in (
-                service.table("topics").select("id, name").in_("id", topic_ids).execute().data
+                service.table("topics").select("id, name").in_("id", topic_ids).eq("tenant_id", tid).execute().data
                 or []
             )
         }
@@ -770,27 +826,7 @@ def _flat_weak_topics(service, tid: str, uid: str, threshold: int = 60) -> list[
     """
     from collections import defaultdict
 
-    attempts = (
-        service.table("quiz_attempts")
-        .select("id")
-        .eq("tenant_id", tid)
-        .eq("student_id", uid)
-        .eq("status", "graded")
-        .execute()
-        .data
-        or []
-    )
-    attempt_ids = [a["id"] for a in attempts]
-    if not attempt_ids:
-        return []
-    answers = (
-        service.table("attempt_answers")
-        .select("question_id, is_correct")
-        .in_("attempt_id", attempt_ids)
-        .execute()
-        .data
-        or []
-    )
+    answers, _ = _student_graded_answers(service, tid, uid)
     if not answers:
         return []
     qids = list({a["question_id"] for a in answers})
@@ -798,6 +834,7 @@ def _flat_weak_topics(service, tid: str, uid: str, threshold: int = 60) -> list[
         service.table("questions")
         .select("id, chapter_id, topic_id")
         .in_("id", qids)
+        .eq("tenant_id", tid)
         .execute()
         .data
         or []
@@ -805,7 +842,7 @@ def _flat_weak_topics(service, tid: str, uid: str, threshold: int = 60) -> list[
     qmap = {q["id"]: q for q in qrows}
     chapter_ids = list({q["chapter_id"] for q in qrows if q.get("chapter_id")})
     chapters = (
-        service.table("chapters").select("id, name, subject_id").in_("id", chapter_ids).execute().data
+        service.table("chapters").select("id, name, subject_id").in_("id", chapter_ids).eq("tenant_id", tid).execute().data
         if chapter_ids
         else []
     ) or []
@@ -815,7 +852,7 @@ def _flat_weak_topics(service, tid: str, uid: str, threshold: int = 60) -> list[
         {
             s["id"]: s["name"]
             for s in (
-                service.table("subjects").select("id, name").in_("id", subject_ids).execute().data
+                service.table("subjects").select("id, name").in_("id", subject_ids).eq("tenant_id", tid).execute().data
                 or []
             )
         }
@@ -827,7 +864,7 @@ def _flat_weak_topics(service, tid: str, uid: str, threshold: int = 60) -> list[
         {
             t["id"]: t["name"]
             for t in (
-                service.table("topics").select("id, name").in_("id", topic_ids).execute().data
+                service.table("topics").select("id, name").in_("id", topic_ids).eq("tenant_id", tid).execute().data
                 or []
             )
         }

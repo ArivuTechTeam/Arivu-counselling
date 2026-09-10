@@ -25,12 +25,10 @@ import {
 // the student is doing fine, so we hide it — this view is weak areas ONLY.
 const WEAK = 60;
 
-/** Keep only weak areas: drop strong subjects entirely, and within the rest keep
- *  only weak topics (and the chapters that still have any). A subject the student
- *  is doing well on overall never appears here. */
+/** Keep every weak topic, even when stronger topics lift its parent subject's
+ *  aggregate above the threshold. Then remove empty chapters and subjects. */
 function onlyWeak(subjects: WeakSubjectNode[]): WeakSubjectNode[] {
   return subjects
-    .filter((s) => s.accuracy < WEAK) // strong subject → gone
     .map((s) => ({
       ...s,
       chapters: s.chapters

@@ -11,6 +11,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { PageHeader } from "@/components/ui/page-header";
+import { ErrorCard } from "@/components/ui/error-card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ExamConfig, getExamConfig, startExam } from "@/lib/api";
 
@@ -29,24 +30,41 @@ export default function ExamPage() {
   const router = useRouter();
   const [cfg, setCfg] = useState<ExamConfig | null>(null);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
 
-  useEffect(() => {
+  function load() {
+    setLoadError(null);
+    setCfg(null);
     getExamConfig()
       .then(setCfg)
-      .catch((e) => setError(e.message));
-  }, []);
+      .catch((e) => setLoadError(e.message));
+  }
+
+  useEffect(load, []);
 
   async function begin() {
     setBusy(true);
-    setError(null);
+    setActionError(null);
     try {
       const { session_id } = await startExam();
       router.push(`/dashboard/student/practice/${session_id}`);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not start the exam.");
+      setActionError(e instanceof Error ? e.message : "Could not start the exam.");
       setBusy(false);
     }
+  }
+
+  if (loadError) {
+    return (
+      <div className="mx-auto flex max-w-3xl flex-col gap-6">
+        <PageHeader
+          title="Exam Simulator"
+          description="A full, timed exam under real conditions — the closest thing to the real day."
+        />
+        <ErrorCard message={loadError} onRetry={load} />
+      </div>
+    );
   }
 
   return (
@@ -108,9 +126,9 @@ export default function ExamPage() {
             </div>
           )}
 
-          {error && (
+          {actionError && (
             <p className="rounded-lg border border-destructive/20 bg-destructive/5 px-3 py-2 text-sm text-destructive">
-              {error}
+              {actionError}
             </p>
           )}
 
