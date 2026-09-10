@@ -175,8 +175,10 @@ class MutableService:
     def __init__(self, tables: dict[str, list[dict]]) -> None:
         self.tables = tables
         self.next_id = 1
+        self.calls: list[str] = []
 
     def table(self, name: str) -> MutableQuery:
+        self.calls.append(name)
         return MutableQuery(self, name)
 
 
@@ -358,8 +360,15 @@ class QuizAttemptFlowTests(unittest.TestCase):
         ):
             started = start_attempt(StartAttemptRequest(variant_id="v1"), profile())
             attempt_id = started["attempt_id"]
+            self.assertEqual(started["status"], "in_progress")
+            self.assertEqual(len(started["questions"]), 2)
+            self.assertNotIn("correct_answer", started["questions"][0])
+            # Starting now returns the already-loaded taking state in seven DB
+            # round trips. The former immediate page GET added three more.
+            self.assertEqual(len(service.calls), 7)
 
             taking = get_attempt(attempt_id, profile())
+            self.assertEqual(len(service.calls), 10)
             self.assertEqual(taking["status"], "in_progress")
             self.assertNotIn("correct_answer", taking["questions"][0])
 

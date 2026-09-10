@@ -322,7 +322,10 @@ def start_attempt(
             detail="This quiz is not assigned to your course.",
         )
 
-    if not _ordered_approved_questions(service, body.variant_id, profile.tenant_id):
+    questions = _ordered_approved_questions(
+        service, body.variant_id, profile.tenant_id
+    )
+    if not questions:
         raise HTTPException(
             status_code=400,
             detail="This quiz does not have any approved questions yet.",
@@ -340,7 +343,16 @@ def start_attempt(
         )
         .execute()
     )
-    return {"attempt_id": attempt.data[0]["id"]}
+    attempt_id = attempt.data[0]["id"]
+    # These questions were already loaded to validate the quiz. Return the
+    # answer-stripped taking state so the client can render immediately instead
+    # of repeating the attempt + link + question queries after navigation.
+    return {
+        "attempt_id": attempt_id,
+        "status": "in_progress",
+        "questions": [_strip_answer(question) for question in questions],
+        "autosave_state": {},
+    }
 
 
 def _load_attempt(service, attempt_id: str, profile: CurrentProfile) -> dict:

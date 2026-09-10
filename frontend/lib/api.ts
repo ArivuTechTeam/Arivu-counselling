@@ -471,6 +471,22 @@ export type AttemptResult = {
 
 export type AttemptState = AttemptInProgress | AttemptResult;
 
+// A newly-created attempt already carries its safe, answer-stripped question
+// payload. Keep it for exactly one route transition so the taking screen does
+// not immediately repeat the same backend reads. Later visits still fetch the
+// server state and therefore restore the latest autosave.
+const primedAttemptStates = new Map<string, AttemptState>();
+
+function primeAttemptState(state: AttemptState): void {
+  primedAttemptStates.set(state.attempt_id, state);
+}
+
+export function consumePrimedAttemptState(attemptId: string): AttemptState | null {
+  const state = primedAttemptStates.get(attemptId) ?? null;
+  primedAttemptStates.delete(attemptId);
+  return state;
+}
+
 export const listStudentQuizzes = () =>
   jsonRequest<StudentQuiz[]>("/api/v1/quizzes", "GET");
 
@@ -547,10 +563,13 @@ export type AttemptHistoryItem = {
 export const listStudentAttempts = () =>
   jsonRequest<AttemptHistoryItem[]>("/api/v1/student/attempts", "GET");
 
-export const startAttempt = (variantId: string) =>
-  jsonRequest<{ attempt_id: string }>("/api/v1/attempts", "POST", {
+export const startAttempt = async (variantId: string) => {
+  const state = await jsonRequest<AttemptInProgress>("/api/v1/attempts", "POST", {
     variant_id: variantId,
   });
+  primeAttemptState(state);
+  return state;
+};
 
 export const getAttempt = (attemptId: string) =>
   jsonRequest<AttemptState>(`/api/v1/attempts/${attemptId}`, "GET");
@@ -579,8 +598,16 @@ export type StartPracticeInput = {
   count?: number;
   difficulty?: string | null;
 };
-export const startPracticeSession = (input: StartPracticeInput) =>
-  jsonRequest<{ session_id: string }>("/api/v1/practice/sessions", "POST", input);
+export type StartedPracticeSession = AttemptInProgress & { session_id: string };
+export const startPracticeSession = async (input: StartPracticeInput) => {
+  const state = await jsonRequest<StartedPracticeSession>(
+    "/api/v1/practice/sessions",
+    "POST",
+    input,
+  );
+  primeAttemptState(state);
+  return state;
+};
 export const getPracticeSession = (id: string) =>
   jsonRequest<AttemptState>(`/api/v1/practice/sessions/${id}`, "GET");
 export const submitPracticeSession = (

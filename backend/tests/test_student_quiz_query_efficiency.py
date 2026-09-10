@@ -4,6 +4,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from app.api.practice import _load_questions
 from app.api.student import _ordered_approved_questions, list_quizzes
 from app.lib.auth import CurrentProfile
 
@@ -149,6 +150,24 @@ class StudentQuizQueryEfficiencyTests(unittest.TestCase):
     def test_attempt_question_load_does_not_select_embedding(self) -> None:
         questions = _ordered_approved_questions(
             self.service, "variant-0-0", "tenant-1"
+        )
+
+        self.assertEqual(len(questions), 2)
+        question_selects = [
+            columns for table, columns in self.service.calls if table == "questions"
+        ]
+        self.assertEqual(
+            question_selects,
+            [
+                "id, type, question_text, options, correct_answer, explanation, marks"
+            ],
+        )
+
+    def test_practice_question_load_does_not_select_embedding(self) -> None:
+        questions = _load_questions(
+            self.service,
+            ["question-0", "question-1"],
+            "tenant-1",
         )
 
         self.assertEqual(len(questions), 2)

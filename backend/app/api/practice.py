@@ -55,6 +55,9 @@ def _exam_deadline_passed(session: dict, now: datetime | None = None) -> bool:
 # Sensible default exam pattern; a per-institution value in tenants.exam_config
 # overrides any of these keys.
 DEFAULT_EXAM = {"questions": 50, "duration_minutes": 60, "negative_marking": 0.25}
+PRACTICE_QUESTION_COLUMNS = (
+    "id, type, question_text, options, correct_answer, explanation, marks"
+)
 
 
 def _exam_config(service, tenant_id: str) -> dict:
@@ -96,7 +99,7 @@ def _load_questions(service, ids: list[str], tenant_id: str) -> list[dict]:
         return []
     rows = (
         service.table("questions")
-        .select("*")
+        .select(PRACTICE_QUESTION_COLUMNS)
         .in_("id", ids)
         .eq("tenant_id", tenant_id)
         .execute()
@@ -187,7 +190,16 @@ def start_practice(
         .execute()
         .data[0]
     )
-    return {"session_id": row["id"]}
+    # Prime the first render with the questions selected above. This replaces
+    # the immediate GET that otherwise reloads the new session and its questions.
+    questions = _load_questions(service, ids, profile.tenant_id)
+    return {
+        "session_id": row["id"],
+        "attempt_id": row["id"],
+        "status": "in_progress",
+        "questions": [_strip(question) for question in questions],
+        "autosave_state": {},
+    }
 
 
 @router.get("/practice/sessions/{session_id}")

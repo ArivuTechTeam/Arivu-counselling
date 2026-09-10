@@ -20,6 +20,7 @@ import {
   AttemptState,
   TakingQuestion,
   addBookmark,
+  consumePrimedAttemptState,
   getAttempt,
   getPracticeSession,
   saveAttemptProgress,
@@ -65,31 +66,54 @@ export function QuizAttempt({
   const [error, setError] = useState<string | null>(null);
   const [autosaveError, setAutosaveError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const loadedAttemptKey = useRef<string | null>(null);
+  const answerRevision = useRef(0);
+  const savedAnswerRevision = useRef(0);
 
   function load() {
     setError(null);
+    const primed = consumePrimedAttemptState(attemptId);
+    if (primed) {
+      setState(primed);
+      if (primed.status === "in_progress") {
+        setAnswers((primed as AttemptInProgress).autosave_state ?? {});
+        answerRevision.current = 0;
+        savedAnswerRevision.current = 0;
+      }
+      return;
+    }
     const fetcher = source === "practice" ? getPracticeSession : getAttempt;
     fetcher(attemptId)
       .then((next) => {
         setState(next);
         if (next.status === "in_progress") {
           setAnswers((next as AttemptInProgress).autosave_state ?? {});
+          answerRevision.current = 0;
+          savedAnswerRevision.current = 0;
         }
       })
       .catch((e) => setError(e.message));
   }
 
   useEffect(() => {
+    const key = `${source}:${attemptId}`;
+    if (loadedAttemptKey.current === key) return;
+    loadedAttemptKey.current = key;
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [attemptId, source]);
 
   useEffect(() => {
     if (!state || state.status !== "in_progress") return;
+    if (answerRevision.current === savedAnswerRevision.current) return;
+    const revisionToSave = answerRevision.current;
     const timer = window.setTimeout(() => {
       const saver = source === "practice" ? savePracticeProgress : saveAttemptProgress;
       saver(attemptId, answers)
-        .then(() => setAutosaveError(null))
+        .then(() => {
+          savedAnswerRevision.current = revisionToSave;
+          setAutosaveError(null);
+        })
         .catch(() =>
           setAutosaveError(
             "Progress could not be saved. Keep this page open and check your connection.",
@@ -140,9 +164,11 @@ export function QuizAttempt({
   const answeredCount = questions.filter((x) => isAnswered(answers[x.id])).length;
 
   function setAnswer(qid: string, val: unknown) {
+    answerRevision.current += 1;
     setAnswers((a) => ({ ...a, [qid]: val }));
   }
   function toggleMulti(qid: string, id: string) {
+    answerRevision.current += 1;
     setAnswers((a) => {
       const cur = Array.isArray(a[qid]) ? (a[qid] as string[]) : [];
       return {
@@ -152,6 +178,7 @@ export function QuizAttempt({
     });
   }
   function clearAnswer(qid: string) {
+    answerRevision.current += 1;
     setAnswers((a) => {
       const n = { ...a };
       delete n[qid];
@@ -208,7 +235,7 @@ export function QuizAttempt({
   const atLast = current === questions.length - 1;
 
   return (
-    <div className="flex flex-col gap-5 lg:flex-row lg:items-start">
+    <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(20rem,22rem)] lg:items-start">
       {/* Question panel — one at a time */}
       <div className="flex min-w-0 flex-1 flex-col gap-4">
         <div className="flex items-center justify-between gap-3 text-sm">
@@ -287,12 +314,17 @@ export function QuizAttempt({
       </div>
 
       {/* Question palette — attempted / current / remaining */}
-      <aside className="w-full shrink-0 lg:w-64">
-        <div className="rounded-lg border bg-card p-4 shadow-sm">
-          <p className="mb-3 text-[11px] font-semibold uppercase tracking-widest text-muted-foreground">
-            Questions
-          </p>
-          <div className="grid grid-cols-6 gap-2 lg:grid-cols-5">
+      <aside className="w-full lg:sticky lg:top-0">
+        <div className="rounded-lg border bg-card p-3 shadow-sm sm:p-4">
+          <div className="mb-2 flex items-center justify-between gap-3">
+            <p className="text-[11px] font-semibold uppercase tracking-widest text-muted-foreground">
+              Questions
+            </p>
+            <span className="text-xs font-medium text-muted-foreground">
+              {current + 1} / {questions.length}
+            </span>
+          </div>
+          <div className="grid grid-cols-8 gap-1.5 sm:grid-cols-10 lg:grid-cols-10">
             {questions.map((qq, i) => {
               const ans = isAnswered(answers[qq.id]);
               const mk = marked[qq.id];
@@ -307,7 +339,9 @@ export function QuizAttempt({
                   key={qq.id}
                   type="button"
                   onClick={() => setCurrent(i)}
-                  className={`flex h-9 w-9 items-center justify-center rounded-md text-sm font-medium transition ${base} ${
+                  aria-label={`Go to question ${i + 1}${ans ? ", answered" : ""}${mk ? ", marked for review" : ""}`}
+                  aria-current={cur ? "step" : undefined}
+                  className={`flex h-8 min-w-0 items-center justify-center rounded-md text-xs font-medium transition ${base} ${
                     cur ? "ring-2 ring-brand-600 ring-offset-1" : ""
                   }`}
                 >
@@ -317,25 +351,26 @@ export function QuizAttempt({
             })}
           </div>
 
-          <div className="mt-4 flex flex-col gap-1.5 text-xs text-muted-foreground">
+          <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1.5 text-[11px] text-muted-foreground">
             <Legend cls="bg-emerald-500" label="Answered" />
             <Legend cls="bg-muted" label="Not answered" />
             <Legend cls="bg-violet-500" label="Marked for review" />
           </div>
 
-          <div className="mt-4 rounded-md bg-muted p-2 text-center text-xs text-muted-foreground">
-            <span className="font-semibold text-primary">{answeredCount}</span> /{" "}
-            {questions.length} answered
+          <div className="mt-3 flex items-center gap-2 border-t pt-3">
+            <div className="min-w-0 flex-1 rounded-md bg-muted px-2 py-2 text-center text-xs text-muted-foreground">
+              <span className="font-semibold text-primary">{answeredCount}</span> /{" "}
+              {questions.length} answered
+            </div>
+            <Button
+              className="shrink-0"
+              size="sm"
+              onClick={handleSubmit}
+              disabled={submitting}
+            >
+              {submitting ? "Submitting…" : "Submit quiz"}
+            </Button>
           </div>
-
-          <Button
-            className="mt-3 w-full"
-            size="sm"
-            onClick={handleSubmit}
-            disabled={submitting}
-          >
-            {submitting ? "Submitting…" : "Submit quiz"}
-          </Button>
         </div>
       </aside>
     </div>
@@ -345,7 +380,7 @@ export function QuizAttempt({
 /** First-paint placeholder mirroring the question panel + palette layout. */
 function QuestionPanelSkeleton() {
   return (
-    <div className="flex flex-col gap-5 lg:flex-row lg:items-start">
+    <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(20rem,22rem)] lg:items-start">
       <div className="flex min-w-0 flex-1 flex-col gap-4">
         <div className="flex items-center justify-between">
           <Skeleton className="h-5 w-32" />
@@ -368,8 +403,8 @@ function QuestionPanelSkeleton() {
           </div>
         </div>
       </div>
-      <aside className="w-full shrink-0 lg:w-64">
-        <Skeleton className="h-64 w-full rounded-lg" />
+      <aside className="w-full lg:sticky lg:top-0">
+        <Skeleton className="h-[28rem] w-full rounded-lg" />
       </aside>
     </div>
   );
