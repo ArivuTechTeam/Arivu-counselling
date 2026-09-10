@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 
 import {
@@ -15,8 +15,9 @@ import { ErrorCard } from "@/components/ui/error-card";
 import { SkeletonCards } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/ui/empty-state";
 import { BookOpen } from "@/components/ui/icons";
-import { StudentQuiz, listStudentQuizzes, startAttempt } from "@/lib/api";
+import { StudentQuiz, startAttempt } from "@/lib/api";
 import { variantLabel } from "@/lib/format";
+import { useStudentQuizzes } from "@/lib/student-queries";
 
 type TakeItem = {
   setId: string;
@@ -59,37 +60,27 @@ function buildTree(quizzes: StudentQuiz[]): Tree {
 
 export default function StudentSubjectsPage() {
   const router = useRouter();
-  const [quizzes, setQuizzes] = useState<StudentQuiz[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const { data: quizzes = null, error: loadError, mutate } = useStudentQuizzes();
+  const [actionError, setActionError] = useState<string | null>(null);
   const [starting, setStarting] = useState<string | null>(null);
   const [active, setActive] = useState<string | null>(null);
-
-  function load() {
-    setError(null);
-    listStudentQuizzes()
-      .then(setQuizzes)
-      .catch((e) => setError(e.message));
-  }
-
-  useEffect(() => {
-    load();
-  }, []);
 
   const tree = useMemo(() => (quizzes ? buildTree(quizzes) : {}), [quizzes]);
   const subjects = Object.keys(tree).sort();
 
   async function start(variantId: string) {
     setStarting(variantId);
-    setError(null);
+    setActionError(null);
     try {
       const { attempt_id } = await startAttempt(variantId);
       router.push(`/dashboard/student/attempt/${attempt_id}`);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not start quiz");
+      setActionError(e instanceof Error ? e.message : "Could not start quiz");
       setStarting(null);
     }
   }
 
+  const error = actionError ?? (loadError instanceof Error ? loadError.message : null);
   if (error)
     return (
       <div className="flex flex-col gap-6">
@@ -97,7 +88,10 @@ export default function StudentSubjectsPage() {
           title="Subjects"
           description="Browse your subjects and their chapters, then take a quiz."
         />
-        <ErrorCard message={error} onRetry={load} />
+        <ErrorCard
+          message={error}
+          onRetry={loadError ? () => void mutate() : undefined}
+        />
       </div>
     );
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 
 import {
@@ -12,7 +12,8 @@ import {
 } from "@/components/ui/card";
 import { PageHeader } from "@/components/ui/page-header";
 import { Skeleton } from "@/components/ui/skeleton";
-import { StudentQuiz, createChallenge, listStudentQuizzes } from "@/lib/api";
+import { createChallenge } from "@/lib/api";
+import { useStudentQuizzes } from "@/lib/student-queries";
 
 const COUNTS = [5, 10, 15];
 const fieldClass =
@@ -20,21 +21,11 @@ const fieldClass =
 
 export default function ChallengePage() {
   const router = useRouter();
-  const [quizzes, setQuizzes] = useState<StudentQuiz[] | null>(null);
+  const { data: quizzes = null, error: subjectsError } = useStudentQuizzes();
   const [subjectId, setSubjectId] = useState("");
   const [count, setCount] = useState(10);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [subjectsError, setSubjectsError] = useState(false);
-
-  useEffect(() => {
-    listStudentQuizzes()
-      .then(setQuizzes)
-      .catch(() => {
-        setSubjectsError(true);
-        setQuizzes([]);
-      });
-  }, []);
 
   const subjects = useMemo(() => {
     const map = new Map<string, string>();
@@ -109,7 +100,7 @@ export default function ChallengePage() {
                   className={fieldClass}
                   value={subjectId}
                   onChange={(e) => setSubjectId(e.target.value)}
-                  disabled={subjectsError}
+                  disabled={Boolean(subjectsError)}
                 >
                   <option value="">All my subjects</option>
                   {subjects.map((s) => (

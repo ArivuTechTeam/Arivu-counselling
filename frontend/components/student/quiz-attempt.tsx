@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
+import { useSWRConfig } from "swr";
 
 import { AiTutor } from "@/components/student/ai-tutor";
 import { StudentDownloads } from "@/components/shared/pdf-buttons";
@@ -26,6 +27,10 @@ import {
   submitAttempt,
   submitPracticeSession,
 } from "@/lib/api";
+import {
+  STUDENT_DASHBOARD_KEY,
+  STUDENT_QUIZZES_KEY,
+} from "@/lib/student-queries";
 
 function isAnswered(v: unknown): boolean {
   if (v === undefined || v === null || v === "") return false;
@@ -45,6 +50,7 @@ export function QuizAttempt({
   attemptId: string;
   source?: "quiz" | "practice";
 }) {
+  const { mutate: mutateCache } = useSWRConfig();
   const [state, setState] = useState<AttemptState | null>(null);
   const [answers, setAnswers] = useState<Record<string, unknown>>({});
   const [current, setCurrent] = useState(0);
@@ -162,7 +168,14 @@ export function QuizAttempt({
       });
       const submit =
         source === "practice" ? submitPracticeSession : submitAttempt;
-      setState(await submit(attemptId, payload));
+      const result = await submit(attemptId, payload);
+      setState(result);
+      // The result changes attended state, history, score and weak-area totals.
+      // Clear cached summaries so the next dashboard/catalog mount reloads them.
+      await Promise.all([
+        mutateCache(STUDENT_QUIZZES_KEY, undefined, { revalidate: false }),
+        mutateCache(STUDENT_DASHBOARD_KEY, undefined, { revalidate: false }),
+      ]);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Submit failed");
     } finally {

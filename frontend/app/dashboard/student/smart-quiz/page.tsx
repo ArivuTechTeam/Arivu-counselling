@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 
 import {
@@ -12,7 +12,8 @@ import {
 } from "@/components/ui/card";
 import { PageHeader } from "@/components/ui/page-header";
 import { ErrorCard } from "@/components/ui/error-card";
-import { StudentQuiz, listStudentQuizzes, startPracticeSession } from "@/lib/api";
+import { startPracticeSession } from "@/lib/api";
+import { useStudentQuizzes } from "@/lib/student-queries";
 
 const COUNTS = [10, 15, 20, 30];
 const DIFFICULTIES = [
@@ -27,22 +28,12 @@ const fieldClass =
 
 export default function SmartQuizPage() {
   const router = useRouter();
-  const [quizzes, setQuizzes] = useState<StudentQuiz[] | null>(null);
+  const { data: quizzes = null, error: subjectsError, mutate } = useStudentQuizzes();
   const [subjectId, setSubjectId] = useState("");
   const [count, setCount] = useState(15);
   const [difficulty, setDifficulty] = useState("");
   const [starting, setStarting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
-  function loadSubjects() {
-    setError(null);
-    setQuizzes(null);
-    listStudentQuizzes()
-      .then(setQuizzes)
-      .catch((e) => setError(e.message));
-  }
-
-  useEffect(loadSubjects, []);
 
   // Unique subjects the student has content in.
   const subjects = useMemo(() => {
@@ -140,7 +131,15 @@ export default function SmartQuizPage() {
           {error && (
             <ErrorCard
               message={error}
-              onRetry={quizzes === null ? loadSubjects : undefined}
+              onRetry={subjectsError ? () => void mutate() : undefined}
+              className="text-left"
+            />
+          )}
+
+          {subjectsError && !error && (
+            <ErrorCard
+              message={subjectsError.message}
+              onRetry={() => void mutate()}
               className="text-left"
             />
           )}

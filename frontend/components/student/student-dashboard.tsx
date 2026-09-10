@@ -31,6 +31,7 @@ import {
   getStudentStats,
   listStudentAttempts,
 } from "@/lib/api";
+import { STUDENT_DASHBOARD_KEY } from "@/lib/student-queries";
 
 const BRAND = "#15603d";
 
@@ -312,7 +313,7 @@ export function StudentDashboard() {
   const { data, error, mutate } = useSWR<{
     stats: StudentStats;
     attempts: AttemptHistoryItem[];
-  }>("dashboard:student", async () => {
+  }>(STUDENT_DASHBOARD_KEY, async () => {
     const [stats, attempts] = await Promise.all([
       getStudentStats(),
       listStudentAttempts(),

@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useRouter } from "next/navigation";
 
 import { Button } from "@/components/ui/button";
+import { ErrorCard } from "@/components/ui/error-card";
 import {
   Card,
   CardContent,
@@ -11,8 +12,9 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { StudentQuiz, listStudentQuizzes, startAttempt } from "@/lib/api";
+import { StudentQuiz, startAttempt } from "@/lib/api";
 import { variantLabel } from "@/lib/format";
+import { useStudentQuizzes } from "@/lib/student-queries";
 
 // One takeable quiz = a variant plus the title of the set it belongs to.
 type QuizItem = {
@@ -58,24 +60,18 @@ function flatten(quizzes: StudentQuiz[]): QuizItem[] {
 
 export function StudentQuizzes() {
   const router = useRouter();
-  const [quizzes, setQuizzes] = useState<StudentQuiz[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const { data: quizzes = null, error: loadError, mutate } = useStudentQuizzes();
+  const [actionError, setActionError] = useState<string | null>(null);
   const [starting, setStarting] = useState<string | null>(null);
-
-  useEffect(() => {
-    listStudentQuizzes()
-      .then(setQuizzes)
-      .catch((e) => setError(e.message));
-  }, []);
 
   async function start(variantId: string) {
     setStarting(variantId);
-    setError(null);
+    setActionError(null);
     try {
       const { attempt_id } = await startAttempt(variantId);
       router.push(`/dashboard/student/attempt/${attempt_id}`);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not start quiz");
+      setActionError(e instanceof Error ? e.message : "Could not start quiz");
       setStarting(null);
     }
   }
@@ -85,9 +81,18 @@ export function StudentQuizzes() {
   const completed = items.filter((i) => i.attempted);
   const loaded = quizzes !== null;
 
+  if (loadError) {
+    return (
+      <ErrorCard
+        message={loadError.message}
+        onRetry={() => void mutate()}
+      />
+    );
+  }
+
   return (
     <div className="flex flex-col gap-6">
-      {error && <p className="text-sm text-red-600">{error}</p>}
+      {actionError && <p className="text-sm text-red-600">{actionError}</p>}
 
       {/* Quizzes to attend — the first thing a student should see */}
       <Card className="animate-rise">
