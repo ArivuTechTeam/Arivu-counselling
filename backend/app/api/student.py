@@ -35,6 +35,11 @@ def _require_student(profile: CurrentProfile) -> None:
         )
 
 
+QUESTION_ATTEMPT_COLUMNS = (
+    "id, type, question_text, options, correct_answer, explanation, marks"
+)
+
+
 def _ordered_approved_questions(
     service, variant_id: str, tenant_id: str
 ) -> list[dict]:
@@ -54,16 +59,37 @@ def _ordered_approved_questions(
         return []
     rows = (
         service.table("questions")
-        .select("*")
+        .select(QUESTION_ATTEMPT_COLUMNS)
         .in_("id", ids)
         .eq("tenant_id", tenant_id)
         .eq("review_status", "approved")
+    )
+    rows = rows.execute().data or []
+    by_id = {row["id"]: row for row in rows}
+    return [by_id[link["question_id"]] for link in links if link["question_id"] in by_id]
+
+
+def _approved_question_counts(
+    service, variant_ids: list[str], tenant_id: str
+) -> dict[str, int]:
+    """Count approved linked questions for every variant in one round trip."""
+    if not variant_ids:
+        return {}
+    links = (
+        service.table("quiz_variant_questions")
+        .select("variant_id, questions!inner(id)")
+        .in_("variant_id", variant_ids)
+        .eq("tenant_id", tenant_id)
+        .eq("questions.review_status", "approved")
         .execute()
         .data
         or []
     )
-    by_id = {row["id"]: row for row in rows}
-    return [by_id[link["question_id"]] for link in links if link["question_id"] in by_id]
+    counts: dict[str, int] = {}
+    for link in links:
+        variant_id = link["variant_id"]
+        counts[variant_id] = counts.get(variant_id, 0) + 1
+    return counts
 
 
 def _strip_answer(q: dict) -> dict:
@@ -176,29 +202,36 @@ def list_quizzes(profile: CurrentProfile = Depends(get_current_profile)) -> list
                 or []
             )
         }
-    # First pass: collect the takeable variants (those with approved questions).
+    # Fetch every variant and all approved-question counts in two catalog-sized
+    # queries. This stays constant as the number of quiz sets/variants grows.
     set_variants: list[tuple[dict, list[dict]]] = []
     all_variant_ids: list[str] = []
-    for s in sets:
-        variants = (
-            service.table("quiz_variants")
-            .select("id, variant_type, total_marks, time_limit_minutes")
-            .eq("quiz_set_id", s["id"])
-            .eq("tenant_id", profile.tenant_id)
-            .execute()
-            .data
-            or []
-        )
-        takeable = []
-        for v in variants:
-            count = len(
-                _ordered_approved_questions(service, v["id"], profile.tenant_id)
+    set_ids = [quiz_set["id"] for quiz_set in sets]
+    variants = (
+        service.table("quiz_variants")
+        .select("id, quiz_set_id, variant_type, total_marks, time_limit_minutes")
+        .in_("quiz_set_id", set_ids)
+        .eq("tenant_id", profile.tenant_id)
+        .execute()
+        .data
+        or []
+    )
+    counts = _approved_question_counts(
+        service, [variant["id"] for variant in variants], profile.tenant_id
+    )
+    variants_by_set: dict[str, list[dict]] = {}
+    for variant in variants:
+        count = counts.get(variant["id"], 0)
+        if count:
+            variants_by_set.setdefault(variant["quiz_set_id"], []).append(
+                {**variant, "question_count": count}
             )
-            if count > 0:  # only offer variants that actually have questions
-                takeable.append({**v, "question_count": count})
-                all_variant_ids.append(v["id"])
+            all_variant_ids.append(variant["id"])
+
+    for quiz_set in sets:
+        takeable = variants_by_set.get(quiz_set["id"], [])
         if takeable:
-            set_variants.append((s, takeable))
+            set_variants.append((quiz_set, takeable))
 
     # This student's own attempts on those variants — so the UI can lead with the
     # quizzes they HAVEN'T attended yet, and show a best score on the ones they have.
