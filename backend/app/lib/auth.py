@@ -155,7 +155,7 @@ def get_current_profile(
     client = get_service_client()
     result = (
         client.table("profiles")
-        .select("*")
+        .select("id,tenant_id,role,full_name,must_change_password")
         .eq("id", user.user_id)
         .maybe_single()  # returns None instead of erroring if no row
         .execute()
