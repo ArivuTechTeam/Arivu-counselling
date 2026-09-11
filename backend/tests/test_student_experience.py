@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import unittest
-from datetime import date
+from datetime import date, datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -15,18 +15,33 @@ from app.api.challenge import (
 from app.api.practice import (
     AutosavePractice,
     StartPractice,
+    SubmitPractice,
+    SubmittedAnswer as PracticeSubmittedAnswer,
     _require_student as require_practice_student,
+    _daily_today,
     _streak,
     autosave_practice,
+    exam_config,
+    get_daily,
+    get_practice,
     leaderboard,
+    practice_subjects,
+    preview_practice,
+    start_practice,
+    start_daily,
+    start_exam,
+    submit_practice,
 )
 from app.api.student import (
     StartAttemptRequest,
+    RevisedTopic,
     SubmitRequest,
     SubmittedAnswer,
     _require_student as require_quiz_student,
     _student_graded_answers,
     get_attempt,
+    mark_topic_revised,
+    revision_topics,
     start_attempt,
     student_attempts,
     submit_attempt,
@@ -50,6 +65,10 @@ class MemoryQuery:
 
     def eq(self, key, value):
         self.rows = [row for row in self.rows if row.get(key) == value]
+        return self
+
+    def neq(self, key, value):
+        self.rows = [row for row in self.rows if row.get(key) != value]
         return self
 
     def in_(self, key, values):
@@ -93,6 +112,7 @@ class MutableQuery:
         self.service = service
         self.table = table
         self.filters: list[tuple[str, object]] = []
+        self.neq_filters: list[tuple[str, object]] = []
         self.in_filters: list[tuple[str, set[object]]] = []
         self.operation = "select"
         self.payload = None
@@ -125,11 +145,18 @@ class MutableQuery:
         self.filters.append((key, value))
         return self
 
+    def neq(self, key, value):
+        self.neq_filters.append((key, value))
+        return self
+
     def in_(self, key, values):
         self.in_filters.append((key, set(values)))
         return self
 
     def order(self, *_args, **_kwargs):
+        return self
+
+    def limit(self, _count):
         return self
 
     def maybe_single(self):
@@ -141,8 +168,10 @@ class MutableQuery:
         return self
 
     def _matches(self, row: dict) -> bool:
-        return all(row.get(k) == v for k, v in self.filters) and all(
-            row.get(k) in values for k, values in self.in_filters
+        return (
+            all(row.get(k) == v for k, v in self.filters)
+            and all(row.get(k) != v for k, v in self.neq_filters)
+            and all(row.get(k) in values for k, values in self.in_filters)
         )
 
     def execute(self):
@@ -206,6 +235,54 @@ class GradingTests(unittest.TestCase):
 
 
 class StudentAnalyticsTests(unittest.TestCase):
+    def test_history_derives_subject_for_chapter_practice(self) -> None:
+        service = MemoryService(
+            {
+                "quiz_attempts": [],
+                "practice_sessions": [
+                    {
+                        "id": "p1",
+                        "tenant_id": "t1",
+                        "student_id": "u1",
+                        "status": "graded",
+                        "mode": "chapter",
+                        "subject_id": None,
+                        "chapter_id": "chapter-1",
+                        "total_score": 4,
+                        "max_score": 5,
+                        "submitted_at": "2026-09-10T10:00:00Z",
+                    },
+                    {
+                        "id": "challenge-history",
+                        "tenant_id": "t1",
+                        "student_id": "u1",
+                        "status": "graded",
+                        "mode": "challenge",
+                        "subject_id": "subject-1",
+                        "chapter_id": None,
+                        "total_score": 5,
+                        "max_score": 5,
+                        "submitted_at": "2026-09-10T11:00:00Z",
+                    },
+                ],
+                "chapters": [
+                    {
+                        "id": "chapter-1",
+                        "tenant_id": "t1",
+                        "subject_id": "subject-1",
+                    }
+                ],
+            }
+        )
+
+        with patch("app.api.student.get_service_client", return_value=service):
+            history = student_attempts(profile())
+
+        self.assertEqual(len(history), 1)
+        self.assertEqual(history[0]["source"], "practice")
+        self.assertEqual(history[0]["subject_id"], "subject-1")
+        self.assertEqual(history[0]["chapter_id"], "chapter-1")
+
     def test_quiz_and_practice_answers_are_combined_and_scoped(self) -> None:
         service = MemoryService(
             {
@@ -319,6 +396,7 @@ class QuizAttemptFlowTests(unittest.TestCase):
                         "quiz_set_id": "set1",
                         "variant_type": "mixed",
                         "total_marks": 3,
+                        "time_limit_minutes": 10,
                     }
                 ],
                 "quiz_variant_questions": [
@@ -357,20 +435,43 @@ class QuizAttemptFlowTests(unittest.TestCase):
         with (
             patch("app.api.student.get_service_client", return_value=service),
             patch("app.api.student.log_event"),
+            patch(
+                "app.api.student.get_settings",
+                return_value=SimpleNamespace(student_quiz_attempt_limit=2),
+            ),
         ):
             started = start_attempt(StartAttemptRequest(variant_id="v1"), profile())
             attempt_id = started["attempt_id"]
             self.assertEqual(started["status"], "in_progress")
             self.assertEqual(len(started["questions"]), 2)
             self.assertNotIn("correct_answer", started["questions"][0])
-            # Starting now returns the already-loaded taking state in seven DB
-            # round trips. The former immediate page GET added three more.
-            self.assertEqual(len(service.calls), 7)
+            self.assertEqual(started["time_limit_minutes"], 10.0)
+            self.assertEqual(
+                sum(q["suggested_seconds"] for q in started["questions"]), 600
+            )
+            # Starting returns the already-loaded state. The eighth query is the
+            # backend-enforced two-attempt limit check.
+            self.assertEqual(len(service.calls), 8)
 
             taking = get_attempt(attempt_id, profile())
-            self.assertEqual(len(service.calls), 10)
+            # The timed state adds one tenant-scoped variant lookup so refreshes
+            # can restore the server-authoritative deadline.
+            self.assertEqual(len(service.calls), 12)
             self.assertEqual(taking["status"], "in_progress")
             self.assertNotIn("correct_answer", taking["questions"][0])
+
+            with self.assertRaises(HTTPException) as incomplete:
+                submit_attempt(
+                    attempt_id,
+                    SubmitRequest(
+                        answers=[
+                            SubmittedAnswer(question_id="q1", student_answer="B")
+                        ]
+                    ),
+                    profile(),
+                )
+            self.assertEqual(incomplete.exception.status_code, 400)
+            self.assertIn("every question", incomplete.exception.detail.lower())
 
             result = submit_attempt(
                 attempt_id,
@@ -389,12 +490,341 @@ class QuizAttemptFlowTests(unittest.TestCase):
 
             reviewed = get_attempt(attempt_id, profile())
             self.assertEqual(reviewed["total_score"], 2.0)
-            self.assertEqual(student_attempts(profile())[0]["attempt_id"], attempt_id)
+            history = student_attempts(profile())
+            self.assertEqual(history[0]["attempt_id"], attempt_id)
+            self.assertEqual(history[0]["variant_id"], "v1")
+            self.assertEqual(history[0]["subject_id"], "s1")
+            self.assertIsNone(history[0]["chapter_id"])
+
+            second = start_attempt(StartAttemptRequest(variant_id="v1"), profile())
+            abandoned = submit_attempt(
+                second["attempt_id"],
+                SubmitRequest(
+                    answers=[
+                        SubmittedAnswer(question_id="q1", student_answer="B")
+                    ],
+                    finalize_reason="left",
+                ),
+                profile(),
+            )
+            self.assertEqual(abandoned["total_score"], 2.0)
+            self.assertIsNone(abandoned["results"][1]["student_answer"])
+            self.assertEqual(abandoned["results"][1]["marks_awarded"], 0.0)
+            with self.assertRaises(HTTPException) as limit_reached:
+                start_attempt(StartAttemptRequest(variant_id="v1"), profile())
+            self.assertEqual(limit_reached.exception.status_code, 400)
+            self.assertIn("all 2 attempts", limit_reached.exception.detail.lower())
 
             other = CurrentProfile(user_id="u2", tenant_id="t1", role="student")
             with self.assertRaises(HTTPException) as caught:
                 get_attempt(attempt_id, other)
             self.assertEqual(caught.exception.status_code, 404)
+
+
+class PracticeAndRevisionFlowTests(unittest.TestCase):
+    def test_smart_quiz_start_autosave_submit_and_all_subject_history(self) -> None:
+        service = MutableService(
+            {
+                "enrollments": [
+                    {"tenant_id": "t1", "profile_id": "u1", "course_id": "c1"}
+                ],
+                "subjects": [
+                    {"id": "s1", "tenant_id": "t1", "course_id": "c1", "name": "Maths"}
+                ],
+                "chapters": [{"id": "ch1", "tenant_id": "t1", "subject_id": "s1"}],
+                "questions": [
+                    {
+                        "id": "q1",
+                        "tenant_id": "t1",
+                        "chapter_id": "ch1",
+                        "review_status": "approved",
+                        "difficulty": "easy",
+                        "type": "mcq_single",
+                        "question_text": "Pick A",
+                        "options": [{"id": "A", "text": "A"}],
+                        "correct_answer": "A",
+                        "explanation": "A",
+                        "marks": 1,
+                    },
+                    {
+                        "id": "q2",
+                        "tenant_id": "t1",
+                        "chapter_id": "ch1",
+                        "review_status": "approved",
+                        "difficulty": "easy",
+                        "type": "numerical",
+                        "question_text": "One plus one",
+                        "options": None,
+                        "correct_answer": {"value": 2, "tolerance": 0},
+                        "explanation": "2",
+                        "marks": 2,
+                    },
+                ],
+                "practice_sessions": [],
+                "practice_answers": [],
+                "quiz_attempts": [],
+            }
+        )
+        body = StartPractice(mode="smart", count=10, difficulty="easy")
+        with (
+            patch("app.api.practice.get_service_client", return_value=service),
+            patch("app.api.student.get_service_client", return_value=service),
+        ):
+            listed_subjects = practice_subjects(profile())
+            self.assertEqual(
+                [(row["id"], row["name"]) for row in listed_subjects],
+                [("s1", "Maths")],
+            )
+            self.assertEqual(preview_practice(body, profile())["question_count"], 2)
+            self.assertEqual(service.tables["practice_sessions"], [])
+
+            started = start_practice(body, profile())
+            session_id = started["session_id"]
+            self.assertEqual(len(started["questions"]), 2)
+            self.assertNotIn("correct_answer", started["questions"][0])
+
+            autosave_practice(
+                session_id, AutosavePractice(answers={"q1": "A"}), profile()
+            )
+            restored = get_practice(session_id, profile())
+            self.assertEqual(restored["autosave_state"], {"q1": "A"})
+
+            result = submit_practice(
+                session_id,
+                SubmitPractice(
+                    answers=[
+                        PracticeSubmittedAnswer(question_id="q1", student_answer="A"),
+                        PracticeSubmittedAnswer(question_id="q2", student_answer=2),
+                    ]
+                ),
+                profile(),
+            )
+            self.assertEqual(result["total_score"], 3.0)
+            self.assertEqual([row["is_correct"] for row in result["results"]], [True, True])
+            history = student_attempts(profile())
+            self.assertEqual(history[0]["attempt_id"], session_id)
+            self.assertIsNone(history[0]["subject_id"])
+            self.assertEqual(history[0]["source"], "practice")
+
+    def test_revised_topic_returns_after_new_weak_work(self) -> None:
+        service = MutableService(
+            {
+                "quiz_attempts": [],
+                "attempt_answers": [],
+                "practice_sessions": [
+                    {"id": "p1", "tenant_id": "t1", "student_id": "u1", "status": "graded"}
+                ],
+                "practice_answers": [
+                    {"session_id": "p1", "tenant_id": "t1", "question_id": "q1", "is_correct": False}
+                ],
+                "questions": [{"id": "q1", "tenant_id": "t1", "chapter_id": "ch1", "topic_id": "tp1"}],
+                "chapters": [{"id": "ch1", "tenant_id": "t1", "subject_id": "s1", "name": "Numbers"}],
+                "subjects": [{"id": "s1", "tenant_id": "t1", "name": "Maths"}],
+                "topics": [{"id": "tp1", "tenant_id": "t1", "name": "Addition"}],
+                "revised_topics": [],
+            }
+        )
+        with patch("app.api.student.get_service_client", return_value=service):
+            first = revision_topics(profile())
+            self.assertEqual(first[0]["key"], "topic:tp1")
+            mark_topic_revised(RevisedTopic(key=first[0]["key"]), profile())
+            self.assertEqual(revision_topics(profile()), [])
+
+            service.tables["practice_sessions"].append(
+                {"id": "p2", "tenant_id": "t1", "student_id": "u1", "status": "graded"}
+            )
+            service.tables["practice_answers"].append(
+                {"session_id": "p2", "tenant_id": "t1", "question_id": "q1", "is_correct": False}
+            )
+            refreshed = revision_topics(profile())
+            self.assertEqual(refreshed[0]["answered"], 2)
+
+
+class DailyAndExamFlowTests(unittest.TestCase):
+    @staticmethod
+    def _questions(count: int) -> list[dict]:
+        return [
+            {
+                "id": f"q{i}",
+                "tenant_id": "t1",
+                "review_status": "approved",
+                "type": "mcq_single",
+                "question_text": f"Question {i}",
+                "options": [{"id": "A", "text": "A"}, {"id": "B", "text": "B"}],
+                "correct_answer": "A",
+                "explanation": "A is correct",
+                "marks": 1,
+            }
+            for i in range(1, count + 1)
+        ]
+
+    def test_daily_full_lifecycle_is_exactly_ten_and_updates_streak(self) -> None:
+        questions = self._questions(10)
+        ids = [q["id"] for q in questions]
+        service = MutableService(
+            {
+                "practice_sessions": [],
+                "practice_answers": [],
+                "questions": questions,
+            }
+        )
+        fixed_day = date(2026, 9, 10)
+        with (
+            patch("app.api.practice.get_service_client", return_value=service),
+            patch("app.api.practice.select_question_ids", return_value=ids),
+            patch("app.api.practice._daily_today", return_value=fixed_day),
+        ):
+            started = start_daily(profile())
+            self.assertEqual(len(started["questions"]), 10)
+            self.assertNotIn("correct_answer", started["questions"][0])
+            self.assertEqual(started["time_limit_minutes"], 10.0)
+            self.assertIsNotNone(started["deadline_at"])
+            session_id = started["session_id"]
+
+            autosave_practice(
+                session_id, AutosavePractice(answers={"q1": "A"}), profile()
+            )
+            resumed = start_daily(profile())
+            self.assertEqual(resumed["session_id"], session_id)
+            self.assertEqual(resumed["autosave_state"], {"q1": "A"})
+
+            result = submit_practice(
+                session_id,
+                SubmitPractice(
+                    answers=[
+                        PracticeSubmittedAnswer(
+                            question_id=question_id, student_answer="A"
+                        )
+                        for question_id in ids
+                    ]
+                ),
+                profile(),
+            )
+            self.assertEqual(result["total_score"], 10)
+            daily = get_daily(profile())
+            self.assertTrue(daily["done_today"])
+            self.assertTrue(daily["attempted_today"])
+            self.assertEqual(daily["streak"], 1)
+            with self.assertRaises(HTTPException) as caught:
+                start_daily(profile())
+            self.assertEqual(caught.exception.status_code, 400)
+
+    def test_abandoned_daily_consumes_today_without_extending_streak(self) -> None:
+        questions = self._questions(10)
+        ids = [q["id"] for q in questions]
+        service = MutableService(
+            {
+                "practice_sessions": [],
+                "practice_answers": [],
+                "questions": questions,
+            }
+        )
+        with (
+            patch("app.api.practice.get_service_client", return_value=service),
+            patch("app.api.practice.select_question_ids", return_value=ids),
+            patch("app.api.practice._daily_today", return_value=date(2026, 9, 10)),
+        ):
+            session_id = start_daily(profile())["session_id"]
+            result = submit_practice(
+                session_id,
+                SubmitPractice(
+                    answers=[
+                        PracticeSubmittedAnswer(question_id="q1", student_answer="A")
+                    ],
+                    finalize_reason="left",
+                ),
+                profile(),
+            )
+            self.assertEqual(result["total_score"], 1)
+            daily = get_daily(profile())
+            self.assertFalse(daily["done_today"])
+            self.assertTrue(daily["attempted_today"])
+            self.assertEqual(daily["streak"], 0)
+            with self.assertRaises(HTTPException):
+                start_daily(profile())
+
+    def test_daily_and_exam_refuse_partial_question_sets(self) -> None:
+        service = MutableService(
+            {
+                "practice_sessions": [],
+                "questions": self._questions(1),
+                "tenants": [
+                    {
+                        "id": "t1",
+                        "exam_config": {
+                            "questions": 2,
+                            "duration_minutes": 30,
+                            "negative_marking": 0.25,
+                        },
+                    }
+                ],
+            }
+        )
+        with (
+            patch("app.api.practice.get_service_client", return_value=service),
+            patch("app.api.practice.select_question_ids", return_value=["q1"]),
+            patch("app.api.practice._daily_today", return_value=date(2026, 9, 10)),
+        ):
+            with self.assertRaises(HTTPException) as daily_error:
+                start_daily(profile())
+            self.assertIn("10 approved questions", daily_error.exception.detail)
+            with self.assertRaises(HTTPException) as exam_error:
+                start_exam(profile())
+            self.assertIn("requires 2 approved questions", exam_error.exception.detail)
+        self.assertEqual(service.tables["practice_sessions"], [])
+
+    def test_exam_resumes_one_active_session_and_grades_deterministically(self) -> None:
+        questions = self._questions(2)
+        ids = [q["id"] for q in questions]
+        service = MutableService(
+            {
+                "practice_sessions": [],
+                "practice_answers": [],
+                "questions": questions,
+                "tenants": [
+                    {
+                        "id": "t1",
+                        "exam_config": {
+                            "questions": 2,
+                            "duration_minutes": 30,
+                            "negative_marking": 0.25,
+                        },
+                    }
+                ],
+            }
+        )
+        with (
+            patch("app.api.practice.get_service_client", return_value=service),
+            patch("app.api.practice.select_question_ids", return_value=ids),
+        ):
+            self.assertIsNone(exam_config(profile())["active_session_id"])
+            started = start_exam(profile())
+            session_id = started["session_id"]
+            self.assertEqual(len(started["questions"]), 2)
+            self.assertIsNotNone(started["deadline_at"])
+            self.assertEqual(start_exam(profile())["session_id"], session_id)
+            self.assertEqual(exam_config(profile())["active_session_id"], session_id)
+
+            result = submit_practice(
+                session_id,
+                SubmitPractice(
+                    answers=[
+                        PracticeSubmittedAnswer(question_id="q1", student_answer="A"),
+                        PracticeSubmittedAnswer(question_id="q2", student_answer="B"),
+                    ]
+                ),
+                profile(),
+            )
+            self.assertEqual(result["total_score"], 0.75)
+            self.assertIsNone(exam_config(profile())["active_session_id"])
+
+    def test_daily_date_uses_configured_calendar_timezone(self) -> None:
+        settings = SimpleNamespace(daily_challenge_timezone="Asia/Kolkata")
+        with patch("app.api.practice.get_settings", return_value=settings):
+            self.assertEqual(
+                _daily_today(datetime(2026, 9, 9, 20, 0, tzinfo=timezone.utc)),
+                date(2026, 9, 10),
+            )
 
 
 class StudentBoundaryTests(unittest.TestCase):
@@ -487,6 +917,62 @@ class StudentBoundaryTests(unittest.TestCase):
         ):
             autosave_practice("p1", AutosavePractice(answers={"q1": "A"}), profile())
         self.assertEqual(caught.exception.status_code, 400)
+
+    def test_practice_requires_every_question_before_early_submit(self) -> None:
+        service = MutableService(
+            {
+                "practice_sessions": [
+                    {
+                        "id": "p1",
+                        "tenant_id": "t1",
+                        "student_id": "u1",
+                        "status": "in_progress",
+                        "mode": "smart",
+                        "config": {},
+                        "question_ids": ["q1", "q2"],
+                    }
+                ],
+                "questions": [
+                    {
+                        "id": "q1",
+                        "tenant_id": "t1",
+                        "type": "mcq_single",
+                        "question_text": "One",
+                        "options": [],
+                        "correct_answer": "A",
+                        "explanation": None,
+                        "marks": 1,
+                    },
+                    {
+                        "id": "q2",
+                        "tenant_id": "t1",
+                        "type": "mcq_single",
+                        "question_text": "Two",
+                        "options": [],
+                        "correct_answer": "B",
+                        "explanation": None,
+                        "marks": 1,
+                    },
+                ],
+            }
+        )
+        with (
+            patch("app.api.practice.get_service_client", return_value=service),
+            self.assertRaises(HTTPException) as caught,
+        ):
+            submit_practice(
+                "p1",
+                SubmitPractice(
+                    answers=[
+                        PracticeSubmittedAnswer(
+                            question_id="q1", student_answer="A"
+                        )
+                    ]
+                ),
+                profile(),
+            )
+        self.assertEqual(caught.exception.status_code, 400)
+        self.assertIn("every question", caught.exception.detail.lower())
 
     def test_question_level_access_requires_the_students_graded_work(self) -> None:
         service = MemoryService(

@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { useRouter } from "next/navigation";
 
 import {
@@ -11,9 +11,10 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { PageHeader } from "@/components/ui/page-header";
+import { AttemptReadiness } from "@/components/student/attempt-readiness";
 import { ErrorCard } from "@/components/ui/error-card";
-import { startPracticeSession } from "@/lib/api";
-import { useStudentQuizzes } from "@/lib/student-queries";
+import { previewPracticeSession, startPracticeSession } from "@/lib/api";
+import { usePracticeSubjects } from "@/lib/student-queries";
 
 const COUNTS = [10, 15, 20, 30];
 const DIFFICULTIES = [
@@ -28,34 +29,44 @@ const fieldClass =
 
 export default function SmartQuizPage() {
   const router = useRouter();
-  const { data: quizzes = null, error: subjectsError, mutate } = useStudentQuizzes();
+  const { data: subjects, error: subjectsError, mutate } = usePracticeSubjects();
   const [subjectId, setSubjectId] = useState("");
   const [count, setCount] = useState(15);
   const [difficulty, setDifficulty] = useState("");
   const [starting, setStarting] = useState(false);
+  const [previewing, setPreviewing] = useState(false);
+  const [availableCount, setAvailableCount] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [showReadiness, setShowReadiness] = useState(false);
 
-  // Unique subjects the student has content in.
-  const subjects = useMemo(() => {
-    const map = new Map<string, string>();
-    for (const q of quizzes ?? []) {
-      if (q.subject_id && q.subject_name) map.set(q.subject_id, q.subject_name);
+  const loadingSubjects = subjects === undefined;
+
+  const input = {
+    mode: "smart",
+    subject_id: subjectId || null,
+    count,
+    difficulty: difficulty || null,
+  };
+
+  async function prepare() {
+    setPreviewing(true);
+    setError(null);
+    try {
+      const preview = await previewPracticeSession(input);
+      setAvailableCount(preview.question_count);
+      setShowReadiness(true);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not prepare the quiz.");
+    } finally {
+      setPreviewing(false);
     }
-    return Array.from(map, ([id, name]) => ({ id, name }));
-  }, [quizzes]);
-
-  const loadingSubjects = quizzes === null;
+  }
 
   async function start() {
     setStarting(true);
     setError(null);
     try {
-      const { session_id } = await startPracticeSession({
-        mode: "smart",
-        subject_id: subjectId || null,
-        count,
-        difficulty: difficulty || null,
-      });
+      const { session_id } = await startPracticeSession(input);
       router.push(`/dashboard/student/practice/${session_id}`);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Could not start the quiz.");
@@ -91,7 +102,7 @@ export default function SmartQuizPage() {
                 <option value="">
                   {loadingSubjects ? "Loading subjects…" : "All my subjects"}
                 </option>
-                {subjects.map((s) => (
+                {(subjects ?? []).map((s) => (
                   <option key={s.id} value={s.id}>
                     {s.name}
                   </option>
@@ -146,15 +157,27 @@ export default function SmartQuizPage() {
 
           <div>
             <button
-              onClick={start}
-              disabled={starting}
+              onClick={() => void prepare()}
+              disabled={starting || previewing || loadingSubjects || !!subjectsError}
               className="rounded-lg bg-primary px-6 py-2.5 text-sm font-semibold text-primary-foreground shadow-sm transition-colors hover:bg-primary/90 disabled:opacity-60"
             >
-              {starting ? "Starting…" : "Start Smart Quiz →"}
+              {previewing ? "Checking questions…" : "Start Smart Quiz →"}
             </button>
           </div>
         </CardContent>
       </Card>
+      <AttemptReadiness
+        open={showReadiness}
+        title="Smart Quiz"
+        questionCount={availableCount ?? count}
+        requestedQuestionCount={count}
+        busy={starting}
+        onCancel={() => {
+          setShowReadiness(false);
+          setAvailableCount(null);
+        }}
+        onConfirm={() => void start()}
+      />
     </div>
   );
 }

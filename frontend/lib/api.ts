@@ -1,6 +1,8 @@
 import { createClient } from "@/lib/supabase";
+import { safeDashboardNext } from "@/lib/safe-next";
 
 let sessionExpiryRedirectStarted = false;
+let latestBearerToken: string | null = null;
 
 // Base URL of the FastAPI backend (from .env.local).
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL!;
@@ -45,6 +47,7 @@ async function authHeader(): Promise<Record<string, string>> {
     data: { session },
   } = await supabase.auth.getSession();
   const token = session?.access_token;
+  latestBearerToken = token ?? null;
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
@@ -55,7 +58,11 @@ async function apiError(res: Response, fallback: string): Promise<never> {
       try {
         await createClient().auth.signOut();
       } finally {
-        window.location.replace("/login?reason=session-expired");
+        const next = safeDashboardNext(
+          `${window.location.pathname}${window.location.search}`,
+        );
+        const nextParam = next === "/dashboard" ? "" : `&next=${encodeURIComponent(next)}`;
+        window.location.replace(`/login?reason=session-expired${nextParam}`);
       }
     }
     throw new Error("Your session expired. Please log in again.");
@@ -378,22 +385,6 @@ export const regenerateQuestion = (id: string) =>
     60_000,
   );
 
-// AI Tutor — cached, deeper explanation + a simplified version + hints.
-export type Explanation = {
-  explanation: string;
-  simplified: string;
-  hints: string[];
-  cached: boolean;
-};
-
-export const explainQuestion = (id: string) =>
-  jsonRequest<Explanation>(
-    `/api/v1/questions/${id}/explain`,
-    "POST",
-    undefined,
-    60_000,
-  );
-
 export const changePassword = (currentPassword: string, password: string) =>
   jsonRequest<{ changed: boolean }>("/api/v1/auth/change-password", "POST", {
     current_password: currentPassword,
@@ -419,6 +410,8 @@ export type StudentVariant = {
   question_count: number;
   attempted: boolean;
   attempt_count: number;
+  attempt_limit: number;
+  attempts_remaining: number;
   best_pct?: number | null;
 };
 
@@ -427,6 +420,7 @@ export type StudentQuiz = {
   title: string;
   published_at?: string | null;
   subject_id?: string | null;
+  chapter_id?: string | null;
   subject_name?: string | null;
   chapter_name?: string | null;
   variants: StudentVariant[];
@@ -439,6 +433,8 @@ export type TakingQuestion = {
   question_text: string;
   options?: { id: string; text: string }[] | null;
   marks?: number;
+  /** A soft pacing guide. The overall attempt deadline remains authoritative. */
+  suggested_seconds?: number;
 };
 
 /** A question after grading (answers revealed). */
@@ -456,6 +452,9 @@ export type AttemptInProgress = {
   questions: TakingQuestion[];
   time_limit_minutes?: number | null; // set for timed modes (exam)
   started_at?: string | null;
+  deadline_at?: string | null;
+  /** Server-computed at fetch/start time; used to anchor the local display clock. */
+  remaining_seconds?: number | null;
   autosave_state?: Record<string, unknown>;
 };
 
@@ -552,7 +551,10 @@ export const getStudentStats = () =>
 export type AttemptHistoryItem = {
   attempt_id: string;
   quiz_title: string;
+  variant_id?: string | null;
   variant_type: string | null;
+  subject_id?: string | null;
+  chapter_id?: string | null;
   total_score: number | null;
   max_score: number | null;
   submitted_at: string | null;
@@ -577,9 +579,11 @@ export const getAttempt = (attemptId: string) =>
 export const submitAttempt = (
   attemptId: string,
   answers: { question_id: string; student_answer: unknown }[],
+  finalizeReason: "submit" | "left" = "submit",
 ) =>
   jsonRequest<AttemptResult>(`/api/v1/attempts/${attemptId}/submit`, "POST", {
     answers,
+    finalize_reason: finalizeReason,
   });
 export const saveAttemptProgress = (
   attemptId: string,
@@ -598,6 +602,15 @@ export type StartPracticeInput = {
   count?: number;
   difficulty?: string | null;
 };
+export type PracticeSubject = { id: string; name: string };
+export const listPracticeSubjects = () =>
+  jsonRequest<PracticeSubject[]>("/api/v1/practice/subjects", "GET");
+export const previewPracticeSession = (input: StartPracticeInput) =>
+  jsonRequest<{ requested_count: number; question_count: number }>(
+    "/api/v1/practice/preview",
+    "POST",
+    input,
+  );
 export type StartedPracticeSession = AttemptInProgress & { session_id: string };
 export const startPracticeSession = async (input: StartPracticeInput) => {
   const state = await jsonRequest<StartedPracticeSession>(
@@ -613,10 +626,56 @@ export const getPracticeSession = (id: string) =>
 export const submitPracticeSession = (
   id: string,
   answers: { question_id: string; student_answer: unknown }[],
+  finalizeReason: "submit" | "left" = "submit",
 ) =>
   jsonRequest<AttemptResult>(`/api/v1/practice/sessions/${id}/submit`, "POST", {
     answers,
+    finalize_reason: finalizeReason,
   });
+
+type ExitAnswer = { question_id: string; student_answer: unknown };
+
+function exitSubmitUrl(id: string, source: "quiz" | "practice"): string {
+  return `${API_BASE}/api/v1/${
+    source === "practice" ? `practice/sessions/${id}` : `attempts/${id}`
+  }/submit`;
+}
+
+/** Grade an intentionally abandoned attempt before client-side navigation. */
+export async function finalizeAttemptForExit(
+  id: string,
+  source: "quiz" | "practice",
+  answers: ExitAnswer[],
+): Promise<void> {
+  const headers = await authHeader();
+  const res = await apiFetch(exitSubmitUrl(id, source), {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...headers },
+    body: JSON.stringify({ answers, finalize_reason: "left" }),
+    keepalive: true,
+  });
+  if (!res.ok && res.status !== 400) {
+    await apiError(res, "The attempt could not be finalized.");
+  }
+}
+
+/** Best-effort keepalive used only after the browser confirms a real page exit. */
+export function finalizeAttemptOnUnload(
+  id: string,
+  source: "quiz" | "practice",
+  answers: ExitAnswer[],
+): void {
+  if (!latestBearerToken) return;
+  void fetch(exitSubmitUrl(id, source), {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${latestBearerToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ answers, finalize_reason: "left" }),
+    keepalive: true,
+  });
+}
 export const savePracticeProgress = (
   id: string,
   answers: Record<string, unknown>,
@@ -646,65 +705,111 @@ export const removeBookmark = (questionId: string) =>
 
 // --- Challenge a friend (same institution) ---
 export type ChallengeLeaderRow = {
+  rank: number;
   name: string;
   pct: number;
+  elapsed_seconds: number | null;
   is_creator: boolean;
   is_you: boolean;
 };
 export type ChallengeInfo = {
   token: string;
   creator_name: string;
+  subject_name: string | null;
   questions: number;
+  type_counts: Record<string, number>;
+  duration_minutes: number | null;
+  expires_at: string | null;
+  is_active: boolean;
+  accepting_closed: boolean;
   is_creator: boolean;
   my_status: "not_taken" | "in_progress" | "done";
   my_session_id: string | null;
   my_pct: number | null;
   leaderboard: ChallengeLeaderRow[];
 };
+export type MyChallenge = {
+  token: string;
+  subject_name: string | null;
+  questions: number;
+  duration_minutes: number | null;
+  created_at: string | null;
+  expires_at: string | null;
+  is_active: boolean;
+  is_expired: boolean;
+  players: number;
+  my_status: "not_taken" | "in_progress" | "done";
+  my_session_id: string | null;
+};
+export const listMyChallenges = () =>
+  jsonRequest<MyChallenge[]>("/api/v1/challenges/mine", "GET");
+export type CreatedChallenge = {
+  token: string;
+  questions: number;
+  duration_minutes: number;
+  type_counts: Record<string, number>;
+};
 export const createChallenge = (input: {
   subject_id?: string | null;
-  count?: number;
+  type_counts: Record<string, number>;
 }) =>
-  jsonRequest<{ token: string; session_id: string }>(
+  jsonRequest<CreatedChallenge>(
     "/api/v1/challenges",
     "POST",
     input,
   );
 export const getChallenge = (token: string) =>
   jsonRequest<ChallengeInfo>(`/api/v1/challenges/${token}`, "GET");
-export const acceptChallenge = (token: string) =>
-  jsonRequest<{ session_id: string }>(
+export const acceptChallenge = async (token: string) => {
+  const state = await jsonRequest<StartedPracticeSession>(
     `/api/v1/challenges/${token}/accept`,
     "POST",
     {},
   );
+  primeAttemptState(state);
+  return state;
+};
+export const closeChallenge = (token: string) =>
+  jsonRequest<{ closed: string }>(`/api/v1/challenges/${token}`, "DELETE");
 
 // --- Daily challenge + streak ---
 export type DailyInfo = {
   done_today: boolean;
+  attempted_today: boolean;
   streak: number;
   longest: number;
   today_session_id: string | null;
   last7: { date: string; done: boolean }[];
 };
 export const getDaily = () => jsonRequest<DailyInfo>("/api/v1/daily", "GET");
-export const startDaily = () =>
-  jsonRequest<{ session_id: string }>("/api/v1/daily/start", "POST", {});
+export const startDaily = async () => {
+  const state = await jsonRequest<StartedPracticeSession>(
+    "/api/v1/daily/start",
+    "POST",
+    {},
+  );
+  primeAttemptState(state);
+  return state;
+};
 
 // --- Exam Simulator (timed, negative marking, per-institution pattern) ---
 export type ExamConfig = {
   questions: number;
   duration_minutes: number;
   negative_marking: number;
+  active_session_id: string | null;
 };
 export const getExamConfig = () =>
   jsonRequest<ExamConfig>("/api/v1/exam/config", "GET");
-export const startExam = () =>
-  jsonRequest<{ session_id: string; questions: number; duration_minutes: number }>(
+export const startExam = async () => {
+  const state = await jsonRequest<StartedPracticeSession>(
     "/api/v1/exam/start",
     "POST",
     {},
   );
+  primeAttemptState(state);
+  return state;
+};
 
 // --- Leaderboard (institution-scoped) ---
 export type LeaderRow = {

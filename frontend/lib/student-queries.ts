@@ -9,6 +9,7 @@ import {
   DailyInfo,
   ExamConfig,
   Leaderboard,
+  MyChallenge,
   RevisionTopic,
   StudentQuiz,
   StudentStats,
@@ -21,6 +22,8 @@ import {
   getStudentStats,
   getWeakAnalysis,
   listBookmarks,
+  listMyChallenges,
+  listPracticeSubjects,
   listStudentAttempts,
   listStudentQuizzes,
 } from "@/lib/api";
@@ -35,18 +38,28 @@ export const STUDENT_DAILY_KEY = "student:daily";
 export const STUDENT_EXAM_CONFIG_KEY = "student:exam-config";
 export const STUDENT_LEADERBOARD_KEY_PREFIX = "student:leaderboard:";
 export const STUDENT_CHALLENGE_KEY_PREFIX = "student:challenge:";
+export const STUDENT_MY_CHALLENGES_KEY = "student:my-challenges";
+export const STUDENT_PRACTICE_SUBJECTS_KEY = "student:practice-subjects";
 
 /** One shared catalog request for Dashboard, Subjects, Smart Quiz and Challenge. */
 export function useStudentQuizzes() {
   return useSWR<StudentQuiz[]>(STUDENT_QUIZZES_KEY, listStudentQuizzes);
 }
 
+/** Enrolled subjects for self-serve practice, independent of published quizzes. */
+export function usePracticeSubjects() {
+  return useSWR(STUDENT_PRACTICE_SUBJECTS_KEY, listPracticeSubjects);
+}
+
 export function useStudentStats() {
   return useSWR<StudentStats>(STUDENT_STATS_KEY, getStudentStats);
 }
 
-export function useStudentAttempts() {
-  return useSWR<AttemptHistoryItem[]>(STUDENT_ATTEMPTS_KEY, listStudentAttempts);
+export function useStudentAttempts(enabled = true) {
+  return useSWR<AttemptHistoryItem[]>(
+    enabled ? STUDENT_ATTEMPTS_KEY : null,
+    listStudentAttempts,
+  );
 }
 
 export function useStudentWeakAnalysis() {
@@ -87,4 +100,8 @@ export function studentChallengeKey(token: string) {
 
 export function useStudentChallenge(token: string) {
   return useSWR<ChallengeInfo>(studentChallengeKey(token), () => getChallenge(token));
+}
+
+export function useMyChallenges() {
+  return useSWR<MyChallenge[]>(STUDENT_MY_CHALLENGES_KEY, listMyChallenges);
 }

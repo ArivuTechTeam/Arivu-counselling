@@ -12,6 +12,7 @@ import {
 } from "@/components/ui/card";
 import { PageHeader } from "@/components/ui/page-header";
 import { ErrorCard } from "@/components/ui/error-card";
+import { AttemptReadiness } from "@/components/student/attempt-readiness";
 import { startDaily } from "@/lib/api";
 import { useStudentDaily } from "@/lib/student-queries";
 
@@ -38,6 +39,7 @@ export default function DailyPage() {
   const { data: info, error: loadError, mutate } = useStudentDaily();
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [showReadiness, setShowReadiness] = useState(false);
 
   async function start() {
     setBusy(true);
@@ -50,6 +52,7 @@ export default function DailyPage() {
       setActionError(
         e instanceof Error ? e.message : "Could not start today's challenge.",
       );
+      setShowReadiness(false);
       setBusy(false);
     }
   }
@@ -200,11 +203,17 @@ export default function DailyPage() {
       <Card className="animate-rise">
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
-            {info.done_today ? "Today's challenge 🎉" : "Today's challenge"}
+            {info.done_today
+              ? "Today's challenge 🎉"
+              : info.attempted_today
+                ? "Today's attempt is finished"
+                : "Today's challenge"}
           </CardTitle>
           <CardDescription>
             {info.done_today
               ? "You've completed today's challenge — come back tomorrow to keep the streak going."
+              : info.attempted_today
+                ? "You left today's challenge after starting it. Your saved answers were graded, but it does not extend your streak."
               : "10 quick questions from your syllabus. Finish to extend your streak."}
           </CardDescription>
         </CardHeader>
@@ -215,7 +224,7 @@ export default function DailyPage() {
               🎯 10 questions
             </span>
             <span className="rounded-full bg-muted px-3 py-1 text-muted-foreground">
-              ⏱️ ~5 minutes
+              ⏱️ Type-based time limit
             </span>
             <span className="rounded-full bg-primary/10 px-3 py-1 text-primary">
               🔥 +1 to your streak
@@ -230,9 +239,17 @@ export default function DailyPage() {
                 <strong>{info.streak}-day</strong> streak alive!
               </span>
             </div>
+          ) : info.attempted_today ? (
+            <div className="flex items-center gap-3 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-950">
+              <span className="text-lg">⏳</span>
+              <span>
+                Today&apos;s one attempt has been used. Come back tomorrow for a
+                new challenge.
+              </span>
+            </div>
           ) : (
             <button
-              onClick={start}
+              onClick={() => setShowReadiness(true)}
               disabled={busy}
               className="w-fit rounded-xl bg-gradient-to-b from-[#219256] to-[#15603d] px-6 py-3 text-sm font-semibold text-white shadow-md transition-transform hover:-translate-y-0.5 disabled:opacity-60"
             >
@@ -245,6 +262,25 @@ export default function DailyPage() {
           )}
         </CardContent>
       </Card>
+
+      <AttemptReadiness
+        open={showReadiness}
+        title={
+          info.today_session_id
+            ? "Continue today's challenge"
+            : "Today's 10-question challenge"
+        }
+        questionCount={10}
+        timeDisplay="Type-based"
+        warningText={
+          info.today_session_id
+            ? "This resumes today's existing challenge. Leaving the quiz ends it; only saved answers receive marks, and an abandoned challenge will not extend your streak."
+            : "You get one Daily Challenge each calendar day. After you start, leaving the quiz ends it; only saved answers receive marks, and an abandoned challenge will not extend your streak."
+        }
+        busy={busy}
+        onCancel={() => setShowReadiness(false)}
+        onConfirm={() => void start()}
+      />
     </div>
   );
 }

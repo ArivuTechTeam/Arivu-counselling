@@ -84,20 +84,6 @@
   }
 }
 
-/* Glossy sheen sweeping across a button to draw the eye. */
-@keyframes shine {
-  0% {
-    transform: translateX(-130%) skewX(-18deg);
-  }
-  60%,
-  100% {
-    transform: translateX(130%) skewX(-18deg);
-  }
-}
-.animate-shine {
-  animation: shine 2.8s ease-in-out infinite;
-}
-
 /* Soft pulsing glow — a gentle "attend me" heartbeat around the CTA. */
 @keyframes cta-glow {
   0%,
@@ -113,7 +99,6 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .animate-shine,
   .animate-cta-glow {
     animation: none;
   }

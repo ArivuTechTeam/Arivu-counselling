@@ -49,7 +49,10 @@ export default function DashboardLayout({
       if (cancelled) return;
       if (!user) {
         // No session — send them to sign in rather than rendering an empty shell.
-        router.replace("/login");
+        const next = pathname.startsWith("/dashboard/student/challenge/")
+          ? `?next=${encodeURIComponent(pathname)}`
+          : "";
+        router.replace(`/login${next}`);
         return;
       }
       setEmail(user.email ?? "");

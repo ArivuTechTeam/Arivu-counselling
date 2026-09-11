@@ -59,6 +59,11 @@ migration-20-teacher-deletion-content-retention.sql
 migration-21-fix-google-signup-ambiguous-column.sql
 migration-22-browser-data-api-hardening.sql
 migration-23-quiz-set-document-link.sql
+migration-24-quiz-attempt-limit.sql
+migration-25-revision-topic-snapshots.sql
+migration-26-daily-exam-session-guards.sql
+migration-27-challenge-flow-hardening.sql
+migration-28-remove-eager-challenge-session.sql
 ```
 
 The repository does not prove which migrations are applied to a deployed
@@ -70,6 +75,16 @@ run the duplicate checks documented in migrations 16 and 18 first.
 Migration 22 must be applied to close direct browser access to backend-owned
 tables and analytics views. Migration 23 must be applied before deploying the
 document log because quiz creation starts writing `quiz_sets.document_id`.
+Migration 24 must be applied before deploying the atomic published-quiz attempt
+limit. Migration 25 must be applied before deploying revision-topic snapshots;
+the API reads and writes `revised_topics.answered_at_revision`. Migration 26
+must be applied before deploying the Daily Challenge and Exam Simulator guards;
+the API reads and writes `practice_sessions.activity_date` and `active_slot`.
+Migration 27 must be applied before deploying the hardened Challenge a Friend
+flow. It intentionally stops if duplicate `(challenge_id, student_id)` sessions
+already exist; resolve that data first, then rerun it.
+Migration 28 removes the obsolete helper that started the challenge creator's
+attempt during link creation; apply it after migration 27.
 
 ---
 
@@ -100,7 +115,7 @@ document log because quiz creation starts writing `quiz_sets.document_id`.
 **Environment variables** (from `backend/.env.example`). The connection and
 AI provider variables were confirmed present on the live Railway service as
 of 2026-09-04 (existence checked in the dashboard; values themselves were not
-re-verified). The rate-limit variables have safe code defaults, but set them
+re-verified). The policy variables have safe code defaults, but set them
 explicitly in Railway so the production policy is visible and easy to edit:
 
 | Var | What |
@@ -118,6 +133,9 @@ explicitly in Railway so the production policy is visible and easy to edit:
 | `RATE_LIMIT_QUESTION_REGENERATE_PER_HOUR` | per-user question regenerations per rolling hour (default `10`) |
 | `RATE_LIMIT_QUESTION_EXPLAIN_PER_HOUR` | per-user question explanations per rolling hour (default `10`) |
 | `RATE_LIMIT_QUIZ_EXTRACTION_PER_HOUR` | per-user existing-quiz document extractions per rolling hour (default `10`) |
+| `STUDENT_QUIZ_ATTEMPT_LIMIT` | maximum starts per student for the same published quiz variant (default `2`; on Railway redeploy after changing; for local Docker run `docker compose up -d --force-recreate backend` because restarting Docker Desktop preserves the existing container environment) |
+| `DAILY_CHALLENGE_TIMEZONE` | IANA timezone used to decide each student's institution-facing Daily Challenge calendar day (default `Asia/Kolkata`) |
+| `CHALLENGE_EXPIRY_DAYS` | number of days a new friend challenge accepts new participants (default `30`; existing sessions may still resume) |
 
 **Deploying a change (Railway):** merge to `main` first, then run
 `scripts/deploy.sh` from `main` (or `railway up backend --path-as-root

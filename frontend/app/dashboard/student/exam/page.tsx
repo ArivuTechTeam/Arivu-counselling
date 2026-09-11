@@ -97,8 +97,10 @@ export default function ExamPage() {
           {cfg ? (
             [
               ["Timed", "The clock starts the moment you begin and the exam auto-submits when it runs out."],
-              ["Negative marking", `Each wrong answer costs you ${cfg.negative_marking} marks. Leave a question blank to score zero on it instead.`],
-              ["No pausing", "Once you start you can't pause — set aside the full time and find a quiet spot."],
+              ["Complete every question", `Answer all ${cfg.questions} questions before submitting early. If time ends first, your saved work submits automatically.`],
+              ["Question pacing", "The base guide is 45s for True/False, 60s for single choice, 75s for fill blank, 90s for multiple choice, and 120s for numerical. These guides scale to fit this exam's overall limit."],
+              ["Negative marking", `Each wrong answer costs you ${cfg.negative_marking} marks. Review carefully before you submit.`],
+              ["No pausing", "Only one exam can be active at a time. Returning here resumes that same exam and its original deadline."],
             ].map(([t, d]) => (
               <div key={t} className="flex gap-3 rounded-lg border p-3">
                 <span className="mt-0.5 h-2 w-2 shrink-0 rounded-full bg-primary" />
@@ -128,7 +130,11 @@ export default function ExamPage() {
               disabled={busy || !cfg}
               className="rounded-lg bg-gradient-to-b from-[#219256] to-[#15603d] px-6 py-3 text-sm font-bold text-white shadow-sm transition-transform hover:-translate-y-0.5 disabled:opacity-60"
             >
-              {busy ? "Starting your exam…" : "Start the exam →"}
+              {busy
+                ? "Opening your exam…"
+                : cfg?.active_session_id
+                  ? "Continue active exam →"
+                  : "Start the exam →"}
             </button>
           </div>
         </CardContent>

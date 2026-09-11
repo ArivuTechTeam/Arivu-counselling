@@ -34,6 +34,22 @@ class RecordingQuery:
 
     def execute(self):
         rows = [dict(row) for row in self.service.tables.get(self.table, [])]
+        if self.table == "quiz_variant_questions" and "questions!inner" in self.columns:
+            questions = {
+                question["id"]: question
+                for question in self.service.tables.get("questions", [])
+            }
+            rows = [
+                {
+                    **row,
+                    "questions": {
+                        "id": row["question_id"],
+                        "type": questions[row["question_id"]]["type"],
+                    },
+                }
+                for row in rows
+                if row.get("question_id") in questions
+            ]
         for column, value in self.filters:
             if column == "questions.review_status":
                 approved = {
@@ -65,6 +81,7 @@ class RecordingService:
             for set_index, set_id in enumerate(set_ids)
             for variant_index in range(3)
         ]
+        variants[0]["time_limit_minutes"] = None
         questions = [
             {
                 "id": f"question-{index}",
@@ -129,10 +146,19 @@ class StudentQuizQueryEfficiencyTests(unittest.TestCase):
         )
 
     def test_dashboard_catalog_uses_constant_batched_query_count(self) -> None:
-        with patch("app.api.student.get_service_client", return_value=self.service):
+        with (
+            patch("app.api.student.get_service_client", return_value=self.service),
+            patch(
+                "app.api.student.get_settings",
+                return_value=SimpleNamespace(student_quiz_attempt_limit=4),
+            ),
+        ):
             quizzes = list_quizzes(self.profile)
 
         self.assertEqual(len(quizzes), 4)
+        self.assertEqual(quizzes[0]["variants"][0]["time_limit_minutes"], 2)
+        self.assertEqual(quizzes[0]["variants"][0]["attempt_limit"], 4)
+        self.assertEqual(quizzes[0]["variants"][0]["attempts_remaining"], 4)
         self.assertEqual(len(self.service.calls), 7)
         self.assertEqual(
             sum(1 for table, _ in self.service.calls if table == "quiz_variants"), 1
@@ -146,6 +172,12 @@ class StudentQuizQueryEfficiencyTests(unittest.TestCase):
             1,
         )
         self.assertFalse(any(columns == "*" for _, columns in self.service.calls))
+        link_columns = [
+            columns
+            for table, columns in self.service.calls
+            if table == "quiz_variant_questions"
+        ]
+        self.assertEqual(link_columns, ["variant_id, questions!inner(id, type)"])
 
     def test_attempt_question_load_does_not_select_embedding(self) -> None:
         questions = _ordered_approved_questions(
@@ -177,7 +209,7 @@ class StudentQuizQueryEfficiencyTests(unittest.TestCase):
         self.assertEqual(
             question_selects,
             [
-                "id, type, question_text, options, correct_answer, explanation, marks"
+                "id, chapter_id, type, question_text, options, correct_answer, explanation, marks"
             ],
         )
 

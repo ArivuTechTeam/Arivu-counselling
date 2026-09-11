@@ -3,20 +3,24 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 
-import { PageHeader } from "@/components/ui/page-header";
 import { EmptyState } from "@/components/ui/empty-state";
-import { ErrorCard } from "@/components/ui/error-card";
-import { SkeletonList } from "@/components/ui/skeleton";
 import { Inbox } from "@/components/ui/icons";
+import { AttemptHistoryItem } from "@/lib/api";
 import { variantLabel } from "@/lib/format";
-import { useStudentAttempts } from "@/lib/student-queries";
 
 function hexFor(pct: number) {
   return pct >= 70 ? "#00a651" : pct >= 40 ? "#f5a623" : "#ff6b7a";
 }
 
-export function TestHistory() {
-  const { data: items, error, mutate } = useStudentAttempts();
+export function AttemptHistoryList({
+  items,
+  chapterNames = {},
+  emptyScope = "subject",
+}: {
+  items: AttemptHistoryItem[];
+  chapterNames?: Record<string, string>;
+  emptyScope?: "subject" | "all";
+}) {
   const [mounted, setMounted] = useState(false);
 
   // Let the bars/rings animate from 0 once the list is in.
@@ -28,21 +32,18 @@ export function TestHistory() {
   }, [items]);
 
   return (
-    <div className="flex flex-col gap-6">
-      <PageHeader
-        title="Quiz history"
-        description="Every attempt you've made, newest first — tap a card to review it."
-      />
-
-      {error ? (
-        <ErrorCard message={error.message} onRetry={() => void mutate()} />
-      ) : items === undefined ? (
-        <SkeletonList />
-      ) : items.length === 0 ? (
+    <div className="flex flex-col gap-4">
+      {items.length === 0 ? (
         <EmptyState
           icon={<Inbox />}
-          title="No attempts yet"
-          message="Take a quiz to build your history — every attempt you make will show up here for you to review."
+          title={
+            emptyScope === "all" ? "No quiz history yet" : "No history for this subject yet"
+          }
+          message={
+            emptyScope === "all"
+              ? "Complete a quiz or practice session and your score will appear here."
+              : "Complete a quiz for this subject and your score will appear here."
+          }
         />
       ) : (
         <div className="flex flex-col gap-4">
@@ -83,6 +84,9 @@ export function TestHistory() {
                   </p>
                   <p className="mt-0.5 text-xs text-muted-foreground">
                     {variantLabel(a.variant_type)}
+                    {a.chapter_id && chapterNames[a.chapter_id]
+                      ? ` · ${chapterNames[a.chapter_id]}`
+                      : ""}
                     {a.submitted_at
                       ? ` · ${new Date(a.submitted_at).toLocaleDateString()}`
                       : ""}
