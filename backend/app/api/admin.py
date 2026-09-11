@@ -1201,11 +1201,9 @@ class InstitutionAnalyticsResponse(BaseModel):
 async def _gather(thunks: dict[str, Callable[[object], object]]) -> dict:
     """Run Supabase reads concurrently and propagate failures to the UI.
 
-    A single sync client is not safe to share across worker threads — doing
-    so caused intermittent HTTP/2 disconnects and false zero-value
-    dashboards. Each thunk gets its OWN get_service_client() instance instead
-    of closing over one shared client, so the underlying network calls can
-    run in parallel threads without hitting that hazard again.
+    The process-wide client uses httpx's thread-safe HTTP/1.1 connection pool,
+    so these worker threads can share it without HTTP/2 multiplexing failures.
+    Errors still propagate instead of being converted into false zero values.
     """
 
     async def run(key: str, thunk: Callable[[object], object]):

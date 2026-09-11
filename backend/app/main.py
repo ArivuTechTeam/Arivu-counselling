@@ -39,6 +39,7 @@ from app.lib.auth import (
     get_current_user,
 )
 from app.lib.config import get_settings
+from app.lib.supabase import SupabaseUnavailableError
 
 settings = get_settings()
 app = FastAPI(
@@ -103,6 +104,24 @@ async def safe_validation_error(
         headers={
             "Cache-Control": "no-store, private",
             "Pragma": "no-cache",
+        },
+    )
+
+
+@app.exception_handler(SupabaseUnavailableError)
+async def temporary_supabase_failure(
+    _request: Request, _exception: SupabaseUnavailableError
+) -> JSONResponse:
+    """Expose exhausted Data API retries as a temporary, retryable failure."""
+    return JSONResponse(
+        status_code=503,
+        content={
+            "detail": "The data service is temporarily unavailable. Please try again."
+        },
+        headers={
+            "Cache-Control": "no-store, private",
+            "Pragma": "no-cache",
+            "Retry-After": "2",
         },
     )
 

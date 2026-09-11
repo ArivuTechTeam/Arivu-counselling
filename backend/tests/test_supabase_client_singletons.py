@@ -6,6 +6,8 @@ from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import httpx
+
 import app.lib.supabase as supabase_lib
 
 
@@ -33,16 +35,23 @@ class SupabaseClientSingletonTests(unittest.TestCase):
     def test_stateless_clients_are_constructed_once(self) -> None:
         created = []
 
-        def factory(_url: str, key: str):
+        http_clients = []
+
+        def factory(_url: str, key: str, *, options):
             client = SimpleNamespace(key=key)
             created.append(client)
+            http_clients.append(options.httpx_client)
             return client
 
-        with patch.object(supabase_lib, "create_client", side_effect=factory):
-            service_first = supabase_lib.get_service_client()
-            service_second = supabase_lib.get_service_client()
-            anon_first = supabase_lib.get_anon_client()
-            anon_second = supabase_lib.get_anon_client()
+        try:
+            with patch.object(supabase_lib, "create_client", side_effect=factory):
+                service_first = supabase_lib.get_service_client()
+                service_second = supabase_lib.get_service_client()
+                anon_first = supabase_lib.get_anon_client()
+                anon_second = supabase_lib.get_anon_client()
+        finally:
+            for http_client in http_clients:
+                http_client.close()
 
         self.assertIs(service_first, service_second)
         self.assertIs(anon_first, anon_second)
@@ -52,26 +61,37 @@ class SupabaseClientSingletonTests(unittest.TestCase):
     def test_concurrent_first_access_creates_one_service_client(self) -> None:
         constructions = 0
 
-        def factory(_url: str, _key: str):
+        http_clients = []
+
+        def factory(_url: str, _key: str, *, options):
             nonlocal constructions
             constructions += 1
             time.sleep(0.01)
+            http_clients.append(options.httpx_client)
             return object()
 
-        with (
-            patch.object(supabase_lib, "create_client", side_effect=factory),
-            ThreadPoolExecutor(max_workers=20) as pool,
-        ):
-            clients = list(
-                pool.map(lambda _index: supabase_lib.get_service_client(), range(40))
-            )
+        try:
+            with (
+                patch.object(supabase_lib, "create_client", side_effect=factory),
+                ThreadPoolExecutor(max_workers=20) as pool,
+            ):
+                clients = list(
+                    pool.map(
+                        lambda _index: supabase_lib.get_service_client(), range(40)
+                    )
+                )
+        finally:
+            for http_client in http_clients:
+                http_client.close()
 
         self.assertEqual(constructions, 1)
         self.assertTrue(all(client is clients[0] for client in clients))
 
     def test_auth_state_operations_receive_isolated_clients(self) -> None:
         with patch.object(
-            supabase_lib, "create_client", side_effect=lambda *_args: object()
+            supabase_lib,
+            "create_client",
+            side_effect=lambda *_args, **_kwargs: object(),
         ) as factory:
             first = supabase_lib.create_anon_auth_client()
             second = supabase_lib.create_anon_auth_client()
@@ -79,6 +99,79 @@ class SupabaseClientSingletonTests(unittest.TestCase):
         self.assertIsNot(first, second)
         self.assertEqual(factory.call_count, 2)
 
+
+class SupabaseReadRetryTransportTests(unittest.TestCase):
+    def test_retries_get_after_remote_protocol_error(self) -> None:
+        calls = 0
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise httpx.RemoteProtocolError(
+                    "connection terminated", request=request
+                )
+            return httpx.Response(200, json={"ok": True})
+
+        transport = supabase_lib._ReadRetryTransport(
+            httpx.MockTransport(handler), base_delay_seconds=0
+        )
+        with httpx.Client(transport=transport) as client:
+            response = client.get("https://example.test/profiles")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(calls, 2)
+
+    def test_retries_transient_gateway_response_for_get(self) -> None:
+        calls = 0
+
+        def handler(_request: httpx.Request) -> httpx.Response:
+            nonlocal calls
+            calls += 1
+            return httpx.Response(502 if calls == 1 else 200)
+
+        transport = supabase_lib._ReadRetryTransport(
+            httpx.MockTransport(handler), base_delay_seconds=0
+        )
+        with httpx.Client(transport=transport) as client:
+            response = client.get("https://example.test/quizzes")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(calls, 2)
+
+    def test_does_not_retry_post_after_transport_error(self) -> None:
+        calls = 0
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            nonlocal calls
+            calls += 1
+            raise httpx.RemoteProtocolError("connection lost", request=request)
+
+        transport = supabase_lib._ReadRetryTransport(
+            httpx.MockTransport(handler), base_delay_seconds=0
+        )
+        with httpx.Client(transport=transport) as client:
+            with self.assertRaises(httpx.RemoteProtocolError):
+                client.post("https://example.test/attempts", json={"answer": "a"})
+
+        self.assertEqual(calls, 1)
+
+    def test_raises_controlled_error_after_read_retries_are_exhausted(self) -> None:
+        calls = 0
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            nonlocal calls
+            calls += 1
+            raise httpx.RemoteProtocolError("connection lost", request=request)
+
+        transport = supabase_lib._ReadRetryTransport(
+            httpx.MockTransport(handler), base_delay_seconds=0
+        )
+        with httpx.Client(transport=transport) as client:
+            with self.assertRaises(supabase_lib.SupabaseUnavailableError):
+                client.get("https://example.test/profiles")
+
+        self.assertEqual(calls, 3)
 
 if __name__ == "__main__":
     unittest.main()
