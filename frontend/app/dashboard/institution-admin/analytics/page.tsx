@@ -1,18 +1,21 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { Area, AreaChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { ErrorCard } from "@/components/ui/error-card";
 import { PageHeader } from "@/components/ui/page-header";
-import { AdminQuizSet, Course as AcademicCourse, InstitutionAnalytics, QualityFinding, getAdminQuizSets, getInstitutionAnalytics, listCourses } from "@/lib/api";
+import { AdminQuizSet, Course as AcademicCourse, InstitutionAnalytics, QualityFinding } from "@/lib/api";
+import { useCourses, useInstitutionAnalytics, useInstitutionQuizSets } from "@/lib/staff-queries";
 import { QuizPerformanceModal } from "../quizzes/_components/quiz-performance-modal";
 import { CourseSubjectDrilldownModal } from "./_components/course-subject-drilldown-modal";
 import { QuizDrilldownModal } from "./_components/quiz-drilldown-modal";
 import { StudentPerformanceModal } from "./_components/student-performance-modal";
 
 const BRAND = "#15603d";
+const EMPTY_QUIZZES: AdminQuizSet[] = [];
+const EMPTY_COURSES: AcademicCourse[] = [];
 const SEVERITY = {
   critical: { label: "Critical", color: "#ff6b7a", chip: "bg-rose-100 text-rose-700" },
   warn: { label: "Improve", color: "#f5a623", chip: "bg-amber-100 text-amber-700" },
@@ -42,11 +45,14 @@ function Skeleton() {
 }
 
 export default function InstitutionAnalyticsPage() {
-  const [data, setData] = useState<InstitutionAnalytics | null>(null);
-  const [quizzes, setQuizzes] = useState<AdminQuizSet[]>([]);
-  const [courses, setCourses] = useState<AcademicCourse[]>([]);
-  const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
+  const analyticsQuery = useInstitutionAnalytics();
+  const quizzesQuery = useInstitutionQuizSets();
+  const coursesQuery = useCourses();
+  const data = analyticsQuery.data ?? null;
+  const quizzes = quizzesQuery.data ?? EMPTY_QUIZZES;
+  const courses = coursesQuery.data ?? EMPTY_COURSES;
+  const error = analyticsQuery.error ?? quizzesQuery.error ?? coursesQuery.error;
+  const loading = analyticsQuery.isValidating || quizzesQuery.isValidating || coursesQuery.isValidating;
   const [teacherSort, setTeacherSort] = useState<TeacherSort>("attempts");
   const [showInactive, setShowInactive] = useState(false);
   const [courseSort, setCourseSort] = useState<{ key: CourseSort; direction: "asc" | "desc" }>({ key: "attempts", direction: "desc" });
@@ -58,12 +64,8 @@ export default function InstitutionAnalyticsPage() {
   const [selectedQuiz, setSelectedQuiz] = useState<AdminQuizSet | null>(null);
 
   function load() {
-    setLoading(true); setError(null);
-    Promise.all([getInstitutionAnalytics(), getAdminQuizSets(), listCourses()])
-      .then(([analytics, rows, courseRows]) => { setData(analytics); setQuizzes(rows); setCourses(courseRows); })
-      .catch((reason) => setError(reason.message)).finally(() => setLoading(false));
+    void Promise.all([analyticsQuery.mutate(), quizzesQuery.mutate(), coursesQuery.mutate()]);
   }
-  useEffect(load, []);
 
   const activeTeachers = useMemo(() => {
     const rows = [...(data?.teacher_activity ?? [])].filter((teacher) => teacher.is_active);
@@ -95,7 +97,7 @@ export default function InstitutionAnalyticsPage() {
     }
   }
 
-  if (error) return <div className="flex flex-col gap-6"><PageHeader title="Institution analytics" description="See performance trends and where your institution needs attention."/><ErrorCard message={error} onRetry={load}/></div>;
+  if (error) return <div className="flex flex-col gap-6"><PageHeader title="Institution analytics" description="See performance trends and where your institution needs attention."/><ErrorCard message={error.message} onRetry={load}/></div>;
   if (!data) return <div className="flex flex-col gap-6"><PageHeader title="Institution analytics" description="See performance trends and where your institution needs attention."/><Skeleton/></div>;
 
   const { summary, trend } = data;

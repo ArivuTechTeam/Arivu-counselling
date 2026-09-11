@@ -2,7 +2,6 @@
 
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
-import useSWR from "swr";
 
 import {
   Card,
@@ -16,9 +15,8 @@ import { ErrorCard } from "@/components/ui/error-card";
 import { Skeleton, SkeletonCards } from "@/components/ui/skeleton";
 import {
   AttentionStudent,
-  TeacherClassOverview,
-  getTeacherClassOverview,
 } from "@/lib/api";
+import { useTeacherOverview } from "@/lib/staff-queries";
 
 function color(pct: number) {
   return pct >= 70 ? "#00a651" : pct >= 40 ? "#f5a623" : "#ff6b7a";
@@ -157,10 +155,7 @@ function ScoreDistributionChart({
 
 export function ClassAnalytics() {
   const router = useRouter();
-  const { data = null, error, mutate } = useSWR<TeacherClassOverview>(
-    "dashboard:teacher:class-overview",
-    getTeacherClassOverview,
-  );
+  const { data = null, error, mutate } = useTeacherOverview();
 
   const loaded = data !== null;
   const quizzes = data?.accuracy_by_quiz ?? [];

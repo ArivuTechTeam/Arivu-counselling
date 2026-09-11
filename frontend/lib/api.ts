@@ -1038,6 +1038,7 @@ export type InstitutionAnalytics = {
   summary: {
     students: number;
     teachers: number;
+    admins: number;
     active_week: number;
     inactive_students: number;
     at_risk: number;
@@ -1046,6 +1047,10 @@ export type InstitutionAnalytics = {
     published_quizzes: number;
     quiz_sets: number;
     courses: number;
+    subjects: number;
+    documents: number;
+    draft_quizzes: number;
+    questions: number;
   };
   trend: {
     attempts_last7: number;
@@ -1295,6 +1300,12 @@ export type TeacherClassOverview = {
   pipeline: ReviewPipeline;
   activity_trend: ActivityPoint[];
   score_distribution: ScoreBand[];
+  content: {
+    documents: number;
+    quiz_sets: number;
+    published: number;
+    drafts: number;
+  };
 };
 
 export const getTeacherClassOverview = () =>

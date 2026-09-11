@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import {
@@ -17,11 +17,11 @@ import { FileText } from "@/components/ui/icons";
 import { PageHeader } from "@/components/ui/page-header";
 import { SkeletonList } from "@/components/ui/skeleton";
 import {
-  DocumentLogItem,
   getDocumentFileUrl,
-  listDocumentLog,
   reExtractDocument,
 } from "@/lib/api";
+import { DocumentLogItem } from "@/lib/api";
+import { useTeacherDocumentLog } from "@/lib/staff-queries";
 
 function formatWhen(iso: string): string {
   const d = new Date(iso);
@@ -54,25 +54,15 @@ function quizStatusView(status: string): { label: string; tone: QuizTone } {
 
 export function DocumentLog() {
   const router = useRouter();
-  const [items, setItems] = useState<DocumentLogItem[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const { data: items = null, error, mutate } = useTeacherDocumentLog();
   const [opening, setOpening] = useState<string | null>(null);
   const [openError, setOpenError] = useState<string | null>(null);
   const [retrying, setRetrying] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
 
   function load() {
-    setError(null);
-    setItems(null);
-    listDocumentLog()
-      .then(setItems)
-      .catch((e) =>
-        setError(e instanceof Error ? e.message : "Failed to load your documents."),
-      );
+    void mutate();
   }
-  useEffect(() => {
-    load();
-  }, []);
 
   async function openDoc(item: DocumentLogItem) {
     // Reserve the tab during the click gesture; opening it after the API await
@@ -133,7 +123,7 @@ export function DocumentLog() {
         </CardHeader>
         <CardContent>
           {error ? (
-            <ErrorCard message={error} onRetry={load} />
+            <ErrorCard message={error.message} onRetry={load} />
           ) : items === null ? (
             <SkeletonList rows={5} />
           ) : items.length === 0 ? (

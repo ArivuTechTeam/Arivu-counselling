@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 
 import {
   Card,
@@ -13,7 +13,8 @@ import { StudentReportButton } from "@/components/shared/pdf-buttons";
 import { ErrorCard } from "@/components/ui/error-card";
 import { PageHeader } from "@/components/ui/page-header";
 import { SkeletonList, SkeletonStats } from "@/components/ui/skeleton";
-import { ClassMonitor, ClassMonitorStudent, getClassMonitor } from "@/lib/api";
+import { ClassMonitorStudent } from "@/lib/api";
+import { useTeacherMonitor } from "@/lib/staff-queries";
 
 const STATUS: Record<string, { label: string; tone: string; color: string }> = {
   strong: { label: "Strong", tone: "bg-emerald-100 text-emerald-700", color: "#00a651" },
@@ -45,20 +46,8 @@ function Stat({ value, label, color }: { value: number | string; label: string; 
 }
 
 export default function ClassMonitorPage() {
-  const [data, setData] = useState<ClassMonitor | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const { data = null, error, mutate } = useTeacherMonitor();
   const [tab, setTab] = useState<"all" | "at_risk" | "not_started">("all");
-
-  function load() {
-    setError(null);
-    getClassMonitor()
-      .then(setData)
-      .catch((e) => setError(e.message));
-  }
-
-  useEffect(() => {
-    load();
-  }, []);
 
   const rows: ClassMonitorStudent[] = useMemo(() => {
     const all = data?.students ?? [];
@@ -84,7 +73,7 @@ export default function ClassMonitorPage() {
       />
 
       {error ? (
-        <ErrorCard message={error} onRetry={load} />
+        <ErrorCard message={error.message} onRetry={() => void mutate()} />
       ) : loading ? (
         <>
           <SkeletonStats />

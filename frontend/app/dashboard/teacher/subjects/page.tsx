@@ -28,8 +28,8 @@ import {
   createChapter,
   deleteChapter,
   listChapters,
-  listSubjectMetrics,
 } from "@/lib/api";
+import { useTeacherSubjectMetrics } from "@/lib/staff-queries";
 
 type SubjectRow = { id: string; name: string; course: string };
 
@@ -179,20 +179,8 @@ function SubjectCard({
 }
 
 export default function TeacherSubjectsPage() {
-  const [metrics, setMetrics] = useState<SubjectMetrics[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const { data: metrics = null, error, mutate } = useTeacherSubjectMetrics();
   const [active, setActive] = useState<SubjectRow | null>(null);
-
-  function load() {
-    setError(null);
-    listSubjectMetrics()
-      .then(setMetrics)
-      .catch((e) => setError(e instanceof Error ? e.message : "Failed to load."));
-  }
-
-  useEffect(() => {
-    load();
-  }, []);
 
   // Rolled-up KPIs for the top strip.
   const totals = useMemo(() => {
@@ -216,7 +204,7 @@ export default function TeacherSubjectsPage() {
   }, [metrics]);
 
   if (active) {
-    return <ChapterManager subject={active} onBack={() => setActive(null)} />;
+    return <ChapterManager subject={active} onBack={() => setActive(null)} onChanged={() => void mutate()} />;
   }
 
   return (
@@ -227,7 +215,7 @@ export default function TeacherSubjectsPage() {
       />
 
       {error ? (
-        <ErrorCard message={error} onRetry={load} />
+        <ErrorCard message={error.message} onRetry={() => void mutate()} />
       ) : metrics === null ? (
         <>
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
@@ -311,9 +299,11 @@ export default function TeacherSubjectsPage() {
 function ChapterManager({
   subject,
   onBack,
+  onChanged,
 }: {
   subject: SubjectRow;
   onBack: () => void;
+  onChanged: () => void;
 }) {
   const [chapters, setChapters] = useState<Chapter[] | null>(null);
   const [name, setName] = useState("");
@@ -339,6 +329,7 @@ function ChapterManager({
       await createChapter(subject.id, trimmed);
       setName("");
       load();
+      onChanged();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not add chapter.");
     } finally {
@@ -353,6 +344,7 @@ function ChapterManager({
       await deleteChapter(c.id);
       setNotice(`Deleted "${c.name}".`);
       load();
+      onChanged();
     } catch (err) {
       // The backend blocks deletion when the chapter is still in use.
       setError(err instanceof Error ? err.message : "Could not delete chapter.");

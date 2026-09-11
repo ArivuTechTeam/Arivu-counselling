@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import re
 import unittest
+from collections import Counter
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -22,6 +24,8 @@ from app.api.admin import (
     update_user,
 )
 from app.api.institution_admin import router as institution_admin_router
+from app.api.academics import list_courses
+from app.api.teacher import class_overview
 from app.lib.auth import CurrentProfile
 
 
@@ -42,6 +46,9 @@ class _Query:
 
     def in_(self, column: str, values: list[object]):
         self.in_filters.append((column, set(values)))
+        return self
+
+    def order(self, _column: str):
         return self
 
     def maybe_single(self):
@@ -98,6 +105,7 @@ class _Rpc:
 
 class _Service:
     def __init__(self) -> None:
+        self.queries: list[str] = []
         self.tables = {
             "profiles": [
                 {"id": "teacher-a", "tenant_id": "tenant-a", "role": "teacher", "full_name": "Ada Teacher", "created_at": "2026-09-07T10:00:00Z"},
@@ -135,6 +143,7 @@ class _Service:
         self.auth = SimpleNamespace(admin=_AuthAdmin(users))
 
     def table(self, name: str) -> _Query:
+        self.queries.append(name)
         return _Query(self.tables[name])
 
     def rpc(self, name: str, params: dict) -> _Rpc:
@@ -173,6 +182,62 @@ class InstitutionTeacherManagementTests(unittest.TestCase):
         self.assertEqual(courses[0]["name"], "First Year")
         self.assertEqual(courses[0]["student_count"], 1)
         self.assertEqual(courses[0]["subjects"], [{"id": "subject-a", "name": "Mathematics"}])
+
+    def test_course_listing_batches_subjects_in_one_query(self) -> None:
+        self.service.tables["courses"].extend(
+            [
+                {"id": "course-c", "tenant_id": "tenant-a", "name": "Second Year"},
+                {"id": "course-d", "tenant_id": "tenant-a", "name": "Third Year"},
+            ]
+        )
+        self.service.tables["subjects"].extend(
+            [
+                {"id": "subject-c", "tenant_id": "tenant-a", "course_id": "course-c", "name": "Tax"},
+                {"id": "subject-d", "tenant_id": "tenant-a", "course_id": "course-d", "name": "Audit"},
+            ]
+        )
+        self.service.queries.clear()
+
+        with patch("app.api.academics.get_service_client", return_value=self.service):
+            courses = list_courses(self.profile)
+
+        self.assertEqual(len(courses), 3)
+        self.assertEqual(self.service.queries.count("subjects"), 1)
+        self.assertEqual(
+            self.service.queries,
+            ["courses", "subjects", "enrollments", "profiles"],
+        )
+
+    def test_teacher_overview_reuses_content_counts_when_no_variant_exists(self) -> None:
+        self.service.tables.update(
+            {
+                "quiz_sets": [
+                    {"id": "set-a", "tenant_id": "tenant-a", "created_by": "teacher-a", "title": "Draft", "status": "draft"},
+                    {"id": "set-b", "tenant_id": "tenant-b", "created_by": "teacher-b", "title": "Other", "status": "published"},
+                ],
+                "documents": [
+                    {"id": "doc-a", "tenant_id": "tenant-a", "uploaded_by": "teacher-a"},
+                    {"id": "doc-b", "tenant_id": "tenant-b", "uploaded_by": "teacher-b"},
+                ],
+                "quiz_variants": [],
+            }
+        )
+        teacher = CurrentProfile(
+            user_id="teacher-a", tenant_id="tenant-a", role="teacher"
+        )
+        self.service.queries.clear()
+
+        with patch("app.api.teacher.get_service_client", return_value=self.service):
+            result = asyncio.run(class_overview(teacher))
+
+        self.assertEqual(
+            result["content"],
+            {"documents": 1, "quiz_sets": 1, "published": 0, "drafts": 1},
+        )
+        self.assertEqual(
+            Counter(self.service.queries),
+            Counter({"quiz_sets": 1, "documents": 1, "quiz_variants": 1}),
+        )
 
     def test_course_roster_excludes_teachers_and_other_tenants(self) -> None:
         roster = list_course_students("course-a", self.profile)

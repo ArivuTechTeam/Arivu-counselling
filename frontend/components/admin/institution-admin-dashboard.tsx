@@ -2,7 +2,6 @@
 
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import useSWR from "swr";
 import { Area, AreaChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 
 import { AtRiskStudentsCard } from "@/app/dashboard/institution-admin/_components/at-risk-students-card";
@@ -19,11 +18,8 @@ import { ErrorCard } from "@/components/ui/error-card";
 import {
   AdminQuizSet,
   InstitutionAnalytics,
-  InstitutionOverview,
-  getAdminQuizSets,
-  getInstitutionAnalytics,
-  getInstitutionOverview,
 } from "@/lib/api";
+import { useInstitutionAnalytics, useInstitutionQuizSets } from "@/lib/staff-queries";
 
 const BRAND = "#15603d";
 const EMPTY_QUIZZES: AdminQuizSet[] = [];
@@ -67,28 +63,18 @@ export function InstitutionAdminDashboard() {
   const [selectedStudent, setSelectedStudent] = useState<AtRiskStudent | null>(null);
   const [selectedQuiz, setSelectedQuiz] = useState<AdminQuizSet | null>(null);
 
-  const { data, error, mutate } = useSWR<{
-    overview: InstitutionOverview;
-    analytics: InstitutionAnalytics;
-    quizzes: AdminQuizSet[];
-  }>("dashboard:institution-admin", async () => {
-    const [overview, analytics, quizzes] = await Promise.all([
-      getInstitutionOverview(),
-      getInstitutionAnalytics(),
-      getAdminQuizSets(),
-    ]);
-    return { overview, analytics, quizzes };
-  });
-  const overview = data?.overview ?? null;
-  const analytics = data?.analytics ?? null;
-  const quizzes = data?.quizzes ?? EMPTY_QUIZZES;
+  const analyticsQuery = useInstitutionAnalytics();
+  const quizzesQuery = useInstitutionQuizSets();
+  const analytics = analyticsQuery.data ?? null;
+  const quizzes = quizzesQuery.data ?? EMPTY_QUIZZES;
+  const error = analyticsQuery.error ?? quizzesQuery.error;
 
-  const ready = overview !== null && analytics !== null;
-  const teachers = useCountUp(overview?.teachers ?? 0, ready);
-  const students = useCountUp(overview?.students ?? 0, ready);
-  const published = useCountUp(overview?.published_quizzes ?? 0, ready);
-  const attempts = useCountUp(overview?.attempts ?? 0, ready);
-  const drafts = useCountUp(overview?.draft_quizzes ?? 0, ready);
+  const ready = analytics !== null;
+  const teachers = useCountUp(analytics?.summary.teachers ?? 0, ready);
+  const students = useCountUp(analytics?.summary.students ?? 0, ready);
+  const published = useCountUp(analytics?.summary.published_quizzes ?? 0, ready);
+  const attempts = useCountUp(analytics?.summary.graded_attempts ?? 0, ready);
+  const drafts = useCountUp(analytics?.summary.draft_quizzes ?? 0, ready);
   const activeStudents = useCountUp(analytics?.summary.active_week ?? 0, ready);
 
   const drilldownQuizzes = useMemo(() => {
@@ -106,8 +92,8 @@ export function InstitutionAdminDashboard() {
   );
 
   if (error)
-    return <ErrorCard message={error.message} onRetry={() => void mutate()} />;
-  if (!overview || !analytics) return <DashboardSkeleton />;
+    return <ErrorCard message={error.message} onRetry={() => void Promise.all([analyticsQuery.mutate(), quizzesQuery.mutate()])} />;
+  if (!analytics || !quizzesQuery.data) return <DashboardSkeleton />;
 
   const trend = analytics.trend;
   const trendUp = trend.delta >= 0;
@@ -127,7 +113,7 @@ export function InstitutionAdminDashboard() {
             <h1 className="mt-3 text-2xl font-bold sm:text-3xl">
               <span className="text-[#9ff0a6]">{teachers}</span> teachers and <span className="text-[#9ff0a6]">{students}</span> students · {analytics.summary.avg_accuracy}% overall institute accuracy
             </h1>
-            <p className="mt-2 text-sm text-white/80">{overview.courses} courses · {overview.subjects} subjects · {overview.documents} documents</p>
+            <p className="mt-2 text-sm text-white/80">{analytics.summary.courses} courses · {analytics.summary.subjects} subjects · {analytics.summary.documents} documents</p>
             <p className={`mt-4 inline-flex rounded-full px-3 py-1.5 text-sm font-semibold ${trendUp ? "bg-emerald-300/15 text-emerald-100" : "bg-rose-300/15 text-rose-100"}`}>
               {trend.delta === 0 ? "→" : trendUp ? "↑" : "↓"} {Math.abs(trend.percentage_change)}% engagement · {trend.attempts_last7} this week vs {trend.attempts_prev7} last week
             </p>

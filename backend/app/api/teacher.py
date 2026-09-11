@@ -44,6 +44,7 @@ async def class_overview(
         "pipeline": {"pending_review": 0, "approved": 0, "rejected": 0},
         "activity_trend": [],
         "score_distribution": [],
+        "content": {"documents": 0, "quiz_sets": 0, "published": 0, "drafts": 0},
     }
 
     # Stage 1: quiz_sets — every later query needs `set_ids` from this, so it
@@ -51,7 +52,7 @@ async def class_overview(
     def fetch_sets():
         return (
             service.table("quiz_sets")
-            .select("id, title")
+            .select("id, title, status")
             .eq("tenant_id", tid)
             .eq("created_by", uid)
             .execute()
@@ -59,10 +60,29 @@ async def class_overview(
             or []
         )
 
-    sets = await asyncio.to_thread(fetch_sets)
+    def fetch_documents():
+        return (
+            service.table("documents")
+            .select("id")
+            .eq("tenant_id", tid)
+            .eq("uploaded_by", uid)
+            .execute()
+            .data
+            or []
+        )
+
+    sets, document_rows = await asyncio.gather(
+        asyncio.to_thread(fetch_sets), asyncio.to_thread(fetch_documents)
+    )
+    content = {
+        "documents": len(document_rows),
+        "quiz_sets": len(sets),
+        "published": sum(1 for row in sets if row.get("status") == "published"),
+        "drafts": sum(1 for row in sets if row.get("status") == "draft"),
+    }
     set_ids = [s["id"] for s in sets]
     if not set_ids:
-        return empty
+        return {**empty, "content": content}
     title_by_set = {s["id"]: s["title"] for s in sets}
 
     # Stage 2: quiz_variants — needs `set_ids` from stage 1.
@@ -82,10 +102,10 @@ async def class_overview(
     var_marks = {v["id"]: v.get("total_marks") for v in variants}
     variant_ids = [v["id"] for v in variants]
     if not variant_ids:
-        return empty
+        return {**empty, "content": content}
 
-    # Stage 3: keep requests sequential because this supabase-py client
-    # owns one HTTP/2 connection pool and is not safe for concurrent threads.
+    # Stage 3: these reads are independent. The shared Supabase client uses a
+    # thread-safe HTTP/1.1 pool, so overlap their network wait safely.
     def fetch_attempts():
         return (
             service.table("quiz_attempts")
@@ -109,8 +129,10 @@ async def class_overview(
             or []
         )
 
-    attempts = await asyncio.to_thread(fetch_attempts)
-    vq = await asyncio.to_thread(fetch_variant_questions)
+    attempts, vq = await asyncio.gather(
+        asyncio.to_thread(fetch_attempts),
+        asyncio.to_thread(fetch_variant_questions),
+    )
 
     by_set: dict[str, list[float]] = {}
     by_student: dict[str, list[float]] = {}
@@ -153,7 +175,7 @@ async def class_overview(
 
     qids = list({r["question_id"] for r in vq})
 
-    # Stage 4: sequential for the same shared-client safety reason.
+    # Stage 4: profile and question reads are independent as well.
     def fetch_profiles():
         if not by_student:
             return []
@@ -181,8 +203,9 @@ async def class_overview(
             or []
         )
 
-    profs = await asyncio.to_thread(fetch_profiles)
-    qrows = await asyncio.to_thread(fetch_questions)
+    profs, qrows = await asyncio.gather(
+        asyncio.to_thread(fetch_profiles), asyncio.to_thread(fetch_questions)
+    )
     names = {p["id"]: p.get("full_name") for p in profs}
 
     students = []
@@ -242,6 +265,7 @@ async def class_overview(
         "pipeline": pipeline,
         "activity_trend": activity_trend,
         "score_distribution": score_distribution,
+        "content": content,
     }
 
 
@@ -295,7 +319,7 @@ async def class_monitor(
     # The teacher's quizzes -> subjects -> courses -> enrolled students (the class).
     subject_ids = list({s["subject_id"] for s in sets if s.get("subject_id")})
 
-    # Stage 2: requests are sequential because the Supabase client is shared.
+    # Stage 2: independent reads share the thread-safe HTTP/1.1 pool.
     def fetch_subjects():
         if not subject_ids:
             return []
@@ -315,13 +339,14 @@ async def class_monitor(
             or []
         )
 
-    subs = await asyncio.to_thread(fetch_subjects)
-    variants = await asyncio.to_thread(fetch_variants)
+    subs, variants = await asyncio.gather(
+        asyncio.to_thread(fetch_subjects), asyncio.to_thread(fetch_variants)
+    )
     course_ids = list({s["course_id"] for s in subs if s.get("course_id")})
     var_marks = {v["id"]: v.get("total_marks") for v in variants}
     variant_ids = [v["id"] for v in variants]
 
-    # Stage 3: keep requests sequential on the shared client.
+    # Stage 3: enrollment and attempt reads are independent.
     def fetch_enrollments():
         if not course_ids:
             return []
@@ -349,8 +374,9 @@ async def class_monitor(
             or []
         )
 
-    enr = await asyncio.to_thread(fetch_enrollments)
-    attempts = await asyncio.to_thread(fetch_attempts)
+    enr, attempts = await asyncio.gather(
+        asyncio.to_thread(fetch_enrollments), asyncio.to_thread(fetch_attempts)
+    )
     roster: set[str] = {e["profile_id"] for e in enr}
     # Anyone who attempted counts as part of the class too.
     for a in attempts:

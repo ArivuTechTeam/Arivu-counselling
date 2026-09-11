@@ -15,13 +15,12 @@ import { AlertTriangle, FileText, Sparkles } from "@/components/ui/icons";
 import { useToast } from "@/components/ui/toast";
 import {
   Chapter,
-  Course,
   DuplicateFileError,
   createChapter,
   extractQuiz,
   listChapters,
-  listCourses,
 } from "@/lib/api";
+import { useCourses } from "@/lib/staff-queries";
 
 const fieldClass =
   "h-10 w-full rounded-md border border-input bg-background px-3 text-sm shadow-sm transition-colors focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20";
@@ -74,7 +73,8 @@ function InlineError({ message }: { message: string }) {
 export function QuizExtractor() {
   const router = useRouter();
   const { notify } = useToast();
-  const [courses, setCourses] = useState<Course[]>([]);
+  const coursesQuery = useCourses();
+  const courses = coursesQuery.data ?? [];
   const [subjectId, setSubjectId] = useState("");
 
   const [chapters, setChapters] = useState<Chapter[]>([]);
@@ -84,16 +84,11 @@ export function QuizExtractor() {
   const [file, setFile] = useState<File | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const displayError = error ?? coursesQuery.error?.message ?? null;
   const [dupMessage, setDupMessage] = useState<string | null>(null);
   // True after an extraction attempt fails (e.g. the AI timed out), so we can
   // offer a one-click retry instead of a dead-end error.
   const [canRetry, setCanRetry] = useState(false);
-
-  useEffect(() => {
-    listCourses()
-      .then(setCourses)
-      .catch((e) => setError(e instanceof Error ? e.message : "Couldn't load subjects."));
-  }, []);
 
   // When the subject changes, reload its chapters and reset the chapter choice.
   useEffect(() => {
@@ -256,7 +251,7 @@ export function QuizExtractor() {
           </label>
         </div>
 
-        {error && <InlineError message={error} />}
+        {displayError && <InlineError message={displayError} />}
 
         {busy ? (
           <div className="flex items-center gap-2 rounded-lg border border-primary/20 bg-primary/5 px-3 py-2.5 text-sm text-primary">

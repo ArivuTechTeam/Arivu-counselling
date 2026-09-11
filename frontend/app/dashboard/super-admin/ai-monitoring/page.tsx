@@ -1,6 +1,5 @@
 "use client";
 
-import { useEffect, useState } from "react";
 import {
   Area,
   AreaChart,
@@ -20,7 +19,8 @@ import {
 import { ErrorCard } from "@/components/ui/error-card";
 import { PageHeader } from "@/components/ui/page-header";
 import { Skeleton, SkeletonStats } from "@/components/ui/skeleton";
-import { AiMonitoring, QualityFinding, getAiMonitoring } from "@/lib/api";
+import { QualityFinding } from "@/lib/api";
+import { usePlatformAiMonitoring } from "@/lib/staff-queries";
 
 const BRAND = "#15603d";
 
@@ -115,18 +115,7 @@ function FindingCard({ f }: { f: QualityFinding }) {
 }
 
 export default function QuestionQualityPage() {
-  const [d, setD] = useState<AiMonitoring | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
-
-  function load() {
-    setLoading(true);
-    getAiMonitoring()
-      .then(setD)
-      .catch((e) => setError(e.message))
-      .finally(() => setLoading(false));
-  }
-  useEffect(load, []);
+  const { data: d = null, error, isValidating: loading, mutate } = usePlatformAiMonitoring();
 
   if (error) {
     return (
@@ -135,7 +124,7 @@ export default function QuestionQualityPage() {
           title="Question quality"
           description="Track AI question quality and improvements using real teacher reviews."
         />
-        <ErrorCard message={error} onRetry={load} />
+        <ErrorCard message={error.message} onRetry={() => void mutate()} />
       </div>
     );
   }
@@ -196,7 +185,7 @@ export default function QuestionQualityPage() {
               </span>
             )}
             <button
-              onClick={load}
+              onClick={() => void mutate()}
               disabled={loading}
               className="rounded-lg border border-input bg-card px-3 py-1.5 text-sm font-medium text-foreground shadow-sm transition-colors hover:bg-accent disabled:opacity-60"
             >

@@ -11,10 +11,9 @@ import { PageHeader } from "@/components/ui/page-header";
 import { SkeletonList } from "@/components/ui/skeleton";
 import {
   AdminQuizSet,
-  TeacherAnalytics,
   getAdminQuizSets,
-  getTeacherAnalytics,
 } from "@/lib/api";
+import { useInstitutionQuizSets, useInstitutionTeacherAnalytics } from "@/lib/staff-queries";
 
 import { QuizPerformanceModal } from "./_components/quiz-performance-modal";
 
@@ -81,9 +80,12 @@ function health(quiz: AdminQuizSet) {
 }
 
 export default function AdminQuizzesPage() {
-  const [rows, setRows] = useState<AdminQuizSet[] | null>(null);
-  const [faculty, setFaculty] = useState<TeacherAnalytics | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const rowsQuery = useInstitutionQuizSets();
+  const facultyQuery = useInstitutionTeacherAnalytics();
+  const rows = rowsQuery.data ?? null;
+  const faculty = facultyQuery.data ?? null;
+  const [actionError, setActionError] = useState<string | null>(null);
+  const error = actionError ?? rowsQuery.error?.message ?? facultyQuery.error?.message ?? null;
   const [query, setQuery] = useState("");
   const [teacherId, setTeacherId] = useState("");
   const [courseId, setCourseId] = useState("");
@@ -97,16 +99,10 @@ export default function AdminQuizzesPage() {
   } | null>(null);
 
   function load() {
-    setError(null);
-    Promise.all([getAdminQuizSets(), getTeacherAnalytics()])
-      .then(([quizRows, teacherAnalytics]) => {
-        setRows(quizRows);
-        setFaculty(teacherAnalytics);
-      })
-      .catch((reason) => setError(reason.message));
+    setActionError(null);
+    void Promise.all([rowsQuery.mutate(), facultyQuery.mutate()]);
   }
 
-  useEffect(load, []);
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     setQuery(params.get("q") ?? "");
@@ -202,7 +198,7 @@ export default function AdminQuizzesPage() {
   }, [courseId, query, sort, sourceRows, status]);
 
   function openTeacher(nextTeacherId: string) {
-    setError(null);
+    setActionError(null);
     setTeacherId(nextTeacherId);
     setTeacherRows(null);
     setQuery("");
@@ -217,7 +213,7 @@ export default function AdminQuizzesPage() {
       .then((quizRows) =>
         setTeacherRows({ teacherId: nextTeacherId, rows: quizRows }),
       )
-      .catch((reason) => setError(reason.message));
+      .catch((reason) => setActionError(reason.message));
   }
 
   function backToFaculty() {

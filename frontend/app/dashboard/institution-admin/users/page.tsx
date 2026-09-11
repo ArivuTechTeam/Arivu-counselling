@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import Link from "next/link";
 
 import { Button } from "@/components/ui/button";
@@ -19,19 +19,17 @@ import { PageHeader } from "@/components/ui/page-header";
 import { SkeletonList } from "@/components/ui/skeleton";
 import {
   AdminUser,
-  Course,
   CourseRoster,
   TeacherCourse,
   createTeacher,
   deleteUser,
   getTeacherSubjects,
   listCourseStudents,
-  listCourses,
   listTeacherCourses,
-  listUsers,
   resetTeacherTemporaryPassword,
   updateTeacher,
 } from "@/lib/api";
+import { useCourses, useInstitutionUsers } from "@/lib/staff-queries";
 
 const TEACHERS_PER_PAGE = 12;
 
@@ -65,8 +63,10 @@ function initials(text: string): string {
 }
 
 export default function UsersPage() {
-  const [teachers, setTeachers] = useState<AdminUser[] | null>(null);
-  const [courses, setCourses] = useState<Course[]>([]);
+  const teachersQuery = useInstitutionUsers();
+  const coursesQuery = useCourses();
+  const teachers = teachersQuery.data ?? null;
+  const courses = coursesQuery.data ?? [];
   const [form, setForm] = useState({
     full_name: "",
     email: "",
@@ -99,6 +99,7 @@ export default function UsersPage() {
   const [credentialResetTeacher, setCredentialResetTeacher] = useState<AdminUser | null>(null);
   const [resettingCredential, setResettingCredential] = useState(false);
   const [notice, setNotice] = useState<Notice | null>(null);
+  const loadError = error ?? teachersQuery.error?.message ?? coursesQuery.error?.message ?? null;
 
   const selectedCourse = courses.find((course) => course.id === form.course_id);
 
@@ -129,14 +130,6 @@ export default function UsersPage() {
     : 0;
   const lastResult = Math.min(currentPage * TEACHERS_PER_PAGE, filteredUsers.length);
 
-  function refresh() {
-    listUsers().then(setTeachers).catch((e) => setError(e.message));
-  }
-  useEffect(() => {
-    refresh();
-    listCourses().then(setCourses).catch((e) => setError(e.message));
-  }, []);
-
   async function add() {
     setBusy(true);
     setError(null);
@@ -154,7 +147,7 @@ export default function UsersPage() {
       }));
       setForm({ full_name: "", email: "", password: "", course_id: "", subject_ids: [] });
       setPage(1);
-      await listUsers().then(setTeachers);
+      await teachersQuery.mutate();
       showNotice("success", "Teacher added successfully.");
     } catch (e) {
       const message = e instanceof Error ? e.message : "Failed to add teacher";
@@ -230,7 +223,7 @@ export default function UsersPage() {
     try {
       await deleteUser(id);
       setConfirmDel(null);
-      await listUsers().then(setTeachers);
+      await teachersQuery.mutate();
       showNotice("success", "Teacher removed successfully.");
     } catch (e) {
       showNotice(
@@ -330,7 +323,7 @@ export default function UsersPage() {
       setExpandedTeacherId(null);
       setExpandedCourseId(null);
       setManageTeacher(null);
-      await listUsers().then(setTeachers);
+      await teachersQuery.mutate();
       showNotice("success", "Teacher updated successfully.");
     } catch (e) {
       const message = e instanceof Error ? e.message : "Failed to update teacher.";
@@ -449,9 +442,9 @@ export default function UsersPage() {
           <Button disabled={busy || !form.full_name.trim() || !form.email.trim() || !form.password || !form.course_id || form.subject_ids.length === 0} onClick={add}>
             {busy ? "Adding…" : "Add teacher"}
           </Button>
-          {error && (
+          {loadError && (
             <div className="sm:col-span-2">
-              <ErrorCard message={error} />
+              <ErrorCard message={loadError} onRetry={() => void Promise.all([teachersQuery.mutate(), coursesQuery.mutate()])} />
             </div>
           )}
         </CardContent>

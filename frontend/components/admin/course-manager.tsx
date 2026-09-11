@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import type { ReactNode } from "react";
 
 import { AlertTriangle, BookOpen, Inbox, Trash, X } from "@/components/ui/icons";
@@ -10,8 +10,8 @@ import {
   createSubject,
   deleteCourse,
   deleteSubject,
-  listCourses,
 } from "@/lib/api";
+import { useCourses } from "@/lib/staff-queries";
 
 // --- per-course colour (auto-assigned — backend has no colour field) ---------
 const PALETTE = [
@@ -254,8 +254,10 @@ function DeleteModal({
 
 // --- main ---------------------------------------------------------------------
 export function CourseManager() {
-  const [courses, setCourses] = useState<Course[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const coursesQuery = useCourses();
+  const courses = coursesQuery.data ?? null;
+  const [actionError, setActionError] = useState<string | null>(null);
+  const error = actionError ?? coursesQuery.error?.message ?? null;
   const [busy, setBusy] = useState(false);
 
   const [openCourseId, setOpenCourseId] = useState<string | null>(null);
@@ -264,20 +266,17 @@ export function CourseManager() {
   const [del, setDel] = useState<DeleteTarget | null>(null);
 
   function refresh() {
-    listCourses()
-      .then(setCourses)
-      .catch((e) => setError(e.message));
+    void coursesQuery.mutate();
   }
-  useEffect(refresh, []);
 
   async function run(fn: () => Promise<unknown>) {
     setBusy(true);
-    setError(null);
+    setActionError(null);
     try {
       await fn();
       refresh();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Something went wrong");
+      setActionError(e instanceof Error ? e.message : "Something went wrong");
     } finally {
       setBusy(false);
     }

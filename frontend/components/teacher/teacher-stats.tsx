@@ -3,11 +3,10 @@
 import * as React from "react";
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
-import useSWR from "swr";
 
 import { Skeleton, SkeletonStats } from "@/components/ui/skeleton";
 import { ErrorCard } from "@/components/ui/error-card";
-import { listDocuments, listQuizSets } from "@/lib/api";
+import { useTeacherOverview } from "@/lib/staff-queries";
 
 function useCountUp(target: number, on: boolean, ms = 900) {
   const [v, setV] = useState(0);
@@ -110,20 +109,10 @@ function MetricTile({
 }
 
 export function TeacherStats() {
-  const { data, error, mutate } = useSWR("dashboard:teacher:stats", async () => {
-    const [documents, quizSets] = await Promise.all([
-      listDocuments(),
-      listQuizSets(),
-    ]);
-    return {
-      docs: documents.length,
-      sets: quizSets.length,
-      published: quizSets.filter((quiz) => quiz.status === "published").length,
-    };
-  });
-  const docs = data?.docs ?? null;
-  const sets = data?.sets ?? null;
-  const published = data?.published ?? null;
+  const { data, error, mutate } = useTeacherOverview();
+  const docs = data?.content.documents ?? null;
+  const sets = data?.content.quiz_sets ?? null;
+  const published = data?.content.published ?? null;
 
   const ready = docs !== null && sets !== null;
   const drafts = Math.max(0, (sets ?? 0) - (published ?? 0));

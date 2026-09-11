@@ -133,9 +133,26 @@ def list_courses(profile: CurrentProfile = Depends(get_current_profile)) -> list
         if profile.role == "teacher"
         else None
     )
+    course_ids = [str(course["id"]) for course in courses]
+    subjects_by_course: dict[str, list[dict]] = {}
+    if course_ids:
+        subjects_query = (
+            service.table("subjects")
+            .select("id, name, course_id")
+            .eq("tenant_id", profile.tenant_id)
+            .in_("course_id", course_ids)
+        )
+        if assigned is not None:
+            if not assigned:
+                return []
+            subjects_query = subjects_query.in_("id", sorted(assigned))
+        for subject in subjects_query.order("name").execute().data or []:
+            subjects_by_course.setdefault(str(subject["course_id"]), []).append(
+                {"id": subject["id"], "name": subject["name"]}
+            )
+
     student_count_by_course: dict[str, int] = {}
     if profile.role == "institution_admin" and courses:
-        course_ids = [str(course["id"]) for course in courses]
         enrollments = (
             service.table("enrollments")
             .select("profile_id, course_id")
@@ -172,11 +189,9 @@ def list_courses(profile: CurrentProfile = Depends(get_current_profile)) -> list
         }
     visible_courses: list[dict] = []
     for course in courses:
-        subjects = _subjects_for(service, course["id"], profile.tenant_id)
-        if assigned is not None:
-            subjects = [subject for subject in subjects if subject["id"] in assigned]
-            if not subjects:
-                continue
+        subjects = subjects_by_course.get(str(course["id"]), [])
+        if assigned is not None and not subjects:
+            continue
         course["subjects"] = subjects
         if profile.role == "institution_admin":
             course["student_count"] = student_count_by_course.get(str(course["id"]), 0)

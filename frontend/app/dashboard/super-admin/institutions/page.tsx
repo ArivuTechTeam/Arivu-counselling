@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import Link from "next/link";
 
 import { AdminManager } from "@/components/admin/admin-manager";
@@ -18,10 +18,9 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { SkeletonList } from "@/components/ui/skeleton";
 import { AlertTriangle, Eye, EyeOff } from "@/components/ui/icons";
 import {
-  InstitutionRow,
-  getPlatformOverview,
   onboardInstitution,
 } from "@/lib/api";
+import { usePlatformOverview } from "@/lib/staff-queries";
 
 const field =
   "h-10 w-full rounded-md border border-input bg-background px-3 text-sm shadow-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20";
@@ -183,16 +182,9 @@ function OnboardForm({ onDone }: { onDone: () => void }) {
 }
 
 export default function InstitutionsPage() {
-  const [rows, setRows] = useState<InstitutionRow[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  function load() {
-    setError(null);
-    getPlatformOverview()
-      .then((d) => setRows(d.institutions_table))
-      .catch((e) => setError(e.message));
-  }
-  useEffect(load, []);
+  const { data, error, mutate } = usePlatformOverview();
+  const rows = data?.institutions_table ?? null;
+  const load = () => void mutate();
 
   return (
     <div className="flex flex-col gap-6">
@@ -212,7 +204,7 @@ export default function InstitutionsPage() {
         </CardHeader>
         <CardContent>
           {error ? (
-            <ErrorCard message={error} onRetry={load} />
+            <ErrorCard message={error.message} onRetry={load} />
           ) : rows === null ? (
             <SkeletonList />
           ) : rows.length === 0 ? (

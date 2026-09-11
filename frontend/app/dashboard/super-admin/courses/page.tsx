@@ -1,7 +1,5 @@
 "use client";
 
-import { useEffect, useState } from "react";
-
 import {
   Card,
   CardContent,
@@ -13,7 +11,7 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { ErrorCard } from "@/components/ui/error-card";
 import { PageHeader } from "@/components/ui/page-header";
 import { SkeletonList } from "@/components/ui/skeleton";
-import { QuestionBank, getQuestionBank } from "@/lib/api";
+import { usePlatformQuestionBank } from "@/lib/staff-queries";
 
 function mixLabel(values: Record<string, number>) {
   const entries = Object.entries(values).sort((a, b) => b[1] - a[1]);
@@ -25,17 +23,7 @@ function mixLabel(values: Record<string, number>) {
 }
 
 export default function CoursesPage() {
-  const [data, setData] = useState<QuestionBank | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  function load() {
-    setError(null);
-    getQuestionBank()
-      .then(setData)
-      .catch((reason) => setError(reason.message));
-  }
-
-  useEffect(load, []);
+  const { data = null, error, mutate } = usePlatformQuestionBank();
 
   return (
     <div className="flex flex-col gap-6">
@@ -45,7 +33,7 @@ export default function CoursesPage() {
       />
 
       {error ? (
-        <ErrorCard message={error} onRetry={load} />
+        <ErrorCard message={error.message} onRetry={() => void mutate()} />
       ) : data === null ? (
         <SkeletonList rows={5} />
       ) : data.courses.length === 0 ? (

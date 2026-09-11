@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -251,7 +252,7 @@ class SuperAdminRegressionTests(unittest.TestCase):
     def test_platform_overview_is_super_only(self) -> None:
         admin = CurrentProfile(user_id="admin", tenant_id="tenant-a", role="institution_admin")
         with self.assertRaises(HTTPException) as caught:
-            platform_overview(admin)
+            asyncio.run(platform_overview(admin))
         self.assertEqual(caught.exception.status_code, 403)
 
     def test_create_and_remove_admin_keeps_auth_and_profile_in_sync(self) -> None:

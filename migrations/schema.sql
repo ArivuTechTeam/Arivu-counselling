@@ -339,6 +339,22 @@ create table attempt_answers (
 create index idx_answers_tenant on attempt_answers(tenant_id);
 create index idx_answers_attempt on attempt_answers(attempt_id);
 
+-- Staff dashboard compound-filter indexes (migration-29).
+create index idx_profiles_tenant_role on profiles(tenant_id, role);
+create index idx_subjects_tenant_course on subjects(tenant_id, course_id);
+create index idx_enrollments_tenant_course_profile on enrollments(tenant_id, course_id, profile_id);
+create index idx_teacher_subjects_tenant_teacher_subject on teacher_subjects(tenant_id, teacher_id, subject_id);
+create index idx_chapters_tenant_subject on chapters(tenant_id, subject_id);
+create index idx_documents_tenant_uploader_created on documents(tenant_id, uploaded_by, created_at desc);
+create index idx_questions_tenant_creator_chapter on questions(tenant_id, created_by, chapter_id);
+create index idx_questions_tenant_review on questions(tenant_id, review_status);
+create index idx_quizsets_tenant_creator_status on quiz_sets(tenant_id, created_by, status);
+create index idx_quizsets_tenant_subject on quiz_sets(tenant_id, subject_id);
+create index idx_variants_tenant_quizset on quiz_variants(tenant_id, quiz_set_id);
+create index idx_vq_tenant_variant on quiz_variant_questions(tenant_id, variant_id);
+create index idx_attempts_tenant_variant_status on quiz_attempts(tenant_id, variant_id, status);
+create index idx_attempts_tenant_student_status_submitted on quiz_attempts(tenant_id, student_id, status, submitted_at desc);
+
 
 -- ============================================================================
 -- STEP 9: AI TUTOR (cached by question, not by attempt)

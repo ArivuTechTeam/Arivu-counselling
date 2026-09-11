@@ -15,16 +15,15 @@ import { AlertTriangle, Check, Sparkles, Zap } from "@/components/ui/icons";
 import { useToast } from "@/components/ui/toast";
 import {
   Chapter,
-  Course,
   DocumentOut,
   TopicWeight,
   extractTopics,
   generateBlueprintQuiz,
   listChapters,
-  listCourses,
   listDocuments,
   uploadDocument,
 } from "@/lib/api";
+import { useCourses } from "@/lib/staff-queries";
 
 const fieldClass =
   "h-10 w-full rounded-md border border-input bg-background px-3 text-sm shadow-sm transition-colors focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20";
@@ -116,6 +115,7 @@ function StepBar({ step }: { step: number }) {
 export function BlueprintGenerator() {
   const router = useRouter();
   const { notify } = useToast();
+  const coursesQuery = useCourses();
 
   const [documents, setDocuments] = useState<DocumentOut[]>([]);
   const [documentId, setDocumentId] = useState("");
@@ -123,7 +123,7 @@ export function BlueprintGenerator() {
   const [uploadedName, setUploadedName] = useState<string | null>(null);
   const [uploadError, setUploadError] = useState<string | null>(null);
 
-  const [courses, setCourses] = useState<Course[]>([]);
+  const courses = coursesQuery.data ?? [];
   const [subjectId, setSubjectId] = useState("");
   const [chapterName, setChapterName] = useState("");
   const [chapters, setChapters] = useState<Chapter[]>([]);
@@ -131,6 +131,7 @@ export function BlueprintGenerator() {
 
   const [extracting, setExtracting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const displayError = error ?? coursesQuery.error?.message ?? null;
   const [topics, setTopics] = useState<string[]>([]);
   const [weights, setWeights] = useState<Record<string, TopicWeight>>({});
 
@@ -147,9 +148,6 @@ export function BlueprintGenerator() {
   useEffect(() => {
     listDocuments()
       .then((docs) => setDocuments(docs.filter((d) => d.status === "completed")))
-      .catch((e) => setError(e.message));
-    listCourses()
-      .then(setCourses)
       .catch((e) => setError(e.message));
   }, []);
 
@@ -443,7 +441,7 @@ export function BlueprintGenerator() {
               )}
             </Button>
           </div>
-          {error && <InlineError message={error} />}
+          {displayError && <InlineError message={displayError} />}
         </CardContent>
       </Card>
 

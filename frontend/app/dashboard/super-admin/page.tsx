@@ -1,7 +1,6 @@
 "use client";
 
 import Link from "next/link";
-import useSWR from "swr";
 import {
   Area,
   AreaChart,
@@ -30,7 +29,7 @@ import {
 import { ErrorCard } from "@/components/ui/error-card";
 import { Skeleton, SkeletonStats } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/ui/empty-state";
-import { PlatformOverview, getPlatformOverview } from "@/lib/api";
+import { usePlatformOverview } from "@/lib/staff-queries";
 
 const BRAND = "#15603d";
 
@@ -56,10 +55,7 @@ function PipeRow({
 }
 
 export default function PlatformOverviewPage() {
-  const { data: s = null, error, mutate } = useSWR<PlatformOverview>(
-    "dashboard:super-admin",
-    getPlatformOverview,
-  );
+  const { data: s = null, error, mutate } = usePlatformOverview();
 
   const ready = s !== null;
   const inst = useCountUp(s?.institutions ?? 0, ready);

@@ -1135,6 +1135,7 @@ class AtRiskStudent(BaseModel):
 class AnalyticsSummary(BaseModel):
     students: int
     teachers: int
+    admins: int
     active_week: int
     inactive_students: int
     at_risk: int
@@ -1143,6 +1144,10 @@ class AnalyticsSummary(BaseModel):
     published_quizzes: int
     quiz_sets: int
     courses: int
+    subjects: int
+    documents: int
+    draft_quizzes: int
+    questions: int
 
 
 class AnalyticsTrend(BaseModel):
@@ -1481,6 +1486,12 @@ async def institution_analytics(
             .execute()
             .data
             or [],
+            "documents": lambda client: client.table("documents")
+            .select("id")
+            .eq("tenant_id", t)
+            .execute()
+            .data
+            or [],
         }
     )
     profiles = data["profiles"]
@@ -1492,6 +1503,7 @@ async def institution_analytics(
     variants = data["variants"]
     attempts = data["attempts"]
     enrollments = data["enrollments"]
+    documents = data["documents"]
 
     students = [p for p in profiles if p["role"] == "student"]
     teachers = [p for p in profiles if p["role"] == "teacher"]
@@ -1734,6 +1746,7 @@ async def institution_analytics(
     summary = {
         "students": len(students),
         "teachers": len(teachers),
+        "admins": sum(1 for p in profiles if p["role"] == "institution_admin"),
         "active_week": len(active_ids),
         "inactive_students": len(inactive_students),
         "at_risk": len(at_risk),
@@ -1742,6 +1755,10 @@ async def institution_analytics(
         "published_quizzes": sum(1 for q in quiz_sets if q["status"] == "published"),
         "quiz_sets": len(quiz_sets),
         "courses": len(courses),
+        "subjects": len(subjects),
+        "documents": len(documents),
+        "draft_quizzes": sum(1 for q in quiz_sets if q["status"] == "draft"),
+        "questions": len(questions),
     }
 
     return InstitutionAnalyticsResponse(**{
@@ -1798,7 +1815,7 @@ def platform_stats(profile: CurrentProfile = Depends(get_current_profile)) -> di
 
 
 @router.get("/platform/overview")
-def platform_overview(
+async def platform_overview(
     profile: CurrentProfile = Depends(get_current_profile),
 ) -> dict:
     """
@@ -1811,28 +1828,43 @@ def platform_overview(
     from datetime import date, timedelta
 
     _require_super(profile)
-    service = get_service_client()
-
-    tenants = _select_all(
-        service,
-        "tenants",
-        "id, name, subdomain, plan_tier, is_active, created_at",
+    data = await _gather(
+        {
+            "tenants": lambda client: _select_all(
+                client,
+                "tenants",
+                "id, name, subdomain, plan_tier, is_active, created_at",
+            ),
+            "profiles": lambda client: _select_all(
+                client, "profiles", "id, tenant_id, role"
+            ),
+            "quiz_sets": lambda client: _select_all(
+                client, "quiz_sets", "id, tenant_id, status"
+            ),
+            "questions": lambda client: _select_all(
+                client, "questions", "id, tenant_id, review_status"
+            ),
+            "variants": lambda client: _select_all(
+                client, "quiz_variants", "id, tenant_id, total_marks"
+            ),
+            "attempts": lambda client: _select_all(
+                client,
+                "quiz_attempts",
+                "id, tenant_id, status, total_score, variant_id, submitted_at",
+            ),
+            "documents": lambda client: _select_all(
+                client, "documents", "id, tenant_id"
+            ),
+        }
     )
-    profiles = _select_all(service, "profiles", "id, tenant_id, role")
-    quiz_sets = _select_all(service, "quiz_sets", "id, tenant_id, status")
-    questions = _select_all(
-        service, "questions", "id, tenant_id, review_status"
-    )
-    variants = _select_all(
-        service, "quiz_variants", "id, tenant_id, total_marks"
-    )
+    tenants = data["tenants"]
+    profiles = data["profiles"]
+    quiz_sets = data["quiz_sets"]
+    questions = data["questions"]
+    variants = data["variants"]
     var_marks = {v["id"]: v.get("total_marks") for v in variants}
-    attempts = _select_all(
-        service,
-        "quiz_attempts",
-        "id, tenant_id, status, total_score, variant_id, submitted_at",
-    )
-    documents = _select_all(service, "documents", "id, tenant_id")
+    attempts = data["attempts"]
+    documents = data["documents"]
 
     # ---- Per-tenant aggregation -------------------------------------------
     def blank() -> dict:

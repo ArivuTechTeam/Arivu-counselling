@@ -1,6 +1,5 @@
 "use client";
 
-import { useEffect, useState } from "react";
 import Link from "next/link";
 
 import {
@@ -15,7 +14,7 @@ import { ErrorCard } from "@/components/ui/error-card";
 import { Inbox } from "@/components/ui/icons";
 import { SkeletonList } from "@/components/ui/skeleton";
 import { statusLabel } from "@/lib/format";
-import { QuizSetSummary, listQuizSets } from "@/lib/api";
+import { useTeacherQuizSets } from "@/lib/staff-queries";
 
 const SET_TONE: Record<string, string> = {
   published: "bg-emerald-100 text-emerald-700",
@@ -24,19 +23,7 @@ const SET_TONE: Record<string, string> = {
 };
 
 export function QuizSetList() {
-  const [sets, setSets] = useState<QuizSetSummary[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  function load() {
-    setError(null);
-    listQuizSets()
-      .then(setSets)
-      .catch((e) => setError(e.message));
-  }
-
-  useEffect(() => {
-    load();
-  }, []);
+  const { data: sets = null, error, mutate } = useTeacherQuizSets();
 
   return (
     <Card>
@@ -46,7 +33,7 @@ export function QuizSetList() {
       </CardHeader>
       <CardContent>
         {error ? (
-          <ErrorCard message={error} onRetry={load} />
+          <ErrorCard message={error.message} onRetry={() => void mutate()} />
         ) : sets === null ? (
           <SkeletonList />
         ) : sets.length === 0 ? (
