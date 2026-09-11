@@ -151,7 +151,7 @@ async function apiError(res: Response, fallback: string): Promise<never> {
     if (!sessionExpiryRedirectStarted) {
       sessionExpiryRedirectStarted = true;
       try {
-        await createClient().auth.signOut();
+        await createClient().auth.signOut({ scope: "local" });
       } finally {
         const next = safeDashboardNext(
           `${window.location.pathname}${window.location.search}`,
