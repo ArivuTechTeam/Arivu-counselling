@@ -67,7 +67,7 @@ export default function LoginPage() {
     const { error } = await supabase.auth.signInWithPassword({ email, password });
     setLoading(false);
     if (error) {
-      setError(error.message);
+      setError("Sign-in failed. Check your credentials and try again.");
       return;
     }
     router.push(requestedDestination());
@@ -81,8 +81,8 @@ export default function LoginPage() {
       // No course is required for an existing user. A brand-new Google user
       // selects one securely on the callback page before a profile is created.
       await signInWithGoogle(undefined, requestedDestination());
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Google sign-in could not start.");
+    } catch {
+      setError("Google sign-in could not start. Please try again.");
       setGoogleLoading(false);
     }
   }

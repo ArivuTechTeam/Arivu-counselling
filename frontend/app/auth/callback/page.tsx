@@ -9,6 +9,7 @@ import { listPublicCourses } from "@/lib/api";
 import { PENDING_GOOGLE_COURSE_KEY } from "@/lib/google-auth";
 import { PENDING_AUTH_NEXT_KEY } from "@/lib/google-auth";
 import { createClient } from "@/lib/supabase";
+import { PUBLIC_ENV } from "@/lib/public-env";
 import { safeDashboardNext } from "@/lib/safe-next";
 
 type PublicCourse = { id: string; name: string };
@@ -21,7 +22,7 @@ export default function AuthCallbackPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const tenantId = process.env.NEXT_PUBLIC_DEFAULT_TENANT_ID;
+  const tenantId = PUBLIC_ENV.defaultTenantId;
 
   const finishDestination = useCallback(() => {
     const destination = safeDashboardNext(
@@ -121,12 +122,8 @@ export default function AuthCallbackPage() {
 
         window.sessionStorage.removeItem(PENDING_GOOGLE_COURSE_KEY);
         setLoading(false);
-      } catch (e) {
-        setError(
-          e instanceof Error
-            ? e.message
-            : "Google sign-in could not be completed. Please try again.",
-        );
+      } catch {
+        setError("Google sign-in could not be completed. Please try again.");
         setLoading(false);
       }
     }

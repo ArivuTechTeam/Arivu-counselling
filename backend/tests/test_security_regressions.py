@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
@@ -247,6 +248,104 @@ class MigrationSecurityTests(unittest.TestCase):
         self.assertEqual(error.status_code, 502)
         self.assertEqual(error.detail, "Please try again.")
         self.assertNotIn("private provider response", error.detail)
+
+
+class SecretSafetyTests(unittest.TestCase):
+    def test_local_env_files_and_credentials_are_ignored(self) -> None:
+        root = Path(__file__).resolve().parents[2]
+        gitignore = (root / ".gitignore").read_text()
+        self.assertIn(".env", gitignore.splitlines())
+        self.assertIn(".env.*", gitignore.splitlines())
+        self.assertIn("*.pem", gitignore.splitlines())
+        self.assertIn("*credentials*.json", gitignore.splitlines())
+
+        for service in ("backend", "frontend"):
+            dockerignore = (root / service / ".dockerignore").read_text()
+            self.assertIn(".env*", dockerignore.splitlines())
+
+    def test_frontend_does_not_reference_server_only_environment(self) -> None:
+        root = Path(__file__).resolve().parents[2]
+        forbidden = (
+            "SUPABASE_SERVICE_ROLE_KEY",
+            "SUPABASE_JWT_SECRET",
+            "DEEPSEEK_API_KEY",
+            "GEMINI_API_KEY",
+            "DATABASE_URL",
+            "CLIENT_SECRET",
+        )
+        source_suffixes = {".ts", ".tsx", ".js", ".mjs"}
+        for path in (root / "frontend").rglob("*"):
+            if path.suffix not in source_suffixes or any(
+                part in {"node_modules", ".next", ".pnpm-store"}
+                for part in path.parts
+            ):
+                continue
+            contents = path.read_text(errors="ignore")
+            for name in forbidden:
+                self.assertNotIn(name, contents, f"{name} referenced by {path}")
+
+    def test_repository_has_no_known_credential_literals(self) -> None:
+        root = Path(__file__).resolve().parents[2]
+        credential_patterns = (
+            re.compile(r"eyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{10,}"),
+            re.compile(r"sb_secret_[A-Za-z0-9_-]{12,}"),
+            re.compile(r"sk_(?:live|test)_[A-Za-z0-9]{12,}"),
+            re.compile(r"sk-(?:proj-)?[A-Za-z0-9_-]{20,}"),
+            re.compile(r"pk_(?:live|test)_[A-Za-z0-9]{12,}"),
+            re.compile(r"AIza[0-9A-Za-z_-]{20,}"),
+            re.compile(r"(?:postgres(?:ql)?|mongodb(?:\+srv)?|mysql|redis)://[^\s]+"),
+            re.compile(r"AKIA[0-9A-Z]{16}"),
+            re.compile(r"SG\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}"),
+            re.compile(r"xox[baprs]-[A-Za-z0-9-]{10,}"),
+        )
+        text_suffixes = {
+            ".py", ".ts", ".tsx", ".js", ".mjs", ".sql", ".md",
+            ".yml", ".yaml", ".json", ".sh", ".toml",
+        }
+        ignored_parts = {
+            ".git", ".next", ".pnpm-store", "node_modules", "venv",
+            ".venv", ".pytest_cache", ".claude", ".tokensave", ".superdesign",
+        }
+        for path in root.rglob("*"):
+            if (
+                not path.is_file()
+                or path.suffix not in text_suffixes
+                or any(part in ignored_parts for part in path.parts)
+            ):
+                continue
+            contents = path.read_text(errors="ignore")
+            for pattern in credential_patterns:
+                self.assertIsNone(pattern.search(contents), f"credential-like literal in {path}")
+
+    def test_every_declared_application_table_enables_rls(self) -> None:
+        root = Path(__file__).resolve().parents[2]
+        sql = "\n".join(
+            path.read_text() for path in sorted((root / "migrations").glob("*.sql"))
+        )
+        created = set(
+            re.findall(
+                r"(?im)^\s*create\s+table(?:\s+if\s+not\s+exists)?\s+(?:public\.)?([a-z_][a-z0-9_]*)",
+                sql,
+            )
+        )
+        protected = set(
+            re.findall(
+                r"(?im)^\s*alter\s+table(?:\s+if\s+exists)?\s+(?:public\.)?([a-z_][a-z0-9_]*)\s+enable\s+row\s+level\s+security",
+                sql,
+            )
+        )
+        self.assertTrue(created)
+        self.assertEqual(set(), created - protected)
+
+    def test_backend_logging_does_not_dump_exceptions_or_payloads(self) -> None:
+        root = Path(__file__).resolve().parents[2]
+        source = "\n".join(
+            path.read_text() for path in (root / "backend" / "app").rglob("*.py")
+        )
+        self.assertNotIn("logger.exception(", source)
+        self.assertNotIn("log.exception(", source)
+        self.assertNotIn("exc_info=True", source)
+        self.assertNotIn("%r", source)
 
 
 class _RowsQuery:

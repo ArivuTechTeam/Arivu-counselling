@@ -3,6 +3,7 @@
 import { useState } from "react";
 
 import { createClient } from "@/lib/supabase";
+import { PUBLIC_ENV } from "@/lib/public-env";
 
 /**
  * DEV-ONLY quick account switcher.
@@ -29,7 +30,7 @@ type DevAccount = {
 // NEXT_PUBLIC values are browser-readable by definition. This configuration is
 // deliberately limited to non-secret labels/emails; never add passwords here.
 function readDevAccounts(): DevAccount[] {
-  const raw = process.env.NEXT_PUBLIC_DEV_ACCOUNT_EMAILS_JSON;
+  const raw = PUBLIC_ENV.devAccountEmailsJson;
   if (!raw) return [];
   try {
     const parsed = JSON.parse(raw);
@@ -75,7 +76,7 @@ function DevSwitcherInner({ currentEmail }: { currentEmail: string }) {
       password,
     });
     if (error) {
-      setError(error.message);
+      setError("Sign-in failed. Check the selected account and password.");
       setBusy(null);
       return;
     }

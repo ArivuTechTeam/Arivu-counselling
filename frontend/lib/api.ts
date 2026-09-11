@@ -1,11 +1,12 @@
 import { createClient } from "@/lib/supabase";
+import { PUBLIC_ENV } from "@/lib/public-env";
 import { safeDashboardNext } from "@/lib/safe-next";
 
 let sessionExpiryRedirectStarted = false;
 let latestBearerToken: string | null = null;
 
 // Base URL of the FastAPI backend (from .env.local).
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL!;
+const API_BASE = PUBLIC_ENV.apiBaseUrl;
 const DEFAULT_TIMEOUT_MS = 20_000;
 // 150 MB takes about 10 minutes at 2 Mbps before server-side extraction time.
 const DOCUMENT_UPLOAD_TIMEOUT_MS = 15 * 60_000;

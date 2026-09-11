@@ -39,7 +39,11 @@ def enforce_ai_rate_limit(
             },
         ).execute()
     except Exception as exc:  # noqa: BLE001 - fail closed if quota state is unknown
-        logger.exception("Could not enforce AI rate limit for %s", endpoint)
+        logger.error(
+            "Could not enforce AI rate limit for %s (%s)",
+            endpoint,
+            type(exc).__name__,
+        )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="AI features are temporarily unavailable. Please try again shortly.",
@@ -48,7 +52,13 @@ def enforce_ai_rate_limit(
     data = result.data
     row = data[0] if isinstance(data, list) and data else data
     if not isinstance(row, dict) or "allowed" not in row:
-        logger.error("Malformed AI rate-limit response for %s: %r", endpoint, data)
+        # Never log an upstream response body: provider/database payloads can
+        # contain user data or credentials in an error envelope.
+        logger.error(
+            "Malformed AI rate-limit response for %s (response_type=%s)",
+            endpoint,
+            type(data).__name__,
+        )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="AI features are temporarily unavailable. Please try again shortly.",

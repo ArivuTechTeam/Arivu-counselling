@@ -260,7 +260,7 @@ class InstitutionTeacherManagementTests(unittest.TestCase):
             TeacherCreate(
                 full_name="Student",
                 email="student@example.com",
-                password="password",
+                password=_generate_temporary_password(),
                 role="student",
                 course_id="course-a",
                 subject_ids=["subject-a"],

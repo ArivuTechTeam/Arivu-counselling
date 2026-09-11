@@ -10,6 +10,7 @@ from fastapi import HTTPException
 from app.api.admin import (
     AdminCreate,
     TenantCreate,
+    _generate_temporary_password,
     _select_all,
     _set_provisioned_profile,
     create_admin,
@@ -262,7 +263,7 @@ class SuperAdminRegressionTests(unittest.TestCase):
                 AdminCreate(
                     full_name="Demo Admin",
                     email="admin@example.com",
-                    password="Temporary!9Pass",
+                    password=_generate_temporary_password(),
                     tenant_id="tenant-a",
                 ),
                 SUPER,
@@ -287,7 +288,7 @@ class SuperAdminRegressionTests(unittest.TestCase):
                     subdomain="demo-college",
                     admin_full_name="First Admin",
                     admin_email="first@example.com",
-                    admin_password="Temporary!9Pass",
+                    admin_password=_generate_temporary_password(),
                 ),
                 SUPER,
             )

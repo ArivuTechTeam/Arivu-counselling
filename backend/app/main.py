@@ -2,7 +2,7 @@
 FastAPI application entry point for quiz-generator-v1.
 
 Run locally (from the backend/ folder, with the venv active) via:
-    uvicorn app.main:app --reload
+    uvicorn app.main:app
 
 Slice 1 endpoints:
     GET  /health   -> unauthenticated health check (is the server alive?)
@@ -20,6 +20,7 @@ from fastapi import Depends, FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.api import (
     academics,
@@ -52,9 +53,10 @@ settings = get_settings()
 app = FastAPI(
     title="quiz-generator-v1 API",
     version="0.1.0",
-    docs_url="/docs" if settings.is_local_development else None,
+    debug=settings.debug,
+    docs_url="/docs" if settings.debug else None,
     redoc_url=None,
-    openapi_url="/openapi.json" if settings.is_local_development else None,
+    openapi_url="/openapi.json" if settings.debug else None,
 )
 
 # --- CORS ---------------------------------------------------------------
@@ -88,16 +90,33 @@ async def trace_and_protect_api_responses(request: Request, call_next):
     started = time.perf_counter()
     try:
         response = await call_next(request)
-    except Exception:
-        logger.exception(
-            "Unhandled request failure request_id=%s method=%s path=%s",
+    except Exception as exc:
+        # Tracebacks and exception strings from SDKs may contain upstream
+        # response bodies, URLs, or credentials. Keep only safe correlation
+        # fields and the exception class in production logs.
+        logger.error(
+            "Unhandled request failure request_id=%s method=%s path=%s error_type=%s",
             request_id,
             request.method,
             request.url.path,
+            type(exc).__name__,
         )
         raise
 
     response.headers["X-Request-ID"] = request_id
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Strict-Transport-Security"] = (
+        "max-age=31536000; includeSubDomains"
+    )
+    response.headers["Content-Security-Policy"] = (
+        "default-src 'none'; script-src 'self'; frame-ancestors 'none'; "
+        "base-uri 'none'; form-action 'none'"
+    )
+    response.headers["Referrer-Policy"] = "no-referrer"
+    response.headers["Permissions-Policy"] = (
+        "camera=(), microphone=(), geolocation=(), payment=()"
+    )
     if request.url.path.startswith("/api/v1/"):
         response.headers["Cache-Control"] = "no-store, private"
         response.headers["Pragma"] = "no-cache"
@@ -114,7 +133,7 @@ async def trace_and_protect_api_responses(request: Request, call_next):
 
 @app.exception_handler(RequestValidationError)
 async def safe_validation_error(
-    _request: Request, exception: RequestValidationError
+    request: Request, exception: RequestValidationError
 ) -> JSONResponse:
     """Return useful field errors without echoing submitted passwords or text."""
     errors = [
@@ -125,16 +144,44 @@ async def safe_validation_error(
         }
         for error in exception.errors()
     ]
+    request_id = getattr(request.state, "request_id", uuid4().hex)
     return JSONResponse(
         status_code=422,
         content={
             "detail": "Please check the submitted fields and try again.",
             "errors": errors,
+            "request_id": request_id,
         },
         headers={
             "Cache-Control": "no-store, private",
             "Pragma": "no-cache",
+            "X-Request-ID": request_id,
         },
+    )
+
+
+@app.exception_handler(StarletteHTTPException)
+async def safe_http_error(
+    request: Request, exception: StarletteHTTPException
+) -> JSONResponse:
+    """Return safe HTTP errors in one consistent, traceable envelope."""
+    request_id = getattr(request.state, "request_id", uuid4().hex)
+    if exception.status_code >= 500:
+        detail = "The request could not be completed. Please try again."
+    elif isinstance(exception.detail, str):
+        detail = exception.detail
+    else:
+        detail = "The request could not be completed."
+    headers = {
+        **(exception.headers or {}),
+        "Cache-Control": "no-store, private",
+        "Pragma": "no-cache",
+        "X-Request-ID": request_id,
+    }
+    return JSONResponse(
+        status_code=exception.status_code,
+        content={"detail": detail, "request_id": request_id},
+        headers=headers,
     )
 
 

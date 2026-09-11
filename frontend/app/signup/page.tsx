@@ -10,6 +10,7 @@ import { Brand } from "@/components/ui/brand";
 import { listPublicCourses } from "@/lib/api";
 import { initAuthFx } from "@/lib/auth-fx";
 import { signInWithGoogle } from "@/lib/google-auth";
+import { PUBLIC_ENV } from "@/lib/public-env";
 import { createClient } from "@/lib/supabase";
 import "../login/login.css";
 
@@ -67,7 +68,7 @@ export default function SignupPage() {
   const [loading, setLoading] = useState(false);
   const [googleLoading, setGoogleLoading] = useState(false);
 
-  const tenantId = process.env.NEXT_PUBLIC_DEFAULT_TENANT_ID;
+  const tenantId = PUBLIC_ENV.defaultTenantId;
 
   useEffect(() => {
     if (tenantId) {
@@ -102,10 +103,6 @@ export default function SignupPage() {
       password,
       options: {
         data: {
-          // Kept for compatibility while Migration 11 rolls out. The hardened
-          // trigger ignores this value for public users and derives the tenant
-          // from course_id instead.
-          tenant_id: tenantId,
           full_name: fullName,
           // The database derives the tenant from this course and always creates
           // a student. It ignores browser-supplied role/tenant metadata.
@@ -115,7 +112,7 @@ export default function SignupPage() {
     });
     setLoading(false);
     if (error) {
-      setError(error.message);
+      setError("Account creation failed. Please check your details and try again.");
       return;
     }
     if (data.session) {
@@ -140,8 +137,8 @@ export default function SignupPage() {
       // callback validates whichever course arrives and derives the tenant
       // before creating a student profile.
       await signInWithGoogle(courseId);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Google sign-in could not start.");
+    } catch {
+      setError("Google sign-in could not start. Please try again.");
       setGoogleLoading(false);
     }
   }

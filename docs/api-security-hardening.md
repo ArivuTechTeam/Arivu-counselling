@@ -11,8 +11,8 @@ inside FastAPI.
 2. In the Supabase SQL Editor, run
    `migrations/migration-22-browser-data-api-hardening.sql` once.
 3. Confirm Railway's `FRONTEND_ORIGIN` is the exact Vercel production origin,
-   including `https://` and without a path or trailing slash. A non-local value
-   disables localhost CORS and the public FastAPI documentation routes.
+   including `https://` and without a path or trailing slash. Set
+   `APP_DEBUG=false`; production startup rejects debug mode for non-local origins.
 4. Remove `NEXT_PUBLIC_DEV_ACCOUNTS_JSON` from every Vercel environment if it
    was ever added. Do not add `NEXT_PUBLIC_DEV_ACCOUNT_EMAILS_JSON` in
    production; the development switcher is local-only.

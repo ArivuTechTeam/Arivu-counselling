@@ -9,6 +9,15 @@ jobs:
   backend:
     name: Backend tests
     runs-on: ubuntu-latest
+    env:
+      APP_ENV: test
+      APP_DEBUG: "false"
+      SUPABASE_URL: https://example.supabase.co
+      SUPABASE_ANON_KEY: ci-non-secret-${{ github.run_id }}-${{ github.run_attempt }}
+      SUPABASE_SERVICE_ROLE_KEY: ci-non-secret-${{ github.run_id }}-${{ github.run_attempt }}
+      SUPABASE_JWT_SECRET: ci-non-secret-${{ github.run_id }}-${{ github.run_attempt }}
+      FRONTEND_ORIGIN: https://app.example.com
+      GEMINI_API_KEY: ci-non-secret-${{ github.run_id }}-${{ github.run_attempt }}
     defaults:
       run:
         working-directory: backend

@@ -3,6 +3,8 @@ import {
   type SupabaseClient,
 } from "@supabase/supabase-js";
 
+import { PUBLIC_ENV } from "@/lib/public-env";
+
 /**
  * Creates the Supabase client used by browser-only authentication and data
  * access. The public anon key remains constrained by Row Level Security.
@@ -33,8 +35,8 @@ let cachedBrowserClient: SupabaseClient | undefined;
 export function createClient() {
   if (!cachedBrowserClient) {
     cachedBrowserClient = createSupabaseClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+      PUBLIC_ENV.supabaseUrl,
+      PUBLIC_ENV.supabaseAnonKey,
       {
         auth: {
           storage: window.sessionStorage,

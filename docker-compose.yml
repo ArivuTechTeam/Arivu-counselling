@@ -11,6 +11,8 @@ services:
       PIP_DISABLE_PIP_VERSION_CHECK: "1"
       PIP_ROOT_USER_ACTION: ignore
       WATCHFILES_FORCE_POLLING: "true"
+      APP_ENV: development
+      APP_DEBUG: "false"
       SUPABASE_URL: ${SUPABASE_URL}
       SUPABASE_ANON_KEY: ${SUPABASE_ANON_KEY}
       SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY}
@@ -29,7 +31,7 @@ services:
       - ./migrations:/migrations:ro
     command: >-
       sh -c "pip install -q -r requirements.txt &&
-      exec uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
+      exec uvicorn app.main:app --host 0.0.0.0 --port 8000"
     networks:
       - quiz-generator-net
 

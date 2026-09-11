@@ -5,6 +5,7 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
+from uuid import uuid4
 
 from fastapi import HTTPException
 
@@ -98,6 +99,22 @@ class RateLimitServiceTests(unittest.TestCase):
         self.assertEqual(caught.exception.status_code, 503)
         self.assertNotIn("Supabase", caught.exception.detail)
 
+    def test_malformed_response_is_not_written_to_logs(self) -> None:
+        sentinel = "server-only-secret-must-not-be-logged"
+        service = _RPCService({"credential": sentinel})
+        with patch(
+            "app.services.rate_limit.get_service_client", return_value=service
+        ), self.assertLogs("app.services.rate_limit", level="ERROR") as captured:
+            with self.assertRaises(HTTPException):
+                enforce_ai_rate_limit(
+                    profile=profile(),
+                    endpoint="topic_extraction",
+                    hourly_limit=10,
+                    action_label="topic extraction",
+                )
+
+        self.assertNotIn(sentinel, "\n".join(captured.output))
+
 
 class RateLimitConfigurationTests(unittest.TestCase):
     def test_default_and_environment_override(self) -> None:
@@ -118,9 +135,11 @@ class RateLimitConfigurationTests(unittest.TestCase):
     def test_all_six_settings_are_independently_configurable(self) -> None:
         environment = {
             "SUPABASE_URL": "https://example.supabase.co",
-            "SUPABASE_ANON_KEY": "anon",
-            "SUPABASE_SERVICE_ROLE_KEY": "service",
-            "SUPABASE_JWT_SECRET": "jwt",
+            "SUPABASE_ANON_KEY": uuid4().hex,
+            "SUPABASE_SERVICE_ROLE_KEY": uuid4().hex,
+            "SUPABASE_JWT_SECRET": uuid4().hex,
+            "FRONTEND_ORIGIN": "https://app.example.com",
+            "GEMINI_API_KEY": uuid4().hex,
             "RATE_LIMIT_QUIZ_GENERATION_PER_HOUR": "11",
             "RATE_LIMIT_BLUEPRINT_PER_HOUR": "12",
             "RATE_LIMIT_TOPIC_EXTRACTION_PER_HOUR": "13",

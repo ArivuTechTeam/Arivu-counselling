@@ -70,7 +70,12 @@ def _insert(rows: list[dict[str, Any]]) -> None:
         return
     try:
         get_service_client().table("events").insert(rows).execute()
-    except Exception:  # noqa: BLE001 — instrumentation must never break the app
+    except Exception as exc:  # noqa: BLE001 — instrumentation must never break the app
         # Debug-level on purpose: a missing table or transient failure here is
-        # not an application error; we just skip recording.
-        log.debug("event logging skipped (%d rows)", len(rows), exc_info=True)
+        # not an application error; we just skip recording. Do not attach the
+        # raw exception because SDK errors can include response bodies.
+        log.debug(
+            "event logging skipped (%d rows, %s)",
+            len(rows),
+            type(exc).__name__,
+        )

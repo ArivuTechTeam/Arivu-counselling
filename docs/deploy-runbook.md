@@ -13,6 +13,24 @@ uvicorn)**, both talking to one **Supabase** project.
 > alternative if you're setting this up fresh, but isn't what's deployed today.
 > The frontend goes on Vercel.
 
+## Deployment security gates
+
+Do not release until the target Supabase project has been checked directly:
+
+- Enable SSL Enforcement and database Network Restrictions in Supabase.
+- Confirm RLS is enabled on every exposed table and apply migration 22.
+- Under Authentication > Rate Limits, set the password-reset resend interval
+  to at least 20 minutes (no more than three requests per hour per user).
+- Enforce no more than five password sign-in attempts per minute per client IP
+  at the auth provider/gateway and enable Supabase Auth CAPTCHA for sign-in,
+  signup, and password recovery. Supabase's standard password endpoint has its
+  own abuse controls, but this repository cannot prove the stricter five/minute
+  deployment setting.
+- Set backend `APP_DEBUG=false` and use only HTTPS production origins.
+
+These platform settings are not represented by application migrations. Verify
+them in the Supabase dashboard for the exact project used by production.
+
 ---
 
 ## 0. One-time: get the code on GitHub `main`
@@ -120,6 +138,8 @@ explicitly in Railway so the production policy is visible and easy to edit:
 
 | Var | What |
 |---|---|
+| `APP_ENV` | set to `production`; rejects localhost/non-HTTPS service origins in production |
+| `APP_DEBUG` | must be `false` in production; controls API docs/debug behavior |
 | `SUPABASE_URL` | Supabase project URL |
 | `SUPABASE_ANON_KEY` | anon public key |
 | `SUPABASE_SERVICE_ROLE_KEY` | service role key (server-only, **secret**) |

@@ -175,9 +175,11 @@ async def extract_quiz_endpoint(
     except Exception:
         try:
             delete_bytes(object_path)
-        except Exception:  # noqa: BLE001 - retain the original database error
-            logger.exception(
-                "Could not remove orphaned extraction upload %s", object_path
+        except Exception as cleanup_exc:  # noqa: BLE001 - retain original error
+            logger.error(
+                "Could not remove orphaned extraction upload %s (%s)",
+                object_path,
+                type(cleanup_exc).__name__,
             )
         raise
     document_id = inserted.data[0]["id"]
@@ -207,7 +209,9 @@ async def extract_quiz_endpoint(
             exception=exc,
         ) from exc
     except Exception as exc:  # noqa: BLE001
-        logger.exception("Unexpected quiz extraction failure")
+        logger.error(
+            "Unexpected quiz extraction failure (%s)", type(exc).__name__
+        )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="We couldn't finish extracting this quiz. Please try again.",
@@ -294,7 +298,9 @@ async def re_extract_quiz_endpoint(
             exception=exc,
         ) from exc
     except Exception as exc:  # noqa: BLE001
-        logger.exception("Unexpected quiz re-extraction failure")
+        logger.error(
+            "Unexpected quiz re-extraction failure (%s)", type(exc).__name__
+        )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="We couldn't finish extracting this quiz. Please try again.",

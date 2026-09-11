@@ -50,12 +50,65 @@ def _positive_float(name: str, default: float) -> float:
     return value
 
 
+def _boolean(name: str, default: bool = False) -> bool:
+    """Read a boolean setting without treating arbitrary text as truthy."""
+    raw_value = os.getenv(name)
+    if raw_value is None:
+        return default
+    normalized = raw_value.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    raise RuntimeError(f"{name} must be true or false.")
+
+
+def _validated_url(name: str, *, allow_local_http: bool = False) -> str:
+    """Require an absolute HTTPS URL (or explicit local HTTP URL)."""
+    value = _require(name).rstrip("/")
+    parsed = urlparse(value)
+    local_host = parsed.hostname in {"localhost", "127.0.0.1"}
+    valid_scheme = parsed.scheme == "https" or (
+        allow_local_http and local_host and parsed.scheme == "http"
+    )
+    if not valid_scheme or not parsed.hostname or parsed.username or parsed.password:
+        raise RuntimeError(
+            f"{name} must be an absolute HTTPS origin without credentials. "
+            "HTTP is allowed only for localhost development."
+        )
+    if parsed.path not in {"", "/"} or parsed.params or parsed.query or parsed.fragment:
+        raise RuntimeError(f"{name} must be an origin only, without a path or query.")
+    return value
+
+
+def _optional_secret(name: str) -> str | None:
+    """Read an optional secret, rejecting template placeholders."""
+    value = os.getenv(name)
+    if not value:
+        return None
+    normalized = value.strip()
+    if normalized.lower().startswith(("replace_with_", "your-", "your_")):
+        raise RuntimeError(f"{name} must be replaced with a real credential.")
+    return normalized
+
+
 class Settings:
     """Typed, validated view of our environment variables."""
 
     def __init__(self) -> None:
+        self.app_env: str = os.getenv("APP_ENV", "production").strip().lower()
+        if self.app_env not in {"production", "development", "test"}:
+            raise RuntimeError("APP_ENV must be production, development, or test.")
+        allow_local_http = self.app_env != "production"
+
+        # Debug behavior is always opt-in. Production deployments should leave
+        # this false; local developers may set APP_DEBUG=true to expose API docs.
+        self.debug: bool = _boolean("APP_DEBUG", False)
+
         # --- Supabase connection ---
-        self.supabase_url: str = _require("SUPABASE_URL")
+        self.supabase_url: str = _validated_url(
+            "SUPABASE_URL", allow_local_http=allow_local_http
+        )
         # anon key: safe-ish, RLS-limited. The backend uses it when it wants
         # to act "as the logged-in user" (respecting their tenant + role).
         self.supabase_anon_key: str = _require("SUPABASE_ANON_KEY")
@@ -73,20 +126,25 @@ class Settings:
 
         # --- Local dev / CORS ---
         # Which frontend origin is allowed to call this API from the browser.
-        self.frontend_origin: str = os.getenv(
-            "FRONTEND_ORIGIN", "http://localhost:3000"
-        ).rstrip("/")
+        self.frontend_origin: str = _validated_url(
+            "FRONTEND_ORIGIN", allow_local_http=allow_local_http
+        )
         frontend_host = urlparse(self.frontend_origin).hostname
         self.is_local_development: bool = frontend_host in {
             "localhost",
             "127.0.0.1",
         }
+        if self.debug and (
+            self.app_env == "production" or not self.is_local_development
+        ):
+            raise RuntimeError(
+                "APP_DEBUG may only be enabled for localhost development or tests."
+            )
 
         # --- AI / LLM (Slice 3) ---
-        # Optional: the app boots without these, but quiz generation fails with
-        # a clear error until DEEPSEEK_API_KEY is set. Model + URL have sane
-        # defaults so you normally only need to supply the key.
-        self.deepseek_api_key: str | None = os.getenv("DEEPSEEK_API_KEY")
+        # At least one provider credential is mandatory because quiz generation
+        # is a core feature. Provider model/URL settings retain safe defaults.
+        self.deepseek_api_key: str | None = _optional_secret("DEEPSEEK_API_KEY")
         self.deepseek_base_url: str = os.getenv(
             "DEEPSEEK_BASE_URL", "https://api.deepseek.com"
         )
@@ -94,11 +152,17 @@ class Settings:
 
         # Gemini (Google). If a key is set, it becomes the PRIMARY model and
         # DeepSeek (if configured) is the fallback.
-        self.gemini_api_key: str | None = os.getenv("GEMINI_API_KEY")
+        self.gemini_api_key: str | None = _optional_secret("GEMINI_API_KEY")
         self.gemini_base_url: str = os.getenv(
             "GEMINI_BASE_URL", "https://generativelanguage.googleapis.com/v1beta"
         )
         self.gemini_model: str = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+
+        if not self.deepseek_api_key and not self.gemini_api_key:
+            raise RuntimeError(
+                "At least one AI provider key is required: set GEMINI_API_KEY "
+                "or DEEPSEEK_API_KEY."
+            )
 
         # The blueprint quiz feature (topic extraction + blueprint generation)
         # runs on the cheapest tier by default — Flash-Lite. Swappable to a
@@ -141,8 +205,8 @@ class Settings:
         # How much document text to feed the model per generation. Larger =
         # broader coverage (esp. with big-context models like Gemini) but more
         # tokens/cost. Tunable without a code change.
-        self.generation_max_text_chars: int = int(
-            os.getenv("GENERATION_MAX_TEXT_CHARS", "60000")
+        self.generation_max_text_chars: int = _positive_int(
+            "GENERATION_MAX_TEXT_CHARS", 60000
         )
 
         # --- Per-user AI request limits (rolling one-hour windows) ---
@@ -192,7 +256,9 @@ class Settings:
 def _require(name: str) -> str:
     """Read a required env var, or raise a clear error if it's missing."""
     value = os.getenv(name)
-    if not value:
+    if not value or value.strip().lower().startswith(
+        ("replace_with_", "your-", "your_")
+    ):
         raise RuntimeError(
             f"Missing required environment variable: {name}. "
             f"Copy backend/.env.example to backend/.env and fill it in."
