@@ -21,7 +21,6 @@ import {
   RefreshCw,
   Search,
   Sparkles,
-  TrendingUp,
   Trophy,
   UserCheck,
   Users,
@@ -157,7 +156,7 @@ const NAV: Record<string, NavItem[]> = {
   student: [
     { label: "Dashboard", href: "/dashboard/student", section: "Overview", icon: LayoutDashboard },
     {
-      label: "Subjects",
+      label: "Take Quiz",
       href: "/dashboard/student/subjects",
       section: "Overview",
       icon: BookOpen,
@@ -202,7 +201,7 @@ const NAV: Record<string, NavItem[]> = {
       label: "Quiz history",
       href: "/dashboard/student/history",
       section: "Progress",
-      icon: TrendingUp,
+      icon: BarChart3,
     },
   ],
 };
@@ -281,7 +280,14 @@ export function DashboardShell({
   const [pwOpen, setPwOpen] = useState(false);
   const [pwDone, setPwDone] = useState(false);
   const [navQuery, setNavQuery] = useState("");
-  const [openSections, setOpenSections] = useState<Set<string>>(() => new Set());
+  const [openSections, setOpenSections] = useState<Set<string>>(
+    () =>
+      new Set(
+        (role ? NAV[role] ?? [] : []).map(
+          (item) => item.section ?? "Workspace",
+        ),
+      ),
+  );
   const initial = (email?.[0] ?? "?").toUpperCase();
 
   // First-login security prompt: admin-created accounts still hold a temp
@@ -297,14 +303,6 @@ export function DashboardShell({
     .filter((i) => i.href && (pathname === i.href || pathname.startsWith(i.href + "/")))
     .sort((a, b) => (b.href?.length ?? 0) - (a.href?.length ?? 0))[0];
   const title = active?.label ?? "Dashboard";
-  const activeSection = items.find((i) => i.href === active?.href)?.section ?? "Workspace";
-
-  // Sections start closed; whichever section holds the current page always
-  // opens (covers landing on a page directly, e.g. a bookmark, without ever
-  // clicking the accordion) without closing anything the user opened by hand.
-  useEffect(() => {
-    setOpenSections((prev) => (prev.has(activeSection) ? prev : new Set(prev).add(activeSection)));
-  }, [activeSection]);
 
   function toggleSection(section: string) {
     setOpenSections((prev) => {

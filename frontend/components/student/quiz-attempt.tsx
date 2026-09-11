@@ -1,9 +1,9 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
+import { useSWRConfig } from "swr";
 
-import { AiTutor } from "@/components/student/ai-tutor";
 import { StudentDownloads } from "@/components/shared/pdf-buttons";
 import { downloadCardImage } from "@/lib/share-card";
 import { Badge } from "@/components/ui/badge";
@@ -19,6 +19,9 @@ import {
   AttemptState,
   TakingQuestion,
   addBookmark,
+  consumePrimedAttemptState,
+  finalizeAttemptForExit,
+  finalizeAttemptOnUnload,
   getAttempt,
   getPracticeSession,
   saveAttemptProgress,
@@ -26,6 +29,19 @@ import {
   submitAttempt,
   submitPracticeSession,
 } from "@/lib/api";
+import {
+  STUDENT_ATTEMPTS_KEY,
+  STUDENT_BOOKMARKS_KEY,
+  STUDENT_CHALLENGE_KEY_PREFIX,
+  STUDENT_DAILY_KEY,
+  STUDENT_EXAM_CONFIG_KEY,
+  STUDENT_LEADERBOARD_KEY_PREFIX,
+  STUDENT_MY_CHALLENGES_KEY,
+  STUDENT_QUIZZES_KEY,
+  STUDENT_REVISION_TOPICS_KEY,
+  STUDENT_STATS_KEY,
+  STUDENT_WEAK_ANALYSIS_KEY,
+} from "@/lib/student-queries";
 
 function isAnswered(v: unknown): boolean {
   if (v === undefined || v === null || v === "") return false;
@@ -34,8 +50,29 @@ function isAnswered(v: unknown): boolean {
 }
 
 function fmtTime(ms: number): string {
-  const s = Math.max(0, Math.floor(ms / 1000));
+  const s = Math.max(0, Math.ceil(ms / 1000));
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+}
+
+function fmtPace(seconds?: number): string | null {
+  if (!seconds) return null;
+  if (seconds < 60) return `${seconds} sec`;
+  const minutes = Math.floor(seconds / 60);
+  const remainder = seconds % 60;
+  return remainder ? `${minutes}m ${remainder}s` : `${minutes} min`;
+}
+
+function answerPayload(
+  questions: TakingQuestion[],
+  answers: Record<string, unknown>,
+) {
+  return questions.map((question) => {
+    let value = answers[question.id];
+    if (question.type === "numerical" && value !== undefined && value !== "") {
+      value = Number(value);
+    }
+    return { question_id: question.id, student_answer: value ?? null };
+  });
 }
 
 export function QuizAttempt({
@@ -45,6 +82,7 @@ export function QuizAttempt({
   attemptId: string;
   source?: "quiz" | "practice";
 }) {
+  const { mutate: mutateCache } = useSWRConfig();
   const [state, setState] = useState<AttemptState | null>(null);
   const [answers, setAnswers] = useState<Record<string, unknown>>({});
   const [current, setCurrent] = useState(0);
@@ -52,31 +90,83 @@ export function QuizAttempt({
   const [error, setError] = useState<string | null>(null);
   const [autosaveError, setAutosaveError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const loadedAttemptKey = useRef<string | null>(null);
+  const answerRevision = useRef(0);
+  const savedAnswerRevision = useRef(0);
+  const submissionLockRef = useRef(false);
+  const autoFiredRef = useRef(false);
+  const answersRef = useRef(answers);
+  answersRef.current = answers;
+
+  const invalidateStudentCaches = useCallback(async () => {
+    await Promise.all([
+      mutateCache(STUDENT_QUIZZES_KEY, undefined, { revalidate: false }),
+      mutateCache(STUDENT_STATS_KEY, undefined, { revalidate: false }),
+      mutateCache(STUDENT_ATTEMPTS_KEY, undefined, { revalidate: false }),
+      mutateCache(STUDENT_WEAK_ANALYSIS_KEY, undefined, { revalidate: false }),
+      mutateCache(STUDENT_REVISION_TOPICS_KEY, undefined, { revalidate: false }),
+      mutateCache(STUDENT_DAILY_KEY, undefined, { revalidate: false }),
+      mutateCache(STUDENT_EXAM_CONFIG_KEY, undefined, { revalidate: false }),
+      mutateCache(STUDENT_MY_CHALLENGES_KEY, undefined, { revalidate: false }),
+      mutateCache(
+        (key) =>
+          typeof key === "string" &&
+          (key.startsWith(STUDENT_LEADERBOARD_KEY_PREFIX) ||
+            key.startsWith(STUDENT_CHALLENGE_KEY_PREFIX)),
+        undefined,
+        { revalidate: false },
+      ),
+    ]);
+  }, [mutateCache]);
+
+  function applyLoadedState(next: AttemptState) {
+    setState(next);
+    setCurrent(0);
+    setMarked({});
+    setAutosaveError(null);
+    autoFiredRef.current = false;
+    submissionLockRef.current = false;
+    if (next.status === "in_progress") {
+      setAnswers((next as AttemptInProgress).autosave_state ?? {});
+      answerRevision.current = 0;
+      savedAnswerRevision.current = 0;
+    }
+  }
 
   function load() {
     setError(null);
+    const primed = consumePrimedAttemptState(attemptId);
+    if (primed) {
+      applyLoadedState(primed);
+      return;
+    }
     const fetcher = source === "practice" ? getPracticeSession : getAttempt;
     fetcher(attemptId)
       .then((next) => {
-        setState(next);
-        if (next.status === "in_progress") {
-          setAnswers((next as AttemptInProgress).autosave_state ?? {});
-        }
+        applyLoadedState(next);
       })
       .catch((e) => setError(e.message));
   }
 
   useEffect(() => {
+    const key = `${source}:${attemptId}`;
+    if (loadedAttemptKey.current === key) return;
+    loadedAttemptKey.current = key;
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [attemptId, source]);
 
   useEffect(() => {
     if (!state || state.status !== "in_progress") return;
+    if (answerRevision.current === savedAnswerRevision.current) return;
+    const revisionToSave = answerRevision.current;
     const timer = window.setTimeout(() => {
       const saver = source === "practice" ? savePracticeProgress : saveAttemptProgress;
       saver(attemptId, answers)
-        .then(() => setAutosaveError(null))
+        .then(() => {
+          savedAnswerRevision.current = revisionToSave;
+          setAutosaveError(null);
+        })
         .catch(() =>
           setAutosaveError(
             "Progress could not be saved. Keep this page open and check your connection.",
@@ -86,30 +176,127 @@ export function QuizAttempt({
     return () => window.clearTimeout(timer);
   }, [answers, attemptId, source, state]);
 
-  // Countdown for timed modes (exam). submitRef always points at the latest
-  // handleSubmit so the timer auto-submits exactly once when the clock hits zero.
+  // The server supplies remaining_seconds. Anchor that value to performance.now()
+  // so browser interval throttling and device clock changes cannot accumulate drift.
   const [remainingMs, setRemainingMs] = useState<number | null>(null);
-  const submitRef = useRef<() => void>(() => {});
-  const autoFiredRef = useRef(false);
+  const submitRef = useRef<(automatic: boolean) => Promise<boolean>>(async () => false);
   useEffect(() => {
+    setRemainingMs(null);
+    autoFiredRef.current = false;
     if (!state || state.status !== "in_progress") return;
     const s = state as AttemptInProgress;
     const lim = s.time_limit_minutes;
-    const startedAt = s.started_at;
-    if (!lim || !startedAt) return;
-    const deadline = new Date(startedAt).getTime() + lim * 60_000;
-    const tick = () => {
-      const ms = deadline - Date.now();
-      setRemainingMs(Math.max(0, ms));
-      if (ms <= 0 && !autoFiredRef.current) {
-        autoFiredRef.current = true;
-        submitRef.current();
+    if (!lim) return;
+    let initialMs: number | null = null;
+    if (typeof s.remaining_seconds === "number") {
+      initialMs = Math.max(0, s.remaining_seconds * 1000);
+    } else if (s.deadline_at) {
+      const deadline = Date.parse(s.deadline_at);
+      if (Number.isFinite(deadline)) initialMs = Math.max(0, deadline - Date.now());
+    } else if (s.started_at) {
+      const started = Date.parse(s.started_at);
+      if (Number.isFinite(started)) {
+        initialMs = Math.max(0, started + lim * 60_000 - Date.now());
       }
+    }
+    if (initialMs === null) return;
+
+    const anchor = performance.now();
+    let cancelled = false;
+    const autoSubmit = async () => {
+      if (autoFiredRef.current) return;
+      autoFiredRef.current = true;
+      for (const delay of [0, 1000, 2000]) {
+        if (cancelled) return;
+        if (delay) await new Promise((resolve) => window.setTimeout(resolve, delay));
+        if (cancelled) return;
+        if (await submitRef.current(true)) return;
+      }
+      // Keep retrying on later ticks if the connection remains unavailable.
+      autoFiredRef.current = false;
+    };
+    const tick = () => {
+      const ms = initialMs - (performance.now() - anchor);
+      setRemainingMs(Math.max(0, ms));
+      if (ms <= 0) void autoSubmit();
     };
     tick();
-    const id = setInterval(tick, 1000);
-    return () => clearInterval(id);
-  }, [state]);
+    const id = window.setInterval(tick, 500);
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
+  }, [attemptId, state]);
+
+  useEffect(() => {
+    if (!state || state.status !== "in_progress") return;
+    const questions = (state as AttemptInProgress).questions;
+    let leavingIntentionally = false;
+    const warning =
+      "Leaving now ends this attempt. Answered questions will be graded and unanswered questions will score zero. Continue?";
+
+    const finalizeOnUnload = () => {
+      finalizeAttemptOnUnload(
+        attemptId,
+        source,
+        answerPayload(questions, answersRef.current),
+      );
+    };
+    const onBeforeUnload = (event: BeforeUnloadEvent) => {
+      if (leavingIntentionally) return;
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    const onDocumentClick = async (event: MouseEvent) => {
+      if (
+        event.defaultPrevented ||
+        event.button !== 0 ||
+        event.metaKey ||
+        event.ctrlKey ||
+        event.shiftKey ||
+        event.altKey
+      ) {
+        return;
+      }
+      const target = event.target instanceof Element ? event.target : null;
+      const anchor = target?.closest("a[href]") as HTMLAnchorElement | null;
+      if (!anchor || anchor.target === "_blank" || anchor.hasAttribute("download")) {
+        return;
+      }
+      const destination = new URL(anchor.href, window.location.href);
+      if (destination.href === window.location.href) return;
+      event.preventDefault();
+      if (!window.confirm(warning)) return;
+      leavingIntentionally = true;
+      const payload = answerPayload(questions, answersRef.current);
+      try {
+        await finalizeAttemptForExit(attemptId, source, payload);
+        await invalidateStudentCaches();
+      } catch {
+        finalizeAttemptOnUnload(attemptId, source, payload);
+      } finally {
+        window.location.assign(destination.href);
+      }
+    };
+    const onPopState = () => {
+      if (!window.confirm(warning)) {
+        window.history.forward();
+        return;
+      }
+      leavingIntentionally = true;
+      void invalidateStudentCaches();
+      finalizeOnUnload();
+    };
+
+    window.addEventListener("beforeunload", onBeforeUnload);
+    window.addEventListener("popstate", onPopState);
+    document.addEventListener("click", onDocumentClick, true);
+    return () => {
+      window.removeEventListener("beforeunload", onBeforeUnload);
+      window.removeEventListener("popstate", onPopState);
+      document.removeEventListener("click", onDocumentClick, true);
+    };
+  }, [attemptId, invalidateStudentCaches, source, state]);
 
   if (error && !state) return <ErrorCard message={error} onRetry={load} />;
   if (!state) return <QuestionPanelSkeleton />;
@@ -118,13 +305,33 @@ export function QuizAttempt({
   }
 
   const questions = (state as { questions: TakingQuestion[] }).questions;
+  if (questions.length === 0) {
+    return (
+      <ErrorCard message="This quiz has no available questions. Please return to the dashboard and choose another quiz." />
+    );
+  }
   const q = questions[current];
   const answeredCount = questions.filter((x) => isAnswered(answers[x.id])).length;
+  const totalTimeMs = Number((state as AttemptInProgress).time_limit_minutes) * 60_000;
+  const timeRatio =
+    remainingMs !== null && Number.isFinite(totalTimeMs) && totalTimeMs > 0
+      ? Math.max(0, Math.min(1, remainingMs / totalTimeMs))
+      : null;
+  const timeMessage =
+    remainingMs === 0
+      ? "Time is complete — safely submitting your work."
+      : timeRatio !== null && timeRatio <= 0.1
+        ? "Final stretch — focus on any unanswered questions."
+        : timeRatio !== null && timeRatio <= 0.25
+          ? "You’re doing well — keep a steady pace."
+          : "Plenty of time — keep your rhythm.";
 
   function setAnswer(qid: string, val: unknown) {
+    answerRevision.current += 1;
     setAnswers((a) => ({ ...a, [qid]: val }));
   }
   function toggleMulti(qid: string, id: string) {
+    answerRevision.current += 1;
     setAnswers((a) => {
       const cur = Array.isArray(a[qid]) ? (a[qid] as string[]) : [];
       return {
@@ -134,6 +341,7 @@ export function QuizAttempt({
     });
   }
   function clearAnswer(qid: string) {
+    answerRevision.current += 1;
     setAnswers((a) => {
       const n = { ...a };
       delete n[qid];
@@ -144,33 +352,69 @@ export function QuizAttempt({
     setMarked((m) => ({ ...m, [qid]: !m[qid] }));
   }
 
-  async function handleSubmit() {
+  async function handleSubmit(automatic = false): Promise<boolean> {
+    if (submissionLockRef.current) return false;
+    if (!automatic) {
+      const firstMissing = questions.findIndex((qq) => !isAnswered(answers[qq.id]));
+      if (firstMissing >= 0) {
+        setCurrent(firstMissing);
+        setError(
+          `Answer all ${questions.length} questions before submitting. Question ${firstMissing + 1} is next.`,
+        );
+        return false;
+      }
+    }
+    submissionLockRef.current = true;
     setSubmitting(true);
     setError(null);
     try {
-      const payload = questions.map((qq) => {
-        let val = answers[qq.id];
-        if (qq.type === "numerical" && val !== undefined && val !== "") {
-          val = Number(val);
-        }
-        return { question_id: qq.id, student_answer: val ?? null };
-      });
+      const payload = answerPayload(questions, answers);
       const submit =
         source === "practice" ? submitPracticeSession : submitAttempt;
-      setState(await submit(attemptId, payload));
+      const result = await submit(attemptId, payload);
+      setState(result);
+      // Grading changes every student summary derived from attempt results.
+      // Evict them without issuing requests while the results page is visible;
+      // their next mount will reload fresh data once.
+      await invalidateStudentCaches();
+      return true;
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Submit failed");
+      // If the response was lost after the server graded an expiry submission,
+      // reload once and accept that authoritative state instead of trapping the
+      // student on a zeroed timer.
+      if (automatic) {
+        try {
+          const fetcher = source === "practice" ? getPracticeSession : getAttempt;
+          const recovered = await fetcher(attemptId);
+          if (recovered.status === "graded") {
+            setState(recovered);
+            return true;
+          }
+        } catch {
+          // Preserve the original submission error below.
+        }
+      }
+      setError(
+        automatic
+          ? "Time is complete. We are still safely retrying your submission. Keep this page open."
+          : e instanceof Error
+            ? e.message
+            : "Submit failed",
+      );
+      return false;
     } finally {
+      submissionLockRef.current = false;
       setSubmitting(false);
     }
   }
 
-  submitRef.current = handleSubmit; // keep the timer's submit reference fresh
+  submitRef.current = handleSubmit;
 
   const atLast = current === questions.length - 1;
+  const paletteLayout = getPaletteLayout(questions.length);
 
   return (
-    <div className="flex flex-col gap-5 lg:flex-row lg:items-start">
+    <div className={`grid gap-4 lg:items-start ${paletteLayout.pageColumns}`}>
       {/* Question panel — one at a time */}
       <div className="flex min-w-0 flex-1 flex-col gap-4">
         <div className="flex items-center justify-between gap-3 text-sm">
@@ -179,27 +423,51 @@ export function QuizAttempt({
             <span className="text-muted-foreground"> of {questions.length}</span>
           </span>
           <div className="flex items-center gap-3">
-            {remainingMs !== null && (
-              <span
-                className={`rounded-md border px-2.5 py-1 font-semibold tabular-nums ${
-                  remainingMs <= 60_000
-                    ? "border-rose-300 bg-rose-50 text-rose-700"
-                    : remainingMs <= 300_000
-                      ? "border-amber-300 bg-amber-50 text-amber-700"
-                      : "border-input bg-muted text-foreground"
-                }`}
-              >
-                {fmtTime(remainingMs)}
-              </span>
-            )}
             <span className="text-muted-foreground">{answeredCount} answered</span>
           </div>
         </div>
 
+        <p className="rounded-md border border-amber-200 bg-amber-50/70 px-3 py-2 text-xs text-amber-900">
+          Leaving for another page ends the attempt. Answered work is graded; unanswered
+          questions receive zero.
+        </p>
+
+        {remainingMs !== null && (
+          <div
+            className={`rounded-lg border px-4 py-3 ${
+              timeRatio !== null && timeRatio <= 0.1
+                ? "border-amber-300 bg-amber-50/70"
+                : "border-primary/20 bg-primary/[0.04]"
+            }`}
+            role="timer"
+            aria-live={remainingMs === 0 ? "assertive" : "off"}
+          >
+            <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between sm:gap-3">
+              <p className="text-sm text-muted-foreground">{timeMessage}</p>
+              <span className="shrink-0 font-semibold tabular-nums text-foreground">
+                {fmtTime(remainingMs)} remaining
+              </span>
+            </div>
+            <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-primary/10">
+              <div
+                className="h-full rounded-full bg-primary transition-[width] duration-500"
+                style={{ width: `${(timeRatio ?? 0) * 100}%` }}
+              />
+            </div>
+          </div>
+        )}
+
         <div className="rounded-lg border bg-card p-5 shadow-sm">
-          <div className="mb-3 flex items-center justify-between">
+          <div className="mb-3 flex items-center justify-between gap-3">
             <span className="font-semibold">Q{current + 1}</span>
-            <Badge tone="type">{typeLabel(q.type)}</Badge>
+            <div className="flex flex-wrap items-center justify-end gap-2">
+              {fmtPace(q.suggested_seconds) ? (
+                <span className="text-xs text-muted-foreground">
+                  Suggested pace: {fmtPace(q.suggested_seconds)}
+                </span>
+              ) : null}
+              <Badge tone="type">{typeLabel(q.type)}</Badge>
+            </div>
           </div>
           <p className="mb-4 text-[15px] text-foreground">{q.question_text}</p>
           <QuestionInput
@@ -231,7 +499,11 @@ export function QuizAttempt({
             </Button>
             <div className="ml-auto">
               {atLast ? (
-                <Button size="sm" onClick={handleSubmit} disabled={submitting}>
+                <Button
+                  size="sm"
+                  onClick={() => void handleSubmit(false)}
+                  disabled={submitting}
+                >
                   {submitting ? "Submitting…" : "Submit quiz"}
                 </Button>
               ) : (
@@ -249,12 +521,19 @@ export function QuizAttempt({
       </div>
 
       {/* Question palette — attempted / current / remaining */}
-      <aside className="w-full shrink-0 lg:w-64">
-        <div className="rounded-lg border bg-card p-4 shadow-sm">
-          <p className="mb-3 text-[11px] font-semibold uppercase tracking-widest text-muted-foreground">
-            Questions
-          </p>
-          <div className="grid grid-cols-6 gap-2 lg:grid-cols-5">
+      <aside className="w-full lg:sticky lg:top-0">
+        <div className="rounded-lg border bg-card p-3 shadow-sm sm:p-4">
+          <div className="mb-2 flex items-center justify-between gap-3">
+            <p className="text-[11px] font-semibold uppercase tracking-widest text-muted-foreground">
+              Questions
+            </p>
+            <span className="text-xs font-medium text-muted-foreground">
+              {current + 1} / {questions.length}
+            </span>
+          </div>
+          <div
+            className={`grid grid-cols-8 gap-1.5 sm:grid-cols-10 ${paletteLayout.paletteColumns}`}
+          >
             {questions.map((qq, i) => {
               const ans = isAnswered(answers[qq.id]);
               const mk = marked[qq.id];
@@ -269,7 +548,9 @@ export function QuizAttempt({
                   key={qq.id}
                   type="button"
                   onClick={() => setCurrent(i)}
-                  className={`flex h-9 w-9 items-center justify-center rounded-md text-sm font-medium transition ${base} ${
+                  aria-label={`Go to question ${i + 1}${ans ? ", answered" : ""}${mk ? ", marked for review" : ""}`}
+                  aria-current={cur ? "step" : undefined}
+                  className={`flex h-8 min-w-0 items-center justify-center rounded-md text-xs font-medium transition ${base} ${
                     cur ? "ring-2 ring-brand-600 ring-offset-1" : ""
                   }`}
                 >
@@ -279,25 +560,26 @@ export function QuizAttempt({
             })}
           </div>
 
-          <div className="mt-4 flex flex-col gap-1.5 text-xs text-muted-foreground">
+          <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1.5 text-[11px] text-muted-foreground">
             <Legend cls="bg-emerald-500" label="Answered" />
             <Legend cls="bg-muted" label="Not answered" />
             <Legend cls="bg-violet-500" label="Marked for review" />
           </div>
 
-          <div className="mt-4 rounded-md bg-muted p-2 text-center text-xs text-muted-foreground">
-            <span className="font-semibold text-primary">{answeredCount}</span> /{" "}
-            {questions.length} answered
+          <div className="mt-3 flex items-center gap-2 border-t pt-3">
+            <div className="min-w-0 flex-1 rounded-md bg-muted px-2 py-2 text-center text-xs text-muted-foreground">
+              <span className="font-semibold text-primary">{answeredCount}</span> /{" "}
+              {questions.length} answered
+            </div>
+            <Button
+              className="shrink-0"
+              size="sm"
+              onClick={() => void handleSubmit(false)}
+              disabled={submitting}
+            >
+              {submitting ? "Submitting…" : "Submit quiz"}
+            </Button>
           </div>
-
-          <Button
-            className="mt-3 w-full"
-            size="sm"
-            onClick={handleSubmit}
-            disabled={submitting}
-          >
-            {submitting ? "Submitting…" : "Submit quiz"}
-          </Button>
         </div>
       </aside>
     </div>
@@ -307,7 +589,7 @@ export function QuizAttempt({
 /** First-paint placeholder mirroring the question panel + palette layout. */
 function QuestionPanelSkeleton() {
   return (
-    <div className="flex flex-col gap-5 lg:flex-row lg:items-start">
+    <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(20rem,22rem)] lg:items-start">
       <div className="flex min-w-0 flex-1 flex-col gap-4">
         <div className="flex items-center justify-between">
           <Skeleton className="h-5 w-32" />
@@ -330,8 +612,8 @@ function QuestionPanelSkeleton() {
           </div>
         </div>
       </div>
-      <aside className="w-full shrink-0 lg:w-64">
-        <Skeleton className="h-64 w-full rounded-lg" />
+      <aside className="w-full lg:sticky lg:top-0">
+        <Skeleton className="h-[28rem] w-full rounded-lg" />
       </aside>
     </div>
   );
@@ -344,6 +626,36 @@ function Legend({ cls, label }: { cls: string; label: string }) {
       {label}
     </div>
   );
+}
+
+/**
+ * Keep small quizzes visually compact while reserving enough palette space for
+ * large exams. Static class strings are intentional so Tailwind can discover
+ * every responsive variant during the production build.
+ */
+function getPaletteLayout(questionCount: number) {
+  if (questionCount <= 5) {
+    return {
+      pageColumns: "lg:grid-cols-[minmax(0,1fr)_14rem]",
+      paletteColumns: "lg:grid-cols-5",
+    };
+  }
+  if (questionCount <= 20) {
+    return {
+      pageColumns: "lg:grid-cols-[minmax(0,1fr)_16rem]",
+      paletteColumns: "lg:grid-cols-5",
+    };
+  }
+  if (questionCount <= 50) {
+    return {
+      pageColumns: "lg:grid-cols-[minmax(0,1fr)_20rem]",
+      paletteColumns: "lg:grid-cols-8",
+    };
+  }
+  return {
+    pageColumns: "lg:grid-cols-[minmax(0,1fr)_minmax(20rem,22rem)]",
+    paletteColumns: "lg:grid-cols-10",
+  };
 }
 
 function QuestionInput({
@@ -454,10 +766,14 @@ function Results({ result }: { result: AttemptResult }) {
   return (
     <div className="flex flex-col gap-4">
       <Link
-        href="/dashboard/student"
+        href={
+          result.challenge_token
+            ? `/dashboard/student/challenge/${result.challenge_token}`
+            : "/dashboard/student"
+        }
         className="inline-flex w-fit items-center gap-1 text-sm text-muted-foreground transition-colors hover:text-foreground"
       >
-        ← Back to dashboard
+        {result.challenge_token ? "← Back to challenge" : "← Back to dashboard"}
       </Link>
       <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border bg-card p-5 shadow-sm">
         <div>
@@ -489,7 +805,7 @@ function Results({ result }: { result: AttemptResult }) {
           href={`/dashboard/student/challenge/${result.challenge_token}`}
           className="flex items-center justify-between gap-3 rounded-lg border border-primary/30 bg-primary/5 px-5 py-4 text-sm font-semibold text-primary transition-colors hover:bg-primary/10"
         >
-          See the leaderboard &amp; challenge a friend
+          View the game leaderboard
           <span>→</span>
         </Link>
       )}
@@ -550,7 +866,7 @@ function Results({ result }: { result: AttemptResult }) {
                 </span>
               </div>
             )}
-            {q.explanation && (
+            {!q.is_correct && q.explanation && (
               <div className="flex flex-wrap gap-x-2 px-3 py-2">
                 <span className="shrink-0 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
                   Why
@@ -559,7 +875,6 @@ function Results({ result }: { result: AttemptResult }) {
               </div>
             )}
           </div>
-          <AiTutor questionId={q.id} />
         </div>
       ))}
     </div>
@@ -568,6 +883,7 @@ function Results({ result }: { result: AttemptResult }) {
 
 /** "Save to revision" toggle — adds the question to the student's bookmark list. */
 function BookmarkButton({ questionId }: { questionId: string }) {
+  const { mutate: mutateCache } = useSWRConfig();
   const [saved, setSaved] = useState(false);
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState(false);
@@ -578,6 +894,7 @@ function BookmarkButton({ questionId }: { questionId: string }) {
     try {
       await addBookmark(questionId);
       setSaved(true);
+      await mutateCache(STUDENT_BOOKMARKS_KEY, undefined, { revalidate: false });
     } catch {
       setFailed(true);
     } finally {

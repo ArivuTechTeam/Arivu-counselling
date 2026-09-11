@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useRouter } from "next/navigation";
 
 import {
@@ -11,8 +11,10 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { PageHeader } from "@/components/ui/page-header";
+import { ErrorCard } from "@/components/ui/error-card";
 import { Skeleton } from "@/components/ui/skeleton";
-import { ExamConfig, getExamConfig, startExam } from "@/lib/api";
+import { startExam } from "@/lib/api";
+import { useStudentExamConfig } from "@/lib/student-queries";
 
 function Stat({ value, label }: { value: string; label: string }) {
   return (
@@ -27,26 +29,32 @@ function Stat({ value, label }: { value: string; label: string }) {
 
 export default function ExamPage() {
   const router = useRouter();
-  const [cfg, setCfg] = useState<ExamConfig | null>(null);
+  const { data: cfg, error: loadError, mutate } = useStudentExamConfig();
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    getExamConfig()
-      .then(setCfg)
-      .catch((e) => setError(e.message));
-  }, []);
+  const [actionError, setActionError] = useState<string | null>(null);
 
   async function begin() {
     setBusy(true);
-    setError(null);
+    setActionError(null);
     try {
       const { session_id } = await startExam();
       router.push(`/dashboard/student/practice/${session_id}`);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not start the exam.");
+      setActionError(e instanceof Error ? e.message : "Could not start the exam.");
       setBusy(false);
     }
+  }
+
+  if (loadError) {
+    return (
+      <div className="mx-auto flex max-w-3xl flex-col gap-6">
+        <PageHeader
+          title="Exam Simulator"
+          description="A full, timed exam under real conditions — the closest thing to the real day."
+        />
+        <ErrorCard message={loadError.message} onRetry={() => void mutate()} />
+      </div>
+    );
   }
 
   return (
@@ -89,8 +97,10 @@ export default function ExamPage() {
           {cfg ? (
             [
               ["Timed", "The clock starts the moment you begin and the exam auto-submits when it runs out."],
-              ["Negative marking", `Each wrong answer costs you ${cfg.negative_marking} marks. Leave a question blank to score zero on it instead.`],
-              ["No pausing", "Once you start you can't pause — set aside the full time and find a quiet spot."],
+              ["Complete every question", `Answer all ${cfg.questions} questions before submitting early. If time ends first, your saved work submits automatically.`],
+              ["Question pacing", "The base guide is 45s for True/False, 60s for single choice, 75s for fill blank, 90s for multiple choice, and 120s for numerical. These guides scale to fit this exam's overall limit."],
+              ["Negative marking", `Each wrong answer costs you ${cfg.negative_marking} marks. Review carefully before you submit.`],
+              ["No pausing", "Only one exam can be active at a time. Returning here resumes that same exam and its original deadline."],
             ].map(([t, d]) => (
               <div key={t} className="flex gap-3 rounded-lg border p-3">
                 <span className="mt-0.5 h-2 w-2 shrink-0 rounded-full bg-primary" />
@@ -108,9 +118,9 @@ export default function ExamPage() {
             </div>
           )}
 
-          {error && (
+          {actionError && (
             <p className="rounded-lg border border-destructive/20 bg-destructive/5 px-3 py-2 text-sm text-destructive">
-              {error}
+              {actionError}
             </p>
           )}
 
@@ -120,7 +130,11 @@ export default function ExamPage() {
               disabled={busy || !cfg}
               className="rounded-lg bg-gradient-to-b from-[#219256] to-[#15603d] px-6 py-3 text-sm font-bold text-white shadow-sm transition-transform hover:-translate-y-0.5 disabled:opacity-60"
             >
-              {busy ? "Starting your exam…" : "Start the exam →"}
+              {busy
+                ? "Opening your exam…"
+                : cfg?.active_session_id
+                  ? "Continue active exam →"
+                  : "Start the exam →"}
             </button>
           </div>
         </CardContent>

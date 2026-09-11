@@ -7,7 +7,9 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Brand } from "@/components/ui/brand";
 import { listPublicCourses } from "@/lib/api";
 import { PENDING_GOOGLE_COURSE_KEY } from "@/lib/google-auth";
+import { PENDING_AUTH_NEXT_KEY } from "@/lib/google-auth";
 import { createClient } from "@/lib/supabase";
+import { safeDashboardNext } from "@/lib/safe-next";
 
 type PublicCourse = { id: string; name: string };
 
@@ -20,6 +22,14 @@ export default function AuthCallbackPage() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const tenantId = process.env.NEXT_PUBLIC_DEFAULT_TENANT_ID;
+
+  const finishDestination = useCallback(() => {
+    const destination = safeDashboardNext(
+      window.sessionStorage.getItem(PENDING_AUTH_NEXT_KEY),
+    );
+    window.sessionStorage.removeItem(PENDING_AUTH_NEXT_KEY);
+    return destination;
+  }, []);
 
   const completeGoogleSignup = useCallback(async (selectedCourseId: string) => {
     setSaving(true);
@@ -38,9 +48,9 @@ export default function AuthCallbackPage() {
       return;
     }
     window.sessionStorage.removeItem(PENDING_GOOGLE_COURSE_KEY);
-    router.replace("/dashboard");
+    router.replace(finishDestination());
     router.refresh();
-  }, [router]);
+  }, [finishDestination, router]);
 
   useEffect(() => {
     if (initialized.current) return;
@@ -86,7 +96,7 @@ export default function AuthCallbackPage() {
         // tenant, and enrollments and can go straight to the dashboard.
         if (profile) {
           window.sessionStorage.removeItem(PENDING_GOOGLE_COURSE_KEY);
-          router.replace("/dashboard");
+          router.replace(finishDestination());
           router.refresh();
           return;
         }
@@ -122,7 +132,7 @@ export default function AuthCallbackPage() {
     }
 
     void finishOAuth();
-  }, [completeGoogleSignup, router, tenantId]);
+  }, [completeGoogleSignup, finishDestination, router, tenantId]);
 
   // While exchanging the code / checking for an existing profile, show only a
   // brief, low-ceremony spinner — existing users never see anything past this.

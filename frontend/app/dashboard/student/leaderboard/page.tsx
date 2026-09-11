@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 
 import {
   Card,
@@ -12,7 +12,8 @@ import {
 import { PageHeader } from "@/components/ui/page-header";
 import { ErrorCard } from "@/components/ui/error-card";
 import { SkeletonList } from "@/components/ui/skeleton";
-import { Leaderboard, LeaderRow, getLeaderboard } from "@/lib/api";
+import { LeaderRow } from "@/lib/api";
+import { useStudentLeaderboard } from "@/lib/student-queries";
 
 const MEDAL = ["#e8b923", "#9aa4ad", "#c17d4a"]; // gold / silver / bronze
 
@@ -50,19 +51,9 @@ function Row({ r }: { r: LeaderRow }) {
 }
 
 export default function LeaderboardPage() {
-  const [data, setData] = useState<Leaderboard | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
-
-  function load(courseId?: string) {
-    setLoading(true);
-    setError(null);
-    getLeaderboard(courseId)
-      .then(setData)
-      .catch((e) => setError(e.message))
-      .finally(() => setLoading(false));
-  }
-  useEffect(() => load(), []);
+  const [courseId, setCourseId] = useState<string>();
+  const { data, error, isValidating, mutate } =
+    useStudentLeaderboard(courseId);
 
   if (error) {
     return (
@@ -71,7 +62,7 @@ export default function LeaderboardPage() {
           title="Leaderboard"
           description="How you rank among students in your course."
         />
-        <ErrorCard message={error} onRetry={() => load()} />
+        <ErrorCard message={error.message} onRetry={() => void mutate()} />
       </div>
     );
   }
@@ -95,8 +86,8 @@ export default function LeaderboardPage() {
           {data.courses.map((c) => (
             <button
               key={c.id}
-              onClick={() => load(c.id)}
-              disabled={loading}
+              onClick={() => setCourseId(c.id)}
+              disabled={isValidating}
               className={`rounded-full border px-3 py-1.5 text-xs font-medium transition-colors ${
                 c.id === data.course_id
                   ? "border-primary bg-primary/10 text-primary"
@@ -136,14 +127,14 @@ export default function LeaderboardPage() {
             Top students{data?.course_name ? ` · ${data.course_name}` : ""}
           </CardTitle>
           <CardDescription>
-            {data === null
+            {!data
               ? "Fetching the latest scores…"
               : data.top.length === 0
                 ? "No quiz results yet for this course — take a quiz to get on the board."
                 : "Points are based on your total score across quizzes. Keep practising to climb."}
           </CardDescription>
         </CardHeader>
-        {data === null && (
+        {!data && (
           <CardContent>
             <SkeletonList rows={6} />
           </CardContent>

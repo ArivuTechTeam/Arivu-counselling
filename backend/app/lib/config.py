@@ -16,6 +16,7 @@ from __future__ import annotations
 import os
 from functools import lru_cache
 from urllib.parse import urlparse
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from dotenv import load_dotenv
 
@@ -159,6 +160,27 @@ class Settings:
         self.rate_limit_quiz_extraction_per_hour = _positive_int(
             "RATE_LIMIT_QUIZ_EXTRACTION_PER_HOUR", 10
         )
+
+        # Maximum starts per student for the same published quiz variant.
+        # Started and abandoned attempts both count toward this limit.
+        self.student_quiz_attempt_limit = _positive_int(
+            "STUDENT_QUIZ_ATTEMPT_LIMIT", 2
+        )
+
+        # New friend challenges accept participants for this many days. Existing
+        # in-progress sessions can still be resumed after the sharing window.
+        self.challenge_expiry_days = _positive_int("CHALLENGE_EXPIRY_DAYS", 30)
+
+        # Calendar boundary used for one-per-day challenges and streaks.
+        self.daily_challenge_timezone = os.getenv(
+            "DAILY_CHALLENGE_TIMEZONE", "Asia/Kolkata"
+        )
+        try:
+            ZoneInfo(self.daily_challenge_timezone)
+        except ZoneInfoNotFoundError as exc:
+            raise RuntimeError(
+                "DAILY_CHALLENGE_TIMEZONE must be a valid IANA timezone."
+            ) from exc
 
 
 def _require(name: str) -> str:

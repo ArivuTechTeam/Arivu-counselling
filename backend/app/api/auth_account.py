@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field
 
 from app.lib.auth import CurrentProfile, get_current_profile
 from app.lib.api_errors import public_error
-from app.lib.supabase import get_anon_client, get_service_client
+from app.lib.supabase import create_anon_auth_client, get_service_client
 
 router = APIRouter(prefix="/api/v1/auth", tags=["account"])
 
@@ -81,7 +81,9 @@ def change_password(
 
     # 1) Authenticate the CURRENT password. This proves it's really them (not a
     #    borrowed/left-open session) and lets us enforce "new != old".
-    anon = get_anon_client()
+    # sign_in mutates the Supabase client's session/Authorization header, so this
+    # password check must not use the process-wide stateless anon singleton.
+    anon = create_anon_auth_client()
     try:
         anon.auth.sign_in_with_password(
             {"email": profile.email, "password": body.current_password}

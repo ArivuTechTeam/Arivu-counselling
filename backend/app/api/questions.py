@@ -33,6 +33,7 @@ from app.services.rate_limit import (
     enforce_ai_rate_limit,
 )
 from app.services.review import regenerate_question
+from app.services.student_access import student_has_graded_question
 from app.services.tutor import explain_question
 
 router = APIRouter(prefix="/api/v1/questions", tags=["questions"])
@@ -60,62 +61,6 @@ def _assert_teacher_question(
     )
     if question is None or not question.data:
         raise HTTPException(status_code=404, detail="Question not found.")
-
-
-def _student_has_graded_question(
-    service, question_id: str, profile: CurrentProfile
-) -> bool:
-    attempt_answers = (
-        service.table("attempt_answers")
-        .select("attempt_id")
-        .eq("question_id", question_id)
-        .eq("tenant_id", profile.tenant_id)
-        .execute()
-        .data
-        or []
-    )
-    attempt_ids = [row["attempt_id"] for row in attempt_answers]
-    if attempt_ids:
-        attempts = (
-            service.table("quiz_attempts")
-            .select("id")
-            .in_("id", attempt_ids)
-            .eq("tenant_id", profile.tenant_id)
-            .eq("student_id", profile.user_id)
-            .eq("status", "graded")
-            .limit(1)
-            .execute()
-            .data
-            or []
-        )
-        if attempts:
-            return True
-
-    practice_answers = (
-        service.table("practice_answers")
-        .select("session_id")
-        .eq("question_id", question_id)
-        .eq("tenant_id", profile.tenant_id)
-        .execute()
-        .data
-        or []
-    )
-    session_ids = [row["session_id"] for row in practice_answers]
-    if not session_ids:
-        return False
-    sessions = (
-        service.table("practice_sessions")
-        .select("id")
-        .in_("id", session_ids)
-        .eq("tenant_id", profile.tenant_id)
-        .eq("student_id", profile.user_id)
-        .eq("status", "graded")
-        .limit(1)
-        .execute()
-        .data
-        or []
-    )
-    return bool(sessions)
 
 
 class QuestionEdit(BaseModel):
@@ -282,7 +227,7 @@ def explain(
     service = get_service_client()
     if profile.role == "teacher":
         _assert_teacher_question(service, question_id, profile)
-    elif not _student_has_graded_question(service, question_id, profile):
+    elif not student_has_graded_question(service, question_id, profile):
         raise HTTPException(
             status_code=403,
             detail="Explanations are available after you submit this question.",

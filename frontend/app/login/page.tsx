@@ -10,6 +10,7 @@ import { Brand } from "@/components/ui/brand";
 import { initAuthFx } from "@/lib/auth-fx";
 import { signInWithGoogle } from "@/lib/google-auth";
 import { createClient } from "@/lib/supabase";
+import { safeDashboardNext } from "@/lib/safe-next";
 import "./login.css";
 
 function MailIcon() {
@@ -47,6 +48,12 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false);
   const [googleLoading, setGoogleLoading] = useState(false);
 
+  function requestedDestination() {
+    return safeDashboardNext(
+      new URL(window.location.href).searchParams.get("next"),
+    );
+  }
+
   async function handleSignIn(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
@@ -63,7 +70,7 @@ export default function LoginPage() {
       setError(error.message);
       return;
     }
-    router.push("/dashboard");
+    router.push(requestedDestination());
   }
 
   async function handleGoogleSignIn() {
@@ -73,7 +80,7 @@ export default function LoginPage() {
     try {
       // No course is required for an existing user. A brand-new Google user
       // selects one securely on the callback page before a profile is created.
-      await signInWithGoogle();
+      await signInWithGoogle(undefined, requestedDestination());
     } catch (e) {
       setError(e instanceof Error ? e.message : "Google sign-in could not start.");
       setGoogleLoading(false);

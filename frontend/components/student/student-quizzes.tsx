@@ -1,9 +1,11 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useRouter } from "next/navigation";
 
 import { Button } from "@/components/ui/button";
+import { AttemptReadiness } from "@/components/student/attempt-readiness";
+import { ErrorCard } from "@/components/ui/error-card";
 import {
   Card,
   CardContent,
@@ -11,8 +13,9 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { StudentQuiz, listStudentQuizzes, startAttempt } from "@/lib/api";
+import { StudentQuiz, startAttempt } from "@/lib/api";
 import { variantLabel } from "@/lib/format";
+import { useStudentQuizzes } from "@/lib/student-queries";
 
 // One takeable quiz = a variant plus the title of the set it belongs to.
 type QuizItem = {
@@ -26,6 +29,9 @@ type QuizItem = {
   totalMarks?: number | null;
   timeLimit?: number | null;
   attempted: boolean;
+  attemptCount: number;
+  attemptLimit: number;
+  attemptsRemaining: number;
   bestPct?: number | null;
 };
 
@@ -49,6 +55,9 @@ function flatten(quizzes: StudentQuiz[]): QuizItem[] {
         totalMarks: v.total_marks,
         timeLimit: v.time_limit_minutes,
         attempted: v.attempted,
+        attemptCount: v.attempt_count,
+        attemptLimit: v.attempt_limit,
+        attemptsRemaining: v.attempts_remaining,
         bestPct: v.best_pct,
       });
     }
@@ -58,24 +67,20 @@ function flatten(quizzes: StudentQuiz[]): QuizItem[] {
 
 export function StudentQuizzes() {
   const router = useRouter();
-  const [quizzes, setQuizzes] = useState<StudentQuiz[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const { data: quizzes = null, error: loadError, mutate } = useStudentQuizzes();
+  const [actionError, setActionError] = useState<string | null>(null);
   const [starting, setStarting] = useState<string | null>(null);
+  const [pending, setPending] = useState<QuizItem | null>(null);
 
-  useEffect(() => {
-    listStudentQuizzes()
-      .then(setQuizzes)
-      .catch((e) => setError(e.message));
-  }, []);
-
-  async function start(variantId: string) {
-    setStarting(variantId);
-    setError(null);
+  async function start() {
+    if (!pending) return;
+    setStarting(pending.variantId);
+    setActionError(null);
     try {
-      const { attempt_id } = await startAttempt(variantId);
+      const { attempt_id } = await startAttempt(pending.variantId);
       router.push(`/dashboard/student/attempt/${attempt_id}`);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not start quiz");
+      setActionError(e instanceof Error ? e.message : "Could not start quiz");
       setStarting(null);
     }
   }
@@ -85,9 +90,18 @@ export function StudentQuizzes() {
   const completed = items.filter((i) => i.attempted);
   const loaded = quizzes !== null;
 
+  if (loadError) {
+    return (
+      <ErrorCard
+        message={loadError.message}
+        onRetry={() => void mutate()}
+      />
+    );
+  }
+
   return (
     <div className="flex flex-col gap-6">
-      {error && <p className="text-sm text-red-600">{error}</p>}
+      {actionError && <p className="text-sm text-red-600">{actionError}</p>}
 
       {/* Quizzes to attend — the first thing a student should see */}
       <Card className="animate-rise">
@@ -135,20 +149,23 @@ export function StudentQuizzes() {
                       {i.questionCount} question{i.questionCount === 1 ? "" : "s"}
                       {i.totalMarks ? ` · ${i.totalMarks} marks` : ""}
                       {i.timeLimit ? ` · ${i.timeLimit} min` : ""}
+                      {` · ${i.attemptsRemaining} of ${i.attemptLimit} attempts left`}
                     </p>
                   </div>
                   <button
                     type="button"
-                    onClick={() => start(i.variantId)}
-                    disabled={starting === i.variantId}
+                    onClick={() => setPending(i)}
+                    disabled={starting === i.variantId || i.attemptsRemaining === 0}
                     className="group relative w-full overflow-hidden rounded-lg bg-gradient-to-b from-[#219256] to-[#15603d] px-4 py-2.5 text-sm font-semibold text-white transition-all animate-cta-glow hover:-translate-y-0.5 active:translate-y-0 disabled:cursor-not-allowed disabled:opacity-70"
                   >
                     {/* glossy top highlight */}
                     <span className="pointer-events-none absolute inset-x-0 top-0 h-1/2 rounded-t-lg bg-white/20" />
-                    {/* sweeping sheen */}
-                    <span className="pointer-events-none absolute inset-y-0 left-0 w-1/3 animate-shine bg-gradient-to-r from-transparent via-white/40 to-transparent" />
                     <span className="relative z-10 flex items-center justify-center gap-1">
-                      {starting === i.variantId ? "Starting…" : "Start quiz"}
+                      {starting === i.variantId
+                        ? "Starting…"
+                        : i.attemptsRemaining === 0
+                          ? "Attempt limit reached"
+                          : "Start quiz"}
                       {starting !== i.variantId && (
                         <span className="transition-transform group-hover:translate-x-1">
                           →
@@ -184,21 +201,37 @@ export function StudentQuizzes() {
                     {topicLine(i) ? `${topicLine(i)} · ` : ""}
                     {variantLabel(i.variantType)}
                     {i.bestPct != null ? ` · best ${i.bestPct}%` : ""}
+                    {` · ${i.attemptsRemaining} attempt${i.attemptsRemaining === 1 ? "" : "s"} left`}
                   </p>
                 </div>
                 <Button
                   size="sm"
                   variant="outline"
-                  onClick={() => start(i.variantId)}
-                  disabled={starting === i.variantId}
+                  onClick={() => setPending(i)}
+                  disabled={starting === i.variantId || i.attemptsRemaining === 0}
                 >
-                  {starting === i.variantId ? "Starting…" : "Retake"}
+                  {starting === i.variantId
+                    ? "Starting…"
+                    : i.attemptsRemaining === 0
+                      ? "Limit reached"
+                      : "Retake"}
                 </Button>
               </div>
             ))}
           </CardContent>
         </Card>
       )}
+      <AttemptReadiness
+        open={pending !== null}
+        title={pending?.title ?? "Quiz"}
+        questionCount={pending?.questionCount ?? 0}
+        timeLimitMinutes={pending?.timeLimit}
+        attemptNumber={pending ? pending.attemptCount + 1 : undefined}
+        maxAttempts={pending?.attemptLimit}
+        busy={starting !== null}
+        onCancel={() => setPending(null)}
+        onConfirm={() => void start()}
+      />
     </div>
   );
 }

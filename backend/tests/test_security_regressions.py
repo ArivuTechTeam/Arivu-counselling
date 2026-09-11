@@ -124,6 +124,86 @@ class MigrationSecurityTests(unittest.TestCase):
         self.assertIn("alter table public.quiz_sets", sql)
         self.assertIn("alter column created_by drop not null", sql)
 
+    def test_quiz_attempt_limit_is_atomic_and_tenant_scoped(self) -> None:
+        root = Path(__file__).resolve().parents[2]
+        sql = (
+            root / "migrations/migration-24-quiz-attempt-limit.sql"
+        ).read_text().lower()
+        self.assertIn("pg_advisory_xact_lock", sql)
+        self.assertIn("count(*) >= p_max_attempts", sql)
+        self.assertIn("attempts.tenant_id = p_tenant_id", sql)
+        self.assertIn("attempts.student_id = p_student_id", sql)
+        self.assertIn("attempts.variant_id = p_variant_id", sql)
+        self.assertIn("security invoker", sql)
+        self.assertIn("from public, anon, authenticated", sql)
+        self.assertIn("to service_role", sql)
+
+    def test_docker_forwards_student_quiz_attempt_limit(self) -> None:
+        root = Path(__file__).resolve().parents[2]
+        compose = (root / "docker-compose.yml").read_text()
+        root_example = (root / ".env.example").read_text()
+        self.assertIn(
+            "STUDENT_QUIZ_ATTEMPT_LIMIT: ${STUDENT_QUIZ_ATTEMPT_LIMIT:-2}",
+            compose,
+        )
+        self.assertIn("STUDENT_QUIZ_ATTEMPT_LIMIT=2", root_example)
+
+    def test_revision_topic_snapshot_migration_is_safe_and_additive(self) -> None:
+        root = Path(__file__).resolve().parents[2]
+        sql = (
+            root / "migrations/migration-25-revision-topic-snapshots.sql"
+        ).read_text().lower()
+        self.assertIn("add column if not exists answered_at_revision", sql)
+        self.assertIn("integer not null default 0", sql)
+        self.assertIn("check (answered_at_revision >= 0)", sql)
+        self.assertIn("from pg_constraint", sql)
+
+    def test_daily_and_exam_session_guards_are_atomic_and_additive(self) -> None:
+        root = Path(__file__).resolve().parents[2]
+        sql = (
+            root / "migrations/migration-26-daily-exam-session-guards.sql"
+        ).read_text().lower()
+        self.assertIn("add column if not exists activity_date date", sql)
+        self.assertIn("add column if not exists active_slot boolean", sql)
+        self.assertIn("create unique index if not exists uq_practice_daily_student_date", sql)
+        self.assertIn("tenant_id, student_id, activity_date", sql)
+        self.assertIn("where mode = 'daily' and activity_date is not null", sql)
+        self.assertIn("create unique index if not exists uq_practice_active_exam_student", sql)
+        self.assertIn("where mode = 'exam' and status = 'in_progress'", sql)
+
+    def test_challenge_hardening_is_atomic_unique_and_backend_only(self) -> None:
+        root = Path(__file__).resolve().parents[2]
+        sql = (
+            root / "migrations/migration-27-challenge-flow-hardening.sql"
+        ).read_text().lower()
+        self.assertIn("add column if not exists question_snapshot jsonb", sql)
+        self.assertIn("add column if not exists course_ids uuid[]", sql)
+        self.assertIn("uq_practice_challenge_participant", sql)
+        self.assertIn("challenge_id, student_id", sql)
+        self.assertIn("create_challenge_with_session", sql)
+        self.assertIn("security invoker", sql)
+        self.assertIn("set search_path = ''", sql)
+        self.assertIn("from public, anon, authenticated", sql)
+        self.assertIn("to service_role", sql)
+        self.assertIn("revoke all on table public.challenges", sql)
+
+    def test_docker_forwards_challenge_policy(self) -> None:
+        root = Path(__file__).resolve().parents[2]
+        compose = (root / "docker-compose.yml").read_text()
+        root_example = (root / ".env.example").read_text()
+        self.assertIn(
+            "CHALLENGE_EXPIRY_DAYS: ${CHALLENGE_EXPIRY_DAYS:-30}", compose
+        )
+        self.assertIn("CHALLENGE_EXPIRY_DAYS=30", root_example)
+
+    def test_eager_challenge_session_creator_is_removed(self) -> None:
+        root = Path(__file__).resolve().parents[2]
+        sql = (
+            root / "migrations/migration-28-remove-eager-challenge-session.sql"
+        ).read_text().lower()
+        self.assertIn("drop function if exists", sql)
+        self.assertIn("create_challenge_with_session", sql)
+
     def test_browser_data_api_cannot_expose_quiz_answers(self) -> None:
         root = Path(__file__).resolve().parents[2]
         sql = (

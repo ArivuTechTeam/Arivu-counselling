@@ -127,6 +127,8 @@ class RateLimitConfigurationTests(unittest.TestCase):
             "RATE_LIMIT_QUESTION_REGENERATE_PER_HOUR": "14",
             "RATE_LIMIT_QUESTION_EXPLAIN_PER_HOUR": "15",
             "RATE_LIMIT_QUIZ_EXTRACTION_PER_HOUR": "16",
+            "STUDENT_QUIZ_ATTEMPT_LIMIT": "7",
+            "CHALLENGE_EXPIRY_DAYS": "45",
         }
         with patch.dict(os.environ, environment, clear=True):
             settings = Settings()
@@ -137,6 +139,8 @@ class RateLimitConfigurationTests(unittest.TestCase):
         self.assertEqual(settings.rate_limit_question_regenerate_per_hour, 14)
         self.assertEqual(settings.rate_limit_question_explain_per_hour, 15)
         self.assertEqual(settings.rate_limit_quiz_extraction_per_hour, 16)
+        self.assertEqual(settings.student_quiz_attempt_limit, 7)
+        self.assertEqual(settings.challenge_expiry_days, 45)
 
 
 class RateLimitMigrationTests(unittest.TestCase):

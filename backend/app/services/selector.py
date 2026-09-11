@@ -20,6 +20,13 @@ from app.lib.auth import CurrentProfile
 # 100 covers a full-length exam (e.g. CA Foundation 100Q); shorter modes cap lower.
 _MAX_POOL = 2000
 _MAX_COUNT = 100
+SELECTABLE_QUESTION_TYPES = (
+    "mcq_single",
+    "mcq_multi",
+    "true_false",
+    "numerical",
+    "fill_blank",
+)
 
 
 def enrolled_subject_ids(service, profile: CurrentProfile) -> set[str]:
@@ -121,3 +128,56 @@ def select_question_ids(
     ids = [r["id"] for r in rows]
     random.shuffle(ids)
     return ids[:count]
+
+
+def select_question_ids_by_type(
+    service,
+    profile: CurrentProfile,
+    *,
+    subject_id: str | None,
+    type_counts: dict[str, int],
+) -> tuple[list[str], dict[str, int]]:
+    """Select an exact randomized mix without silently substituting types."""
+    tenant_id = profile.tenant_id
+    allowed = enrolled_subject_ids(service, profile)
+    if not allowed or (subject_id and subject_id not in allowed):
+        return [], {question_type: 0 for question_type in type_counts}
+
+    chapter_ids = _chapter_ids(
+        service, [subject_id] if subject_id else list(allowed), tenant_id
+    )
+    if not chapter_ids:
+        return [], {question_type: 0 for question_type in type_counts}
+
+    requested_types = [
+        question_type for question_type, count in type_counts.items() if count > 0
+    ]
+    if not requested_types:
+        return [], {}
+    rows = (
+        service.table("questions")
+        .select("id, type")
+        .eq("tenant_id", tenant_id)
+        .eq("review_status", "approved")
+        .in_("chapter_id", chapter_ids)
+        .in_("type", requested_types)
+        .limit(_MAX_POOL)
+        .execute()
+        .data
+        or []
+    )
+    pools = {question_type: [] for question_type in requested_types}
+    for row in rows:
+        question_type = row.get("type")
+        if question_type in pools:
+            pools[question_type].append(row["id"])
+
+    selected: list[str] = []
+    availability: dict[str, int] = {}
+    for question_type in requested_types:
+        pool = pools[question_type]
+        random.shuffle(pool)
+        availability[question_type] = len(pool)
+        selected.extend(pool[: type_counts[question_type]])
+    random.shuffle(selected)
+    return selected, availability

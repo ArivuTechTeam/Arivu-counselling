@@ -4,7 +4,6 @@ import * as React from "react";
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import useSWR from "swr";
 import {
   Area,
   AreaChart,
@@ -25,12 +24,7 @@ import {
 import { StudentQuizzes } from "@/components/student/student-quizzes";
 import { ErrorCard } from "@/components/ui/error-card";
 import { Skeleton } from "@/components/ui/skeleton";
-import {
-  AttemptHistoryItem,
-  StudentStats,
-  getStudentStats,
-  listStudentAttempts,
-} from "@/lib/api";
+import { useStudentAttempts, useStudentStats } from "@/lib/student-queries";
 
 const BRAND = "#15603d";
 
@@ -309,18 +303,10 @@ function masteryColor(pct: number) {
 
 export function StudentDashboard() {
   const router = useRouter();
-  const { data, error, mutate } = useSWR<{
-    stats: StudentStats;
-    attempts: AttemptHistoryItem[];
-  }>("dashboard:student", async () => {
-    const [stats, attempts] = await Promise.all([
-      getStudentStats(),
-      listStudentAttempts(),
-    ]);
-    return { stats, attempts };
-  });
-  const stats = data?.stats ?? null;
-  const attempts = data?.attempts ?? [];
+  const statsQuery = useStudentStats();
+  const attemptsQuery = useStudentAttempts();
+  const stats = statsQuery.data ?? null;
+  const attempts = attemptsQuery.data ?? [];
 
   const ready = stats !== null;
   const acc = stats?.overall_accuracy ?? 0;
@@ -360,9 +346,17 @@ export function StudentDashboard() {
   const quizzesA = useCountUp(quizzes, ready);
   const bestA = useCountUp(best, ready && attempts.length > 0);
 
-  // Both fetches failed — show a retryable error instead of a zeroed dashboard.
+  // Either summary is required for a correct dashboard; retry both together.
+  const error = statsQuery.error ?? attemptsQuery.error;
   if (error) {
-    return <ErrorCard message={error.message} onRetry={() => void mutate()} />;
+    return (
+      <ErrorCard
+        message={error.message}
+        onRetry={() =>
+          void Promise.all([statsQuery.mutate(), attemptsQuery.mutate()])
+        }
+      />
+    );
   }
 
   // First paint before stats arrive — skeleton the hero + tile grid.

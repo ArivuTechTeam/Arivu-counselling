@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import {
   Card,
@@ -15,22 +15,19 @@ import { SkeletonList } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/ui/empty-state";
 import { BookOpen, Check } from "@/components/ui/icons";
 import {
-  WeakAnalysis,
   WeakChapterNode,
   WeakSubjectNode,
-  getWeakAnalysis,
 } from "@/lib/api";
+import { useStudentWeakAnalysis } from "@/lib/student-queries";
 
 // Below this success rate a topic counts as "weak" (needs work). At or above it
 // the student is doing fine, so we hide it — this view is weak areas ONLY.
 const WEAK = 60;
 
-/** Keep only weak areas: drop strong subjects entirely, and within the rest keep
- *  only weak topics (and the chapters that still have any). A subject the student
- *  is doing well on overall never appears here. */
+/** Keep every weak topic, even when stronger topics lift its parent subject's
+ *  aggregate above the threshold. Then remove empty chapters and subjects. */
 function onlyWeak(subjects: WeakSubjectNode[]): WeakSubjectNode[] {
   return subjects
-    .filter((s) => s.accuracy < WEAK) // strong subject → gone
     .map((s) => ({
       ...s,
       chapters: s.chapters
@@ -87,33 +84,24 @@ function Pct({ pct }: { pct: number }) {
 const ckey = (s: string, c: string) => `${s}::${c}`;
 
 export function WeakAreaAnalysis() {
-  const [data, setData] = useState<WeakAnalysis | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const { data, error, mutate } = useStudentWeakAnalysis();
   const [openS, setOpenS] = useState<Set<string>>(new Set());
   const [openC, setOpenC] = useState<Set<string>>(new Set());
-
-  function load() {
-    setError(null);
-    getWeakAnalysis()
-      .then((d) => {
-        setData(d);
-        // Auto-open the weakest subject and its weakest chapter to guide focus.
-        const weak = onlyWeak(d.subjects);
-        const s0: WeakSubjectNode | undefined = weak[0];
-        if (s0) {
-          setOpenS(new Set([s0.subject]));
-          const c0: WeakChapterNode | undefined = s0.chapters[0];
-          if (c0) setOpenC(new Set([ckey(s0.subject, c0.chapter)]));
-        }
-      })
-      .catch((e) =>
-        setError(e instanceof Error ? e.message : "Could not load your analysis."),
-      );
-  }
+  const openedInitialWeakArea = useRef(false);
 
   useEffect(() => {
-    load();
-  }, []);
+    if (!data || openedInitialWeakArea.current) return;
+    openedInitialWeakArea.current = true;
+    // Auto-open the weakest subject and chapter once, without resetting the
+    // student's drill-down state when SWR refreshes in the background.
+    const weak = onlyWeak(data.subjects);
+    const s0: WeakSubjectNode | undefined = weak[0];
+    if (s0) {
+      setOpenS(new Set([s0.subject]));
+      const c0: WeakChapterNode | undefined = s0.chapters[0];
+      if (c0) setOpenC(new Set([ckey(s0.subject, c0.chapter)]));
+    }
+  }, [data]);
 
   function toggleS(s: string) {
     setOpenS((prev) => {
@@ -133,10 +121,10 @@ export function WeakAreaAnalysis() {
   }
 
   if (error) {
-    return <ErrorCard message={error} onRetry={load} />;
+    return <ErrorCard message={error.message} onRetry={() => void mutate()} />;
   }
 
-  if (data === null) {
+  if (data === undefined) {
     return <SkeletonList rows={4} />;
   }
 

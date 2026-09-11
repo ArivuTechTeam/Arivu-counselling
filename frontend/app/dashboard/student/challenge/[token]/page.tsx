@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 
@@ -14,8 +14,11 @@ import {
 import { PageHeader } from "@/components/ui/page-header";
 import { ErrorCard } from "@/components/ui/error-card";
 import { Skeleton, SkeletonList } from "@/components/ui/skeleton";
-import { ChallengeInfo, acceptChallenge, getChallenge } from "@/lib/api";
+import { AttemptReadiness } from "@/components/student/attempt-readiness";
+import { acceptChallenge } from "@/lib/api";
+import { typeLabel } from "@/lib/format";
 import { downloadCardImage } from "@/lib/share-card";
+import { useStudentChallenge } from "@/lib/student-queries";
 
 const MEDAL = ["#e8b923", "#9aa4ad", "#c17d4a"]; // gold / silver / bronze
 
@@ -26,33 +29,39 @@ export default function ChallengeHubPage({
 }) {
   const token = params.token;
   const router = useRouter();
-  const [info, setInfo] = useState<ChallengeInfo | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const { data: info, error: loadError, mutate } = useStudentChallenge(token);
+  const [actionError, setActionError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [showReadiness, setShowReadiness] = useState(false);
+  const [copied, setCopied] = useState(false);
   const cardRef = useRef<HTMLDivElement>(null);
 
-  function load() {
-    setError(null);
-    setInfo(null);
-    getChallenge(token)
-      .then(setInfo)
-      .catch((e) => setError(e.message));
+  async function copyLink() {
+    setActionError(null);
+    try {
+      await navigator.clipboard.writeText(window.location.href);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1800);
+    } catch {
+      setActionError("Could not copy the link. Copy the address from your browser instead.");
+    }
   }
-  useEffect(load, [token]);
 
   async function accept() {
     setBusy(true);
-    setError(null);
+    setActionError(null);
     try {
       const { session_id } = await acceptChallenge(token);
+      await mutate(undefined, { revalidate: false });
       router.push(`/dashboard/student/practice/${session_id}`);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not start the challenge.");
+      setActionError(e instanceof Error ? e.message : "Could not start the challenge.");
+      setShowReadiness(false);
       setBusy(false);
     }
   }
 
-  if (error) {
+  if (loadError) {
     return (
       <div className="flex flex-col gap-4">
         <PageHeader
@@ -61,8 +70,8 @@ export default function ChallengeHubPage({
         />
         <ErrorCard
           title="Challenge unavailable"
-          message={error}
-          onRetry={load}
+          message={loadError.message}
+          onRetry={() => void mutate()}
         />
         <Link
           href="/dashboard/student/challenge"
@@ -101,10 +110,39 @@ export default function ChallengeHubPage({
 
   return (
     <div className="flex flex-col gap-6">
+      <Link
+        href="/dashboard/student/challenge"
+        className="w-fit text-sm font-medium text-muted-foreground transition-colors hover:text-primary"
+      >
+        ← Back to my challenges
+      </Link>
       <PageHeader
         title="Challenge"
-        description={`${info.questions} questions · created by ${info.creator_name}`}
+        description={`${info.questions} questions · ${
+          info.duration_minutes
+            ? `${info.duration_minutes} min`
+            : "untimed legacy challenge"
+        } · ${info.subject_name ?? "mixed subjects"} · created by ${info.creator_name}`}
       />
+
+      {Object.keys(info.type_counts).length > 0 && (
+        <div className="flex flex-wrap gap-2" aria-label="Challenge question mix">
+          {Object.entries(info.type_counts).map(([questionType, amount]) => (
+            <span
+              key={questionType}
+              className="rounded-full border border-primary/20 bg-primary/5 px-3 py-1 text-xs font-medium text-primary"
+            >
+              {amount} {typeLabel(questionType)}
+            </span>
+          ))}
+        </div>
+      )}
+
+      {actionError && (
+        <p className="rounded-lg border border-destructive/20 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+          {actionError}
+        </p>
+      )}
 
       {/* Not done yet → invite to play / continue */}
       {info.my_status !== "done" && (
@@ -114,6 +152,8 @@ export default function ChallengeHubPage({
             <h2 className="text-2xl font-bold">
               {info.my_status === "in_progress"
                 ? "You have a quiz in progress"
+                : info.accepting_closed && !info.is_creator
+                  ? "This challenge is closed"
                 : info.is_creator
                   ? "Ready to set the score?"
                   : `${info.creator_name} challenged you!`}
@@ -121,26 +161,41 @@ export default function ChallengeHubPage({
             <p className="mx-auto mt-2 max-w-md text-sm text-white/80">
               {info.my_status === "in_progress"
                 ? "Pick up where you left off and lock in your score."
+                : info.accepting_closed && !info.is_creator
+                  ? "New attempts are no longer available. Completed scores remain on the leaderboard."
                 : "Same questions for everyone — score higher than the rest to top the leaderboard."}
             </p>
-            <button
-              onClick={() =>
-                info.my_status === "in_progress" && info.my_session_id
-                  ? router.push(`/dashboard/student/practice/${info.my_session_id}`)
-                  : accept()
-              }
-              disabled={busy}
-              className="mt-6 inline-flex items-center gap-2 rounded-lg bg-white px-6 py-2.5 text-sm font-bold text-[#15603d] shadow-md transition-transform hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-70"
-            >
-              {busy && (
-                <span className="h-4 w-4 animate-spin rounded-full border-2 border-[#15603d]/30 border-t-[#15603d]" />
+            <div className="mt-6 flex flex-wrap justify-center gap-2">
+              {info.my_status === "in_progress" || info.is_creator || !info.accepting_closed ? (
+                <button
+                  onClick={() =>
+                    info.my_status === "in_progress" && info.my_session_id
+                      ? router.push(`/dashboard/student/practice/${info.my_session_id}`)
+                      : setShowReadiness(true)
+                  }
+                  disabled={busy}
+                  className="inline-flex items-center gap-2 rounded-lg bg-white px-6 py-2.5 text-sm font-bold text-[#15603d] shadow-md transition-transform hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-70"
+                >
+                  {busy && (
+                    <span className="h-4 w-4 animate-spin rounded-full border-2 border-[#15603d]/30 border-t-[#15603d]" />
+                  )}
+                  {busy
+                    ? "Opening…"
+                    : info.my_status === "in_progress"
+                      ? "Continue game →"
+                      : "Start my attempt →"}
+                </button>
+              ) : null}
+              {!info.accepting_closed && (
+                <button
+                  type="button"
+                  onClick={() => void copyLink()}
+                  className="rounded-lg border border-white/30 bg-white/10 px-6 py-2.5 text-sm font-bold text-white transition-colors hover:bg-white/20"
+                >
+                  {copied ? "Invite link copied" : "Copy invite link"}
+                </button>
               )}
-              {busy
-                ? "Loading…"
-                : info.my_status === "in_progress"
-                  ? "Continue →"
-                  : "Accept challenge →"}
-            </button>
+            </div>
           </div>
         </div>
       )}
@@ -184,7 +239,7 @@ export default function ChallengeHubPage({
           </div>
 
           {/* Actions — outside the captured card */}
-          <div className="flex w-[340px] max-w-full gap-2">
+          <div className="grid w-[340px] max-w-full grid-cols-2 gap-2">
             <button
               onClick={() =>
                 cardRef.current &&
@@ -194,11 +249,18 @@ export default function ChallengeHubPage({
             >
               Download
             </button>
+            <button
+              type="button"
+              onClick={() => void copyLink()}
+              className="rounded-lg border border-input bg-card px-3 py-2.5 text-sm font-semibold text-foreground shadow-sm transition-colors hover:bg-accent"
+            >
+              {copied ? "Link copied" : "Copy link"}
+            </button>
             <a
               href={waHref}
               target="_blank"
               rel="noopener noreferrer"
-              className="flex-1 rounded-lg bg-[#25D366] px-3 py-2.5 text-center text-sm font-semibold text-white transition-transform hover:-translate-y-0.5"
+              className="col-span-2 rounded-lg bg-[#25D366] px-3 py-2.5 text-center text-sm font-semibold text-white transition-transform hover:-translate-y-0.5"
             >
               Share on WhatsApp
             </a>
@@ -213,14 +275,14 @@ export default function ChallengeHubPage({
           <CardDescription>
             {info.leaderboard.length === 0
               ? "No one has finished yet — be the first."
-              : "Everyone who's taken this challenge, highest first."}
+              : "Highest score first; faster completion breaks equal-score ties."}
           </CardDescription>
         </CardHeader>
         {info.leaderboard.length > 0 && (
           <CardContent className="flex flex-col gap-2">
             {info.leaderboard.map((r, i) => (
               <div
-                key={i}
+                key={r.rank}
                 className={`flex items-center gap-3 rounded-lg border p-3 transition-colors hover:bg-accent ${
                   r.is_you ? "border-primary/40 bg-primary/5" : ""
                 }`}
@@ -229,7 +291,7 @@ export default function ChallengeHubPage({
                   className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-xs font-bold text-white"
                   style={{ background: i < 3 ? MEDAL[i] : "#cbd5e1" }}
                 >
-                  {i + 1}
+                  {r.rank}
                 </span>
                 <span className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">
                   {r.name}
@@ -244,14 +306,30 @@ export default function ChallengeHubPage({
                     </span>
                   )}
                 </span>
-                <span className="shrink-0 text-sm font-bold text-foreground">
-                  {r.pct}%
-                </span>
+                <div className="shrink-0 text-right">
+                  <p className="text-sm font-bold text-foreground">{r.pct}%</p>
+                  {r.elapsed_seconds !== null && (
+                    <p className="text-[10px] text-muted-foreground">
+                      {Math.floor(r.elapsed_seconds / 60)}m {r.elapsed_seconds % 60}s
+                    </p>
+                  )}
+                </div>
               </div>
             ))}
           </CardContent>
         )}
       </Card>
+
+      <AttemptReadiness
+        open={showReadiness}
+        title={`${info.creator_name}'s challenge`}
+        questionCount={info.questions}
+        timeLimitMinutes={info.duration_minutes}
+        warningText="You can take this challenge only once. The timer begins after confirmation. Leaving ends the attempt, grades saved answers, and gives zero for unanswered questions."
+        busy={busy}
+        onCancel={() => setShowReadiness(false)}
+        onConfirm={() => void accept()}
+      />
     </div>
   );
 }

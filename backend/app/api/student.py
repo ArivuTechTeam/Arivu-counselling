@@ -12,14 +12,24 @@ Student quiz-taking API (Slice 5).
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 
 from app.lib.auth import CurrentProfile, get_current_profile
 from app.lib.api_errors import public_error
+from app.lib.config import get_settings
 from app.lib.supabase import get_service_client
+from app.services.attempt_timing import (
+    DEFAULT_PACING_SECONDS,
+    QUESTION_PACING_SECONDS,
+    deadline_state,
+    effective_time_limit_minutes,
+    is_answered,
+    taking_questions,
+    timing_payload,
+)
 from app.services.events import ATTEMPT_SUBMITTED, log_event
 from app.services.grading import grade_answer
 from app.services.selector import enrolled_subject_ids
@@ -35,12 +45,20 @@ def _require_student(profile: CurrentProfile) -> None:
         )
 
 
-def _ordered_approved_questions(service, variant_id: str) -> list[dict]:
+QUESTION_ATTEMPT_COLUMNS = (
+    "id, type, question_text, options, correct_answer, explanation, marks"
+)
+
+
+def _ordered_approved_questions(
+    service, variant_id: str, tenant_id: str
+) -> list[dict]:
     """The variant's APPROVED questions, in the teacher's chosen order."""
     links = (
         service.table("quiz_variant_questions")
         .select("question_id, order_index")
         .eq("variant_id", variant_id)
+        .eq("tenant_id", tenant_id)
         .order("order_index")
         .execute()
         .data
@@ -51,15 +69,42 @@ def _ordered_approved_questions(service, variant_id: str) -> list[dict]:
         return []
     rows = (
         service.table("questions")
-        .select("*")
+        .select(QUESTION_ATTEMPT_COLUMNS)
         .in_("id", ids)
+        .eq("tenant_id", tenant_id)
         .eq("review_status", "approved")
+    )
+    rows = rows.execute().data or []
+    by_id = {row["id"]: row for row in rows}
+    return [by_id[link["question_id"]] for link in links if link["question_id"] in by_id]
+
+
+def _approved_question_stats(
+    service, variant_ids: list[str], tenant_id: str
+) -> dict[str, dict[str, int]]:
+    """Count questions and derive their base duration in one round trip."""
+    if not variant_ids:
+        return {}
+    links = (
+        service.table("quiz_variant_questions")
+        .select("variant_id, questions!inner(id, type)")
+        .in_("variant_id", variant_ids)
+        .eq("tenant_id", tenant_id)
+        .eq("questions.review_status", "approved")
         .execute()
         .data
         or []
     )
-    by_id = {row["id"]: row for row in rows}
-    return [by_id[link["question_id"]] for link in links if link["question_id"] in by_id]
+    stats: dict[str, dict[str, int]] = {}
+    for link in links:
+        variant_id = link["variant_id"]
+        item = stats.setdefault(variant_id, {"count": 0, "seconds": 0})
+        question_type = (link.get("questions") or {}).get("type")
+        item["count"] += 1
+        item["seconds"] += QUESTION_PACING_SECONDS.get(
+            question_type, DEFAULT_PACING_SECONDS
+        )
+    return stats
 
 
 def _strip_answer(q: dict) -> dict:
@@ -73,10 +118,37 @@ def _strip_answer(q: dict) -> dict:
     }
 
 
+def _quiz_title_for_variant(
+    service, variant_id: str, tenant_id: str
+) -> str:
+    variant = (
+        service.table("quiz_variants")
+        .select("quiz_set_id")
+        .eq("id", variant_id)
+        .eq("tenant_id", tenant_id)
+        .maybe_single()
+        .execute()
+    )
+    if variant is None or not variant.data:
+        return "Quiz"
+    quiz_set = (
+        service.table("quiz_sets")
+        .select("title")
+        .eq("id", variant.data["quiz_set_id"])
+        .eq("tenant_id", tenant_id)
+        .maybe_single()
+        .execute()
+    )
+    if quiz_set and quiz_set.data and quiz_set.data.get("title"):
+        return quiz_set.data["title"]
+    return "Quiz"
+
+
 @router.get("/quizzes")
 def list_quizzes(profile: CurrentProfile = Depends(get_current_profile)) -> list[dict]:
     _require_student(profile)
     service = get_service_client()
+    attempt_limit = get_settings().student_quiz_attempt_limit
 
     # 1) Which courses is this student enrolled in?
     enrollments = (
@@ -146,26 +218,43 @@ def list_quizzes(profile: CurrentProfile = Depends(get_current_profile)) -> list
                 or []
             )
         }
-    # First pass: collect the takeable variants (those with approved questions).
+    # Fetch every variant and all approved-question counts in two catalog-sized
+    # queries. This stays constant as the number of quiz sets/variants grows.
     set_variants: list[tuple[dict, list[dict]]] = []
     all_variant_ids: list[str] = []
-    for s in sets:
-        variants = (
-            service.table("quiz_variants")
-            .select("id, variant_type, total_marks, time_limit_minutes")
-            .eq("quiz_set_id", s["id"])
-            .execute()
-            .data
-            or []
-        )
-        takeable = []
-        for v in variants:
-            count = len(_ordered_approved_questions(service, v["id"]))
-            if count > 0:  # only offer variants that actually have questions
-                takeable.append({**v, "question_count": count})
-                all_variant_ids.append(v["id"])
+    set_ids = [quiz_set["id"] for quiz_set in sets]
+    variants = (
+        service.table("quiz_variants")
+        .select("id, quiz_set_id, variant_type, total_marks, time_limit_minutes")
+        .in_("quiz_set_id", set_ids)
+        .eq("tenant_id", profile.tenant_id)
+        .execute()
+        .data
+        or []
+    )
+    question_stats = _approved_question_stats(
+        service, [variant["id"] for variant in variants], profile.tenant_id
+    )
+    variants_by_set: dict[str, list[dict]] = {}
+    for variant in variants:
+        stats = question_stats.get(variant["id"], {})
+        count = stats.get("count", 0)
+        if count:
+            derived_minutes = max(1, -(-stats.get("seconds", 0) // 60))
+            variants_by_set.setdefault(variant["quiz_set_id"], []).append(
+                {
+                    **variant,
+                    "question_count": count,
+                    "time_limit_minutes": variant.get("time_limit_minutes")
+                    or derived_minutes,
+                }
+            )
+            all_variant_ids.append(variant["id"])
+
+    for quiz_set in sets:
+        takeable = variants_by_set.get(quiz_set["id"], [])
         if takeable:
-            set_variants.append((s, takeable))
+            set_variants.append((quiz_set, takeable))
 
     # This student's own attempts on those variants — so the UI can lead with the
     # quizzes they HAVEN'T attended yet, and show a best score on the ones they have.
@@ -188,9 +277,10 @@ def list_quizzes(profile: CurrentProfile = Depends(get_current_profile)) -> list
     for s, takeable in set_variants:
         annotated = []
         for v in takeable:
+            all_attempts = attempts_by_variant.get(v["id"], [])
             graded = [
                 a
-                for a in attempts_by_variant.get(v["id"], [])
+                for a in all_attempts
                 if a["status"] == "graded"
             ]
             best_pct = None
@@ -202,7 +292,11 @@ def list_quizzes(profile: CurrentProfile = Depends(get_current_profile)) -> list
                 {
                     **v,
                     "attempted": len(graded) > 0,
-                    "attempt_count": len(graded),
+                    "attempt_count": len(all_attempts),
+                    "attempt_limit": attempt_limit,
+                    "attempts_remaining": max(
+                        0, attempt_limit - len(all_attempts)
+                    ),
                     "best_pct": best_pct,
                 }
             )
@@ -228,10 +322,11 @@ def start_attempt(
 ) -> dict:
     _require_student(profile)
     service = get_service_client()
+    attempt_limit = get_settings().student_quiz_attempt_limit
 
     variant = (
         service.table("quiz_variants")
-        .select("id, quiz_set_id")
+        .select("id, quiz_set_id, time_limit_minutes")
         .eq("id", body.variant_id)
         .eq("tenant_id", profile.tenant_id)
         .maybe_single()
@@ -256,19 +351,83 @@ def start_attempt(
             detail="This quiz is not assigned to your course.",
         )
 
-    attempt = (
+    previous_attempts = (
         service.table("quiz_attempts")
-        .insert(
-            {
-                "tenant_id": profile.tenant_id,
-                "variant_id": body.variant_id,
-                "student_id": profile.user_id,
-                "status": "in_progress",
-            }
-        )
+        .select("id")
+        .eq("tenant_id", profile.tenant_id)
+        .eq("student_id", profile.user_id)
+        .eq("variant_id", body.variant_id)
         .execute()
+        .data
+        or []
     )
-    return {"attempt_id": attempt.data[0]["id"]}
+    if len(previous_attempts) >= attempt_limit:
+        raise HTTPException(
+            status_code=400,
+            detail=f"You have already used all {attempt_limit} attempts for this quiz.",
+        )
+
+    questions = _ordered_approved_questions(
+        service, body.variant_id, profile.tenant_id
+    )
+    if not questions:
+        raise HTTPException(
+            status_code=400,
+            detail="This quiz does not have any approved questions yet.",
+        )
+
+    time_limit = effective_time_limit_minutes(
+        questions, variant.data.get("time_limit_minutes")
+    )
+    started_at = datetime.now(timezone.utc).isoformat()
+    try:
+        if hasattr(service, "rpc"):
+            created = service.rpc(
+                "create_limited_quiz_attempt",
+                {
+                    "p_tenant_id": profile.tenant_id,
+                    "p_variant_id": body.variant_id,
+                    "p_student_id": profile.user_id,
+                    "p_started_at": started_at,
+                    "p_max_attempts": attempt_limit,
+                },
+            ).execute()
+            attempt_id = str(created.data)
+        else:  # lightweight in-memory test clients
+            attempt = (
+                service.table("quiz_attempts")
+                .insert(
+                    {
+                        "tenant_id": profile.tenant_id,
+                        "variant_id": body.variant_id,
+                        "student_id": profile.user_id,
+                        "status": "in_progress",
+                        "started_at": started_at,
+                    }
+                )
+                .execute()
+            )
+            attempt_id = attempt.data[0]["id"]
+    except Exception as exc:
+        if "quiz_attempt_limit_reached" in str(exc):
+            raise HTTPException(
+                status_code=400,
+                detail=f"You have already used all {attempt_limit} attempts for this quiz.",
+            ) from exc
+        raise
+    # These questions were already loaded to validate the quiz. Return the
+    # answer-stripped taking state so the client can render immediately instead
+    # of repeating the attempt + link + question queries after navigation.
+    return {
+        "attempt_id": attempt_id,
+        "status": "in_progress",
+        "questions": taking_questions(
+            [_strip_answer(question) for question in questions],
+            time_limit,
+        ),
+        "autosave_state": {},
+        **timing_payload(started_at, time_limit),
+    }
 
 
 def _load_attempt(service, attempt_id: str, profile: CurrentProfile) -> dict:
@@ -294,14 +453,31 @@ def get_attempt(
     _require_student(profile)
     service = get_service_client()
     attempt = _load_attempt(service, attempt_id, profile)
-    questions = _ordered_approved_questions(service, attempt["variant_id"])
+    questions = _ordered_approved_questions(
+        service, attempt["variant_id"], profile.tenant_id
+    )
+    variant = (
+        service.table("quiz_variants")
+        .select("time_limit_minutes")
+        .eq("id", attempt["variant_id"])
+        .eq("tenant_id", profile.tenant_id)
+        .maybe_single()
+        .execute()
+    )
+    time_limit = effective_time_limit_minutes(
+        questions,
+        (variant.data or {}).get("time_limit_minutes") if variant else None,
+    )
 
     if attempt["status"] == "in_progress":
         return {
             "attempt_id": attempt_id,
             "status": "in_progress",
-            "questions": [_strip_answer(q) for q in questions],
+            "questions": taking_questions(
+                [_strip_answer(q) for q in questions], time_limit
+            ),
             "autosave_state": attempt.get("autosave_state") or {},
+            **timing_payload(attempt.get("started_at"), time_limit),
         }
 
     # Graded: return full results (answers now allowed).
@@ -309,6 +485,7 @@ def get_attempt(
         service.table("attempt_answers")
         .select("*")
         .eq("attempt_id", attempt_id)
+        .eq("tenant_id", profile.tenant_id)
         .execute()
         .data
         or []
@@ -333,24 +510,9 @@ def get_attempt(
         )
     max_score = sum(float(q.get("marks") or 1) for q in questions)
     # Quiz title (for the downloadable report card / question paper header).
-    quiz_title = "Quiz"
-    vrow = (
-        service.table("quiz_variants")
-        .select("quiz_set_id")
-        .eq("id", attempt["variant_id"])
-        .maybe_single()
-        .execute()
+    quiz_title = _quiz_title_for_variant(
+        service, attempt["variant_id"], profile.tenant_id
     )
-    if vrow and vrow.data:
-        srow = (
-            service.table("quiz_sets")
-            .select("title")
-            .eq("id", vrow.data["quiz_set_id"])
-            .maybe_single()
-            .execute()
-        )
-        if srow and srow.data and srow.data.get("title"):
-            quiz_title = srow.data["title"]
     return {
         "attempt_id": attempt_id,
         "status": attempt["status"],
@@ -368,6 +530,7 @@ class SubmittedAnswer(BaseModel):
 
 class SubmitRequest(BaseModel):
     answers: list[SubmittedAnswer]
+    finalize_reason: Literal["submit", "left"] = "submit"
 
 
 class AutosaveRequest(BaseModel):
@@ -385,8 +548,30 @@ def autosave_attempt(
     attempt = _load_attempt(service, attempt_id, profile)
     if attempt["status"] != "in_progress":
         raise HTTPException(status_code=400, detail="This attempt is already submitted.")
+    variant = (
+        service.table("quiz_variants")
+        .select("time_limit_minutes")
+        .eq("id", attempt["variant_id"])
+        .eq("tenant_id", profile.tenant_id)
+        .maybe_single()
+        .execute()
+    )
+    questions = _ordered_approved_questions(
+        service, attempt["variant_id"], profile.tenant_id
+    )
+    time_limit = effective_time_limit_minutes(
+        questions,
+        (variant.data or {}).get("time_limit_minutes") if variant else None,
+    )
+    deadline = deadline_state(
+        attempt.get("started_at"),
+        time_limit,
+    )
+    if deadline and deadline.beyond_grace:
+        raise HTTPException(status_code=400, detail="This quiz has ended.")
     allowed = {
-        q["id"] for q in _ordered_approved_questions(service, attempt["variant_id"])
+        q["id"]
+        for q in questions
     }
     answers = {key: value for key, value in body.answers.items() if key in allowed}
     service.table("quiz_attempts").update({"autosave_state": answers}).eq(
@@ -409,8 +594,37 @@ def submit_attempt(
     if attempt["status"] != "in_progress":
         raise HTTPException(status_code=400, detail="This attempt is already submitted.")
 
-    questions = _ordered_approved_questions(service, attempt["variant_id"])
+    questions = _ordered_approved_questions(
+        service, attempt["variant_id"], profile.tenant_id
+    )
     submitted = {a.question_id: a.student_answer for a in body.answers}
+    variant = (
+        service.table("quiz_variants")
+        .select("time_limit_minutes")
+        .eq("id", attempt["variant_id"])
+        .eq("tenant_id", profile.tenant_id)
+        .maybe_single()
+        .execute()
+    )
+    time_limit = effective_time_limit_minutes(
+        questions,
+        (variant.data or {}).get("time_limit_minutes") if variant else None,
+    )
+    deadline = deadline_state(
+        attempt.get("started_at"),
+        time_limit,
+    )
+    if deadline and deadline.beyond_grace:
+        submitted = dict(attempt.get("autosave_state") or {})
+    elif body.finalize_reason != "left" and not (deadline and deadline.reached):
+        missing = [
+            q["id"] for q in questions if not is_answered(submitted.get(q["id"]))
+        ]
+        if missing:
+            raise HTTPException(
+                status_code=400,
+                detail="Answer every question before submitting.",
+            )
 
     total = 0.0
     results = []
@@ -471,14 +685,18 @@ def submit_attempt(
     except Exception as exc:  # noqa: BLE001
         # Compensate so a failed answer write never leaves a graded attempt
         # with missing results. The status predicate also makes retries safe.
-        service.table("attempt_answers").delete().eq("attempt_id", attempt_id).execute()
+        service.table("attempt_answers").delete().eq("attempt_id", attempt_id).eq(
+            "tenant_id", profile.tenant_id
+        ).execute()
         service.table("quiz_attempts").update(
             {
                 "status": "in_progress",
                 "total_score": None,
                 "submitted_at": None,
             }
-        ).eq("id", attempt_id).eq("student_id", profile.user_id).execute()
+        ).eq("id", attempt_id).eq("tenant_id", profile.tenant_id).eq(
+            "student_id", profile.user_id
+        ).execute()
         raise public_error(
             500,
             "We couldn't save your answers. Your attempt is still open; please try again.",
@@ -507,10 +725,69 @@ def submit_attempt(
     return {
         "attempt_id": attempt_id,
         "status": "graded",
+        "quiz_title": _quiz_title_for_variant(
+            service, attempt["variant_id"], profile.tenant_id
+        ),
         "total_score": total,
         "max_score": max_score,
         "results": results,
     }
+
+
+def _student_graded_answers(
+    service, tenant_id: str, student_id: str
+) -> tuple[list[dict], int]:
+    """Return every graded answer for one student across both quiz engines.
+
+    Teacher-published quizzes use quiz_attempts/attempt_answers; Smart Quiz,
+    Daily, Exam, Challenge and Revision use practice_sessions/practice_answers.
+    Student analytics must combine both or the dashboard contradicts History.
+    """
+    quiz_attempts = (
+        service.table("quiz_attempts")
+        .select("id")
+        .eq("tenant_id", tenant_id)
+        .eq("student_id", student_id)
+        .eq("status", "graded")
+        .execute()
+        .data
+        or []
+    )
+    practice_sessions = (
+        service.table("practice_sessions")
+        .select("id")
+        .eq("tenant_id", tenant_id)
+        .eq("student_id", student_id)
+        .eq("status", "graded")
+        .execute()
+        .data
+        or []
+    )
+
+    answers: list[dict] = []
+    attempt_ids = [row["id"] for row in quiz_attempts]
+    if attempt_ids:
+        answers.extend(
+            service.table("attempt_answers")
+            .select("question_id, is_correct")
+            .in_("attempt_id", attempt_ids)
+            .eq("tenant_id", tenant_id)
+            .execute()
+            .data
+            or []
+        )
+    session_ids = [row["id"] for row in practice_sessions]
+    if session_ids:
+        answers.extend(
+            service.table("practice_answers")
+            .select("question_id, is_correct")
+            .in_("session_id", session_ids)
+            .eq("tenant_id", tenant_id)
+            .execute()
+            .data
+            or []
+        )
+    return answers, len(quiz_attempts) + len(practice_sessions)
 
 
 @router.get("/student/stats")
@@ -524,28 +801,7 @@ def student_stats(profile: CurrentProfile = Depends(get_current_profile)) -> dic
     service = get_service_client()
     tid, uid = profile.tenant_id, profile.user_id
 
-    attempts = (
-        service.table("quiz_attempts")
-        .select("id, status")
-        .eq("tenant_id", tid)
-        .eq("student_id", uid)
-        .execute()
-        .data
-        or []
-    )
-    graded = [a for a in attempts if a["status"] == "graded"]
-    attempt_ids = [a["id"] for a in graded]
-
-    answers: list[dict] = []
-    if attempt_ids:
-        answers = (
-            service.table("attempt_answers")
-            .select("question_id, is_correct")
-            .in_("attempt_id", attempt_ids)
-            .execute()
-            .data
-            or []
-        )
+    answers, graded_work_count = _student_graded_answers(service, tid, uid)
     total = len(answers)
     correct = sum(1 for a in answers if a.get("is_correct"))
     accuracy = round(correct / total * 100) if total else 0
@@ -558,6 +814,7 @@ def student_stats(profile: CurrentProfile = Depends(get_current_profile)) -> dic
             service.table("questions")
             .select("id, topic_id")
             .in_("id", qids)
+            .eq("tenant_id", tid)
             .execute()
             .data
             or []
@@ -575,6 +832,7 @@ def student_stats(profile: CurrentProfile = Depends(get_current_profile)) -> dic
                 service.table("topics")
                 .select("id, name")
                 .in_("id", list(agg.keys()))
+                .eq("tenant_id", tid)
                 .execute()
                 .data
                 or []
@@ -591,7 +849,7 @@ def student_stats(profile: CurrentProfile = Depends(get_current_profile)) -> dic
             topic_accuracy.sort(key=lambda x: x["accuracy"])
 
     return {
-        "quizzes_taken": len(graded),
+        "quizzes_taken": graded_work_count,
         "questions_solved": total,
         "overall_accuracy": accuracy,
         "weak_areas": topic_accuracy[:3],
@@ -616,28 +874,7 @@ def student_weak_analysis(
         "subjects": [],
     }
 
-    attempts = (
-        service.table("quiz_attempts")
-        .select("id")
-        .eq("tenant_id", tid)
-        .eq("student_id", uid)
-        .eq("status", "graded")
-        .execute()
-        .data
-        or []
-    )
-    attempt_ids = [a["id"] for a in attempts]
-    if not attempt_ids:
-        return empty
-
-    answers = (
-        service.table("attempt_answers")
-        .select("question_id, is_correct")
-        .in_("attempt_id", attempt_ids)
-        .execute()
-        .data
-        or []
-    )
+    answers, _ = _student_graded_answers(service, tid, uid)
     if not answers:
         return empty
 
@@ -646,6 +883,7 @@ def student_weak_analysis(
         service.table("questions")
         .select("id, chapter_id, topic_id")
         .in_("id", qids)
+        .eq("tenant_id", tid)
         .execute()
         .data
         or []
@@ -654,7 +892,7 @@ def student_weak_analysis(
 
     chapter_ids = list({q["chapter_id"] for q in qrows if q.get("chapter_id")})
     chapters = (
-        service.table("chapters").select("id, name, subject_id").in_("id", chapter_ids).execute().data
+        service.table("chapters").select("id, name, subject_id").in_("id", chapter_ids).eq("tenant_id", tid).execute().data
         if chapter_ids
         else []
     ) or []
@@ -664,7 +902,7 @@ def student_weak_analysis(
         {
             s["id"]: s["name"]
             for s in (
-                service.table("subjects").select("id, name").in_("id", subject_ids).execute().data
+                service.table("subjects").select("id, name").in_("id", subject_ids).eq("tenant_id", tid).execute().data
                 or []
             )
         }
@@ -676,7 +914,7 @@ def student_weak_analysis(
         {
             t["id"]: t["name"]
             for t in (
-                service.table("topics").select("id, name").in_("id", topic_ids).execute().data
+                service.table("topics").select("id, name").in_("id", topic_ids).eq("tenant_id", tid).execute().data
                 or []
             )
         }
@@ -765,32 +1003,12 @@ def student_weak_analysis(
 def _flat_weak_topics(service, tid: str, uid: str, threshold: int = 60) -> list[dict]:
     """Flat list of a student's weak topics (accuracy < threshold), weakest first.
 
-    Each item: {key, subject, chapter, topic, accuracy, answered}. `key` is a
-    stable "Subject||Chapter||Topic" string used to mark a topic as revised.
+    Each item: {key, subject, chapter, topic, accuracy, answered}. `key` uses
+    database ids so renaming a subject, chapter or topic does not reset revision.
     """
     from collections import defaultdict
 
-    attempts = (
-        service.table("quiz_attempts")
-        .select("id")
-        .eq("tenant_id", tid)
-        .eq("student_id", uid)
-        .eq("status", "graded")
-        .execute()
-        .data
-        or []
-    )
-    attempt_ids = [a["id"] for a in attempts]
-    if not attempt_ids:
-        return []
-    answers = (
-        service.table("attempt_answers")
-        .select("question_id, is_correct")
-        .in_("attempt_id", attempt_ids)
-        .execute()
-        .data
-        or []
-    )
+    answers, _ = _student_graded_answers(service, tid, uid)
     if not answers:
         return []
     qids = list({a["question_id"] for a in answers})
@@ -798,6 +1016,7 @@ def _flat_weak_topics(service, tid: str, uid: str, threshold: int = 60) -> list[
         service.table("questions")
         .select("id, chapter_id, topic_id")
         .in_("id", qids)
+        .eq("tenant_id", tid)
         .execute()
         .data
         or []
@@ -805,7 +1024,7 @@ def _flat_weak_topics(service, tid: str, uid: str, threshold: int = 60) -> list[
     qmap = {q["id"]: q for q in qrows}
     chapter_ids = list({q["chapter_id"] for q in qrows if q.get("chapter_id")})
     chapters = (
-        service.table("chapters").select("id, name, subject_id").in_("id", chapter_ids).execute().data
+        service.table("chapters").select("id, name, subject_id").in_("id", chapter_ids).eq("tenant_id", tid).execute().data
         if chapter_ids
         else []
     ) or []
@@ -815,7 +1034,7 @@ def _flat_weak_topics(service, tid: str, uid: str, threshold: int = 60) -> list[
         {
             s["id"]: s["name"]
             for s in (
-                service.table("subjects").select("id, name").in_("id", subject_ids).execute().data
+                service.table("subjects").select("id, name").in_("id", subject_ids).eq("tenant_id", tid).execute().data
                 or []
             )
         }
@@ -827,7 +1046,7 @@ def _flat_weak_topics(service, tid: str, uid: str, threshold: int = 60) -> list[
         {
             t["id"]: t["name"]
             for t in (
-                service.table("topics").select("id, name").in_("id", topic_ids).execute().data
+                service.table("topics").select("id, name").in_("id", topic_ids).eq("tenant_id", tid).execute().data
                 or []
             )
         }
@@ -848,7 +1067,12 @@ def _flat_weak_topics(service, tid: str, uid: str, threshold: int = 60) -> list[
         else:
             sname, cname = "Uncategorised", "General"
         tname = topics.get(q["topic_id"]) if q.get("topic_id") else "General"
-        key = f"{sname}||{cname}||{tname}"
+        if q.get("topic_id"):
+            key = f"topic:{q['topic_id']}"
+        elif ch:
+            key = f"chapter:{ch['id']}:general"
+        else:
+            key = "uncategorised:general"
         agg[key][0] += 1 if a.get("is_correct") else 0
         agg[key][1] += 1
         meta[key] = (sname, cname, tname)
@@ -883,15 +1107,23 @@ def revision_topics(
     weak = _flat_weak_topics(service, profile.tenant_id, profile.user_id)
     revised = (
         service.table("revised_topics")
-        .select("topic_key")
+        .select("topic_key, answered_at_revision")
         .eq("student_id", profile.user_id)
         .eq("tenant_id", profile.tenant_id)
         .execute()
         .data
         or []
     )
-    done = {r["topic_key"] for r in revised}
-    return [w for w in weak if w["key"] not in done]
+    # A revised topic stays cleared until the student answers another question
+    # in it. If it is still weak after new work, surface it again for revision.
+    snapshots = {
+        r["topic_key"]: int(r.get("answered_at_revision") or 0) for r in revised
+    }
+    return [
+        w
+        for w in weak
+        if w["key"] not in snapshots or w["answered"] > snapshots[w["key"]]
+    ]
 
 
 class RevisedTopic(BaseModel):
@@ -904,11 +1136,24 @@ def mark_topic_revised(
 ) -> dict:
     _require_student(profile)
     service = get_service_client()
+    current = next(
+        (
+            topic
+            for topic in _flat_weak_topics(
+                service, profile.tenant_id, profile.user_id
+            )
+            if topic["key"] == body.key
+        ),
+        None,
+    )
+    if current is None:
+        raise HTTPException(status_code=404, detail="Revision topic not found.")
     service.table("revised_topics").upsert(
         {
             "tenant_id": profile.tenant_id,
             "student_id": profile.user_id,
             "topic_key": body.key,
+            "answered_at_revision": current["answered"],
         },
         on_conflict="student_id,topic_key",
     ).execute()
@@ -950,27 +1195,31 @@ def student_attempts(
     variants = {v["id"]: v for v in vrows}
 
     set_ids = list({v["quiz_set_id"] for v in variants.values()})
-    titles: dict[str, str] = {}
+    quiz_sets: dict[str, dict] = {}
     if set_ids:
         srows = (
             service.table("quiz_sets")
-            .select("id, title")
+            .select("id, title, subject_id, chapter_id")
             .in_("id", set_ids)
             .eq("tenant_id", tid)
             .execute()
             .data
             or []
         )
-        titles = {s["id"]: s["title"] for s in srows}
+        quiz_sets = {s["id"]: s for s in srows}
 
     out = []
     for a in attempts:
         v = variants.get(a["variant_id"], {})
+        quiz_set = quiz_sets.get(v.get("quiz_set_id"), {})
         out.append(
             {
                 "attempt_id": a["id"],
-                "quiz_title": titles.get(v.get("quiz_set_id"), "Quiz"),
+                "quiz_title": quiz_set.get("title", "Quiz"),
+                "variant_id": a.get("variant_id"),
                 "variant_type": v.get("variant_type"),
+                "subject_id": quiz_set.get("subject_id"),
+                "chapter_id": quiz_set.get("chapter_id"),
                 "total_score": a.get("total_score"),
                 "max_score": v.get("total_marks"),
                 "submitted_at": a.get("submitted_at"),
@@ -980,14 +1229,38 @@ def student_attempts(
 
     practice = (
         service.table("practice_sessions")
-        .select("id, mode, total_score, max_score, submitted_at")
+        .select(
+            "id, mode, subject_id, chapter_id, total_score, max_score, submitted_at"
+        )
         .eq("tenant_id", tid)
         .eq("student_id", uid)
         .eq("status", "graded")
+        .neq("mode", "challenge")
         .execute()
         .data
         or []
     )
+    chapter_ids = list(
+        {
+            session["chapter_id"]
+            for session in practice
+            if session.get("chapter_id") and not session.get("subject_id")
+        }
+    )
+    chapter_subjects: dict[str, str] = {}
+    if chapter_ids:
+        chapter_rows = (
+            service.table("chapters")
+            .select("id, subject_id")
+            .in_("id", chapter_ids)
+            .eq("tenant_id", tid)
+            .execute()
+            .data
+            or []
+        )
+        chapter_subjects = {
+            chapter["id"]: chapter["subject_id"] for chapter in chapter_rows
+        }
     for session in practice:
         mode = str(session.get("mode") or "practice").replace("_", " ").title()
         out.append(
@@ -995,6 +1268,9 @@ def student_attempts(
                 "attempt_id": session["id"],
                 "quiz_title": f"{mode} practice",
                 "variant_type": session.get("mode"),
+                "subject_id": session.get("subject_id")
+                or chapter_subjects.get(session.get("chapter_id")),
+                "chapter_id": session.get("chapter_id"),
                 "total_score": session.get("total_score"),
                 "max_score": session.get("max_score"),
                 "submitted_at": session.get("submitted_at"),

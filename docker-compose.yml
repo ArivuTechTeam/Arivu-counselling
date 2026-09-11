@@ -18,6 +18,9 @@ services:
       FRONTEND_ORIGIN: http://localhost:3001
       DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY}
       GEMINI_API_KEY: ${GEMINI_API_KEY}
+      STUDENT_QUIZ_ATTEMPT_LIMIT: ${STUDENT_QUIZ_ATTEMPT_LIMIT:-2}
+      DAILY_CHALLENGE_TIMEZONE: ${DAILY_CHALLENGE_TIMEZONE:-Asia/Kolkata}
+      CHALLENGE_EXPIRY_DAYS: ${CHALLENGE_EXPIRY_DAYS:-30}
     # Local Docker mounts the checkout so restarting the container never
     # serves an old COPY baked into its image. Installing requirements at
     # startup also picks up dependency changes without a separate rebuild.
