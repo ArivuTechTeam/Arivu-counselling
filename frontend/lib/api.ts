@@ -12,23 +12,118 @@ const DOCUMENT_UPLOAD_TIMEOUT_MS = 15 * 60_000;
 // Includes the default 240-second vision call plus upload/database processing.
 const QUIZ_EXTRACTION_TIMEOUT_MS = 5 * 60_000;
 
+export type ApiErrorCode =
+  | "network_error"
+  | "request_timeout"
+  | "request_cancelled"
+  | "authentication_required"
+  | "permission_denied"
+  | "not_found"
+  | "conflict"
+  | "rate_limited"
+  | "service_unavailable"
+  | "server_error"
+  | "request_failed";
+
+export class ApiRequestError extends Error {
+  readonly code: ApiErrorCode;
+  readonly status: number | null;
+  readonly requestId: string | null;
+  readonly retryable: boolean;
+
+  constructor(
+    message: string,
+    options: {
+      code: ApiErrorCode;
+      status?: number | null;
+      requestId?: string | null;
+      retryable?: boolean;
+    },
+  ) {
+    super(message);
+    this.name = "ApiRequestError";
+    this.code = options.code;
+    this.status = options.status ?? null;
+    this.requestId = options.requestId ?? null;
+    this.retryable = options.retryable ?? false;
+  }
+}
+
+function requestReference(requestId: string | null): string {
+  return requestId ? ` Error reference: ${requestId}.` : "";
+}
+
 async function apiFetch(
   input: RequestInfo | URL,
   init: RequestInit = {},
   timeoutMs = DEFAULT_TIMEOUT_MS,
 ): Promise<Response> {
   const controller = new AbortController();
-  const timer = window.setTimeout(() => controller.abort(), timeoutMs);
+  let timedOut = false;
+  const timer = window.setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, timeoutMs);
   const upstream = init.signal;
   const abortFromUpstream = () => controller.abort();
   upstream?.addEventListener("abort", abortFromUpstream, { once: true });
+  const requestId = crypto.randomUUID();
+  const headers = new Headers(init.headers);
+  headers.set("X-Request-ID", requestId);
+  const method = (init.method ?? "GET").toUpperCase();
+  const maxAttempts = method === "GET" ? 2 : 1;
   try {
-    return await fetch(input, { ...init, signal: controller.signal });
-  } catch (error) {
-    if (controller.signal.aborted) {
-      throw new Error("The request timed out. Please check your connection and try again.");
+    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+      try {
+        const response = await fetch(input, {
+          ...init,
+          headers,
+          signal: controller.signal,
+        });
+        const retryableResponse = [502, 503, 504].includes(response.status);
+        if (retryableResponse && attempt + 1 < maxAttempts) {
+          await new Promise((resolve) => window.setTimeout(resolve, 200));
+          continue;
+        }
+        return response;
+      } catch (error) {
+        if (
+          attempt + 1 < maxAttempts &&
+          !controller.signal.aborted &&
+          error instanceof TypeError
+        ) {
+          await new Promise((resolve) => window.setTimeout(resolve, 200));
+          continue;
+        }
+        throw error;
+      }
     }
-    throw error;
+    throw new Error("Request retry state was exhausted.");
+  } catch {
+    if (controller.signal.aborted) {
+      if (timedOut) {
+        throw new ApiRequestError(
+          `The request timed out. Please check your connection and try again.${requestReference(requestId)}`,
+          {
+            code: "request_timeout",
+            requestId,
+            retryable: true,
+          },
+        );
+      }
+      throw new ApiRequestError("The request was cancelled.", {
+        code: "request_cancelled",
+        requestId,
+      });
+    }
+    throw new ApiRequestError(
+      `Unable to reach the service. Check your connection and try again.${requestReference(requestId)}`,
+      {
+        code: "network_error",
+        requestId,
+        retryable: true,
+      },
+    );
   } finally {
     window.clearTimeout(timer);
     upstream?.removeEventListener("abort", abortFromUpstream);
@@ -65,10 +160,64 @@ async function apiError(res: Response, fallback: string): Promise<never> {
         window.location.replace(`/login?reason=session-expired${nextParam}`);
       }
     }
-    throw new Error("Your session expired. Please log in again.");
+    throw new ApiRequestError("Your session expired. Please log in again.", {
+      code: "authentication_required",
+      status: 401,
+      requestId: res.headers.get("X-Request-ID"),
+    });
   }
-  const body = await res.json().catch(() => ({}));
-  throw new Error(body.detail || fallback);
+  const body = (await res.json().catch(() => ({}))) as {
+    detail?: string;
+    request_id?: string;
+  };
+  const requestId = res.headers.get("X-Request-ID") || body.request_id || null;
+  const statusDetails: Record<
+    number,
+    { code: ApiErrorCode; message: string; retryable: boolean }
+  > = {
+    403: {
+      code: "permission_denied",
+      message: body.detail || "You do not have permission to perform this action.",
+      retryable: false,
+    },
+    404: {
+      code: "not_found",
+      message: body.detail || "The requested item could not be found.",
+      retryable: false,
+    },
+    409: {
+      code: "conflict",
+      message: body.detail || fallback,
+      retryable: false,
+    },
+    429: {
+      code: "rate_limited",
+      message: body.detail || "Too many requests. Please wait and try again.",
+      retryable: true,
+    },
+    503: {
+      code: "service_unavailable",
+      message: body.detail || "The service is temporarily unavailable. Please try again.",
+      retryable: true,
+    },
+  };
+  const details = statusDetails[res.status] ?? {
+    code: res.status >= 500 ? ("server_error" as const) : ("request_failed" as const),
+    message:
+      res.status >= 500
+        ? "An unexpected server error occurred. Please try again."
+        : body.detail || fallback,
+    retryable: res.status >= 500,
+  };
+  throw new ApiRequestError(
+    `${details.message}${requestReference(requestId)}`,
+    {
+      code: details.code,
+      status: res.status,
+      requestId,
+      retryable: details.retryable,
+    },
+  );
 }
 
 export type DocumentOut = {

@@ -64,6 +64,12 @@ class Settings:
         # The secret Supabase signs its JWTs with. We use it to verify tokens
         # locally (HS256) instead of calling Supabase on every request.
         self.supabase_jwt_secret: str = _require("SUPABASE_JWT_SECRET")
+        # Keep each Data API read attempt well below the browser's ordinary
+        # 20-second request deadline. The transport can then retry a stalled
+        # idempotent read instead of the browser timing out before recovery.
+        self.supabase_read_timeout_seconds: float = _positive_float(
+            "SUPABASE_READ_TIMEOUT_SECONDS", 5
+        )
 
         # --- Local dev / CORS ---
         # Which frontend origin is allowed to call this API from the browser.

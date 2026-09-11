@@ -119,9 +119,15 @@ def _create_shared_http_client() -> httpx.Client:
         keepalive_expiry=30.0,
     )
     inner = httpx.HTTPTransport(http2=False, limits=limits)
+    settings = get_settings()
     return httpx.Client(
         transport=_ReadRetryTransport(inner),
-        timeout=httpx.Timeout(connect=5.0, read=30.0, write=30.0, pool=5.0),
+        timeout=httpx.Timeout(
+            connect=5.0,
+            read=settings.supabase_read_timeout_seconds,
+            write=30.0,
+            pool=5.0,
+        ),
         follow_redirects=True,
     )
 
