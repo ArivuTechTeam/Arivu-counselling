@@ -315,7 +315,7 @@ export function DashboardShell({
 
   async function signOut() {
     const supabase = createClient();
-    await supabase.auth.signOut();
+    await supabase.auth.signOut({ scope: "local" });
     router.replace("/login");
   }
 
@@ -525,7 +525,7 @@ export function DashboardShell({
           // dashboard shows empty/error data — send them to sign in fresh.
           if (mustChangePassword) {
             try {
-              await createClient().auth.signOut();
+              await createClient().auth.signOut({ scope: "local" });
             } finally {
               router.replace("/login?reason=password-changed");
             }
