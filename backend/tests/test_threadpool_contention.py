@@ -9,10 +9,16 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import httpx
-from fastapi import Request
+from fastapi import FastAPI, Request
 
+from app.api import quiz as quiz_api
+from app.api import student as student_api
 from app.lib.auth import CurrentProfile, get_current_profile
-from app.main import app
+
+
+app = FastAPI()
+app.include_router(quiz_api.router)
+app.include_router(student_api.router)
 
 
 class EmptyQuery:
@@ -58,7 +64,17 @@ class ThreadpoolContentionProbe(unittest.IsolatedAsyncioTestCase):
             with (
                 patch("app.api.quiz.generate_quiz", side_effect=slow_generation),
                 patch("app.api.quiz.enforce_ai_rate_limit"),
+                patch(
+                    "app.api.quiz.get_settings",
+                    return_value=SimpleNamespace(
+                        rate_limit_quiz_generation_per_hour=10
+                    ),
+                ),
                 patch("app.api.student.get_service_client", return_value=service),
+                patch(
+                    "app.api.student.get_settings",
+                    return_value=SimpleNamespace(student_quiz_attempt_limit=2),
+                ),
             ):
                 async with httpx.AsyncClient(
                     transport=transport, base_url="http://probe"
