@@ -117,3 +117,30 @@ rounds held near 2.2–2.8-second p95. Two isolated rounds rose to 4.827 and
   four-account Chrome Console/Network click-through was not claimed. API
   journeys, live route responses, TypeScript checks, and the production build
   cover the automated portion.
+
+## Follow-up — 200 unique students
+
+A separate live run provisioned 200 unique student accounts in one isolated
+temporary institution and tested simultaneous dashboard traffic without AI:
+
+| Students | Dashboard requests | Errors | Throughput | p95 |
+| ---: | ---: | ---: | ---: | ---: |
+| 25 | 75 | 0 | 17.88 req/s | 4.014 s |
+| 50 | 150 | 0 | 23.96 req/s | 5.670 s |
+| 100 | 300 | 0 | 27.77 req/s | 9.647 s |
+| 200 | 600 | 0 | 29.48 req/s | 18.473 s |
+
+- **Confirmed:** All 600 backend dashboard requests and all 200 Vercel page
+  requests succeeded at the 200-student stage; backend health remained green.
+- **Confirmed:** The 200-student stage exceeded the 15-second protective p95
+  limit, so the harness did not run 200 concurrent quiz writes.
+- **Confirmed:** At 100 concurrent unique students, the eight-page API tour
+  passed 800/800 requests at 5.309-second p95. Quiz start passed 100/100 at
+  6.296-second p95 and deterministic submission passed 100/100 at
+  9.500-second p95.
+- **Confirmed:** All 200 Auth users and the temporary tenant fixture were
+  deleted successfully, and no AI endpoint was called.
+- **Conclusion:** the current live deployment can absorb a 200-student
+  dashboard burst without errors, but it is not yet validated as a smooth
+  200-simultaneous-student exam experience because latency is too high and the
+  write-heavy stage was intentionally stopped.
