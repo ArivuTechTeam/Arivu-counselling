@@ -17,6 +17,7 @@ class SupabaseClientSingletonTests(unittest.TestCase):
             supabase_url="https://example.test",
             supabase_service_role_key="service-key",
             supabase_anon_key="anon-key",
+            supabase_read_timeout_seconds=5.0,
         )
         self.service_patch = patch.object(supabase_lib, "_service_client", None)
         self.anon_patch = patch.object(supabase_lib, "_anon_client", None)
@@ -101,6 +102,25 @@ class SupabaseClientSingletonTests(unittest.TestCase):
 
 
 class SupabaseReadRetryTransportTests(unittest.TestCase):
+    def test_retries_get_after_read_timeout(self) -> None:
+        calls = 0
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise httpx.ReadTimeout("read stalled", request=request)
+            return httpx.Response(200, json={"ok": True})
+
+        transport = supabase_lib._ReadRetryTransport(
+            httpx.MockTransport(handler), base_delay_seconds=0
+        )
+        with httpx.Client(transport=transport) as client:
+            response = client.get("https://example.test/profiles")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(calls, 2)
+
     def test_retries_get_after_remote_protocol_error(self) -> None:
         calls = 0
 

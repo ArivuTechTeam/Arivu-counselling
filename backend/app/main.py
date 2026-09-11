@@ -12,6 +12,10 @@ Slice 1 endpoints:
 
 from __future__ import annotations
 
+import logging
+import time
+from uuid import uuid4
+
 from fastapi import Depends, FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
@@ -39,7 +43,10 @@ from app.lib.auth import (
     get_current_user,
 )
 from app.lib.config import get_settings
+from app.lib.request_trace import request_id_for_header
 from app.lib.supabase import SupabaseUnavailableError
+
+logger = logging.getLogger(__name__)
 
 settings = get_settings()
 app = FastAPI(
@@ -68,17 +75,40 @@ app.add_middleware(
     ),
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allow_headers=["Authorization", "Content-Type"],
+    allow_headers=["Authorization", "Content-Type", "X-Request-ID"],
+    expose_headers=["X-Request-ID", "Retry-After"],
 )
 
 
 @app.middleware("http")
-async def prevent_api_response_caching(request: Request, call_next):
-    """Keep authenticated payloads and one-time credentials out of caches."""
-    response = await call_next(request)
+async def trace_and_protect_api_responses(request: Request, call_next):
+    """Correlate browser errors with logs and prevent API response caching."""
+    request_id = request_id_for_header(request.headers.get("X-Request-ID"))
+    request.state.request_id = request_id
+    started = time.perf_counter()
+    try:
+        response = await call_next(request)
+    except Exception:
+        logger.exception(
+            "Unhandled request failure request_id=%s method=%s path=%s",
+            request_id,
+            request.method,
+            request.url.path,
+        )
+        raise
+
+    response.headers["X-Request-ID"] = request_id
     if request.url.path.startswith("/api/v1/"):
         response.headers["Cache-Control"] = "no-store, private"
         response.headers["Pragma"] = "no-cache"
+    logger.info(
+        "Request completed request_id=%s method=%s path=%s status=%d duration_ms=%.1f",
+        request_id,
+        request.method,
+        request.url.path,
+        response.status_code,
+        (time.perf_counter() - started) * 1000,
+    )
     return response
 
 
@@ -110,18 +140,38 @@ async def safe_validation_error(
 
 @app.exception_handler(SupabaseUnavailableError)
 async def temporary_supabase_failure(
-    _request: Request, _exception: SupabaseUnavailableError
+    request: Request, _exception: SupabaseUnavailableError
 ) -> JSONResponse:
     """Expose exhausted Data API retries as a temporary, retryable failure."""
     return JSONResponse(
         status_code=503,
         content={
-            "detail": "The data service is temporarily unavailable. Please try again."
+            "detail": "The data service is temporarily unavailable. Please try again.",
+            "request_id": getattr(request.state, "request_id", None),
         },
         headers={
             "Cache-Control": "no-store, private",
             "Pragma": "no-cache",
             "Retry-After": "2",
+            "X-Request-ID": getattr(request.state, "request_id", uuid4().hex),
+        },
+    )
+
+
+@app.exception_handler(Exception)
+async def safe_unhandled_error(request: Request, _exception: Exception) -> JSONResponse:
+    """Return a traceable message without leaking internals to the browser."""
+    request_id = getattr(request.state, "request_id", uuid4().hex)
+    return JSONResponse(
+        status_code=500,
+        content={
+            "detail": "An unexpected server error occurred. Please try again.",
+            "request_id": request_id,
+        },
+        headers={
+            "Cache-Control": "no-store, private",
+            "Pragma": "no-cache",
+            "X-Request-ID": request_id,
         },
     )
 
