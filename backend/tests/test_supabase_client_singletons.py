@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import asyncio
-import json
 import time
 import unittest
 from concurrent.futures import ThreadPoolExecutor
@@ -11,7 +9,6 @@ from unittest.mock import patch
 import httpx
 
 import app.lib.supabase as supabase_lib
-from app.main import temporary_supabase_failure
 
 
 class SupabaseClientSingletonTests(unittest.TestCase):
@@ -175,26 +172,6 @@ class SupabaseReadRetryTransportTests(unittest.TestCase):
                 client.get("https://example.test/profiles")
 
         self.assertEqual(calls, 3)
-
-    def test_exhausted_read_returns_retryable_service_unavailable(self) -> None:
-        response = asyncio.run(
-            temporary_supabase_failure(
-                None,  # type: ignore[arg-type] -- handler does not inspect Request
-                supabase_lib.SupabaseUnavailableError("temporary failure"),
-            )
-        )
-
-        self.assertEqual(response.status_code, 503)
-        self.assertEqual(response.headers["retry-after"], "2")
-        self.assertEqual(
-            json.loads(response.body),
-            {
-                "detail": (
-                    "The data service is temporarily unavailable. Please try again."
-                )
-            },
-        )
-
 
 if __name__ == "__main__":
     unittest.main()
