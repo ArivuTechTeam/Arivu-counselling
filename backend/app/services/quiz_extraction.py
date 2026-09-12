@@ -29,7 +29,7 @@ from app.lib.auth import CurrentProfile
 from app.lib.config import get_settings
 from app.lib.storage import download_bytes
 from app.lib.supabase import get_service_client
-from app.services.extraction import extract_text
+from app.services.extraction import MIN_READABLE_PDF_TEXT_CHARS, extract_text
 from app.services.extraction_prompts import (
     EXTRACTION_SYSTEM,
     EXTRACTION_USER_FILE,
@@ -54,7 +54,6 @@ _TEXT_EXT = {"docx"}  # always extracted to text first
 # document and parsed via the cheap text path. Below it, the PDF is effectively a
 # scanned image and must go through Gemini vision. A real typed quiz page has
 # hundreds of characters; a scanned page yields ~0 from pdfplumber.
-_MIN_PDF_TEXT_CHARS = 200
 
 
 class ExtractedQuestion(GeneratedQuestion):
@@ -205,7 +204,7 @@ def _extract_document_content(
             text = extract_text(content, "pdf")
         except Exception:  # noqa: BLE001 - unreadable text layer -> treat as scanned
             text = ""
-        if len(text.strip()) >= _MIN_PDF_TEXT_CHARS:
+        if len(text.strip()) >= MIN_READABLE_PDF_TEXT_CHARS:
             return _text_extract(text)
         return _vision_extract("application/pdf", content)
 

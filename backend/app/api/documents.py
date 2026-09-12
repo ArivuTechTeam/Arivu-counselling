@@ -22,7 +22,7 @@ from starlette.concurrency import run_in_threadpool
 from app.lib.auth import CurrentProfile, get_current_profile
 from app.lib.storage import signed_url, upload_bytes
 from app.lib.supabase import get_service_client
-from app.services.extraction import extract_text
+from app.services.extraction import MIN_READABLE_PDF_TEXT_CHARS, extract_text
 
 router = APIRouter(prefix="/api/v1/documents", tags=["documents"])
 logger = logging.getLogger(__name__)
@@ -166,6 +166,20 @@ async def upload_document(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="Could not extract text from this file. It may be corrupted, "
             "password-protected, or in an unsupported format.",
+        )
+
+    if ext == "pdf" and len(text.strip()) < MIN_READABLE_PDF_TEXT_CHARS:
+        message = (
+            "This looks like a scanned document with no extractable text — "
+            "please use a text-based PDF, or use the Extract Quiz feature if "
+            "this is a scanned question paper."
+        )
+        service.table("documents").update(
+            {"status": "failed", "error_message": message}
+        ).eq("id", doc_id).execute()
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=message,
         )
 
     service.table("documents").update({"status": "completed"}).eq(

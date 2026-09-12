@@ -5,9 +5,9 @@ Slice 2 supports the two text-based formats from the scoping doc:
   - PDF  -> pdfplumber
   - DOCX -> python-docx
 
-Scanned/image-only PDFs (which need Tesseract OCR) are intentionally out of
-scope for now. A PDF that is just scanned images will extract little or no text;
-the caller sees that via a near-zero character count.
+Scanned/image-only PDFs (which need OCR or vision extraction) are intentionally
+out of scope for the text-based upload flow. Callers can use
+``MIN_READABLE_PDF_TEXT_CHARS`` to reject PDFs without a usable text layer.
 """
 
 from __future__ import annotations
@@ -17,6 +17,13 @@ from dataclasses import dataclass
 
 import pdfplumber
 from docx import Document
+from docx.table import Table
+from docx.text.paragraph import Paragraph
+
+
+# Keep this aligned with the existing authored-quiz extraction branch. A few
+# stray PDF metadata glyphs must not make an image-only scan look readable.
+MIN_READABLE_PDF_TEXT_CHARS = 200
 
 
 @dataclass(frozen=True)
@@ -89,4 +96,21 @@ def _extract_pdf_with_pages(content: bytes) -> ExtractedText:
 
 def _extract_docx(content: bytes) -> str:
     doc = Document(io.BytesIO(content))
-    return "\n".join(p.text for p in doc.paragraphs).strip()
+    parts: list[str] = []
+
+    # ``doc.paragraphs`` omits tables. Walk the document body so prose and table
+    # rows stay in their original order and table-only teaching material is not
+    # silently lost before topic extraction.
+    for child in doc.element.body.iterchildren():
+        if child.tag.endswith("}p"):
+            text = Paragraph(child, doc).text.strip()
+            if text:
+                parts.append(text)
+        elif child.tag.endswith("}tbl"):
+            table = Table(child, doc)
+            for row in table.rows:
+                cells = [" ".join(cell.text.split()) for cell in row.cells]
+                if any(cells):
+                    parts.append(" | ".join(cells))
+
+    return "\n".join(parts).strip()
