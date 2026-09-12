@@ -46,6 +46,8 @@ create table if not exists public.document_chunks (
   content_hash  text not null,                 -- SHA-256 of `content`
   char_start    int,
   char_end      int,
+  page_start    int,
+  page_end      int,
   topics_json   jsonb,                          -- MAP result (null until extracted)
   map_status    job_status not null default 'queued',  -- queued/running/succeeded/failed
   attempts      int not null default 0,

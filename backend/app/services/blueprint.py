@@ -66,7 +66,9 @@ class BPQuiz(BaseModel):
     questions: list[BPQuestion]
 
 
-def build_blueprint(selected: list[SelectedTopic], total: int) -> dict:
+def build_blueprint(
+    selected: list[SelectedTopic], total: int, *, selected_only: bool = False
+) -> dict:
     """
     Turn selected topics + weights into per-topic counts + a general count.
 
@@ -80,7 +82,11 @@ def build_blueprint(selected: list[SelectedTopic], total: int) -> dict:
 
     # Each selected topic must get at least 1 → total can't be below topic count.
     total = max(total, len(selected))
-    emphasis_budget = min(total, max(len(selected), round(total * _EMPHASIS_FRACTION)))
+    emphasis_budget = (
+        total
+        if selected_only
+        else min(total, max(len(selected), round(total * _EMPHASIS_FRACTION)))
+    )
 
     units = [_WEIGHT_UNITS[t.weight] for t in selected]
     unit_sum = sum(units)
@@ -185,25 +191,39 @@ def generate_and_persist_from_material(
     difficulty: str,
     profile: CurrentProfile,
     type_counts: dict[str, int] | None = None,
+    selected_only_material: bool = False,
 ) -> dict:
     """Write + persist a blueprint-driven quiz from a block of `material`.
 
     `material` is either a small document's raw text (single-pass path) or a
-    consolidated Master Blueprint rendered to text (large-document path). The
-    question writer, validation, persistence, and instrumentation are identical
-    for both — only the source of `material` differs.
+    consolidated Master Blueprint rendered to text (large-document path). For
+    the latter, `selected_only_material=True` tells allocation and prompting
+    that no whole-document/general coverage is available or desired.
     """
     tid = tenant_id
     chapter_name = chapter_name.strip()
 
     # Build the blueprint (exam setter).
     selected = [SelectedTopic(**t) for t in selected_topics]
-    blueprint = build_blueprint(selected, total_questions)
+    blueprint = build_blueprint(
+        selected, total_questions, selected_only=selected_only_material
+    )
 
     # Generate (question writer) with Gemini primary and DeepSeek fallback.
-    system = build_blueprint_system_prompt(question_types, cognitive_level, difficulty)
+    system = build_blueprint_system_prompt(
+        question_types,
+        cognitive_level,
+        difficulty,
+        selected_only_material=selected_only_material,
+    )
     user = build_blueprint_user_prompt(
-        material, blueprint, question_types, cognitive_level, difficulty, type_counts
+        material,
+        blueprint,
+        question_types,
+        cognitive_level,
+        difficulty,
+        type_counts,
+        selected_only_material=selected_only_material,
     )
     data, provider = complete_json_with_fallback(system, user)
     try:

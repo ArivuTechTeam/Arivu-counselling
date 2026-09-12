@@ -21,7 +21,9 @@ from app.services.blueprint import generate_and_persist_from_material
 from app.services.teacher_access import teacher_has_subject
 
 
-def render_blueprint_material(blueprint: dict) -> str:
+def render_blueprint_material(
+    blueprint: dict, selected_topic_names: set[str] | None = None
+) -> str:
     """Render a Master Blueprint's topics into a compact study-material text block
     for the question writer. Verbatim content is preserved; the structure just
     makes topic boundaries explicit so questions can be tagged to a topic."""
@@ -30,7 +32,18 @@ def render_blueprint_material(blueprint: dict) -> str:
         name = str(topic.get("topic_name", "")).strip()
         if not name:
             continue
+        if selected_topic_names is not None and name.casefold() not in selected_topic_names:
+            continue
         lines.append(f"## {name}")
+        ranges = topic.get("source_page_ranges") or []
+        if ranges:
+            rendered_ranges = ", ".join(
+                f"{r.get('start')}-{r.get('end')}"
+                for r in ranges
+                if isinstance(r, dict) and r.get("start") and r.get("end")
+            )
+            if rendered_ranges:
+                lines.append(f"Approximate source pages: {rendered_ranges}")
         subs = [s for s in (topic.get("subtopics") or []) if s]
         if subs:
             lines.append("Subtopics: " + ", ".join(subs))
@@ -74,7 +87,7 @@ class QuizGeneratorService:
         job = res.data if res and res.data else None
         if not job:
             raise ValueError("Generation job not found.")
-        if job.get("status") not in ("completed", "partial") or not job.get("master_blueprint"):
+        if job.get("status") != "completed" or not job.get("master_blueprint"):
             raise ValueError("This document's analysis isn't ready yet.")
         return job
 
@@ -99,10 +112,30 @@ class QuizGeneratorService:
         if not teacher_has_subject(service, profile, subject_id):
             raise ValueError("Subject not found.")
 
-        material = render_blueprint_material(job["master_blueprint"])
+        requested_names = {
+            str(topic.get("name") or "").strip().casefold()
+            for topic in selected_topics
+            if str(topic.get("name") or "").strip()
+        }
+        if not requested_names:
+            raise ValueError("Select at least one extracted topic before generating.")
+
+        available_names = {
+            str(topic.get("topic_name") or "").strip().casefold()
+            for topic in (job["master_blueprint"].get("topics") or [])
+        }
+        missing_names = requested_names - available_names
+        if missing_names:
+            raise ValueError("One or more selected topics are not in the completed analysis.")
+
+        material = render_blueprint_material(job["master_blueprint"], requested_names)
         if not material:
             raise ValueError("The analysis produced no usable content to generate from.")
-        material = material[: get_settings().generation_max_text_chars]
+        if len(material) > get_settings().generation_max_text_chars:
+            raise ValueError(
+                "The selected topics contain too much source material for one safe "
+                "generation call. Select fewer topics and try again."
+            )
 
         result = generate_and_persist_from_material(
             service=service,
@@ -117,6 +150,7 @@ class QuizGeneratorService:
             difficulty=difficulty,
             profile=profile,
             type_counts=type_counts,
+            selected_only_material=True,
         )
 
         # Link the created quiz set back to the job (best-effort; non-fatal).
@@ -127,4 +161,5 @@ class QuizGeneratorService:
                  "chapter_name": chapter_name}
             ).eq("id", job_id).eq("tenant_id", profile.tenant_id).execute()
         result["job_id"] = job_id
+        result["source_material_chars"] = len(material)
         return result

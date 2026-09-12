@@ -125,11 +125,9 @@ def _gemini_json_large(
         resp = httpx.post(url, json=payload, headers=headers, timeout=180.0)
         resp.raise_for_status()
     except httpx.HTTPStatusError as exc:
-        raise LLMError(
-            f"Gemini returned {exc.response.status_code}: {exc.response.text[:300]}"
-        ) from exc
+        raise LLMError(f"Gemini returned HTTP {exc.response.status_code}.") from exc
     except httpx.HTTPError as exc:
-        raise LLMError(f"Gemini request failed: {exc}") from exc
+        raise LLMError("Gemini request failed.") from exc
 
     data = resp.json()
     candidate = (data.get("candidates") or [{}])[0]
@@ -138,15 +136,13 @@ def _gemini_json_large(
     try:
         text = candidate["content"]["parts"][0]["text"]
     except (KeyError, IndexError) as exc:
-        raise LLMError(
-            f"Unexpected Gemini response (blocked or empty?): {str(data)[:300]}"
-        ) from exc
+        raise LLMError("Gemini returned an unexpected or empty response.") from exc
     try:
         parsed = json.loads(text)
     except json.JSONDecodeError as exc:
-        raise LLMError(f"Gemini returned invalid JSON: {text[:300]}") from exc
+        raise LLMError("Gemini returned invalid JSON.") from exc
     if not isinstance(parsed, dict):
-        raise LLMError(f"Gemini returned non-object JSON: {str(parsed)[:200]}")
+        raise LLMError("Gemini returned a non-object JSON value.")
     return parsed
 
 
@@ -176,11 +172,9 @@ def _deepseek_json_large(
         resp = httpx.post(url, json=payload, headers=headers, timeout=180.0)
         resp.raise_for_status()
     except httpx.HTTPStatusError as exc:
-        raise LLMError(
-            f"DeepSeek returned {exc.response.status_code}: {exc.response.text[:300]}"
-        ) from exc
+        raise LLMError(f"DeepSeek returned HTTP {exc.response.status_code}.") from exc
     except httpx.HTTPError as exc:
-        raise LLMError(f"DeepSeek request failed: {exc}") from exc
+        raise LLMError("DeepSeek request failed.") from exc
 
     data = resp.json()
     choice = (data.get("choices") or [{}])[0]
@@ -189,13 +183,13 @@ def _deepseek_json_large(
     try:
         text = choice["message"]["content"]
     except (KeyError, IndexError) as exc:
-        raise LLMError(f"Unexpected DeepSeek response shape: {data}") from exc
+        raise LLMError("DeepSeek returned an unexpected response shape.") from exc
     try:
         parsed = json.loads(text)
     except json.JSONDecodeError as exc:
-        raise LLMError(f"DeepSeek returned invalid JSON: {text[:300]}") from exc
+        raise LLMError("DeepSeek returned invalid JSON.") from exc
     if not isinstance(parsed, dict):
-        raise LLMError(f"DeepSeek returned non-object JSON: {str(parsed)[:200]}")
+        raise LLMError("DeepSeek returned a non-object JSON value.")
     return parsed
 
 

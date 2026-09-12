@@ -110,7 +110,9 @@ class GenerateFromJobTests(unittest.TestCase):
 
     def test_generates_and_links_quiz_set_to_job(self) -> None:
         fake = _Fake(); _seed_job(fake)
-        with patch(f"{GEN_MODULE}.teacher_has_subject", return_value=True), patch(
+        with patch(f"{GEN_MODULE}.get_settings", return_value=SimpleNamespace(
+            generation_max_text_chars=1_000_000
+        )), patch(f"{GEN_MODULE}.teacher_has_subject", return_value=True), patch(
             f"{GEN_MODULE}.generate_and_persist_from_material",
             return_value={"quiz_set_id": "qs1", "questions": []},
         ) as gen:
@@ -133,14 +135,50 @@ class GenerateFromJobTests(unittest.TestCase):
                 self._call(fake)
         gen.assert_not_called()
 
-    def test_partial_job_is_allowed(self) -> None:
+    def test_partial_job_is_blocked(self) -> None:
         fake = _Fake(); _seed_job(fake, status="partial")
         with patch(f"{GEN_MODULE}.teacher_has_subject", return_value=True), patch(
             f"{GEN_MODULE}.generate_and_persist_from_material",
             return_value={"quiz_set_id": "qs1"},
-        ):
-            result = self._call(fake)
-        self.assertEqual(result["quiz_set_id"], "qs1")
+        ) as gen:
+            with self.assertRaisesRegex(ValueError, "isn't ready"):
+                self._call(fake)
+        gen.assert_not_called()
+
+    def test_sends_only_selected_topic_material_without_truncation(self) -> None:
+        early = {**BLUEPRINT["topics"][0], "topic_name": "Early", "key_facts_and_figures": ["EARLY FACT"]}
+        late = {**BLUEPRINT["topics"][0], "topic_name": "Late", "key_facts_and_figures": ["LATE PAGE 95 FACT"]}
+        fake = _Fake(); _seed_job(fake, blueprint={"topics": [early, late]})
+        svc = QuizGeneratorService(service=fake)
+        with patch(f"{GEN_MODULE}.get_settings", return_value=SimpleNamespace(
+            generation_max_text_chars=1_000_000
+        )), patch(f"{GEN_MODULE}.teacher_has_subject", return_value=True), patch(
+            f"{GEN_MODULE}.generate_and_persist_from_material",
+            return_value={"quiz_set_id": "qs1", "questions": []},
+        ) as gen:
+            result = svc.generate_from_job(
+                job_id="j1", subject_id="s1", chapter_name="Late",
+                selected_topics=[{"name": "Late", "weight": "high"}],
+                total_questions=1, question_types=["mcq_single"],
+                cognitive_level="mixed", difficulty="medium", profile=_profile(),
+            )
+        material = gen.call_args.kwargs["material"]
+        self.assertIn("LATE PAGE 95 FACT", material)
+        self.assertNotIn("EARLY FACT", material)
+        self.assertTrue(gen.call_args.kwargs["selected_only_material"])
+        self.assertEqual(result["source_material_chars"], len(material))
+
+    def test_oversized_selected_material_fails_instead_of_slicing(self) -> None:
+        huge = {**BLUEPRINT["topics"][0], "key_facts_and_figures": ["x" * 500]}
+        fake = _Fake(); _seed_job(fake, blueprint={"topics": [huge]})
+        with patch(f"{GEN_MODULE}.get_settings", return_value=SimpleNamespace(
+            generation_max_text_chars=100
+        )), patch(f"{GEN_MODULE}.teacher_has_subject", return_value=True), patch(
+            f"{GEN_MODULE}.generate_and_persist_from_material"
+        ) as gen:
+            with self.assertRaisesRegex(ValueError, "too much source material"):
+                self._call(fake)
+        gen.assert_not_called()
 
     def test_missing_job_raises(self) -> None:
         fake = _Fake()  # no job seeded

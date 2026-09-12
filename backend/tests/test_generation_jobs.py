@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from app.services.generation_jobs import (
@@ -73,7 +74,7 @@ class _StubChunker:
         self.fake, self.chunk_count = fake, chunk_count
         self.calls = 0
 
-    def chunk_and_store(self, *, document_id, tenant_id, text):
+    def chunk_and_store(self, *, document_id, tenant_id, text, page_spans=()):
         self.calls += 1
         rows = self.fake.db.setdefault("document_chunks", [])
         if not any(r["document_id"] == document_id for r in rows):
@@ -90,7 +91,10 @@ class _StubMapper:
         self.calls = 0
         self.last_summary = None
 
-    def run(self, *, document_id, tenant_id, document_title="", document_summary=""):
+    def run(
+        self, *, document_id, tenant_id, document_title="", document_summary="",
+        profile=None,
+    ):
         self.calls += 1
         self.last_summary = document_summary
         return self.result
@@ -102,7 +106,10 @@ class _StubReducer:
         self.calls = 0
         self.last_summary = None
 
-    def synthesize(self, *, document_id, tenant_id, document_title="", document_summary=""):
+    def synthesize(
+        self, *, document_id, tenant_id, document_title="", document_summary="",
+        profile=None,
+    ):
         self.calls += 1
         self.last_summary = document_summary
         if self.error:
@@ -126,6 +133,7 @@ def _seed_job(fake, *, job_id="j1", tenant_id="t1", document_id="d1", chapter="C
     fake.db.setdefault("quiz_generation_jobs", []).append(
         {
             "id": job_id, "tenant_id": tenant_id, "document_id": document_id,
+            "created_by": "u1", "params": {"profile_rate_limit_reserved": True},
             "chapter_name": chapter, "status": "queued", "phase": "queued",
             "total_chunks": 0, "done_chunks": 0, "master_blueprint": None,
             "error_message": None,
@@ -170,9 +178,10 @@ class RunTests(unittest.TestCase):
         self.assertEqual(result["status"], "partial")
         job = fake.db["quiz_generation_jobs"][0]
         self.assertEqual(job["status"], "partial")
-        self.assertEqual(job["phase"], "ready")
+        self.assertEqual(job["phase"], "mapping")
         self.assertEqual(job["done_chunks"], 2)
-        self.assertEqual(job["master_blueprint"], BP)  # blueprint still built
+        self.assertIsNone(job["master_blueprint"])
+        self.assertIn("1 of 3", job["error_message"])
 
     def test_all_chunks_fail_marks_job_failed(self) -> None:
         fake = _Fake(); _seed_job(fake)
@@ -255,6 +264,17 @@ class RunTests(unittest.TestCase):
         # resume reuses the stored profile — no second profiling call
         runner.run(job_id="j1")
         self.assertEqual(profiler.calls, 1)
+
+    def test_unreserved_background_profile_call_is_rate_limited(self) -> None:
+        fake = _Fake(); _seed_job(fake)
+        fake.db["quiz_generation_jobs"][0]["params"] = {}
+        with patch(
+            f"{MODULE}.get_settings",
+            return_value=SimpleNamespace(rate_limit_topic_extraction_per_hour=10),
+        ), patch(f"{MODULE}.enforce_ai_rate_limit") as limit:
+            self._runner(fake).run(job_id="j1")
+        limit.assert_called_once()
+        self.assertEqual(limit.call_args.kwargs["endpoint"], "topic_extraction")
 
 
 class CreateJobTests(unittest.TestCase):

@@ -25,13 +25,16 @@ import logging
 import threading
 from datetime import datetime, timezone
 
+from app.lib.auth import CurrentProfile
+from app.lib.config import get_settings
 from app.lib.storage import download_bytes
 from app.lib.supabase import get_service_client
 from app.services.chunking_service import ChunkingService
 from app.services.document_profile import profile_document, profile_to_summary
-from app.services.extraction import extract_text
+from app.services.extraction import ExtractedText, extract_text_with_pages
 from app.services.master_blueprint_synthesizer import MasterBlueprintSynthesizer
 from app.services.topic_extraction_pipeline import TopicExtractionPipeline
+from app.services.rate_limit import TOPIC_EXTRACTION, enforce_ai_rate_limit
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +43,7 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _default_text_loader(client, document_id: str, tenant_id: str) -> str:
+def _default_text_loader(client, document_id: str, tenant_id: str) -> ExtractedText:
     """Fetch a stored document (tenant-scoped) and extract its text."""
     doc = (
         client.table("documents")
@@ -52,10 +55,12 @@ def _default_text_loader(client, document_id: str, tenant_id: str) -> str:
     )
     if doc is None or not doc.data:
         raise ValueError("Document not found.")
-    text = extract_text(download_bytes(doc.data["storage_path"]), doc.data["file_type"])
-    if not text.strip():
+    extracted = extract_text_with_pages(
+        download_bytes(doc.data["storage_path"]), doc.data["file_type"]
+    )
+    if not extracted.text.strip():
         raise ValueError("This document has no extractable text (scanned image PDF?).")
-    return text
+    return extracted
 
 
 class GenerationJobRunner:
@@ -130,22 +135,47 @@ class GenerationJobRunner:
             self._update(
                 job_id, tenant_id, status="running", phase="chunking", error_message=None
             )
-            text = self._text_loader(self._client, document_id, tenant_id)
+            loaded = self._text_loader(self._client, document_id, tenant_id)
+            if isinstance(loaded, ExtractedText):
+                text = loaded.text
+                page_spans = loaded.page_spans
+            else:  # backwards-compatible injectable used by focused unit tests
+                text = str(loaded)
+                page_spans = ()
+
+            actor_profile = CurrentProfile(
+                user_id=job["created_by"], tenant_id=tenant_id, role="teacher"
+            )
 
             # 1b) PROFILE — understand the document once (subject + summary), so
             #     MAP/REDUCE can judge what is core vs. noise. Reused on resume.
-            profile = (job.get("params") or {}).get("document_profile")
-            if not profile:
-                profile = self._profiler(text)
+            params = job.get("params") or {}
+            document_profile = params.get("document_profile") or {}
+            if not params.get("document_profile_attempted"):
+                if not params.get("profile_rate_limit_reserved"):
+                    enforce_ai_rate_limit(
+                        profile=actor_profile,
+                        endpoint=TOPIC_EXTRACTION,
+                        hourly_limit=get_settings().rate_limit_topic_extraction_per_hour,
+                        action_label="large-document analysis",
+                    )
+                document_profile = self._profiler(text)
                 self._update(
                     job_id,
                     tenant_id,
-                    params={**(job.get("params") or {}), "document_profile": profile},
+                    params={
+                        **params,
+                        "document_profile": document_profile,
+                        "document_profile_attempted": True,
+                    },
                 )
-            summary = profile_to_summary(profile)
+            summary = profile_to_summary(document_profile)
 
             self._chunker.chunk_and_store(
-                document_id=document_id, tenant_id=tenant_id, text=text
+                document_id=document_id,
+                tenant_id=tenant_id,
+                text=text,
+                page_spans=page_spans,
             )
             total = self._count_chunks(document_id, tenant_id)
             self._update(job_id, tenant_id, total_chunks=total)
@@ -157,32 +187,51 @@ class GenerationJobRunner:
                 tenant_id=tenant_id,
                 document_title=title,
                 document_summary=summary,
+                profile=actor_profile,
             )
             self._update(job_id, tenant_id, done_chunks=map_res["succeeded"])
             if map_res["succeeded"] == 0:
                 raise RuntimeError("Topic extraction failed for every chunk.")
+            if map_res["failed"]:
+                message = (
+                    f"{map_res['failed']} of {map_res['total']} document sections "
+                    "could not be processed. Retry to continue saved sections."
+                )
+                self._update(
+                    job_id,
+                    tenant_id,
+                    status="partial",
+                    phase="mapping",
+                    master_blueprint=None,
+                    error_message=message,
+                )
+                return {
+                    "status": "partial",
+                    "total": map_res["total"],
+                    "succeeded": map_res["succeeded"],
+                    "failed": map_res["failed"],
+                }
 
-            # 3) REDUCE (consolidate whatever succeeded into the Master Blueprint).
+            # 3) REDUCE only after every chunk succeeded. A partial blueprint can
+            # silently omit late-document content, so the teacher must retry first.
             self._update(job_id, tenant_id, phase="reducing")
             blueprint = self._reducer.synthesize(
                 document_id=document_id,
                 tenant_id=tenant_id,
                 document_title=title,
                 document_summary=summary,
+                profile=actor_profile,
             )
 
-            # 'partial' if some chunks never mapped: the blueprint is usable, but a
-            # retry can still fill the gaps and upgrade the job to 'completed'.
-            final_status = "completed" if map_res["failed"] == 0 else "partial"
             self._update(
                 job_id,
                 tenant_id,
                 master_blueprint=blueprint,
                 phase="ready",
-                status=final_status,
+                status="completed",
             )
             return {
-                "status": final_status,
+                "status": "completed",
                 "total": map_res["total"],
                 "succeeded": map_res["succeeded"],
                 "failed": map_res["failed"],

@@ -1,15 +1,25 @@
 from __future__ import annotations
 
 import unittest
+from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 from unittest.mock import patch
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
 from app.api import quiz as quiz_api
 from app.lib.auth import CurrentProfile, get_current_profile
 
 MOD = "app.api.quiz"
+
+SETTINGS = SimpleNamespace(
+    chunking_trigger_chars=100_000,
+    rate_limit_topic_extraction_per_hour=10,
+    generation_chunk_stuck_seconds=900,
+    rate_limit_quiz_generation_per_hour=10,
+    rate_limit_blueprint_per_hour=10,
+)
 
 
 def _client(role="teacher"):
@@ -65,6 +75,32 @@ class _Fake:
         return _Query(self.db, name)
 
 
+class _RateLimitCall:
+    def __init__(self, owner, params):
+        self.owner = owner
+        self.params = params
+
+    def execute(self):
+        self.owner.rate_count += 1
+        limit = self.params["p_limit"]
+        allowed = self.owner.rate_count <= limit
+        return type("R", (), {"data": [{
+            "allowed": allowed,
+            "retry_after_seconds": 3600 if not allowed else 0,
+            "remaining": max(0, limit - self.owner.rate_count),
+        }]})
+
+
+class _RateLimitedFake(_Fake):
+    def __init__(self, db=None):
+        super().__init__(db)
+        self.rate_count = 0
+
+    def rpc(self, name, params):
+        self.last_rpc = (name, params)
+        return _RateLimitCall(self, params)
+
+
 DOC_DB = {"documents": [
     {"id": "d1", "tenant_id": "t1", "uploaded_by": "u1",
      "storage_path": "p", "file_type": "pdf"}
@@ -73,7 +109,9 @@ DOC_DB = {"documents": [
 
 class AnalyzeTests(unittest.TestCase):
     def test_small_document_returns_direct_topics(self) -> None:
-        with patch(f"{MOD}.get_service_client", return_value=_Fake(dict(DOC_DB))), patch(
+        with patch(f"{MOD}.get_settings", return_value=SETTINGS), patch(
+            f"{MOD}.get_service_client", return_value=_Fake(dict(DOC_DB))
+        ), patch(
             f"{MOD}.download_bytes", return_value=b""
         ), patch(f"{MOD}.extract_text", return_value="short text"), patch(
             f"{MOD}.enforce_ai_rate_limit"
@@ -86,20 +124,62 @@ class AnalyzeTests(unittest.TestCase):
 
     def test_large_document_creates_job(self) -> None:
         big = "x" * 200_000  # > default 100k trigger
-        with patch(f"{MOD}.get_service_client", return_value=_Fake(dict(DOC_DB))), patch(
+        with patch(f"{MOD}.get_settings", return_value=SETTINGS), patch(
+            f"{MOD}.get_service_client", return_value=_Fake(dict(DOC_DB))
+        ), patch(
             f"{MOD}.download_bytes", return_value=b""
         ), patch(f"{MOD}.extract_text", return_value=big), patch(
-            f"{MOD}.create_generation_job", return_value="job-1"
+            f"{MOD}.enforce_ai_rate_limit"
+        ) as limit, patch(f"{MOD}.create_generation_job", return_value="job-1"
         ) as create:
             res = _client().post("/api/v1/quiz-sets/analyze", json={"document_id": "d1"})
         self.assertEqual(res.status_code, 200)
         body = res.json()
         self.assertEqual(body["mode"], "job")
         self.assertEqual(body["job_id"], "job-1")
-        create.assert_called_once()
+        create.assert_called_once_with(
+            document_id="d1", tenant_id="t1", created_by="u1",
+            params={"profile_rate_limit_reserved": True},
+        )
+        limit.assert_called_once()
+
+    def test_large_document_rate_limit_blocks_before_job_creation(self) -> None:
+        big = "x" * 200_000
+        with patch(f"{MOD}.get_settings", return_value=SETTINGS), patch(
+            f"{MOD}.get_service_client", return_value=_Fake(dict(DOC_DB))
+        ), patch(f"{MOD}.download_bytes", return_value=b""), patch(
+            f"{MOD}.extract_text", return_value=big
+        ), patch(
+            f"{MOD}.enforce_ai_rate_limit",
+            side_effect=HTTPException(status_code=429, detail="limit reached"),
+        ), patch(f"{MOD}.create_generation_job") as create:
+            res = _client().post("/api/v1/quiz-sets/analyze", json={"document_id": "d1"})
+        self.assertEqual(res.status_code, 429)
+        create.assert_not_called()
+
+    def test_repeated_large_analyze_requests_stop_at_configured_limit(self) -> None:
+        settings = SimpleNamespace(**{**SETTINGS.__dict__, "rate_limit_topic_extraction_per_hour": 2})
+        service = _RateLimitedFake(dict(DOC_DB))
+        big = "x" * 200_000
+        with patch(f"{MOD}.get_settings", return_value=settings), patch(
+            f"{MOD}.get_service_client", return_value=service
+        ), patch(
+            "app.services.rate_limit.get_service_client", return_value=service
+        ), patch(f"{MOD}.download_bytes", return_value=b""), patch(
+            f"{MOD}.extract_text", return_value=big
+        ), patch(f"{MOD}.create_generation_job", return_value="job-1") as create:
+            responses = [
+                _client().post("/api/v1/quiz-sets/analyze", json={"document_id": "d1"})
+                for _ in range(3)
+            ]
+        self.assertEqual([response.status_code for response in responses], [200, 200, 429])
+        self.assertEqual(create.call_count, 2)
+        self.assertEqual(service.last_rpc[0], "consume_ai_rate_limit")
 
     def test_empty_text_is_rejected(self) -> None:
-        with patch(f"{MOD}.get_service_client", return_value=_Fake(dict(DOC_DB))), patch(
+        with patch(f"{MOD}.get_settings", return_value=SETTINGS), patch(
+            f"{MOD}.get_service_client", return_value=_Fake(dict(DOC_DB))
+        ), patch(
             f"{MOD}.download_bytes", return_value=b""
         ), patch(f"{MOD}.extract_text", return_value="   "):
             res = _client().post("/api/v1/quiz-sets/analyze", json={"document_id": "d1"})
@@ -138,6 +218,25 @@ class JobStatusTests(unittest.TestCase):
         self.assertEqual(body["status"], "completed")
         self.assertEqual(body["done_chunks"], 3)
         self.assertEqual([t["name"] for t in body["topics"]], ["Strings"])
+
+    def test_stale_running_job_becomes_retryable_failure(self) -> None:
+        stale = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+        row = dict(JOB_ROW, status="running", phase="mapping", updated_at=stale)
+        fake = _Fake({
+            "quiz_generation_jobs": [row],
+            "document_chunks": [{
+                "id": "c1", "document_id": "d1", "tenant_id": "t1",
+                "map_status": "running",
+            }],
+        })
+        with patch(f"{MOD}.get_settings", return_value=SETTINGS), patch(
+            f"{MOD}.get_service_client", return_value=fake
+        ):
+            res = _client().get("/api/v1/quiz-sets/generation-jobs/j1")
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["status"], "failed")
+        self.assertIn("Retry", res.json()["error_message"])
+        self.assertEqual(fake.db["document_chunks"][0]["map_status"], "failed")
 
     def test_other_tenant_job_404(self) -> None:
         row = dict(JOB_ROW, tenant_id="OTHER")
@@ -181,7 +280,9 @@ class JobGenerateTests(unittest.TestCase):
         return base
 
     def test_delegates_to_generator_service(self) -> None:
-        with patch(f"{MOD}.enforce_ai_rate_limit"), patch(
+        with patch(f"{MOD}.get_settings", return_value=SETTINGS), patch(
+            f"{MOD}.enforce_ai_rate_limit"
+        ), patch(
             f"{MOD}.QuizGeneratorService"
         ) as Svc:
             Svc.return_value.generate_from_job.return_value = {"quiz_set_id": "qs1"}

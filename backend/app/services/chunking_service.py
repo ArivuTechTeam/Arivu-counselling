@@ -25,6 +25,7 @@ from datetime import datetime, timezone
 
 from app.lib.config import get_settings
 from app.lib.supabase import get_service_client
+from app.services.extraction import PageSpan
 from app.services.generation_chunking import GenerationChunk, split_document
 
 
@@ -67,7 +68,12 @@ class ChunkingService:
         )
 
     def chunk_and_store(
-        self, *, document_id: str, tenant_id: str, text: str
+        self,
+        *,
+        document_id: str,
+        tenant_id: str,
+        text: str,
+        page_spans: tuple[PageSpan, ...] | list[PageSpan] = (),
     ) -> ChunkStoreResult:
         """Split the text, hash each chunk, and insert new chunks into
         `document_chunks`. Skips chunks whose content_hash (or chunk_index) is
@@ -98,6 +104,11 @@ class ChunkingService:
                 continue
             seen_hash.add(content_hash)
             seen_index.add(c.index)
+            pages = [
+                span.page_number
+                for span in page_spans
+                if span.char_end > c.char_start and span.char_start < c.char_end
+            ]
             rows.append(
                 {
                     "tenant_id": tenant_id,
@@ -107,6 +118,8 @@ class ChunkingService:
                     "content_hash": content_hash,
                     "char_start": c.char_start,
                     "char_end": c.char_end,
+                    "page_start": min(pages) if pages else None,
+                    "page_end": max(pages) if pages else None,
                     "map_status": "queued",
                     "attempts": 0,
                     "updated_at": _now(),

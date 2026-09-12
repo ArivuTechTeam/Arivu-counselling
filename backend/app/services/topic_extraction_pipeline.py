@@ -19,11 +19,13 @@ from datetime import datetime, timezone
 
 from pydantic import ValidationError
 
+from app.lib.auth import CurrentProfile
 from app.lib.config import get_settings
 from app.lib.supabase import get_service_client
 from app.services.llm.base import LLMError
 from app.services.llm.structured import complete_json_large
 from app.services.map_reduce_prompts import MAP_SYSTEM, build_map_user_prompt
+from app.services.rate_limit import TOPIC_EXTRACTION, enforce_ai_rate_limit
 
 
 def _now() -> str:
@@ -73,6 +75,15 @@ def validate_map_output(data: object) -> list[dict]:
                         or str(w.get("description", "")).strip()
                     )
                 ],
+                "source_page_ranges": [
+                    {"start": int(r["start"]), "end": int(r["end"])}
+                    for r in (t.get("source_page_ranges") or [])
+                    if isinstance(r, dict)
+                    and str(r.get("start", "")).isdigit()
+                    and str(r.get("end", "")).isdigit()
+                    and int(r["start"]) > 0
+                    and int(r["end"]) >= int(r["start"])
+                ],
             }
         )
     return out
@@ -90,6 +101,9 @@ class TopicExtractionPipeline:
         total_chunks: int,
         content: str,
         document_summary: str = "",
+        page_start: int | None = None,
+        page_end: int | None = None,
+        profile: CurrentProfile | None = None,
     ) -> list[dict]:
         """One chunk → topics, retrying once on a transient model error."""
         user = build_map_user_prompt(
@@ -98,12 +112,27 @@ class TopicExtractionPipeline:
             total_chunks=total_chunks,
             content=content,
             document_summary=document_summary,
+            page_start=page_start,
+            page_end=page_end,
         )
         last_error: Exception | None = None
         for _ in range(2):
             try:
+                if profile is not None:
+                    enforce_ai_rate_limit(
+                        profile=profile,
+                        endpoint=TOPIC_EXTRACTION,
+                        hourly_limit=get_settings().rate_limit_topic_extraction_per_hour,
+                        action_label="large-document analysis",
+                    )
                 data, _provider = complete_json_large(MAP_SYSTEM, user)
-                return validate_map_output(data)
+                topics = validate_map_output(data)
+                if page_start is not None and page_end is not None:
+                    for topic in topics:
+                        topic["source_page_ranges"] = [
+                            {"start": page_start, "end": page_end}
+                        ]
+                return topics
             except (LLMError, ValidationError) as exc:
                 last_error = exc
         raise last_error or LLMError("Topic extraction failed for a chunk.")
@@ -115,6 +144,7 @@ class TopicExtractionPipeline:
         total_chunks: int,
         chunk: dict,
         document_summary: str = "",
+        profile: CurrentProfile | None = None,
     ) -> None:
         """Claim a chunk, extract its topics, and checkpoint the result. Uses its
         OWN client so parallel workers don't share one connection."""
@@ -141,6 +171,9 @@ class TopicExtractionPipeline:
                 total_chunks=total_chunks,
                 content=chunk["content"],
                 document_summary=document_summary,
+                page_start=chunk.get("page_start"),
+                page_end=chunk.get("page_end"),
+                profile=profile,
             )
             client.table("document_chunks").update(
                 {
@@ -162,13 +195,16 @@ class TopicExtractionPipeline:
         tenant_id: str,
         document_title: str = "",
         document_summary: str = "",
+        profile: CurrentProfile | None = None,
     ) -> dict:
         """Map every not-yet-succeeded chunk of a document (parallel, resumable).
         Returns {total, succeeded, failed}."""
         client = self._service or get_service_client()
         chunks = (
             client.table("document_chunks")
-            .select("id, chunk_index, content, map_status, attempts")
+            .select(
+                "id, chunk_index, content, map_status, attempts, page_start, page_end"
+            )
             .eq("document_id", document_id)
             .eq("tenant_id", tenant_id)
             .order("chunk_index")
@@ -191,6 +227,7 @@ class TopicExtractionPipeline:
                             total_chunks=total,
                             chunk=c,
                             document_summary=document_summary,
+                            profile=profile,
                         ),
                         pending,
                     )

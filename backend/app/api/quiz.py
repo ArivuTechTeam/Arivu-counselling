@@ -252,10 +252,20 @@ def analyze_document(
 
     # Large document → background Map-Reduce analysis job.
     if len(text) > get_settings().chunking_trigger_chars:
+        # Reserve the profile call before returning a job id. This makes repeated
+        # Analyze clicks fail immediately with 429, while the remaining MAP and
+        # REDUCE calls consume the same atomic limit inside the worker.
+        enforce_ai_rate_limit(
+            profile=profile,
+            endpoint=TOPIC_EXTRACTION,
+            hourly_limit=get_settings().rate_limit_topic_extraction_per_hour,
+            action_label="large-document analysis",
+        )
         job_id = create_generation_job(
             document_id=req.document_id,
             tenant_id=profile.tenant_id,
             created_by=profile.user_id,
+            params={"profile_rate_limit_reserved": True},
         )
         return {"mode": "job", "document_id": req.document_id, "job_id": job_id, "status": "queued"}
 
@@ -293,6 +303,48 @@ def _owned_job(service, job_id: str, profile: CurrentProfile) -> dict:
     return res.data
 
 
+def _fail_if_stuck(service, job: dict, profile: CurrentProfile) -> dict:
+    """Turn an abandoned in-process worker into a retryable failed job."""
+    if job.get("status") != "running" or not job.get("updated_at"):
+        return job
+    try:
+        updated_at = datetime.fromisoformat(str(job["updated_at"]).replace("Z", "+00:00"))
+        if updated_at.tzinfo is None:
+            updated_at = updated_at.replace(tzinfo=timezone.utc)
+    except ValueError:
+        return job
+    age_seconds = (datetime.now(timezone.utc) - updated_at).total_seconds()
+    if age_seconds <= get_settings().generation_chunk_stuck_seconds:
+        return job
+
+    message = "Analysis stopped before it finished. Retry to continue saved sections."
+    now = datetime.now(timezone.utc).isoformat()
+    (
+        service.table("document_chunks")
+        .update({"map_status": "failed", "error_message": message, "updated_at": now})
+        .eq("document_id", job["document_id"])
+        .eq("tenant_id", profile.tenant_id)
+        .eq("map_status", "running")
+        .execute()
+    )
+    (
+        service.table("quiz_generation_jobs")
+        .update(
+            {
+                "status": "failed",
+                "phase": "failed",
+                "error_message": message,
+                "updated_at": now,
+            }
+        )
+        .eq("id", job["id"])
+        .eq("tenant_id", profile.tenant_id)
+        .eq("status", "running")
+        .execute()
+    )
+    return {**job, "status": "failed", "phase": "failed", "error_message": message}
+
+
 @router.get("/generation-jobs/{job_id}")
 def get_generation_job(
     job_id: str,
@@ -303,12 +355,14 @@ def get_generation_job(
     _require_teacher(profile)
     service = get_service_client()
     job = _owned_job(service, job_id, profile)
+    job = _fail_if_stuck(service, job, profile)
 
     blueprint = job.get("master_blueprint") or {}
     topics = [
         {
             "name": t.get("topic_name"),
             "subtopics": t.get("subtopics") or [],
+            "page_ranges": t.get("source_page_ranges") or [],
         }
         for t in (blueprint.get("topics") or [])
         if t.get("topic_name")

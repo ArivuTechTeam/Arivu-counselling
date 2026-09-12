@@ -136,6 +136,9 @@ export function BlueprintGenerator() {
   const [error, setError] = useState<string | null>(null);
   const displayError = error ?? coursesQuery.error?.message ?? null;
   const [topics, setTopics] = useState<string[]>([]);
+  const [topicPageRanges, setTopicPageRanges] = useState<
+    Record<string, { start: number; end: number }[]>
+  >({});
   const [weights, setWeights] = useState<Record<string, TopicWeight>>({});
   const [newTopic, setNewTopic] = useState("");
 
@@ -205,6 +208,11 @@ export function BlueprintGenerator() {
         res.document,
         ...prev.filter((d) => d.id !== res.document.id),
       ]);
+      setJobId(null);
+      setAnalysis(null);
+      setTopics([]);
+      setTopicPageRanges({});
+      setWeights({});
       setDocumentId(res.document.id);
       setUploadedName(res.document.original_filename ?? file.name);
     } catch (err) {
@@ -215,7 +223,8 @@ export function BlueprintGenerator() {
     }
   }
 
-  const analyzing = Boolean(analysis) && analysis?.status !== "failed";
+  const analyzing =
+    analysis?.status === "queued" || analysis?.status === "running";
   const canExtract =
     Boolean(subjectId) &&
     chapterName.trim().length > 0 &&
@@ -226,6 +235,7 @@ export function BlueprintGenerator() {
   async function handleExtract() {
     setError(null);
     setTopics([]);
+    setTopicPageRanges({});
     setWeights({});
     setJobId(null);
     setAnalysis(null);
@@ -312,6 +322,10 @@ export function BlueprintGenerator() {
       name,
       weight,
     }));
+    if (jobId && selected.length === 0) {
+      setGenError("Select at least one extracted topic for this large document.");
+      return;
+    }
     setGenerating(true);
     try {
       // Large document → generate from the ready analysis job's blueprint;
@@ -347,17 +361,28 @@ export function BlueprintGenerator() {
   // the teacher to pick (generation itself is a separate single call afterwards).
   useEffect(() => {
     if (!jobId || !analysis) return;
-    if (analysis.status === "failed") return;
+    if (analysis.status === "failed" || analysis.status === "partial") return;
     const timer = window.setInterval(async () => {
       try {
         const s = await getGenerationJob(jobId);
-        if (
-          (s.status === "completed" || s.status === "partial") &&
-          s.topics.length > 0
-        ) {
+        if (s.status === "completed" && s.topics.length > 0) {
           window.clearInterval(timer);
           setTopics(s.topics.map((t) => t.name));
+          setTopicPageRanges(
+            Object.fromEntries(s.topics.map((t) => [t.name, t.page_ranges || []])),
+          );
           setAnalysis(null); // ready → reveal topic picker
+          return;
+        }
+        if (s.status === "partial") {
+          window.clearInterval(timer);
+          setTopics([]);
+          setAnalysis({
+            status: "partial",
+            phase: s.phase,
+            done: s.done_chunks,
+            total: s.total_chunks,
+          });
           return;
         }
         if (s.status === "failed") {
@@ -466,6 +491,11 @@ export function BlueprintGenerator() {
                   className={fieldClass}
                   value={documentId}
                   onChange={(e) => {
+                    setJobId(null);
+                    setAnalysis(null);
+                    setTopics([]);
+                    setTopicPageRanges({});
+                    setWeights({});
                     setDocumentId(e.target.value);
                     const d = documents.find((x) => x.id === e.target.value);
                     setUploadedName(d?.original_filename ?? null);
@@ -562,7 +592,9 @@ export function BlueprintGenerator() {
                 {analyzing && <Spinner />}
                 {analyzing
                   ? "Analysing a large document — reading it section by section…"
-                  : "Analysis incomplete"}
+                  : analysis.status === "partial"
+                    ? "Some document sections could not be processed"
+                    : "Analysis incomplete"}
               </div>
               <div className="h-2 w-full overflow-hidden rounded-full bg-muted">
                 <div
@@ -583,10 +615,17 @@ export function BlueprintGenerator() {
                 · this can take a couple of minutes. Topics appear here
                 automatically when it&apos;s ready.
               </p>
-              {analysis.status === "failed" && (
+              {analysis.status === "partial" && (
+                <InlineError
+                  message={`${analysis.done} of ${analysis.total} sections were processed. Topic selection is blocked because content may be missing. Retry the remaining sections to continue.`}
+                />
+              )}
+              {(analysis.status === "failed" || analysis.status === "partial") && (
                 <div className="flex flex-wrap items-center gap-3">
                   <div className="flex-1">
-                    <InlineError message="Some sections didn't finish. Completed sections are saved — retry to continue from where it stopped." />
+                    {analysis.status === "failed" && (
+                      <InlineError message="Analysis stopped before it finished. Completed sections are saved — retry to continue from where it stopped." />
+                    )}
                   </div>
                   <Button onClick={retryAnalysis}>
                     <Zap size={16} /> Retry
@@ -606,8 +645,9 @@ export function BlueprintGenerator() {
             <CardTitle>Select the important topics</CardTitle>
             <CardDescription>
               Click the topics that matter most, then mark each High / Medium /
-              Low — they get more questions. The quiz still covers the whole
-              document.{" "}
+              Low — they get more questions. {jobId
+                ? "For this large document, questions use only the topics you select."
+                : "The quiz still covers the whole document."}{" "}
               <span className="font-medium text-primary">{selectedCount} selected</span>.
             </CardDescription>
           </CardHeader>
@@ -639,6 +679,18 @@ export function BlueprintGenerator() {
                       {selected && <Check size={11} />}
                     </span>
                     {name}
+                    {(topicPageRanges[name] || []).length > 0 && (
+                      <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] font-normal text-muted-foreground">
+                        pages{" "}
+                        {topicPageRanges[name]
+                          .map((range) =>
+                            range.start === range.end
+                              ? range.start
+                              : `${range.start}–${range.end}`,
+                          )
+                          .join(", ")}
+                      </span>
+                    )}
                   </button>
 
                   <div className="flex items-center gap-1">
@@ -671,24 +723,27 @@ export function BlueprintGenerator() {
               );
             })}
 
-            {/* Add a topic the AI missed */}
-            <div className="mt-2 flex items-center gap-2 border-t border-dashed border-input pt-3">
-              <input
-                className={fieldClass}
-                value={newTopic}
-                onChange={(e) => setNewTopic(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") {
-                    e.preventDefault();
-                    addTopic();
-                  }
-                }}
-                placeholder="Add a topic the AI missed…"
-              />
-              <Button type="button" onClick={addTopic} disabled={!newTopic.trim()}>
-                Add
-              </Button>
-            </div>
+            {/* A custom topic has no consolidated source block in large-document
+                mode, so only the direct/small-document flow can safely add one. */}
+            {!jobId && (
+              <div className="mt-2 flex items-center gap-2 border-t border-dashed border-input pt-3">
+                <input
+                  className={fieldClass}
+                  value={newTopic}
+                  onChange={(e) => setNewTopic(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      addTopic();
+                    }
+                  }}
+                  placeholder="Add a topic the AI missed…"
+                />
+                <Button type="button" onClick={addTopic} disabled={!newTopic.trim()}>
+                  Add
+                </Button>
+              </div>
+            )}
           </CardContent>
         </Card>
       )}
@@ -699,8 +754,8 @@ export function BlueprintGenerator() {
           <CardHeader>
             <CardTitle>Quiz options</CardTitle>
             <CardDescription>
-              Applies to the whole quiz. High topics get the most questions, Low
-              the fewest; the rest cover the document broadly.
+              Applies to the whole quiz. High topics get the most questions and
+              Low topics the fewest.
             </CardDescription>
           </CardHeader>
           <CardContent className="flex flex-col gap-4">

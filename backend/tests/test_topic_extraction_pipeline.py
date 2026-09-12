@@ -3,6 +3,7 @@ from __future__ import annotations
 import unittest
 from unittest.mock import patch
 
+from app.lib.auth import CurrentProfile
 from app.services.llm.base import LLMError
 from app.services.map_reduce_prompts import MAP_SYSTEM, build_map_user_prompt
 from app.services.topic_extraction_pipeline import (
@@ -107,6 +108,7 @@ class _Fake:
 
 class _Settings:  # stand-in so tests run single-threaded + deterministic
     generation_chunk_concurrency = 1
+    rate_limit_topic_extraction_per_hour = 10
 
 
 def _patch_settings():
@@ -125,6 +127,7 @@ class ValidateOutputTests(unittest.TestCase):
             "key_facts_and_figures",
             "formulas",
             "worked_examples",
+            "source_page_ranges",
         ):
             self.assertEqual(t[key], [])
 
@@ -200,7 +203,8 @@ class RunTests(unittest.TestCase):
         self.assertEqual(call.call_count, 3)  # one AI call per chunk
         for row in fake.db["document_chunks"]:
             self.assertEqual(row["map_status"], "succeeded")
-            self.assertEqual(row["topics_json"], SAMPLE_TOPICS)
+            expected = {"topics": [{**SAMPLE_TOPICS["topics"][0], "source_page_ranges": []}]}
+            self.assertEqual(row["topics_json"], expected)
             self.assertEqual(row["attempts"], 1)
             self.assertIsNone(row["error_message"])
 
@@ -295,6 +299,23 @@ class RunTests(unittest.TestCase):
         # the other tenant's rows are untouched
         other = [r for r in fake.db["document_chunks"] if r["tenant_id"] == "OTHER"]
         self.assertTrue(all(r["map_status"] == "queued" for r in other))
+
+    def test_each_map_ai_call_consumes_the_shared_rate_limit(self) -> None:
+        fake = _Fake()
+        fake.seed_chunks("d1", "t1", 2)
+        pipe = TopicExtractionPipeline(service=fake)
+        profile = CurrentProfile(user_id="u1", tenant_id="t1", role="teacher")
+
+        with _patch_settings(), patch(
+            f"{MODULE}.enforce_ai_rate_limit"
+        ) as limit, patch(
+            f"{MODULE}.complete_json_large", return_value=(SAMPLE_TOPICS, "gemini")
+        ):
+            result = pipe.run(document_id="d1", tenant_id="t1", profile=profile)
+
+        self.assertEqual(result["succeeded"], 2)
+        self.assertEqual(limit.call_count, 2)
+        self.assertTrue(all(c.kwargs["profile"] == profile for c in limit.call_args_list))
 
 
 if __name__ == "__main__":

@@ -17,8 +17,8 @@ Design goals (why these prompts are strict):
     each step can judge what is core vs. peripheral to THIS document, even inside
     a chapter — a single chunk in isolation often can't tell.
 
-No page numbers anywhere: we chunk by character offset on extracted text, so page
-metadata doesn't exist and asking for it would only invite hallucination.
+Page ranges are approximate provenance supplied by deterministic PDF extraction;
+the model must preserve/merge them, never invent page numbers itself.
 """
 
 from __future__ import annotations
@@ -33,7 +33,8 @@ _TOPIC_SCHEMA = (
     '    "key_definitions": [{"term": "string", "definition": "verbatim"}],\n'
     '    "key_facts_and_figures": ["verbatim fact / statistic / figure"],\n'
     '    "formulas": [{"name": "string", "formula": "exact", "variables_explained": "string"}],\n'
-    '    "worked_examples": [{"description": "string", "full_example_text": "verbatim with all values and steps"}]\n'
+    '    "worked_examples": [{"description": "string", "full_example_text": "verbatim with all values and steps"}],\n'
+    '    "source_page_ranges": [{"start": 1, "end": 2}]\n'
     '  }\n'
     "]}"
 )
@@ -118,12 +119,16 @@ def build_map_user_prompt(
     total_chunks: int,
     content: str,
     document_summary: str = "",
+    page_start: int | None = None,
+    page_end: int | None = None,
 ) -> str:
     """User prompt for one chunk. `chunk_number` is 1-based for readability."""
     title = document_title or "Untitled document"
     header = f'Document: "{title}". Section {chunk_number} of {total_chunks}.'
     if document_summary:
         header += f"\nWhat this document is about: {document_summary}"
+    if page_start is not None and page_end is not None:
+        header += f"\nApproximate source pages: {page_start}-{page_end}."
     return (
         f"{header}\n"
         "Extract the teachable study content from THIS section below "
@@ -151,6 +156,8 @@ REDUCE_SYSTEM = (
     "3) Keep the result GRANULAR and well-organised: preserve the distinct "
     "teachable concepts — do NOT over-merge everything into a few broad "
     "headings — and keep them in natural teaching order.\n\n"
+    "For source_page_ranges, union the ranges supplied on merged topics. Preserve "
+    "only ranges present in the input; never infer or invent a page number.\n\n"
     "Incidental numbers (ISBNs, years, prices, page counts, reading times) are "
     "NOT gradeable facts; remove them. Keep definitions, facts, figures, "
     "formulas, and worked examples VERBATIM — do NOT paraphrase them. Do NOT "

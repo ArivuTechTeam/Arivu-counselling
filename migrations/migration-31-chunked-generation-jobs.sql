@@ -1,6 +1,6 @@
 -- ============================================================================
 -- Migration 31 — Large-document (Map-Reduce) quiz generation
--- Apply after migration-23-quiz-set-document-link.sql.
+-- Apply after migration-30-account-data-deletion.sql.
 -- Run this ONCE in the Supabase SQL Editor.
 --
 -- Adds the state for generating a quiz from a LARGE chapter (> ~40 pages) with a
@@ -43,6 +43,8 @@ create table if not exists public.document_chunks (
   content_hash  text not null,                 -- SHA-256 of `content`
   char_start    int,
   char_end      int,
+  page_start    int,
+  page_end      int,
   topics_json   jsonb,                          -- MAP result (null until extracted)
   map_status    job_status not null default 'queued',  -- queued/running/succeeded/failed
   attempts      int not null default 0,

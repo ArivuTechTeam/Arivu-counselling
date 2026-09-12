@@ -1654,7 +1654,11 @@ export type GenerationJobStatus = {
   done_chunks: number;
   error_message: string | null;
   // The Master Blueprint's consolidated topics (present once the job is ready).
-  topics: { name: string; subtopics: string[] }[];
+  topics: {
+    name: string;
+    subtopics: string[];
+    page_ranges: { start: number; end: number }[];
+  }[];
   quiz_set_id: string | null;
 };
 

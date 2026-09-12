@@ -242,6 +242,8 @@ create table document_chunks (
   content_hash text not null,
   char_start int,
   char_end int,
+  page_start int,
+  page_end int,
   topics_json jsonb,
   map_status job_status not null default 'queued',
   attempts int not null default 0,
@@ -458,7 +460,8 @@ create table ai_rate_limits (
     'blueprint_generation',
     'topic_extraction',
     'question_regenerate',
-    'question_explain'
+    'question_explain',
+    'quiz_extraction'
   )),
   window_started_at timestamptz not null,
   request_count integer not null check (request_count > 0),
