@@ -123,8 +123,13 @@ class GenerateFromJobTests(unittest.TestCase):
         # material rendered from the blueprint was passed to the writer
         material = gen.call_args.kwargs["material"]
         self.assertIn("What Is a String?", material)
+        self.assertEqual(gen.call_args.kwargs["source_document_id"], "d1")
         # quiz_set linked back onto the job
         self.assertEqual(fake.db["quiz_generation_jobs"][0]["quiz_set_id"], "qs1")
+        self.assertEqual(
+            fake.db["quiz_generation_jobs"][0]["params"]["selected_topics"],
+            [{"name": "What Is a String?", "weight": "high"}],
+        )
 
     def test_rejects_job_not_ready(self) -> None:
         fake = _Fake(); _seed_job(fake, status="running", blueprint=None)

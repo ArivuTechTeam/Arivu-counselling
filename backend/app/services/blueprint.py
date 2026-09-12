@@ -241,6 +241,7 @@ def generate_blueprint_quiz(
         difficulty=difficulty,
         profile=profile,
         type_counts=type_counts,
+        source_document_id=document_id,
     )
 
 
@@ -259,6 +260,7 @@ def generate_and_persist_from_material(
     profile: CurrentProfile,
     type_counts: dict[str, int] | None = None,
     selected_only_material: bool = False,
+    source_document_id: str | None = None,
 ) -> dict:
     """Write + persist a blueprint-driven quiz from a block of `material`.
 
@@ -337,11 +339,14 @@ def generate_and_persist_from_material(
         )
 
     # 5) quiz_set -> variant -> questions (all pending review).
-    quiz_set = service.table("quiz_sets").insert({
+    quiz_set_values = {
         "tenant_id": tid, "chapter_id": chapter_id, "subject_id": subject_id,
         "title": f"{chapter_name} — {cognitive_level}",
         "status": "draft", "created_by": profile.user_id,
-    }).execute()
+    }
+    if source_document_id:
+        quiz_set_values["document_id"] = source_document_id
+    quiz_set = service.table("quiz_sets").insert(quiz_set_values).execute()
     quiz_set_id = quiz_set.data[0]["id"]
 
     stored: list[dict] = []

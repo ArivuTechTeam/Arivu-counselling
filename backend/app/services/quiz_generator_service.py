@@ -151,14 +151,19 @@ class QuizGeneratorService:
             profile=profile,
             type_counts=type_counts,
             selected_only_material=True,
+            source_document_id=job["document_id"],
         )
 
         # Link the created quiz set back to the job (best-effort; non-fatal).
         quiz_set_id = result.get("quiz_set_id")
         if quiz_set_id:
+            job_params = {
+                **(job.get("params") or {}),
+                "selected_topics": selected_topics,
+            }
             service.table("quiz_generation_jobs").update(
                 {"quiz_set_id": quiz_set_id, "subject_id": subject_id,
-                 "chapter_name": chapter_name}
+                 "chapter_name": chapter_name, "params": job_params}
             ).eq("id", job_id).eq("tenant_id", profile.tenant_id).execute()
         result["job_id"] = job_id
         result["source_material_chars"] = len(material)
