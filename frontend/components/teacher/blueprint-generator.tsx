@@ -17,10 +17,13 @@ import {
   Chapter,
   DocumentOut,
   TopicWeight,
-  extractTopics,
+  analyzeDocument,
   generateBlueprintQuiz,
+  generateFromJob,
+  getGenerationJob,
   listChapters,
   listDocuments,
+  retryGenerationJob,
   uploadDocument,
 } from "@/lib/api";
 import { useCourses } from "@/lib/staff-queries";
@@ -134,6 +137,7 @@ export function BlueprintGenerator() {
   const displayError = error ?? coursesQuery.error?.message ?? null;
   const [topics, setTopics] = useState<string[]>([]);
   const [weights, setWeights] = useState<Record<string, TopicWeight>>({});
+  const [newTopic, setNewTopic] = useState("");
 
   const [typeCounts, setTypeCounts] = useState<Record<string, number>>({
     mcq_single: 5,
@@ -144,6 +148,13 @@ export function BlueprintGenerator() {
 
   const [generating, setGenerating] = useState(false);
   const [genError, setGenError] = useState<string | null>(null);
+  // Large documents are analysed in the background (chunk → MAP → REDUCE) before
+  // topics appear. `jobId` (set once analysis is under way) also routes the final
+  // generation to the job path; null = small-document single-call flow.
+  const [jobId, setJobId] = useState<string | null>(null);
+  const [analysis, setAnalysis] = useState<
+    { status: string; phase: string; done: number; total: number } | null
+  >(null);
 
   useEffect(() => {
     listDocuments()
@@ -204,16 +215,30 @@ export function BlueprintGenerator() {
     }
   }
 
+  const analyzing = Boolean(analysis) && analysis?.status !== "failed";
   const canExtract =
-    Boolean(subjectId) && chapterName.trim().length > 0 && Boolean(documentId) && !extracting;
+    Boolean(subjectId) &&
+    chapterName.trim().length > 0 &&
+    Boolean(documentId) &&
+    !extracting &&
+    !analyzing;
 
   async function handleExtract() {
     setError(null);
     setTopics([]);
     setWeights({});
+    setJobId(null);
+    setAnalysis(null);
     setExtracting(true);
     try {
-      const res = await extractTopics(documentId);
+      const res = await analyzeDocument(documentId);
+      if (res.mode === "job") {
+        // Large document → background analysis. The polling effect fills in the
+        // topics (and clears `analysis`) once the Master Blueprint is ready.
+        setJobId(res.job_id);
+        setAnalysis({ status: "queued", phase: "queued", done: 0, total: 0 });
+        return;
+      }
       setTopics(res.topics);
       if (res.topics.length === 0) {
         setError(
@@ -237,6 +262,27 @@ export function BlueprintGenerator() {
   }
   function setWeight(name: string, w: TopicWeight) {
     setWeights((prev) => ({ ...prev, [name]: w }));
+  }
+
+  // Teachers can curate the extracted list: add a topic the AI missed, or drop
+  // one that isn't useful. Added topics are selected by default.
+  function addTopic() {
+    const name = newTopic.trim();
+    if (!name) return;
+    const exists = topics.some((t) => t.toLowerCase() === name.toLowerCase());
+    if (!exists) {
+      setTopics((prev) => [...prev, name]);
+      setWeights((prev) => ({ ...prev, [name]: "medium" }));
+    }
+    setNewTopic("");
+  }
+  function removeTopic(name: string) {
+    setTopics((prev) => prev.filter((t) => t !== name));
+    setWeights((prev) => {
+      const next = { ...prev };
+      delete next[name];
+      return next;
+    });
   }
   function setCount(type: string, n: number) {
     setTypeCounts((prev) => ({
@@ -262,26 +308,94 @@ export function BlueprintGenerator() {
       setGenError("That's more than 50 questions in total — please reduce the counts.");
       return;
     }
+    const selected = Object.entries(weights).map(([name, weight]) => ({
+      name,
+      weight,
+    }));
     setGenerating(true);
     try {
-      const res = await generateBlueprintQuiz({
-        document_id: documentId,
-        subject_id: subjectId,
-        chapter_name: chapterName,
-        selected_topics: Object.entries(weights).map(([name, weight]) => ({
-          name,
-          weight,
-        })),
-        type_counts: counts,
-        cognitive_level: level,
-        difficulty,
-      });
+      // Large document → generate from the ready analysis job's blueprint;
+      // small document → the existing single-call blueprint path.
+      const res = jobId
+        ? await generateFromJob(jobId, {
+            subject_id: subjectId,
+            chapter_name: chapterName,
+            selected_topics: selected,
+            type_counts: counts,
+            cognitive_level: level,
+            difficulty,
+          })
+        : await generateBlueprintQuiz({
+            document_id: documentId,
+            subject_id: subjectId,
+            chapter_name: chapterName,
+            selected_topics: selected,
+            type_counts: counts,
+            cognitive_level: level,
+            difficulty,
+          });
       notify("✓ Quiz generated — opening your review queue", "success");
       // → page 2/3: review + publish
       router.push(`/dashboard/teacher/review/${res.quiz_set_id}`);
     } catch (e) {
       setGenError(e instanceof Error ? e.message : "Generation failed");
       setGenerating(false);
+    }
+  }
+
+  // Poll a running ANALYSIS job; when it's ready, show its blueprint topics for
+  // the teacher to pick (generation itself is a separate single call afterwards).
+  useEffect(() => {
+    if (!jobId || !analysis) return;
+    if (analysis.status === "failed") return;
+    const timer = window.setInterval(async () => {
+      try {
+        const s = await getGenerationJob(jobId);
+        if (
+          (s.status === "completed" || s.status === "partial") &&
+          s.topics.length > 0
+        ) {
+          window.clearInterval(timer);
+          setTopics(s.topics.map((t) => t.name));
+          setAnalysis(null); // ready → reveal topic picker
+          return;
+        }
+        if (s.status === "failed") {
+          window.clearInterval(timer);
+          setAnalysis({
+            status: "failed",
+            phase: s.phase,
+            done: s.done_chunks,
+            total: s.total_chunks,
+          });
+          setError(
+            s.error_message ||
+              "Analysis failed. Your completed sections are saved — retry to continue.",
+          );
+          return;
+        }
+        setAnalysis({
+          status: s.status,
+          phase: s.phase,
+          done: s.done_chunks,
+          total: s.total_chunks,
+        });
+      } catch {
+        // transient poll error — keep trying on the next tick
+      }
+    }, 2500);
+    return () => window.clearInterval(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [jobId, analysis?.status]);
+
+  async function retryAnalysis() {
+    if (!jobId) return;
+    setError(null);
+    try {
+      await retryGenerationJob(jobId);
+      setAnalysis({ status: "running", phase: "queued", done: 0, total: 0 });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Retry failed");
     }
   }
 
@@ -432,7 +546,7 @@ export function BlueprintGenerator() {
             <Button onClick={handleExtract} disabled={!canExtract}>
               {extracting ? (
                 <span className="flex items-center gap-2">
-                  <Spinner /> Extracting topics… (5–15s)
+                  <Spinner /> Reading document…
                 </span>
               ) : (
                 <span className="flex items-center gap-2">
@@ -441,6 +555,46 @@ export function BlueprintGenerator() {
               )}
             </Button>
           </div>
+          {/* Large-document analysis progress (chunk → read sections → merge) */}
+          {analysis && (
+            <div className="flex flex-col gap-3 rounded-xl border border-primary/20 bg-primary/5 p-4">
+              <div className="flex items-center gap-2 text-sm font-medium text-primary">
+                {analyzing && <Spinner />}
+                {analyzing
+                  ? "Analysing a large document — reading it section by section…"
+                  : "Analysis incomplete"}
+              </div>
+              <div className="h-2 w-full overflow-hidden rounded-full bg-muted">
+                <div
+                  className="h-full rounded-full bg-primary transition-all duration-500"
+                  style={{
+                    width: `${
+                      analysis.total
+                        ? Math.round((analysis.done / analysis.total) * 100)
+                        : 5
+                    }%`,
+                  }}
+                />
+              </div>
+              <p className="text-xs text-muted-foreground">
+                {analysis.total > 0
+                  ? `Read ${analysis.done} of ${analysis.total} sections`
+                  : "Splitting the document into sections…"}{" "}
+                · this can take a couple of minutes. Topics appear here
+                automatically when it&apos;s ready.
+              </p>
+              {analysis.status === "failed" && (
+                <div className="flex flex-wrap items-center gap-3">
+                  <div className="flex-1">
+                    <InlineError message="Some sections didn't finish. Completed sections are saved — retry to continue from where it stopped." />
+                  </div>
+                  <Button onClick={retryAnalysis}>
+                    <Zap size={16} /> Retry
+                  </Button>
+                </div>
+              )}
+            </div>
+          )}
           {displayError && <InlineError message={displayError} />}
         </CardContent>
       </Card>
@@ -487,9 +641,9 @@ export function BlueprintGenerator() {
                     {name}
                   </button>
 
-                  {selected && (
-                    <div className="flex gap-1">
-                      {WEIGHTS.map((w) => (
+                  <div className="flex items-center gap-1">
+                    {selected &&
+                      WEIGHTS.map((w) => (
                         <button
                           key={w.value}
                           type="button"
@@ -503,11 +657,38 @@ export function BlueprintGenerator() {
                           {w.label}
                         </button>
                       ))}
-                    </div>
-                  )}
+                    <button
+                      type="button"
+                      aria-label={`Remove ${name}`}
+                      title="Remove this topic"
+                      onClick={() => removeTopic(name)}
+                      className="ml-1 flex h-7 w-7 items-center justify-center rounded-md text-lg leading-none text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive"
+                    >
+                      ×
+                    </button>
+                  </div>
                 </div>
               );
             })}
+
+            {/* Add a topic the AI missed */}
+            <div className="mt-2 flex items-center gap-2 border-t border-dashed border-input pt-3">
+              <input
+                className={fieldClass}
+                value={newTopic}
+                onChange={(e) => setNewTopic(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    addTopic();
+                  }
+                }}
+                placeholder="Add a topic the AI missed…"
+              />
+              <Button type="button" onClick={addTopic} disabled={!newTopic.trim()}>
+                Add
+              </Button>
+            </div>
           </CardContent>
         </Card>
       )}

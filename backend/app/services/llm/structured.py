@@ -102,6 +102,145 @@ def complete_json_with_fallback(
     return parsed, provider
 
 
+def _gemini_json_large(
+    system_prompt: str, user_prompt: str, *, model: str, max_output_tokens: int
+) -> dict:
+    """Text-only Gemini JSON call tuned for LARGE output: 'thinking' disabled so
+    the whole budget goes to the answer, and a high output cap so the response
+    isn't truncated mid-JSON. Detects the MAX_TOKENS finish reason explicitly."""
+    settings = get_settings()
+    url = f"{settings.gemini_base_url}/models/{model}:generateContent"
+    payload = {
+        "systemInstruction": {"parts": [{"text": system_prompt}]},
+        "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
+        "generationConfig": {
+            "temperature": 0.2,
+            "responseMimeType": "application/json",
+            "thinkingConfig": {"thinkingBudget": 0},
+            "maxOutputTokens": max_output_tokens,
+        },
+    }
+    headers = {"x-goog-api-key": settings.gemini_api_key, "Content-Type": "application/json"}
+    try:
+        resp = httpx.post(url, json=payload, headers=headers, timeout=180.0)
+        resp.raise_for_status()
+    except httpx.HTTPStatusError as exc:
+        raise LLMError(
+            f"Gemini returned {exc.response.status_code}: {exc.response.text[:300]}"
+        ) from exc
+    except httpx.HTTPError as exc:
+        raise LLMError(f"Gemini request failed: {exc}") from exc
+
+    data = resp.json()
+    candidate = (data.get("candidates") or [{}])[0]
+    if candidate.get("finishReason") == "MAX_TOKENS":
+        raise LLMError("Gemini hit the output-token limit (response truncated).")
+    try:
+        text = candidate["content"]["parts"][0]["text"]
+    except (KeyError, IndexError) as exc:
+        raise LLMError(
+            f"Unexpected Gemini response (blocked or empty?): {str(data)[:300]}"
+        ) from exc
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise LLMError(f"Gemini returned invalid JSON: {text[:300]}") from exc
+    if not isinstance(parsed, dict):
+        raise LLMError(f"Gemini returned non-object JSON: {str(parsed)[:200]}")
+    return parsed
+
+
+def _deepseek_json_large(
+    system_prompt: str, user_prompt: str, *, max_tokens: int
+) -> dict:
+    """DeepSeek JSON call with a raised output cap + truncation detection (its
+    default cap silently cuts large JSON, which then fails to parse)."""
+    settings = get_settings()
+    url = f"{settings.deepseek_base_url}/chat/completions"
+    payload = {
+        "model": settings.deepseek_model,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ],
+        "temperature": 0.2,
+        "response_format": {"type": "json_object"},
+        "max_tokens": max_tokens,
+        "stream": False,
+    }
+    headers = {
+        "Authorization": f"Bearer {settings.deepseek_api_key}",
+        "Content-Type": "application/json",
+    }
+    try:
+        resp = httpx.post(url, json=payload, headers=headers, timeout=180.0)
+        resp.raise_for_status()
+    except httpx.HTTPStatusError as exc:
+        raise LLMError(
+            f"DeepSeek returned {exc.response.status_code}: {exc.response.text[:300]}"
+        ) from exc
+    except httpx.HTTPError as exc:
+        raise LLMError(f"DeepSeek request failed: {exc}") from exc
+
+    data = resp.json()
+    choice = (data.get("choices") or [{}])[0]
+    if choice.get("finish_reason") == "length":
+        raise LLMError("DeepSeek hit the output-token limit (response truncated).")
+    try:
+        text = choice["message"]["content"]
+    except (KeyError, IndexError) as exc:
+        raise LLMError(f"Unexpected DeepSeek response shape: {data}") from exc
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise LLMError(f"DeepSeek returned invalid JSON: {text[:300]}") from exc
+    if not isinstance(parsed, dict):
+        raise LLMError(f"DeepSeek returned non-object JSON: {str(parsed)[:200]}")
+    return parsed
+
+
+def complete_json_large(system_prompt: str, user_prompt: str) -> tuple[dict, str]:
+    """JSON call for LARGE outputs (the Map-Reduce MAP/REDUCE steps).
+
+    Gemini primary (full model, thinking off, high output cap) with DeepSeek
+    fallback (raised cap). Unlike `complete_json_with_fallback`, both legs are
+    tuned so a big verbatim JSON response isn't silently truncated, and a
+    truncation is reported as a clear error rather than an opaque parse failure.
+    """
+    settings = get_settings()
+    failures: list[str] = []
+    if settings.gemini_api_key:
+        try:
+            return (
+                _gemini_json_large(
+                    system_prompt,
+                    user_prompt,
+                    model=settings.gemini_model,
+                    max_output_tokens=settings.generation_map_max_output_tokens,
+                ),
+                "gemini",
+            )
+        except LLMError as exc:
+            failures.append(f"gemini: {exc}")
+    if settings.deepseek_api_key:
+        try:
+            return (
+                _deepseek_json_large(
+                    system_prompt,
+                    user_prompt,
+                    max_tokens=settings.deepseek_max_output_tokens,
+                ),
+                "deepseek",
+            )
+        except LLMError as exc:
+            failures.append(f"deepseek: {exc}")
+    if not failures:
+        raise LLMError(
+            "No LLM provider configured — set GEMINI_API_KEY or DEEPSEEK_API_KEY."
+        )
+    raise LLMError("All LLM providers failed → " + " | ".join(failures))
+
+
 def gemini_json_multimodal(
     system_prompt: str,
     user_prompt: str,

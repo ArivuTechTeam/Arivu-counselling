@@ -152,11 +152,55 @@ def generate_blueprint_quiz(
         raise ValueError("This document has no extractable text (scanned image PDF?).")
     material = text[: get_settings().generation_max_text_chars]
 
-    # 2) Build the blueprint (exam setter).
+    # 2) Generate + persist from the document's own text. (For LARGE documents the
+    #    caller uses generate_and_persist_from_material directly with a Master
+    #    Blueprint as the material instead — same writer + persistence.)
+    return generate_and_persist_from_material(
+        service=service,
+        tenant_id=tid,
+        material=material,
+        subject_id=subject_id,
+        chapter_name=chapter_name,
+        selected_topics=selected_topics,
+        total_questions=total_questions,
+        question_types=question_types,
+        cognitive_level=cognitive_level,
+        difficulty=difficulty,
+        profile=profile,
+        type_counts=type_counts,
+    )
+
+
+def generate_and_persist_from_material(
+    *,
+    service,
+    tenant_id: str,
+    material: str,
+    subject_id: str,
+    chapter_name: str,
+    selected_topics: list[dict],
+    total_questions: int,
+    question_types: list[str],
+    cognitive_level: str,
+    difficulty: str,
+    profile: CurrentProfile,
+    type_counts: dict[str, int] | None = None,
+) -> dict:
+    """Write + persist a blueprint-driven quiz from a block of `material`.
+
+    `material` is either a small document's raw text (single-pass path) or a
+    consolidated Master Blueprint rendered to text (large-document path). The
+    question writer, validation, persistence, and instrumentation are identical
+    for both — only the source of `material` differs.
+    """
+    tid = tenant_id
+    chapter_name = chapter_name.strip()
+
+    # Build the blueprint (exam setter).
     selected = [SelectedTopic(**t) for t in selected_topics]
     blueprint = build_blueprint(selected, total_questions)
 
-    # 3) Generate (question writer) with Gemini primary and DeepSeek fallback.
+    # Generate (question writer) with Gemini primary and DeepSeek fallback.
     system = build_blueprint_system_prompt(question_types, cognitive_level, difficulty)
     user = build_blueprint_user_prompt(
         material, blueprint, question_types, cognitive_level, difficulty, type_counts

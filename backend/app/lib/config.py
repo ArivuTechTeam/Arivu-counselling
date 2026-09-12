@@ -149,6 +149,12 @@ class Settings:
             "DEEPSEEK_BASE_URL", "https://api.deepseek.com"
         )
         self.deepseek_model: str = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
+        # DeepSeek's default max output is small (4096) and silently truncates a
+        # large JSON mid-way. Raise it to the model max so the Map-Reduce
+        # pipeline's rich per-chunk output isn't cut off. Tunable from Railway.
+        self.deepseek_max_output_tokens: int = _positive_int(
+            "DEEPSEEK_MAX_OUTPUT_TOKENS", 8192
+        )
 
         # Gemini (Google). If a key is set, it becomes the PRIMARY model and
         # DeepSeek (if configured) is the fallback.
@@ -202,11 +208,56 @@ class Settings:
             "EXTRACTION_CHUNK_CONCURRENCY", 4
         )
 
-        # How much document text to feed the model per generation. Larger =
-        # broader coverage (esp. with big-context models like Gemini) but more
-        # tokens/cost. Tunable without a code change.
+        # How much document text the SINGLE-CALL generation path feeds the model.
+        # Set to match the chunking trigger below so documents up to ~40 pages are
+        # fully covered by one call and only larger ones take the chunked path
+        # (no silent truncation in the 24–40 page band). ~100,000 chars ≈ 40 pages;
+        # ~25k tokens — comfortably within Gemini (1M) and the DeepSeek (160k)
+        # fallback. Tunable without a code change.
         self.generation_max_text_chars: int = _positive_int(
-            "GENERATION_MAX_TEXT_CHARS", 60000
+            "GENERATION_MAX_TEXT_CHARS", 100000
+        )
+
+        # --- Large-document ("chunked") quiz generation ---
+        # Only documents whose extracted text exceeds the trigger take the
+        # chunked, resumable background path; smaller ones use the single-call
+        # flow unchanged. All tunable from Railway with no code change.
+        #   trigger  ~100,000 chars ≈ 40 pages
+        #   chunk    target/overlap/min size for the structure-aware splitter
+        #   concurrency — how many chunks generate in parallel
+        self.chunking_trigger_chars: int = _positive_int(
+            "CHUNKING_TRIGGER_CHARS", 100000
+        )
+        self.generation_chunk_chars: int = _positive_int(
+            "GENERATION_CHUNK_CHARS", 60000
+        )
+        self.generation_chunk_overlap_chars: int = _positive_int(
+            "GENERATION_CHUNK_OVERLAP_CHARS", 5000
+        )
+        self.generation_chunk_min_chars: int = _positive_int(
+            "GENERATION_CHUNK_MIN_CHARS", 8000
+        )
+        self.generation_chunk_concurrency: int = _positive_int(
+            "GENERATION_CHUNK_CONCURRENCY", 4
+        )
+        # Output-token headroom for the MAP (per-chunk extraction) and REDUCE
+        # (blueprint synthesis) calls. Their JSON is large and verbatim, so the
+        # cap must be high or the response truncates mid-JSON. Gemini 2.5 Flash
+        # supports up to 65536; "thinking" is disabled on these calls so the
+        # whole budget goes to output. Tunable from Railway.
+        self.generation_map_max_output_tokens: int = _positive_int(
+            "GENERATION_MAP_MAX_OUTPUT_TOKENS", 65536
+        )
+        # How much text the "understand the document first" profiling call reads.
+        # Big enough to cover most documents whole; bounded for cost/latency and to
+        # stay within the fallback model's context. Tunable from Railway.
+        self.generation_profile_max_chars: int = _positive_int(
+            "GENERATION_PROFILE_MAX_CHARS", 200000
+        )
+        # A chunk left "running" longer than this is considered stuck and is
+        # re-queued by the sweeper / on retry (resumability).
+        self.generation_chunk_stuck_seconds: int = _positive_int(
+            "GENERATION_CHUNK_STUCK_SECONDS", 300
         )
 
         # --- Per-user AI request limits (rolling one-hour windows) ---

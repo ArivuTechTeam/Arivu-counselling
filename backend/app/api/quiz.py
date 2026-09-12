@@ -18,17 +18,23 @@ from pydantic import BaseModel, Field
 from app.lib.auth import CurrentProfile, get_current_profile
 from app.lib.api_errors import public_error
 from app.lib.config import get_settings
+from app.lib.storage import download_bytes
 from app.lib.supabase import get_service_client
 from app.services.blueprint import generate_blueprint_quiz
 from app.services.events import QUIZ_PUBLISHED, log_event
+from app.services.extraction import extract_text
 from app.services.generation import generate_quiz
+from app.services.generation_jobs import create_generation_job, launch_job
 from app.services.llm import LLMError
+from app.services.quiz_generator_service import QuizGeneratorService
 from app.services.rate_limit import (
     BLUEPRINT_GENERATION,
     QUIZ_GENERATION,
+    TOPIC_EXTRACTION,
     enforce_ai_rate_limit,
 )
 from app.services.review import get_quiz_set_detail
+from app.services.topics import extract_topics
 
 router = APIRouter(prefix="/api/v1/quiz-sets", tags=["quiz"])
 
@@ -196,6 +202,225 @@ def _require_teacher(profile: CurrentProfile) -> None:
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Only teachers can access quiz sets.",
         )
+
+
+# --- Large-document (chunked Map-Reduce) generation -------------------------
+# Small documents (<= trigger) keep the existing single-pass topic extraction,
+# untouched. Large ones are analysed in the background (chunk -> MAP -> REDUCE)
+# and the teacher picks topics from the resulting Master Blueprint.
+
+
+class AnalyzeRequest(BaseModel):
+    document_id: str
+
+
+def _owned_document(service, document_id: str, profile: CurrentProfile) -> dict:
+    doc = (
+        service.table("documents")
+        .select("storage_path, file_type")
+        .eq("id", document_id)
+        .eq("tenant_id", profile.tenant_id)
+        .eq("uploaded_by", profile.user_id)
+        .maybe_single()
+        .execute()
+    )
+    if doc is None or not doc.data:
+        raise HTTPException(status_code=404, detail="Document not found.")
+    return doc.data
+
+
+@router.post("/analyze")
+def analyze_document(
+    req: AnalyzeRequest,
+    profile: CurrentProfile = Depends(get_current_profile),
+) -> dict:
+    """Route a document by size. Small documents return their topics directly
+    (unchanged behaviour); large ones kick off a background analysis job and
+    return its id for the client to poll."""
+    if profile.role != "teacher":
+        raise HTTPException(status_code=403, detail="Only teachers can analyze documents.")
+
+    service = get_service_client()
+    doc = _owned_document(service, req.document_id, profile)
+
+    text = extract_text(download_bytes(doc["storage_path"]), doc["file_type"])
+    if not text.strip():
+        raise HTTPException(
+            status_code=400,
+            detail="This document has no extractable text (scanned image PDF?).",
+        )
+
+    # Large document → background Map-Reduce analysis job.
+    if len(text) > get_settings().chunking_trigger_chars:
+        job_id = create_generation_job(
+            document_id=req.document_id,
+            tenant_id=profile.tenant_id,
+            created_by=profile.user_id,
+        )
+        return {"mode": "job", "document_id": req.document_id, "job_id": job_id, "status": "queued"}
+
+    # Small document → existing single-pass topic extraction.
+    enforce_ai_rate_limit(
+        profile=profile,
+        endpoint=TOPIC_EXTRACTION,
+        hourly_limit=get_settings().rate_limit_topic_extraction_per_hour,
+        action_label="topic extraction",
+    )
+    try:
+        topics = extract_topics(text)
+    except LLMError as exc:
+        raise public_error(
+            status.HTTP_502_BAD_GATEWAY,
+            "We couldn't extract topics right now. Please try again.",
+            operation="extract document topics with AI",
+            exception=exc,
+        ) from exc
+    return {"mode": "direct", "document_id": req.document_id, "topics": topics}
+
+
+def _owned_job(service, job_id: str, profile: CurrentProfile) -> dict:
+    res = (
+        service.table("quiz_generation_jobs")
+        .select("*")
+        .eq("id", job_id)
+        .eq("tenant_id", profile.tenant_id)
+        .eq("created_by", profile.user_id)
+        .maybe_single()
+        .execute()
+    )
+    if res is None or not res.data:
+        raise HTTPException(status_code=404, detail="Analysis job not found.")
+    return res.data
+
+
+@router.get("/generation-jobs/{job_id}")
+def get_generation_job(
+    job_id: str,
+    profile: CurrentProfile = Depends(get_current_profile),
+) -> dict:
+    """Poll a large-document analysis job. When ready, includes the Master
+    Blueprint's topics for the teacher to select."""
+    _require_teacher(profile)
+    service = get_service_client()
+    job = _owned_job(service, job_id, profile)
+
+    blueprint = job.get("master_blueprint") or {}
+    topics = [
+        {
+            "name": t.get("topic_name"),
+            "subtopics": t.get("subtopics") or [],
+        }
+        for t in (blueprint.get("topics") or [])
+        if t.get("topic_name")
+    ]
+    return {
+        "job_id": job["id"],
+        "status": job["status"],
+        "phase": job["phase"],
+        "total_chunks": job.get("total_chunks", 0),
+        "done_chunks": job.get("done_chunks", 0),
+        "error_message": job.get("error_message"),
+        "topics": topics,
+        "quiz_set_id": job.get("quiz_set_id"),
+    }
+
+
+@router.post("/generation-jobs/{job_id}/retry")
+def retry_generation_job(
+    job_id: str,
+    profile: CurrentProfile = Depends(get_current_profile),
+) -> dict:
+    """Resume a failed/partial analysis job. Idempotent: already-done chunks are
+    skipped, so this fills the gaps rather than restarting from scratch."""
+    _require_teacher(profile)
+    service = get_service_client()
+    job = _owned_job(service, job_id, profile)
+    if job["status"] not in ("failed", "partial"):
+        raise HTTPException(
+            status_code=400,
+            detail="Only a failed or partial analysis can be retried.",
+        )
+    service.table("quiz_generation_jobs").update(
+        {"status": "queued", "phase": "queued", "error_message": None}
+    ).eq("id", job_id).eq("tenant_id", profile.tenant_id).execute()
+    launch_job(job_id)
+    return {"job_id": job_id, "status": "queued"}
+
+
+class JobGenerateRequest(BaseModel):
+    subject_id: str
+    chapter_name: str
+    selected_topics: list[BlueprintTopicIn] = []
+    type_counts: dict[str, int]
+    cognitive_level: Literal["theory", "practical", "mixed"] = "mixed"
+    difficulty: Literal["easy", "medium", "hard"] = "medium"
+
+
+@router.post("/generation-jobs/{job_id}/generate")
+def generate_from_job(
+    job_id: str,
+    req: JobGenerateRequest,
+    profile: CurrentProfile = Depends(get_current_profile),
+) -> dict:
+    """Generate the quiz from a ready job's Master Blueprint (single AI call),
+    then hand off to the normal review flow — same as small-doc generation."""
+    if profile.role != "teacher":
+        raise HTTPException(status_code=403, detail="Only teachers can generate quizzes.")
+    if not req.chapter_name.strip():
+        raise HTTPException(status_code=400, detail="Chapter name is required.")
+
+    type_counts = {t: n for t, n in req.type_counts.items() if n and n > 0}
+    invalid = set(type_counts) - CORE_TYPES
+    if invalid:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Unsupported question types: {sorted(invalid)}.",
+        )
+    total = sum(type_counts.values())
+    if total < 1:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Set a question count of at least 1 for one or more types.",
+        )
+    if total > 50:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="That's more than 50 questions in total — please reduce the counts.",
+        )
+
+    enforce_ai_rate_limit(
+        profile=profile,
+        endpoint=BLUEPRINT_GENERATION,
+        hourly_limit=get_settings().rate_limit_blueprint_per_hour,
+        action_label="blueprint generation",
+    )
+    try:
+        return QuizGeneratorService().generate_from_job(
+            job_id=job_id,
+            subject_id=req.subject_id,
+            chapter_name=req.chapter_name,
+            selected_topics=[t.model_dump() for t in req.selected_topics],
+            total_questions=total,
+            question_types=list(type_counts.keys()),
+            type_counts=type_counts,
+            cognitive_level=req.cognitive_level,
+            difficulty=req.difficulty,
+            profile=profile,
+        )
+    except ValueError as exc:
+        raise public_error(
+            status.HTTP_400_BAD_REQUEST,
+            "The analysis job, subject, or blueprint could not be used.",
+            operation="prepare blueprint generation from job",
+            exception=exc,
+        ) from exc
+    except LLMError as exc:
+        raise public_error(
+            status.HTTP_502_BAD_GATEWAY,
+            "We couldn't generate the quiz right now. Please try again.",
+            operation="generate quiz from blueprint with AI",
+            exception=exc,
+        ) from exc
 
 
 def _teacher_quiz_set(service, quiz_set_id: str, profile: CurrentProfile) -> dict:
