@@ -165,7 +165,7 @@ def generate_blueprint_quiz(
     try:
         quiz = BPQuiz.model_validate(data)
     except ValidationError as exc:
-        raise LLMError(f"Model returned invalid quiz JSON: {exc}") from exc
+        raise LLMError("Model returned invalid quiz JSON.") from exc
     questions = quiz.questions
     if not questions:
         raise LLMError("Model returned no questions.")

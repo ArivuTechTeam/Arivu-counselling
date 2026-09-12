@@ -43,11 +43,9 @@ class GeminiProvider(LLMProvider):
             resp = httpx.post(url, json=payload, headers=headers, timeout=120.0)
             resp.raise_for_status()
         except httpx.HTTPStatusError as exc:
-            raise LLMError(
-                f"Gemini returned {exc.response.status_code}: {exc.response.text[:300]}"
-            ) from exc
+            raise LLMError(f"Gemini returned HTTP {exc.response.status_code}.") from exc
         except httpx.HTTPError as exc:
-            raise LLMError(f"Gemini request failed: {exc}") from exc
+            raise LLMError("Gemini request failed.") from exc
 
         data = resp.json()
         try:
@@ -55,6 +53,4 @@ class GeminiProvider(LLMProvider):
             # that surfaces here as a KeyError and becomes a fallback trigger.
             return data["candidates"][0]["content"]["parts"][0]["text"]
         except (KeyError, IndexError) as exc:
-            raise LLMError(
-                f"Unexpected Gemini response (blocked or empty?): {str(data)[:300]}"
-            ) from exc
+            raise LLMError("Gemini returned an unexpected or empty response.") from exc

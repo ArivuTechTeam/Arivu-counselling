@@ -6,14 +6,15 @@ import unittest
 from collections import Counter
 from types import SimpleNamespace
 from unittest.mock import patch
+from uuid import uuid4
 
-from fastapi import HTTPException, Response
+from fastapi import HTTPException
 from pydantic import ValidationError
 
 from app.api.admin import (
     TeacherCreate,
+    TemporaryPasswordReset,
     TeacherUpdate,
-    _generate_temporary_password,
     _tenant_course_exists,
     _validated_subject_ids,
     delete_user,
@@ -27,6 +28,10 @@ from app.api.institution_admin import router as institution_admin_router
 from app.api.academics import list_courses
 from app.api.teacher import class_overview
 from app.lib.auth import CurrentProfile
+
+
+def temporary_password() -> str:
+    return f"{uuid4().hex}Aa1!"
 
 
 class _Query:
@@ -260,7 +265,7 @@ class InstitutionTeacherManagementTests(unittest.TestCase):
             TeacherCreate(
                 full_name="Student",
                 email="student@example.com",
-                password=_generate_temporary_password(),
+                password=temporary_password(),
                 role="student",
                 course_id="course-a",
                 subject_ids=["subject-a"],
@@ -321,8 +326,7 @@ class InstitutionTeacherManagementTests(unittest.TestCase):
             self.profile,
         )
 
-        self.assertEqual(result["full_name"], "Ada Updated")
-        self.assertEqual(result["email"], "ada.updated@example.com")
+        self.assertEqual(result, {"changed": True})
         profile = next(row for row in self.service.tables["profiles"] if row["id"] == "teacher-a")
         self.assertEqual(profile["full_name"], "Ada Updated")
         auth_user = self.service.auth.admin.get_user_by_id("teacher-a").user
@@ -330,29 +334,27 @@ class InstitutionTeacherManagementTests(unittest.TestCase):
         self.assertEqual(auth_user.user_metadata["tenant_id"], "tenant-a")
         self.assertEqual(auth_user.user_metadata["full_name"], "Ada Updated")
 
-    def test_temporary_password_is_strong_and_reset_for_tenant_teacher(self) -> None:
-        generated = _generate_temporary_password()
-        self.assertEqual(len(generated), 14)
-        for pattern in (r"[A-Z]", r"[a-z]", r"[0-9]", r"[!@#$%]"):
-            self.assertRegex(generated, pattern)
-
-        response = Response()
+    def test_temporary_password_is_accepted_but_never_returned(self) -> None:
+        generated = temporary_password()
         result = reset_teacher_temporary_password(
-            "teacher-a", response, self.profile
+            "teacher-a", TemporaryPasswordReset(password=generated), self.profile
         )
 
-        self.assertEqual(result.email, "teacher-a@example.com")
-        self.assertEqual(len(result.password), 14)
-        self.assertEqual(response.headers["cache-control"], "no-store, private")
-        self.assertEqual(response.headers["pragma"], "no-cache")
+        self.assertTrue(result.changed)
+        self.assertFalse(hasattr(result, "password"))
+        self.assertFalse(hasattr(result, "email"))
         auth_user = self.service.auth.admin.get_user_by_id("teacher-a").user
-        self.assertEqual(auth_user.password, result.password)
+        self.assertEqual(auth_user.password, generated)
         teacher = next(row for row in self.service.tables["profiles"] if row["id"] == "teacher-a")
         self.assertTrue(teacher["must_change_password"])
 
     def test_cross_tenant_teacher_password_cannot_be_reset(self) -> None:
         with self.assertRaises(HTTPException) as error:
-            reset_teacher_temporary_password("teacher-b", Response(), self.profile)
+            reset_teacher_temporary_password(
+                "teacher-b",
+                TemporaryPasswordReset(password=temporary_password()),
+                self.profile,
+            )
 
         self.assertEqual(error.exception.status_code, 404)
 

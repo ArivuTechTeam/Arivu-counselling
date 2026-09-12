@@ -27,6 +27,7 @@ import {
   X,
   Zap,
 } from "@/components/ui/icons";
+import { deleteOwnAccount } from "@/lib/api";
 import { createClient } from "@/lib/supabase";
 
 type IconComponent = (p: { size?: number; className?: string }) => React.JSX.Element;
@@ -279,6 +280,10 @@ export function DashboardShell({
   const [navOpen, setNavOpen] = useState(false);
   const [pwOpen, setPwOpen] = useState(false);
   const [pwDone, setPwDone] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [deleteConfirmation, setDeleteConfirmation] = useState("");
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
   const [navQuery, setNavQuery] = useState("");
   const [openSections, setOpenSections] = useState<Set<string>>(
     () =>
@@ -317,6 +322,28 @@ export function DashboardShell({
     const supabase = createClient();
     await supabase.auth.signOut({ scope: "local" });
     router.replace("/login");
+  }
+
+  async function deleteAccount() {
+    if (deleteConfirmation !== "DELETE") return;
+    setDeleting(true);
+    setDeleteError(null);
+    try {
+      await deleteOwnAccount();
+    } catch (error) {
+      setDeleteError(
+        error instanceof Error
+          ? error.message
+          : "Account deletion could not be completed. Please try again.",
+      );
+      setDeleting(false);
+      return;
+    }
+    try {
+      await createClient().auth.signOut({ scope: "local" });
+    } finally {
+      router.replace("/login?reason=account-deleted");
+    }
   }
 
   const sections = groupBySection(items);
@@ -499,6 +526,17 @@ export function DashboardShell({
                     </button>
                   )}
                   <button
+                    onClick={() => {
+                      setMenuOpen(false);
+                      setDeleteConfirmation("");
+                      setDeleteError(null);
+                      setDeleteOpen(true);
+                    }}
+                    className="w-full border-b px-4 py-2.5 text-left text-sm font-medium text-destructive hover:bg-accent"
+                  >
+                    Delete account
+                  </button>
+                  <button
                     onClick={signOut}
                     className="w-full px-4 py-2.5 text-left text-sm font-medium text-destructive hover:bg-accent"
                   >
@@ -532,6 +570,67 @@ export function DashboardShell({
           }
         }}
       />
+
+      {deleteOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+          onClick={(event) => {
+            if (event.target === event.currentTarget && !deleting) {
+              setDeleteOpen(false);
+            }
+          }}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="delete-account-title"
+            className="w-full max-w-md rounded-2xl border border-border bg-card p-6 shadow-2xl"
+          >
+            <h2 id="delete-account-title" className="text-lg font-bold text-foreground">
+              Permanently delete account
+            </h2>
+            <p className="mt-2 text-sm text-muted-foreground">
+              This removes your login, profile, enrolments, attempts, answers,
+              bookmarks, revision state, activity events, and original uploaded
+              files. Generated institution teaching content is retained without
+              your name or account ID.
+            </p>
+            <label className="mt-5 flex flex-col gap-2 text-sm font-medium text-foreground">
+              Type DELETE to confirm
+              <input
+                value={deleteConfirmation}
+                onChange={(event) => setDeleteConfirmation(event.target.value)}
+                disabled={deleting}
+                autoComplete="off"
+                className="h-10 rounded-lg border border-input bg-background px-3 outline-none focus:ring-2 focus:ring-ring disabled:opacity-50"
+              />
+            </label>
+            {deleteError && (
+              <p className="mt-3 text-sm text-destructive" role="alert">
+                {deleteError}
+              </p>
+            )}
+            <div className="mt-6 flex justify-end gap-2">
+              <button
+                type="button"
+                disabled={deleting}
+                onClick={() => setDeleteOpen(false)}
+                className="rounded-lg border border-input px-4 py-2 text-sm font-semibold text-foreground hover:bg-secondary disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={deleting || deleteConfirmation !== "DELETE"}
+                onClick={() => void deleteAccount()}
+                className="rounded-lg bg-destructive px-4 py-2 text-sm font-semibold text-destructive-foreground hover:opacity-90 disabled:opacity-50"
+              >
+                {deleting ? "Deleting…" : "Delete permanently"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

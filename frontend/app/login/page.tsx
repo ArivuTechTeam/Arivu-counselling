@@ -94,6 +94,8 @@ export default function LoginPage() {
       setNotice("Your session expired. Please log in again.");
     } else if (reason === "password-changed") {
       setNotice("Your password has been changed. Please sign in with your new password.");
+    } else if (reason === "account-deleted") {
+      setNotice("Your account and personal activity have been deleted.");
     }
     if (reason) {
       url.searchParams.delete("reason");

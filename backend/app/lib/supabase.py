@@ -88,11 +88,10 @@ class _ReadRetryTransport(httpx.BaseTransport):
                     )
 
             logger.warning(
-                "Retrying transient Supabase read (%s, attempt %d/%d, path=%s)",
+                "Retrying transient Supabase read (%s, attempt %d/%d)",
                 failure,
                 attempt + 1,
                 self._max_retries,
-                request.url.path,
             )
 
             # Exponential backoff with small jitter prevents concurrent

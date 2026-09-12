@@ -42,14 +42,12 @@ class DeepSeekProvider(LLMProvider):
             resp = httpx.post(url, json=payload, headers=headers, timeout=120.0)
             resp.raise_for_status()
         except httpx.HTTPStatusError as exc:
-            raise LLMError(
-                f"DeepSeek returned {exc.response.status_code}: {exc.response.text[:300]}"
-            ) from exc
+            raise LLMError(f"DeepSeek returned HTTP {exc.response.status_code}.") from exc
         except httpx.HTTPError as exc:
-            raise LLMError(f"DeepSeek request failed: {exc}") from exc
+            raise LLMError("DeepSeek request failed.") from exc
 
         data = resp.json()
         try:
             return data["choices"][0]["message"]["content"]
         except (KeyError, IndexError) as exc:
-            raise LLMError(f"Unexpected DeepSeek response shape: {data}") from exc
+            raise LLMError("DeepSeek returned an unexpected response shape.") from exc

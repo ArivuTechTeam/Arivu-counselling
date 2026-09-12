@@ -82,6 +82,8 @@ migration-25-revision-topic-snapshots.sql
 migration-26-daily-exam-session-guards.sql
 migration-27-challenge-flow-hardening.sql
 migration-28-remove-eager-challenge-session.sql
+migration-29-staff-dashboard-performance.sql
+migration-30-account-data-deletion.sql
 ```
 
 The repository does not prove which migrations are applied to a deployed
@@ -103,6 +105,11 @@ flow. It intentionally stops if duplicate `(challenge_id, student_id)` sessions
 already exist; resolve that data first, then rerun it.
 Migration 28 removes the obsolete helper that started the challenge creator's
 attempt during link creation; apply it after migration 27.
+Migration 29 adds tenant-scoped dashboard indexes. Migration 30 is required
+before deploying the self-service account-deletion endpoint: it changes the
+relevant ownership foreign keys and installs a service-role-only anonymization
+function. Test migration 30 with a disposable account and verify its private
+Storage object is gone before enabling deletion for production users.
 
 ---
 

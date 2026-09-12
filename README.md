@@ -28,4 +28,5 @@ Environment templates:
 - Frontend: `frontend/.env.local.example`
 
 Deployment and security details are documented in `docs/deploy-runbook.md` and
-`docs/api-security-hardening.md`.
+`docs/api-security-hardening.md`. The collection, disclosure, processor and
+deletion map is in `docs/personal-data-audit.md`.

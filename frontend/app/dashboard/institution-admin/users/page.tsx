@@ -133,6 +133,8 @@ export default function UsersPage() {
   async function add() {
     setBusy(true);
     setError(null);
+    const submittedEmail = form.email;
+    const submittedPassword = form.password;
     try {
       const created = await createTeacher({
         full_name: form.full_name,
@@ -143,7 +145,7 @@ export default function UsersPage() {
       });
       setTemporaryCredentials((current) => ({
         ...current,
-        [created.id]: { email: created.email, password: form.password },
+        [created.id]: { email: submittedEmail, password: submittedPassword },
       }));
       setForm({ full_name: "", email: "", password: "", course_id: "", subject_ids: [] });
       setPage(1);
@@ -183,9 +185,15 @@ export default function UsersPage() {
   async function resetAndCopyTeacherLogin() {
     if (!credentialResetTeacher) return;
     setResettingCredential(true);
-    let credential: TemporaryCredential;
+    const credential: TemporaryCredential = {
+      email: credentialResetTeacher.email || "",
+      password: generateTemporaryPassword(),
+    };
     try {
-      credential = await resetTeacherTemporaryPassword(credentialResetTeacher.id);
+      await resetTeacherTemporaryPassword(
+        credentialResetTeacher.id,
+        credential.password,
+      );
       setTemporaryCredentials((current) => ({
         ...current,
         [credentialResetTeacher.id]: credential,

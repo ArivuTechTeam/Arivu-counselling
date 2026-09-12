@@ -223,12 +223,13 @@ def create_course(
         c = existing[0]
         return {**c, "subjects": _subjects_for(service, c["id"], profile.tenant_id)}
     try:
-        row = (
+        inserted = (
             service.table("courses")
             .insert({"tenant_id": profile.tenant_id, "name": name})
             .execute()
             .data[0]
         )
+        row = {"id": inserted["id"], "name": inserted["name"]}
     except Exception:  # noqa: BLE001 - recover a concurrent get-or-create race
         existing = _course_named(service, profile.tenant_id, name)
         if not existing:
@@ -259,9 +260,9 @@ def create_subject(
     # Reuse an existing subject of the same name in this course.
     existing = _subject_named(service, profile.tenant_id, body.course_id, name)
     if existing:
-        return existing[0]
+        return {"id": existing[0]["id"], "name": existing[0]["name"]}
     try:
-        return (
+        inserted = (
             service.table("subjects")
             .insert(
                 {
@@ -273,11 +274,12 @@ def create_subject(
             .execute()
             .data[0]
         )
+        return {"id": inserted["id"], "name": inserted["name"]}
     except Exception:  # noqa: BLE001 - recover a concurrent get-or-create race
         existing = _subject_named(service, profile.tenant_id, body.course_id, name)
         if not existing:
             raise
-        return existing[0]
+        return {"id": existing[0]["id"], "name": existing[0]["name"]}
 
 
 @router.delete("/courses/{course_id}")
@@ -712,7 +714,7 @@ def create_chapter(
     )
     next_idx = (last[0]["order_index"] + 1) if last else 0
     try:
-        row = (
+        inserted = (
             service.table("chapters")
             .insert(
                 {
@@ -725,6 +727,11 @@ def create_chapter(
             .execute()
             .data[0]
         )
+        row = {
+            "id": inserted["id"],
+            "name": inserted["name"],
+            "order_index": inserted["order_index"],
+        }
     except Exception:  # noqa: BLE001 - recover a concurrent get-or-create race
         existing = _chapter_named(service, profile.tenant_id, body.subject_id, name)
         if not existing:

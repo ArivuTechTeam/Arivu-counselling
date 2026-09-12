@@ -541,6 +541,11 @@ export const changePassword = (currentPassword: string, password: string) =>
     password,
   });
 
+export const deleteOwnAccount = () =>
+  jsonRequest<{ deleted: boolean }>("/api/v1/auth/account", "DELETE", {
+    confirmation: "DELETE",
+  });
+
 export const publishQuizSet = (id: string) =>
   jsonRequest<QuizSetSummary>(`/api/v1/quiz-sets/${id}/publish`, "POST");
 
@@ -1081,11 +1086,9 @@ export const listSubjectMetrics = () =>
 export type AdminUser = {
   id: string;
   full_name: string | null;
-  role: "teacher";
   email: string | null;
   courses: string[];
   subject_count: number;
-  created_at: string | null;
 };
 
 export type TeacherCreateInput = {
@@ -1139,20 +1142,21 @@ export type PlatformStats = {
 
 export const listUsers = () => jsonRequest<AdminUser[]>("/api/v1/users", "GET");
 export const createTeacher = (input: TeacherCreateInput) =>
-  jsonRequest<{ id: string; email: string }>("/api/v1/users", "POST", input);
+  jsonRequest<{ id: string }>("/api/v1/users", "POST", input);
 export const updateTeacher = (id: string, input: TeacherUpdateInput) =>
-  jsonRequest<{ id: string; full_name: string; email: string; subject_ids: string[] }>(
+  jsonRequest<{ changed: boolean }>(
     `/api/v1/users/${id}`,
     "PUT",
     input,
   );
-export const resetTeacherTemporaryPassword = (id: string) =>
-  jsonRequest<{ email: string; password: string }>(
+export const resetTeacherTemporaryPassword = (id: string, password: string) =>
+  jsonRequest<{ changed: boolean }>(
     `/api/v1/users/${id}/temporary-password`,
     "POST",
+    { password },
   );
 export const deleteUser = (id: string) =>
-  jsonRequest<{ deleted: string }>(`/api/v1/users/${id}`, "DELETE");
+  jsonRequest<{ deleted: boolean }>(`/api/v1/users/${id}`, "DELETE");
 export const listTeacherCourses = (teacherId: string) =>
   jsonRequest<TeacherCourse[]>(`/api/v1/teachers/${teacherId}/courses`, "GET");
 export const listCourseStudents = (courseId: string) =>
@@ -1309,12 +1313,7 @@ export type OnboardInstitutionInput = {
   admin_password?: string;
 };
 export const onboardInstitution = (input: OnboardInstitutionInput) =>
-  jsonRequest<{
-    id: string;
-    name: string;
-    subdomain: string;
-    admin: { id: string; email: string } | null;
-  }>("/api/v1/platform/tenants", "POST", input);
+  jsonRequest<{ created: boolean }>("/api/v1/platform/tenants", "POST", input);
 
 export type QuestionBankCourse = {
   course: string;
@@ -1415,9 +1414,9 @@ export const listTenants = () =>
 export const listAdmins = () =>
   jsonRequest<InstitutionAdmin[]>("/api/v1/admins", "GET");
 export const createAdmin = (input: AdminCreateInput) =>
-  jsonRequest<{ id: string; email: string }>("/api/v1/admins", "POST", input);
+  jsonRequest<{ created: boolean }>("/api/v1/admins", "POST", input);
 export const deleteAdmin = (id: string) =>
-  jsonRequest<{ deleted: string }>(`/api/v1/platform/admins/${id}`, "DELETE");
+  jsonRequest<{ deleted: boolean }>(`/api/v1/platform/admins/${id}`, "DELETE");
 
 // --- Teacher class analytics ---
 export type QuizAccuracy = {
