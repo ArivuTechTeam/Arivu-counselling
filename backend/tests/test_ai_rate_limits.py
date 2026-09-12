@@ -148,6 +148,7 @@ class RateLimitConfigurationTests(unittest.TestCase):
             "RATE_LIMIT_QUIZ_EXTRACTION_PER_HOUR": "16",
             "STUDENT_QUIZ_ATTEMPT_LIMIT": "7",
             "CHALLENGE_EXPIRY_DAYS": "45",
+            "DEEPSEEK_MAX_OUTPUT_TOKENS": "8192",
         }
         with patch.dict(os.environ, environment, clear=True):
             settings = Settings()
@@ -160,6 +161,8 @@ class RateLimitConfigurationTests(unittest.TestCase):
         self.assertEqual(settings.rate_limit_quiz_extraction_per_hour, 16)
         self.assertEqual(settings.student_quiz_attempt_limit, 7)
         self.assertEqual(settings.challenge_expiry_days, 45)
+        self.assertEqual(settings.deepseek_max_output_tokens, 65536)
+        self.assertEqual(settings.gemini_fallback_model, "gemini-3.5-flash")
 
 
 class RateLimitMigrationTests(unittest.TestCase):

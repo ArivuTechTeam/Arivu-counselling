@@ -210,7 +210,7 @@ def regenerate(
         return result
     except RegenerationSourceError as exc:
         raise public_error(
-            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
             "This question cannot be regenerated because its original source "
             "material is unavailable. Edit it manually instead.",
             operation="load regeneration source material",

@@ -152,8 +152,9 @@ class Settings:
         # DeepSeek defaults non-thinking responses to 8K output tokens, but its
         # current API accepts a much larger explicit limit. The REDUCE response
         # contains retained source material, so reserve Gemini-equivalent room.
-        self.deepseek_max_output_tokens: int = _positive_int(
-            "DEEPSEEK_MAX_OUTPUT_TOKENS", 65536
+        self.deepseek_max_output_tokens: int = max(
+            65536,
+            _positive_int("DEEPSEEK_MAX_OUTPUT_TOKENS", 65536),
         )
 
         # Gemini (Google). If a key is set, it becomes the PRIMARY model and

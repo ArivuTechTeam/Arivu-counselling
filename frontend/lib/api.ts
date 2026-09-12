@@ -373,6 +373,13 @@ export async function getDocumentFileUrl(id: string): Promise<DocumentFileUrl> {
   return res.json();
 }
 
+/** Soft-archive an upload; its stored file and dependent quiz history remain. */
+export const archiveDocument = (id: string) =>
+  jsonRequest<{ id: string; status: string }>(
+    `/api/v1/documents/${id}/archive`,
+    "POST",
+  );
+
 /**
  * Retry extraction on a document that's already uploaded (e.g. a previous
  * attempt where the AI timed out). Reuses the stored file and chapter, so
@@ -548,6 +555,10 @@ export const deleteOwnAccount = () =>
 
 export const publishQuizSet = (id: string) =>
   jsonRequest<QuizSetSummary>(`/api/v1/quiz-sets/${id}/publish`, "POST");
+
+/** Unpublish and soft-archive a quiz without deleting attempts or analytics. */
+export const archiveQuizSet = (id: string) =>
+  jsonRequest<QuizSetSummary>(`/api/v1/quiz-sets/${id}/archive`, "POST");
 
 /** Approve every still-pending question in the set in one call. */
 export const approveAllQuestions = (id: string) =>

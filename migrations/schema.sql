@@ -23,7 +23,7 @@ create type user_role as enum ('super_admin', 'institution_admin', 'teacher', 's
 create type question_type as enum ('mcq_single', 'mcq_multi', 'numerical', 'true_false', 'fill_blank', 'descriptive');
 create type question_source as enum ('ai_generated', 'manual');
 create type review_status as enum ('pending_review', 'approved', 'rejected', 'needs_edit');
-create type document_status as enum ('uploaded', 'processing', 'completed', 'failed');
+create type document_status as enum ('uploaded', 'processing', 'completed', 'failed', 'archived');
 create type job_status as enum ('queued', 'running', 'succeeded', 'failed');
 create type variant_type as enum ('theory', 'practical', 'mixed');
 create type quiz_status as enum ('draft', 'published', 'archived');

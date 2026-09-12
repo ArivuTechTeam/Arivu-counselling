@@ -521,7 +521,7 @@ def list_quiz_sets(
         .order("created_at", desc=True)
         .execute()
     )
-    return rows.data or []
+    return [row for row in (rows.data or []) if row.get("status") != "archived"]
 
 
 @router.get("/{quiz_set_id}")
@@ -621,6 +621,35 @@ def publish_quiz_set(
         subject_type="quiz_set",
         subject_id=quiz_set_id,
     )
+    row = updated.data[0]
+    return {
+        "id": row["id"],
+        "title": row["title"],
+        "status": row["status"],
+        "created_at": row["created_at"],
+        "published_at": row.get("published_at"),
+    }
+
+
+@router.post("/{quiz_set_id}/archive")
+def archive_quiz_set(
+    quiz_set_id: str,
+    profile: CurrentProfile = Depends(get_current_profile),
+) -> dict:
+    """Unpublish and hide a quiz while preserving attempts and analytics."""
+    _require_teacher(profile)
+    service = get_service_client()
+    _teacher_quiz_set(service, quiz_set_id, profile)
+    updated = (
+        service.table("quiz_sets")
+        .update({"status": "archived", "published_at": None})
+        .eq("id", quiz_set_id)
+        .eq("tenant_id", profile.tenant_id)
+        .eq("created_by", profile.user_id)
+        .execute()
+    )
+    if not updated.data:
+        raise HTTPException(status_code=404, detail="Quiz set not found.")
     row = updated.data[0]
     return {
         "id": row["id"],

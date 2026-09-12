@@ -17,6 +17,7 @@ import { FileText } from "@/components/ui/icons";
 import { PageHeader } from "@/components/ui/page-header";
 import { SkeletonList } from "@/components/ui/skeleton";
 import {
+  archiveDocument,
   getDocumentFileUrl,
   reExtractDocument,
 } from "@/lib/api";
@@ -59,6 +60,7 @@ export function DocumentLog() {
   const [openError, setOpenError] = useState<string | null>(null);
   const [retrying, setRetrying] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [archiving, setArchiving] = useState<string | null>(null);
 
   function load() {
     void mutate();
@@ -100,6 +102,25 @@ export function DocumentLog() {
         e instanceof Error ? e.message : "Extraction failed again. Please try later.",
       );
       setRetrying(null);
+    }
+  }
+
+  async function archive(item: DocumentLogItem) {
+    if (!window.confirm("Archive this document? Its quizzes and history will be kept.")) {
+      return;
+    }
+    setArchiving(item.id);
+    setActionError(null);
+    try {
+      await archiveDocument(item.id);
+      await mutate(
+        (current) => current?.filter((document) => document.id !== item.id),
+        { revalidate: false },
+      );
+    } catch (e) {
+      setActionError(e instanceof Error ? e.message : "Couldn't archive this document.");
+    } finally {
+      setArchiving(null);
     }
   }
 
@@ -196,6 +217,13 @@ export function DocumentLog() {
                               : it.file_type === "pdf"
                                 ? "Open"
                                 : "Download"}
+                          </button>
+                          <button
+                            onClick={() => archive(it)}
+                            disabled={archiving === it.id}
+                            className="inline-flex items-center gap-1.5 rounded-lg border border-input bg-card px-3 py-1.5 text-xs font-semibold text-muted-foreground transition-colors hover:border-destructive/40 hover:text-destructive disabled:opacity-60"
+                          >
+                            {archiving === it.id ? "Archiving…" : "Archive"}
                           </button>
                         </div>
                       </td>
