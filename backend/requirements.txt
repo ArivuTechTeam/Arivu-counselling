@@ -1,7 +1,7 @@
 # Backend dependencies for quiz-generator-v1
 # Install into the venv with:  uv pip install -r requirements.txt
 # These are the DIRECT dependencies we chose. Their sub-dependencies
-# (starlette, sqlalchemy, httpx, etc.) are resolved and installed automatically.
+# (starlette, httpx, etc.) are resolved and installed automatically.
 
 # --- Web framework ---
 fastapi==0.141.1          # async API framework
@@ -10,8 +10,7 @@ uvicorn[standard]==0.52.1 # ASGI server that runs FastAPI (dev + prod)
 # --- Supabase (Auth + DB + Storage client) ---
 supabase==2.31.0          # official Python client for Supabase
 
-# --- Data & ORM ---
-sqlmodel==0.0.39          # ORM = SQLAlchemy + Pydantic, our locked choice
+# --- Data validation ---
 pydantic==2.13.4          # request/response validation (FastAPI-native)
 
 # --- Auth / config ---

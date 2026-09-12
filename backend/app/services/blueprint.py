@@ -28,6 +28,7 @@ from app.services.events import QUESTION_GENERATED, log_events, make_event
 from app.services.extraction import extract_text
 from app.services.llm.base import LLMError
 from app.services.llm.structured import complete_json_with_fallback
+from app.services.question_validation import validate_question_answer_shape
 from app.services.teacher_access import teacher_has_subject
 
 QuestionType = Literal[
@@ -57,10 +58,7 @@ class BPQuestion(BaseModel):
     marks: float = 1
 
     def check_shape(self) -> None:
-        if self.correct_answer is None:
-            raise ValueError("missing correct_answer")
-        if self.type in {"mcq_single", "mcq_multi", "true_false"} and not self.options:
-            raise ValueError(f"{self.type} requires options")
+        validate_question_answer_shape(self.type, self.options, self.correct_answer)
 
 
 class BPQuiz(BaseModel):

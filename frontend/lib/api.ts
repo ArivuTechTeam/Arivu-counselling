@@ -57,6 +57,24 @@ function requestReference(requestId: string | null): string {
   return requestId ? ` Error reference: ${requestId}.` : "";
 }
 
+type ValidationErrorDetail = {
+  location?: Array<string | number>;
+  message?: string;
+};
+
+function validationErrorMessage(errors: ValidationErrorDetail[] | undefined): string | null {
+  if (!Array.isArray(errors) || errors.length === 0) return null;
+  const messages = errors.slice(0, 3).map((error) => {
+    const field = (error.location ?? [])
+      .filter((part) => !["body", "query", "path"].includes(String(part)))
+      .map((part) => String(part).replaceAll("_", " "))
+      .join(" → ");
+    const message = error.message || "Invalid value.";
+    return field ? `${field}: ${message}` : message;
+  });
+  return messages.join(" ");
+}
+
 async function apiFetch(
   input: RequestInfo | URL,
   init: RequestInit = {},
@@ -172,6 +190,7 @@ async function apiError(res: Response, fallback: string): Promise<never> {
   }
   const body = (await res.json().catch(() => ({}))) as {
     detail?: string;
+    errors?: ValidationErrorDetail[];
     request_id?: string;
   };
   const requestId = res.headers.get("X-Request-ID") || body.request_id || null;
@@ -179,6 +198,14 @@ async function apiError(res: Response, fallback: string): Promise<never> {
     number,
     { code: ApiErrorCode; message: string; retryable: boolean }
   > = {
+    422: {
+      code: "request_failed",
+      message:
+        validationErrorMessage(body.errors) ||
+        body.detail ||
+        "Please check the submitted fields and try again.",
+      retryable: false,
+    },
     403: {
       code: "permission_denied",
       message: body.detail || "You do not have permission to perform this action.",

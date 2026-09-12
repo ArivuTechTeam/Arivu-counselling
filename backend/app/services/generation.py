@@ -23,6 +23,7 @@ from app.lib.supabase import get_service_client
 from app.services.extraction import extract_text
 from app.services.llm import LLMError, complete_with_fallback
 from app.services.quiz_prompts import build_system_prompt, build_user_prompt
+from app.services.question_validation import validate_question_answer_shape
 from app.services.teacher_access import teacher_has_subject
 
 # For long documents we skip likely front-matter (cover, copyright page, table
@@ -58,11 +59,8 @@ class GeneratedQuestion(BaseModel):
     marks: float = 1
 
     def check_shape(self) -> None:
-        """Light sanity checks the LLM output must satisfy before we store it."""
-        if self.correct_answer is None:
-            raise ValueError("missing correct_answer")
-        if self.type in {"mcq_single", "mcq_multi", "true_false"} and not self.options:
-            raise ValueError(f"{self.type} requires options")
+        """Reject output that cannot be graded deterministically."""
+        validate_question_answer_shape(self.type, self.options, self.correct_answer)
 
 
 class GeneratedQuiz(BaseModel):
