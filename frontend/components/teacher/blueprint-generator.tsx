@@ -141,6 +141,7 @@ export function BlueprintGenerator() {
   >({});
   const [weights, setWeights] = useState<Record<string, TopicWeight>>({});
   const [newTopic, setNewTopic] = useState("");
+  const [selectionError, setSelectionError] = useState<string | null>(null);
 
   const [typeCounts, setTypeCounts] = useState<Record<string, number>>({
     mcq_single: 5,
@@ -265,8 +266,17 @@ export function BlueprintGenerator() {
   function toggleTopic(name: string) {
     setWeights((prev) => {
       const next = { ...prev };
-      if (name in next) delete next[name];
-      else next[name] = "medium";
+      if (name in next) {
+        delete next[name];
+        setSelectionError(null);
+      } else if (Object.keys(prev).length >= totalQuestions) {
+        setSelectionError(
+          `Increase the question total before selecting more than ${totalQuestions} topic${totalQuestions === 1 ? "" : "s"}.`,
+        );
+      } else {
+        next[name] = "medium";
+        setSelectionError(null);
+      }
       return next;
     });
   }
@@ -281,9 +291,16 @@ export function BlueprintGenerator() {
     if (!name) return;
     const exists = topics.some((t) => t.toLowerCase() === name.toLowerCase());
     if (!exists) {
+      if (Object.keys(weights).length >= totalQuestions) {
+        setSelectionError(
+          `Increase the question total before adding another selected topic.`,
+        );
+        return;
+      }
       setTopics((prev) => [...prev, name]);
       setWeights((prev) => ({ ...prev, [name]: "medium" }));
     }
+    setSelectionError(null);
     setNewTopic("");
   }
   function removeTopic(name: string) {
@@ -295,10 +312,22 @@ export function BlueprintGenerator() {
     });
   }
   function setCount(type: string, n: number) {
-    setTypeCounts((prev) => ({
-      ...prev,
-      [type]: Math.max(0, Math.min(30, Number.isFinite(n) ? n : 0)),
-    }));
+    setTypeCounts((prev) => {
+      const next = {
+        ...prev,
+        [type]: Math.max(0, Math.min(30, Number.isFinite(n) ? n : 0)),
+      };
+      const nextTotal = Object.values(next).reduce((sum, count) => sum + count, 0);
+      const selected = Object.keys(weights).length;
+      if (nextTotal < selected) {
+        setSelectionError(
+          `Deselect ${selected - nextTotal} topic${selected - nextTotal === 1 ? "" : "s"} before reducing the quiz to ${nextTotal} questions.`,
+        );
+        return prev;
+      }
+      setSelectionError(null);
+      return next;
+    });
   }
   const totalQuestions = Object.values(typeCounts).reduce((a, b) => a + (b || 0), 0);
 
@@ -744,6 +773,7 @@ export function BlueprintGenerator() {
                 </Button>
               </div>
             )}
+            {selectionError && <InlineError message={selectionError} />}
           </CardContent>
         </Card>
       )}

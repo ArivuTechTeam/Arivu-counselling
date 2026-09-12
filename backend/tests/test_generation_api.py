@@ -311,6 +311,25 @@ class JobGenerateTests(unittest.TestCase):
             )
         self.assertEqual(res.status_code, 400)
 
+    def test_rejects_more_topics_than_questions_before_generation(self) -> None:
+        topics = [
+            {"name": "One", "weight": "high"},
+            {"name": "Two", "weight": "medium"},
+            {"name": "Three", "weight": "low"},
+            {"name": "Four", "weight": "low"},
+        ]
+        with patch(f"{MOD}.enforce_ai_rate_limit") as limit, patch(
+            f"{MOD}.QuizGeneratorService"
+        ) as generator:
+            res = _client().post(
+                "/api/v1/quiz-sets/generation-jobs/j1/generate",
+                json=self._payload(selected_topics=topics),
+            )
+        self.assertEqual(res.status_code, 400)
+        self.assertIn("no more topics", res.json()["detail"])
+        limit.assert_not_called()
+        generator.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -159,6 +159,13 @@ def generate_blueprint(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="That's more than 50 questions in total — please reduce the counts.",
         )
+    if len(req.selected_topics) > total:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "Select no more topics than the total number of requested questions."
+            ),
+        )
 
     enforce_ai_rate_limit(
         profile=profile,
@@ -440,6 +447,13 @@ def generate_from_job(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="That's more than 50 questions in total — please reduce the counts.",
+        )
+    if len(req.selected_topics) > total:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "Select no more topics than the total number of requested questions."
+            ),
         )
 
     enforce_ai_rate_limit(
