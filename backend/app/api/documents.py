@@ -28,7 +28,7 @@ router = APIRouter(prefix="/api/v1/documents", tags=["documents"])
 logger = logging.getLogger(__name__)
 
 ALLOWED_EXT = {"pdf", "docx"}
-MAX_MB = 150
+MAX_MB = 30
 MAX_BYTES = MAX_MB * 1024 * 1024
 PREVIEW_CHARS = 5000
 # A "view" link for a private document is short-lived to limit leakage.
@@ -123,7 +123,7 @@ async def upload_document(
         )
     if len(content) > MAX_BYTES:
         raise HTTPException(
-            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            status_code=status.HTTP_413_CONTENT_TOO_LARGE,
             detail=f"File too large (max {MAX_MB} MB).",
         )
 

@@ -35,7 +35,10 @@ const websocketOrigin = `${supabaseUrl.protocol === "https:" ? "wss:" : "ws:"}//
 const developmentScripts = process.env.NODE_ENV === "development" ? " 'unsafe-eval'" : "";
 const contentSecurityPolicy = [
   "default-src 'self'",
-  `script-src 'self' 'unsafe-inline'${developmentScripts}`,
+  // @react-pdf/renderer uses Yoga's WebAssembly build in the browser. CSP3's
+  // narrow `wasm-unsafe-eval` source permits WebAssembly compilation without
+  // granting the broader JavaScript `unsafe-eval` permission in production.
+  `script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'${developmentScripts}`,
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' data: blob:",
   "font-src 'self' data:",

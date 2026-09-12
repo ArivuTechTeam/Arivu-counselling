@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 from fastapi import HTTPException, UploadFile
 
-from app.api.documents import upload_document
+from app.api.documents import MAX_MB, upload_document
 from app.lib.auth import CurrentProfile
 
 
@@ -54,6 +54,20 @@ def _teacher() -> CurrentProfile:
 
 
 class DocumentUploadExtractionTests(unittest.IsolatedAsyncioTestCase):
+    async def test_document_upload_limit_is_30_mb_and_rejected_before_storage(self) -> None:
+        self.assertEqual(MAX_MB, 30)
+        upload = UploadFile(filename="too-large.pdf", file=io.BytesIO(b"12345"))
+
+        with patch("app.api.documents.MAX_BYTES", 4), patch(
+            "app.api.documents.upload_bytes"
+        ) as storage_upload:
+            with self.assertRaises(HTTPException) as raised:
+                await upload_document(upload, _teacher())
+
+        self.assertEqual(raised.exception.status_code, 413)
+        self.assertEqual(raised.exception.detail, "File too large (max 30 MB).")
+        storage_upload.assert_not_called()
+
     async def test_scanned_pdf_is_marked_failed_with_actionable_guidance(self) -> None:
         service = _Service()
         upload = UploadFile(filename="scan.pdf", file=io.BytesIO(b"pdf bytes"))

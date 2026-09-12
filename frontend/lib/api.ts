@@ -8,7 +8,10 @@ let latestBearerToken: string | null = null;
 // Base URL of the FastAPI backend (from .env.local).
 const API_BASE = PUBLIC_ENV.apiBaseUrl;
 const DEFAULT_TIMEOUT_MS = 20_000;
-// 150 MB takes about 10 minutes at 2 Mbps before server-side extraction time.
+export const DOCUMENT_UPLOAD_MAX_MB = 30;
+export const DOCUMENT_UPLOAD_MAX_BYTES = DOCUMENT_UPLOAD_MAX_MB * 1024 * 1024;
+// A 30 MiB upload can still take several minutes on a slow connection before
+// server-side extraction begins.
 const DOCUMENT_UPLOAD_TIMEOUT_MS = 15 * 60_000;
 // Includes the default 240-second vision call plus upload/database processing.
 const QUIZ_EXTRACTION_TIMEOUT_MS = 5 * 60_000;
@@ -238,6 +241,14 @@ export type UploadResult = {
 
 /** Upload a PDF/DOCX to the backend, which stores + extracts it. */
 export async function uploadDocument(file: File): Promise<UploadResult> {
+  if (file.size === 0) {
+    throw new Error("The selected file is empty.");
+  }
+  if (file.size > DOCUMENT_UPLOAD_MAX_BYTES) {
+    throw new Error(
+      `Choose a file no larger than ${DOCUMENT_UPLOAD_MAX_MB} MB.`,
+    );
+  }
   const headers = await authHeader();
   const form = new FormData();
   form.append("file", file);
