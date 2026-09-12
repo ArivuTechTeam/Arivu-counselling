@@ -118,7 +118,7 @@ def generate_quiz(
     try:
         quiz = GeneratedQuiz.model_validate_json(raw)
     except ValidationError as exc:
-        raise LLMError(f"Model returned invalid quiz JSON: {exc}") from exc
+        raise LLMError("Model returned invalid quiz JSON.") from exc
 
     questions = quiz.questions[:num_questions]
     if not questions:

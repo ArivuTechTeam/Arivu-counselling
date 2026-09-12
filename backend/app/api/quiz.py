@@ -328,7 +328,14 @@ def publish_quiz_set(
         subject_type="quiz_set",
         subject_id=quiz_set_id,
     )
-    return updated.data[0]
+    row = updated.data[0]
+    return {
+        "id": row["id"],
+        "title": row["title"],
+        "status": row["status"],
+        "created_at": row["created_at"],
+        "published_at": row.get("published_at"),
+    }
 
 
 @router.post("/{quiz_set_id}/approve-all")

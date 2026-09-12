@@ -4,13 +4,13 @@ import asyncio
 import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
+from uuid import uuid4
 
 from fastapi import HTTPException
 
 from app.api.admin import (
     AdminCreate,
     TenantCreate,
-    _generate_temporary_password,
     _select_all,
     _set_provisioned_profile,
     create_admin,
@@ -20,6 +20,10 @@ from app.api.admin import (
     remove_admin,
 )
 from app.lib.auth import CurrentProfile
+
+
+def temporary_password() -> str:
+    return f"{uuid4().hex}Aa1!"
 
 
 class _Query:
@@ -258,26 +262,30 @@ class SuperAdminRegressionTests(unittest.TestCase):
 
     def test_create_and_remove_admin_keeps_auth_and_profile_in_sync(self) -> None:
         service = _ProvisionService()
-        with patch("app.api.admin.get_service_client", return_value=service):
+        with patch("app.api.admin.get_service_client", return_value=service), patch(
+            "app.api.admin.erase_account_data"
+        ):
             created = create_admin(
                 AdminCreate(
                     full_name="Demo Admin",
                     email="admin@example.com",
-                    password=_generate_temporary_password(),
+                    password=temporary_password(),
                     tenant_id="tenant-a",
                 ),
                 SUPER,
             )
 
-            profile = next(row for row in service.tables["profiles"] if row["id"] == created["id"])
+            self.assertEqual(created, {"created": True})
+            created_id = next(iter(service.auth_users))
+            profile = next(row for row in service.tables["profiles"] if row["id"] == created_id)
             self.assertEqual(profile["tenant_id"], "tenant-a")
             self.assertEqual(profile["role"], "institution_admin")
             self.assertTrue(profile["must_change_password"])
 
-            remove_admin(created["id"], SUPER)
+            remove_admin(created_id, SUPER)
 
-        self.assertNotIn(created["id"], service.auth_users)
-        self.assertFalse(any(row["id"] == created["id"] for row in service.tables["profiles"]))
+        self.assertNotIn(created_id, service.auth_users)
+        self.assertFalse(any(row["id"] == created_id for row in service.tables["profiles"]))
 
     def test_onboard_institution_creates_first_admin_in_new_tenant(self) -> None:
         service = _ProvisionService()
@@ -288,17 +296,21 @@ class SuperAdminRegressionTests(unittest.TestCase):
                     subdomain="demo-college",
                     admin_full_name="First Admin",
                     admin_email="first@example.com",
-                    admin_password=_generate_temporary_password(),
+                    admin_password=temporary_password(),
                 ),
                 SUPER,
             )
 
-        self.assertEqual(created["name"], "Demo College")
-        self.assertIsNotNone(created["admin"])
-        profile = next(
-            row for row in service.tables["profiles"] if row["id"] == created["admin"]["id"]
+        self.assertEqual(created, {"created": True})
+        created_tenant = next(
+            row for row in service.tables["tenants"] if row["subdomain"] == "demo-college"
         )
-        self.assertEqual(profile["tenant_id"], created["id"])
+        profile = next(
+            row
+            for row in service.tables["profiles"]
+            if row["tenant_id"] == created_tenant["id"]
+        )
+        self.assertEqual(profile["tenant_id"], created_tenant["id"])
         self.assertEqual(profile["role"], "institution_admin")
         self.assertTrue(profile["must_change_password"])
 

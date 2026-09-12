@@ -174,7 +174,8 @@ def get_current_profile(
     must_change_password = bool(row.get("must_change_password", False))
     if (
         must_change_password
-        and request.url.path != "/api/v1/auth/change-password"
+        and request.url.path
+        not in {"/api/v1/auth/change-password", "/api/v1/auth/account"}
     ):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,

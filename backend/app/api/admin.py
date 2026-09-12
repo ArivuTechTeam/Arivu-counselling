@@ -16,18 +16,17 @@ platform analytics.
 from __future__ import annotations
 
 import asyncio
-import secrets
-import string
 from collections import Counter
 from datetime import datetime, timedelta, timezone
 from typing import Callable, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.lib.auth import CurrentProfile, get_current_profile
 from app.lib.api_errors import public_error
 from app.lib.supabase import get_service_client
+from app.services.account_deletion import erase_account_data
 from app.services.teacher_access import replace_teacher_subjects
 
 router = APIRouter(prefix="/api/v1", tags=["admin"])
@@ -152,7 +151,7 @@ def list_users(profile: CurrentProfile = Depends(get_current_profile)) -> list[d
 
     teachers = (
         service.table("profiles")
-        .select("id, full_name, role, created_at")
+        .select("id, full_name, created_at")
         .eq("tenant_id", profile.tenant_id)
         .eq("role", "teacher")
         .execute()
@@ -208,7 +207,6 @@ def list_users(profile: CurrentProfile = Depends(get_current_profile)) -> list[d
         {
             "id": teacher["id"],
             "full_name": teacher["full_name"],
-            "role": teacher["role"],
             "email": email_by_id.get(teacher["id"]),
             "courses": sorted(
                 course_name[course_id]
@@ -218,7 +216,6 @@ def list_users(profile: CurrentProfile = Depends(get_current_profile)) -> list[d
             "subject_count": len(
                 subjects_by_teacher.get(str(teacher["id"]), set())
             ),
-            "created_at": teacher.get("created_at"),
         }
         for teacher in teachers
     ]
@@ -242,9 +239,14 @@ class TeacherUpdate(BaseModel):
     subject_ids: list[str] = Field(max_length=500)
 
 
-class TemporaryTeacherLogin(BaseModel):
-    email: str | None
-    password: str
+class TemporaryPasswordReset(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    password: str = Field(min_length=12, max_length=128)
+
+
+class TemporaryPasswordResetResult(BaseModel):
+    changed: bool
 
 
 def _validated_subject_ids(
@@ -385,7 +387,9 @@ def create_user(
             exception=exc,
         ) from exc
 
-    return {"id": created.user.id, "email": body.email.strip()}
+    # The browser already has the submitted email; only the new identifier is
+    # needed to associate the in-memory temporary credential with this row.
+    return {"id": created.user.id}
 
 
 @router.delete("/users/{user_id}")
@@ -410,13 +414,20 @@ def delete_user(
     if user_id == profile.user_id:
         raise HTTPException(status_code=400, detail="You cannot remove your own account.")
     try:
-        service.auth.admin.delete_user(user_id)
-    except Exception:  # noqa: BLE001
-        raise HTTPException(
-            status_code=400,
-            detail="Could not remove teacher. Their academic records were preserved.",
+        erase_account_data(
+            service,
+            user_id=user_id,
+            tenant_id=profile.tenant_id,
         )
-    return {"deleted": user_id}
+        service.auth.admin.delete_user(user_id)
+    except Exception as exc:  # noqa: BLE001
+        raise public_error(
+            503,
+            "Could not securely remove this teacher. Please try again.",
+            operation="erase teacher account",
+            exception=exc,
+        ) from exc
+    return {"deleted": True}
 
 
 def _assert_tenant_teacher(service, *, teacher_id: str, tenant_id: str) -> dict:
@@ -434,32 +445,31 @@ def _assert_tenant_teacher(service, *, teacher_id: str, tenant_id: str) -> dict:
     return teacher.data
 
 
-def _generate_temporary_password(length: int = 14) -> str:
-    """Create a strong temporary password without storing it in plaintext."""
-    groups = (string.ascii_uppercase, string.ascii_lowercase, string.digits, "!@#$%")
-    characters = [secrets.choice(group) for group in groups]
-    alphabet = "".join(groups)
-    characters.extend(secrets.choice(alphabet) for _ in range(length - len(groups)))
-    secrets.SystemRandom().shuffle(characters)
-    return "".join(characters)
+def _validate_temporary_password(password: str) -> None:
+    if not any(character.isupper() for character in password):
+        raise HTTPException(status_code=400, detail="Password must include uppercase text.")
+    if not any(character.islower() for character in password):
+        raise HTTPException(status_code=400, detail="Password must include lowercase text.")
+    if not any(character.isdigit() for character in password):
+        raise HTTPException(status_code=400, detail="Password must include a number.")
 
 
 @router.post(
     "/users/{user_id}/temporary-password",
-    response_model=TemporaryTeacherLogin,
+    response_model=TemporaryPasswordResetResult,
 )
 def reset_teacher_temporary_password(
     user_id: str,
-    response: Response,
+    body: TemporaryPasswordReset,
     profile: CurrentProfile = Depends(get_current_profile),
-) -> TemporaryTeacherLogin:
-    """Reset a tenant teacher's password and return it once for immediate copying."""
+) -> TemporaryPasswordResetResult:
+    """Set a browser-generated temporary password without returning it."""
     _require_admin(profile)
+    _validate_temporary_password(body.password)
     service = get_service_client()
     _assert_tenant_teacher(
         service, teacher_id=user_id, tenant_id=profile.tenant_id
     )
-    temporary_password = _generate_temporary_password()
     try:
         updated_profile = (
             service.table("profiles")
@@ -471,21 +481,13 @@ def reset_teacher_temporary_password(
         )
         if not updated_profile.data:
             raise RuntimeError("The teacher profile could not be updated.")
-        auth_response = service.auth.admin.update_user_by_id(
-            user_id, {"password": temporary_password}
-        )
+        service.auth.admin.update_user_by_id(user_id, {"password": body.password})
     except Exception:  # noqa: BLE001
         raise HTTPException(
             status_code=400,
             detail="Could not generate a new temporary teacher login.",
         )
-    auth_user = getattr(auth_response, "user", auth_response)
-    response.headers["Cache-Control"] = "no-store, private"
-    response.headers["Pragma"] = "no-cache"
-    return TemporaryTeacherLogin(
-        email=getattr(auth_user, "email", None),
-        password=temporary_password,
-    )
+    return TemporaryPasswordResetResult(changed=True)
 
 
 @router.put("/users/{user_id}")
@@ -533,7 +535,19 @@ def update_user(
     auth_user = getattr(auth_response, "user", auth_response)
     previous_email = getattr(auth_user, "email", None)
     previous_metadata = dict(getattr(auth_user, "user_metadata", None) or {})
-    updated_metadata = {**previous_metadata, "full_name": full_name}
+    # Send only application-owned fields instead of echoing arbitrary legacy
+    # Auth metadata back to the identity provider.
+    updated_metadata = {
+        "tenant_id": profile.tenant_id,
+        "role": "teacher",
+        "full_name": full_name,
+        "must_change_password": bool(
+            previous_metadata.get("must_change_password", False)
+        ),
+    }
+    previous_course_id = previous_metadata.get("course_id")
+    if previous_course_id:
+        updated_metadata["course_id"] = previous_course_id
 
     auth_updated = False
     profile_updated = False
@@ -558,7 +572,7 @@ def update_user(
         if not updated_profile.data:
             raise RuntimeError("The teacher profile could not be updated.")
         profile_updated = True
-        assigned = replace_teacher_subjects(
+        replace_teacher_subjects(
             service,
             tenant_id=profile.tenant_id,
             teacher_id=user_id,
@@ -601,12 +615,7 @@ def update_user(
             exception=exc,
         ) from exc
 
-    return {
-        "id": user_id,
-        "full_name": full_name,
-        "email": email,
-        "subject_ids": assigned,
-    }
+    return {"changed": True}
 
 
 def _assert_tenant_course(service, *, course_id: str, tenant_id: str) -> dict:
@@ -882,7 +891,7 @@ def create_admin(
             exception=exc,
         ) from exc
 
-    return {"id": created.user.id, "email": body.email}
+    return {"created": True}
 
 
 @router.delete("/platform/admins/{user_id}")
@@ -895,7 +904,7 @@ def remove_admin(
 
     target = (
         service.table("profiles")
-        .select("id, role")
+        .select("id, role, tenant_id")
         .eq("id", user_id)
         .maybe_single()
         .execute()
@@ -907,9 +916,14 @@ def remove_admin(
     if user_id == profile.user_id:
         raise HTTPException(status_code=400, detail="You cannot remove your own account.")
 
-    # Delete the auth user first (source of truth); then clear the profile row in
-    # case the FK isn't set to cascade.
+    # Erase personal data first, delete the Auth identity, then clear the profile
+    # row in case the FK is not configured to cascade.
     try:
+        erase_account_data(
+            service,
+            user_id=user_id,
+            tenant_id=str(target.data["tenant_id"]),
+        )
         service.auth.admin.delete_user(user_id)
     except Exception as exc:  # noqa: BLE001
         raise public_error(
@@ -920,7 +934,7 @@ def remove_admin(
         ) from exc
     service.table("profiles").delete().eq("id", user_id).execute()
 
-    return {"deleted": user_id}
+    return {"deleted": True}
 
 
 # ── Analytics ────────────────────────────────────────────────────────────────
@@ -2054,7 +2068,6 @@ def onboard_institution(
         ) from exc
     tenant_id = created.data[0]["id"]
 
-    admin = None
     if body.admin_email and body.admin_password:
         try:
             u = service.auth.admin.create_user(
@@ -2078,7 +2091,6 @@ def onboard_institution(
                 role="institution_admin",
                 full_name=body.admin_full_name or "",
             )
-            admin = {"id": u.user.id, "email": body.admin_email.strip()}
         except Exception as exc:  # noqa: BLE001
             rollback_error = None
             if "u" in locals() and u.user:
@@ -2104,7 +2116,7 @@ def onboard_institution(
                 exception=exc,
             ) from exc
 
-    return {"id": tenant_id, "name": name, "subdomain": subdomain, "admin": admin}
+    return {"created": True}
 
 
 # ── Super-admin: global question bank (cross-tenant, grouped by course) ───────

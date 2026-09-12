@@ -3,13 +3,16 @@
 import re
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.lib.auth import CurrentProfile, get_current_profile
 from app.lib.api_errors import public_error
 from app.lib.supabase import create_anon_auth_client, get_service_client
+from app.services.account_deletion import erase_account_data
 
 router = APIRouter(prefix="/api/v1/auth", tags=["account"])
+_account_bearer = HTTPBearer(auto_error=True)
 
 # A tiny denylist of obvious choices — not exhaustive, just stops the worst.
 _COMMON_PASSWORDS = {
@@ -67,6 +70,16 @@ def _validate_new_password(new: str, current: str, email: str | None) -> None:
 class PasswordChange(BaseModel):
     current_password: str = Field(min_length=1, max_length=128)
     password: str = Field(min_length=1, max_length=128)
+
+
+class AccountDeletion(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    confirmation: str = Field(pattern=r"^DELETE$")
+
+
+class AccountDeletionResult(BaseModel):
+    deleted: bool
 
 
 @router.post("/change-password")
@@ -129,3 +142,45 @@ def change_password(
                 exception=exc,
             ) from exc
     return {"changed": True}
+
+
+@router.delete("/account", response_model=AccountDeletionResult)
+def delete_own_account(
+    _body: AccountDeletion,
+    credentials: HTTPAuthorizationCredentials = Depends(_account_bearer),
+    profile: CurrentProfile = Depends(get_current_profile),
+) -> AccountDeletionResult:
+    """Revoke every session, erase personal activity, and delete Auth identity.
+
+    Institution-owned teaching content is retained without author identifiers.
+    Migration 30 owns the atomic database anonymization and is callable only by
+    the backend service role.
+    """
+    service = get_service_client()
+
+    try:
+        service.auth.admin.sign_out(credentials.credentials, scope="global")
+    except Exception as exc:  # noqa: BLE001
+        raise public_error(
+            503,
+            "We couldn't securely sign out this account. Please try again.",
+            operation="revoke sessions before account deletion",
+            exception=exc,
+        ) from exc
+
+    try:
+        erase_account_data(
+            service,
+            user_id=profile.user_id,
+            tenant_id=profile.tenant_id,
+        )
+        service.auth.admin.delete_user(profile.user_id)
+    except Exception as exc:  # noqa: BLE001
+        raise public_error(
+            503,
+            "We couldn't finish deleting this account. Please contact support with the error reference.",
+            operation="delete account data",
+            exception=exc,
+        ) from exc
+
+    return AccountDeletionResult(deleted=True)

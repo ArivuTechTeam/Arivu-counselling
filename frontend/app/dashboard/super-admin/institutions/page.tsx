@@ -47,7 +47,7 @@ function OnboardForm({ onDone }: { onDone: () => void }) {
     }
     setBusy(true);
     try {
-      const res = await onboardInstitution({
+      await onboardInstitution({
         name: name.trim(),
         subdomain: subdomain.trim().toLowerCase(),
         plan_tier: plan,
@@ -56,7 +56,7 @@ function OnboardForm({ onDone }: { onDone: () => void }) {
         admin_password: adminPassword || undefined,
       });
       setOk(
-        `Created "${res.name}"${res.admin ? ` with admin ${res.admin.email}` : ""}.`,
+        `Created "${name.trim()}"${adminEmail.trim() ? ` with admin ${adminEmail.trim()}` : ""}.`,
       );
       setName("");
       setSubdomain("");

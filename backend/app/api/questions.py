@@ -72,7 +72,19 @@ class QuestionEdit(BaseModel):
     marks: float | None = Field(default=None, gt=0)
 
 
-@router.patch("/{question_id}")
+class QuestionOut(BaseModel):
+    id: str
+    type: str
+    question_text: str
+    options: list[dict] | None = None
+    correct_answer: Any
+    explanation: str | None = None
+    difficulty: str
+    marks: float
+    review_status: str
+
+
+@router.patch("/{question_id}", response_model=QuestionOut)
 def edit_question(
     question_id: str,
     body: QuestionEdit,
@@ -135,7 +147,7 @@ def _set_review_status(
     return updated.data[0]
 
 
-@router.post("/{question_id}/approve")
+@router.post("/{question_id}/approve", response_model=QuestionOut)
 def approve_question(
     question_id: str,
     profile: CurrentProfile = Depends(get_current_profile),
@@ -153,7 +165,7 @@ def approve_question(
     return result
 
 
-@router.post("/{question_id}/reject")
+@router.post("/{question_id}/reject", response_model=QuestionOut)
 def reject_question(
     question_id: str,
     profile: CurrentProfile = Depends(get_current_profile),
@@ -171,7 +183,7 @@ def reject_question(
     return result
 
 
-@router.post("/{question_id}/regenerate")
+@router.post("/{question_id}/regenerate", response_model=QuestionOut)
 def regenerate(
     question_id: str,
     profile: CurrentProfile = Depends(get_current_profile),

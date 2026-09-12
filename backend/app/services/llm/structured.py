@@ -68,27 +68,23 @@ def gemini_json(
         resp = httpx.post(url, json=payload, headers=headers, timeout=180.0)
         resp.raise_for_status()
     except httpx.HTTPStatusError as exc:
-        raise LLMError(
-            f"Gemini returned {exc.response.status_code}: {exc.response.text[:300]}"
-        ) from exc
+        raise LLMError(f"Gemini returned HTTP {exc.response.status_code}.") from exc
     except httpx.HTTPError as exc:
-        raise LLMError(f"Gemini request failed: {exc}") from exc
+        raise LLMError("Gemini request failed.") from exc
 
     data = resp.json()
     try:
         text = data["candidates"][0]["content"]["parts"][0]["text"]
     except (KeyError, IndexError) as exc:
-        raise LLMError(
-            f"Unexpected Gemini response (blocked or empty?): {str(data)[:300]}"
-        ) from exc
+        raise LLMError("Gemini returned an unexpected or empty response.") from exc
 
     try:
         parsed = json.loads(text)
     except json.JSONDecodeError as exc:
-        raise LLMError(f"Gemini returned non-JSON despite schema: {text[:300]}") from exc
+        raise LLMError("Gemini returned invalid JSON.") from exc
 
     if not isinstance(parsed, dict):
-        raise LLMError(f"Gemini returned a non-object JSON: {str(parsed)[:200]}")
+        raise LLMError("Gemini returned a non-object JSON value.")
     return parsed
 
 
@@ -100,9 +96,9 @@ def complete_json_with_fallback(
     try:
         parsed = json.loads(raw)
     except json.JSONDecodeError as exc:
-        raise LLMError(f"{provider} returned invalid JSON: {raw[:300]}") from exc
+        raise LLMError(f"{provider} returned invalid JSON.") from exc
     if not isinstance(parsed, dict):
-        raise LLMError(f"{provider} returned non-object JSON: {str(parsed)[:200]}")
+        raise LLMError(f"{provider} returned a non-object JSON value.")
     return parsed, provider
 
 
@@ -173,25 +169,21 @@ def gemini_json_multimodal(
         )
         resp.raise_for_status()
     except httpx.HTTPStatusError as exc:
-        raise LLMError(
-            f"Gemini returned {exc.response.status_code}: {exc.response.text[:300]}"
-        ) from exc
+        raise LLMError(f"Gemini returned HTTP {exc.response.status_code}.") from exc
     except httpx.HTTPError as exc:
-        raise LLMError(f"Gemini request failed: {exc}") from exc
+        raise LLMError("Gemini request failed.") from exc
 
     data = resp.json()
     try:
         text = data["candidates"][0]["content"]["parts"][0]["text"]
     except (KeyError, IndexError) as exc:
-        raise LLMError(
-            f"Unexpected Gemini response (blocked or empty?): {str(data)[:300]}"
-        ) from exc
+        raise LLMError("Gemini returned an unexpected or empty response.") from exc
 
     try:
         parsed = json.loads(text)
     except json.JSONDecodeError as exc:
-        raise LLMError(f"Gemini returned non-JSON: {text[:300]}") from exc
+        raise LLMError("Gemini returned invalid JSON.") from exc
 
     if not isinstance(parsed, dict):
-        raise LLMError(f"Gemini returned a non-object JSON: {str(parsed)[:200]}")
+        raise LLMError("Gemini returned a non-object JSON value.")
     return parsed

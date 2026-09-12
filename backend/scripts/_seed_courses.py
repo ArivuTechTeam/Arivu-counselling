@@ -1,5 +1,5 @@
 """
-Seed ArivuPro's course + subjects and enroll the test student.
+Seed ArivuPro's course + subjects and enroll an explicitly configured student.
 Run AFTER migrations/migration-01-enrollments.sql has been applied in Supabase. Idempotent.
 Deleted after it succeeds.
 
@@ -7,11 +7,15 @@ Run from backend/ (not from inside scripts/) so the `app` package resolves:
     python -m scripts._seed_courses
 """
 
+import os
+
 from app.lib.supabase import get_service_client
 
 COURSE_NAME = "CA Foundation"
 SUBJECTS = ["Accounting", "Business Mathematics", "Business Economics"]
-STUDENT_EMAIL = "student.test@arivupro.com"
+STUDENT_EMAIL = os.getenv("SEED_STUDENT_EMAIL", "").strip()
+if not STUDENT_EMAIL:
+    raise SystemExit("SEED_STUDENT_EMAIL is required for this development script.")
 
 service = get_service_client()
 
@@ -60,7 +64,7 @@ users = service.auth.admin.list_users()
 users = getattr(users, "users", users)
 student = next((u for u in users if getattr(u, "email", None) == STUDENT_EMAIL), None)
 if not student:
-    raise SystemExit(f"{STUDENT_EMAIL} not found — create the student first.")
+    raise SystemExit("Configured seed student was not found; create it first.")
 student_id = student.id
 
 # 4) Enroll the student in the course (idempotent via unique constraint)
@@ -72,11 +76,11 @@ already = (
     .execute()
 ).data
 if already:
-    print(f"already enrolled: {STUDENT_EMAIL} in {COURSE_NAME}")
+    print(f"student already enrolled in {COURSE_NAME}")
 else:
     service.table("enrollments").insert(
         {"tenant_id": tenant_id, "profile_id": student_id, "course_id": course_id}
     ).execute()
-    print(f"enrolled {STUDENT_EMAIL} in {COURSE_NAME}")
+    print(f"student enrolled in {COURSE_NAME}")
 
 print(f"\nDONE. course_id={course_id}")

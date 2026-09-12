@@ -20,6 +20,7 @@ from fastapi import Depends, FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.api import (
@@ -48,6 +49,13 @@ from app.lib.request_trace import request_id_for_header
 from app.lib.supabase import SupabaseUnavailableError
 
 logger = logging.getLogger(__name__)
+
+
+def _safe_route_label(request: Request) -> str:
+    """Return a route template, never a URL containing IDs or share tokens."""
+    route = request.scope.get("route")
+    template = getattr(route, "path", None)
+    return template if isinstance(template, str) else "[unmatched]"
 
 settings = get_settings()
 app = FastAPI(
@@ -95,10 +103,10 @@ async def trace_and_protect_api_responses(request: Request, call_next):
         # response bodies, URLs, or credentials. Keep only safe correlation
         # fields and the exception class in production logs.
         logger.error(
-            "Unhandled request failure request_id=%s method=%s path=%s error_type=%s",
+            "Unhandled request failure request_id=%s method=%s route=%s error_type=%s",
             request_id,
             request.method,
-            request.url.path,
+            _safe_route_label(request),
             type(exc).__name__,
         )
         raise
@@ -121,10 +129,10 @@ async def trace_and_protect_api_responses(request: Request, call_next):
         response.headers["Cache-Control"] = "no-store, private"
         response.headers["Pragma"] = "no-cache"
     logger.info(
-        "Request completed request_id=%s method=%s path=%s status=%d duration_ms=%.1f",
+        "Request completed request_id=%s method=%s route=%s status=%d duration_ms=%.1f",
         request_id,
         request.method,
-        request.url.path,
+        _safe_route_label(request),
         response.status_code,
         (time.perf_counter() - started) * 1000,
     )
@@ -249,23 +257,35 @@ def health() -> dict[str, str]:
 
 
 # --- Authenticated identity --------------------------------------------
-@app.get("/api/v1/me", tags=["auth"])
-def read_me(user: CurrentUser = Depends(get_current_user)) -> CurrentUser:
+class AuthenticatedIdentityOut(BaseModel):
+    authenticated: bool
+
+
+class CurrentProfileOut(BaseModel):
+    role: str
+    must_change_password: bool
+
+
+@app.get("/api/v1/me", tags=["auth"], response_model=AuthenticatedIdentityOut)
+def read_me(_user: CurrentUser = Depends(get_current_user)) -> AuthenticatedIdentityOut:
     """
     Return the identity from the caller's verified JWT.
 
     The Depends(get_current_user) line is the gate: FastAPI runs the token
     verification first, and this function only executes if it passed.
     """
-    return user
+    return AuthenticatedIdentityOut(authenticated=True)
 
 
-@app.get("/api/v1/me/profile", tags=["auth"])
+@app.get("/api/v1/me/profile", tags=["auth"], response_model=CurrentProfileOut)
 def read_my_profile(
     profile: CurrentProfile = Depends(get_current_profile),
-) -> CurrentProfile:
+) -> CurrentProfileOut:
     """
-    Return the caller's authoritative tenant_id + role from the profiles
-    table. This is the data later slices will use for permission checks.
+    Return only the profile fields a browser may need. Internal user and tenant
+    identifiers and the email claim stay inside the authorization layer.
     """
-    return profile
+    return CurrentProfileOut(
+        role=profile.role,
+        must_change_password=profile.must_change_password,
+    )

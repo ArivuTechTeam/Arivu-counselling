@@ -177,8 +177,7 @@ async def extract_quiz_endpoint(
             delete_bytes(object_path)
         except Exception as cleanup_exc:  # noqa: BLE001 - retain original error
             logger.error(
-                "Could not remove orphaned extraction upload %s (%s)",
-                object_path,
+                "Could not remove orphaned extraction upload (%s)",
                 type(cleanup_exc).__name__,
             )
         raise
