@@ -22,7 +22,7 @@ from starlette.concurrency import run_in_threadpool
 from app.lib.auth import CurrentProfile, get_current_profile
 from app.lib.storage import signed_url, upload_bytes
 from app.lib.supabase import get_service_client
-from app.services.extraction import extract_text
+from app.services.extraction import MIN_READABLE_PDF_TEXT_CHARS, extract_text
 
 router = APIRouter(prefix="/api/v1/documents", tags=["documents"])
 logger = logging.getLogger(__name__)
@@ -163,9 +163,23 @@ async def upload_document(
             {"status": "failed", "error_message": "Document extraction failed."}
         ).eq("id", doc_id).execute()
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="Could not extract text from this file. It may be corrupted, "
             "password-protected, or in an unsupported format.",
+        )
+
+    if ext == "pdf" and len(text.strip()) < MIN_READABLE_PDF_TEXT_CHARS:
+        message = (
+            "This looks like a scanned document with no extractable text — "
+            "please use a text-based PDF, or use the Extract Quiz feature if "
+            "this is a scanned question paper."
+        )
+        service.table("documents").update(
+            {"status": "failed", "error_message": message}
+        ).eq("id", doc_id).execute()
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=message,
         )
 
     service.table("documents").update({"status": "completed"}).eq(
@@ -210,6 +224,7 @@ def list_documents(
             created_at=str(r["created_at"]),
         )
         for r in rows.data
+        if r.get("status") != "archived"
     ]
 
 
@@ -234,6 +249,7 @@ def document_log(
         .data
         or []
     )
+    docs = [doc for doc in docs if doc.get("status") != "archived"]
     if not docs:
         return []
 
@@ -336,6 +352,27 @@ def document_log(
             )
         )
     return items
+
+
+@router.post("/{document_id}/archive")
+def archive_document(
+    document_id: str,
+    profile: CurrentProfile = Depends(get_current_profile),
+) -> dict:
+    """Hide an old upload without deleting storage or dependent quiz history."""
+    _require_teacher(profile)
+    service = get_service_client()
+    updated = (
+        service.table("documents")
+        .update({"status": "archived"})
+        .eq("id", document_id)
+        .eq("tenant_id", profile.tenant_id)
+        .eq("uploaded_by", profile.user_id)
+        .execute()
+    )
+    if not updated.data:
+        raise HTTPException(status_code=404, detail="Document not found.")
+    return {"id": document_id, "status": "archived"}
 
 
 @router.get("/{document_id}/file-url", response_model=DocumentFileUrl)

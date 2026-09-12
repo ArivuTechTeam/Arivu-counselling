@@ -373,6 +373,13 @@ export async function getDocumentFileUrl(id: string): Promise<DocumentFileUrl> {
   return res.json();
 }
 
+/** Soft-archive an upload; its stored file and dependent quiz history remain. */
+export const archiveDocument = (id: string) =>
+  jsonRequest<{ id: string; status: string }>(
+    `/api/v1/documents/${id}/archive`,
+    "POST",
+  );
+
 /**
  * Retry extraction on a document that's already uploaded (e.g. a previous
  * attempt where the AI timed out). Reuses the stored file and chapter, so
@@ -548,6 +555,10 @@ export const deleteOwnAccount = () =>
 
 export const publishQuizSet = (id: string) =>
   jsonRequest<QuizSetSummary>(`/api/v1/quiz-sets/${id}/publish`, "POST");
+
+/** Unpublish and soft-archive a quiz without deleting attempts or analytics. */
+export const archiveQuizSet = (id: string) =>
+  jsonRequest<QuizSetSummary>(`/api/v1/quiz-sets/${id}/archive`, "POST");
 
 /** Approve every still-pending question in the set in one call. */
 export const approveAllQuestions = (id: string) =>
@@ -1620,10 +1631,68 @@ export type BlueprintGenerateResponse = {
   questions: (GeneratedQuestion & { topic?: string | null })[];
 };
 
-/** Blueprint generation: whole-doc coverage weighted to selected topics. ~20-40s. */
+/** Blueprint generation (small documents): whole-doc coverage weighted to
+ * selected topics, in one AI call. ~20-40s. */
 export const generateBlueprintQuiz = (req: BlueprintGenerateRequest) =>
   jsonRequest<BlueprintGenerateResponse>(
     "/api/v1/quiz-sets/generate-blueprint",
+    "POST",
+    req,
+    90_000,
+  );
+
+// --- Large-document analysis (chunked Map-Reduce) -------------------------
+// Route a document by size: a small document returns its topics immediately;
+// a large one starts a resumable background analysis job to poll.
+export type AnalyzeResponse =
+  | { mode: "direct"; document_id: string; topics: string[] }
+  | { mode: "job"; document_id: string; job_id: string; status: string };
+
+/** Route a document by size (extract text server-side; ~5-20s for large PDFs). */
+export const analyzeDocument = (documentId: string) =>
+  jsonRequest<AnalyzeResponse>(
+    "/api/v1/quiz-sets/analyze",
+    "POST",
+    { document_id: documentId },
+    120_000,
+  );
+
+export type GenerationJobStatus = {
+  job_id: string;
+  status: "queued" | "running" | "partial" | "completed" | "failed";
+  phase: string;
+  total_chunks: number;
+  done_chunks: number;
+  error_message: string | null;
+  // The Master Blueprint's consolidated topics (present once the job is ready).
+  topics: {
+    name: string;
+    subtopics: string[];
+    page_ranges: { start: number; end: number }[];
+  }[];
+  quiz_set_id: string | null;
+};
+
+export const getGenerationJob = (jobId: string) =>
+  jsonRequest<GenerationJobStatus>(
+    `/api/v1/quiz-sets/generation-jobs/${jobId}`,
+    "GET",
+  );
+
+export const retryGenerationJob = (jobId: string) =>
+  jsonRequest<{ status: string; job_id: string }>(
+    `/api/v1/quiz-sets/generation-jobs/${jobId}/retry`,
+    "POST",
+  );
+
+/** Generate the quiz from a ready analysis job's Master Blueprint (single AI
+ * call), then hand off to review — same result shape as small-doc generation. */
+export const generateFromJob = (
+  jobId: string,
+  req: Omit<BlueprintGenerateRequest, "document_id">,
+) =>
+  jsonRequest<BlueprintGenerateResponse & { job_id: string }>(
+    `/api/v1/quiz-sets/generation-jobs/${jobId}/generate`,
     "POST",
     req,
     90_000,

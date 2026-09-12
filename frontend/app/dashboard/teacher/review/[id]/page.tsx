@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 
 import { Button } from "@/components/ui/button";
 import { ErrorCard } from "@/components/ui/error-card";
@@ -14,6 +15,7 @@ import { statusLabel, variantLabel } from "@/lib/format";
 import {
   QuizSetDetail,
   ReviewQuestion,
+  archiveQuizSet,
   approveAllQuestions,
   getQuizSet,
   publishQuizSet,
@@ -31,11 +33,13 @@ function Stat({ label, value, color }: { label: string; value: number; color: st
 }
 
 export default function ReviewDetailPage({ params }: { params: { id: string } }) {
+  const router = useRouter();
   const { notify } = useToast();
   const [detail, setDetail] = useState<QuizSetDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [publishing, setPublishing] = useState(false);
   const [approving, setApproving] = useState(false);
+  const [archiving, setArchiving] = useState(false);
   // One-shot spark burst on the big "win" actions (publish / approve-all).
   const [celebrate, setCelebrate] = useState(false);
 
@@ -112,6 +116,23 @@ export default function ReviewDetailPage({ params }: { params: { id: string } })
     }
   }
 
+  async function handleArchive() {
+    const warning = detail?.status === "published"
+      ? "Archive this quiz? Students will no longer see it, but attempts and analytics will be kept."
+      : "Archive this quiz? Its questions and history will be kept.";
+    if (!window.confirm(warning)) return;
+    setArchiving(true);
+    setError(null);
+    try {
+      await archiveQuizSet(params.id);
+      notify("Quiz archived", "success");
+      router.push("/dashboard/teacher/review");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Archive failed");
+      setArchiving(false);
+    }
+  }
+
   if (error && !detail)
     return (
       <div className="mx-auto flex max-w-4xl flex-col gap-6">
@@ -160,6 +181,17 @@ export default function ReviewDetailPage({ params }: { params: { id: string } })
           <Stat label="Rejected" value={rejected} color="text-rose-500" />
         </div>
         <div className="flex shrink-0 items-center gap-2">
+          <Button
+            variant="outline"
+            onClick={handleArchive}
+            disabled={archiving || publishing || approving}
+          >
+            {archiving
+              ? "Archiving…"
+              : detail.status === "published"
+                ? "Unpublish & archive"
+                : "Archive"}
+          </Button>
           {pending > 0 && (
             <Button
               variant="outline"

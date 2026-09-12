@@ -10,6 +10,7 @@ tagged with that topic's id; general questions are left untagged (topic_id NULL)
 
 from __future__ import annotations
 
+from collections import Counter
 from typing import Any, Literal
 
 from pydantic import BaseModel, ValidationError
@@ -66,7 +67,9 @@ class BPQuiz(BaseModel):
     questions: list[BPQuestion]
 
 
-def build_blueprint(selected: list[SelectedTopic], total: int) -> dict:
+def build_blueprint(
+    selected: list[SelectedTopic], total: int, *, selected_only: bool = False
+) -> dict:
     """
     Turn selected topics + weights into per-topic counts + a general count.
 
@@ -78,9 +81,17 @@ def build_blueprint(selected: list[SelectedTopic], total: int) -> dict:
         total = max(total, 1)
         return {"topics": [], "general": total, "total": total}
 
-    # Each selected topic must get at least 1 → total can't be below topic count.
-    total = max(total, len(selected))
-    emphasis_budget = min(total, max(len(selected), round(total * _EMPHASIS_FRACTION)))
+    # Each selected topic must get at least one question. Never silently raise the
+    # teacher's requested total: that would contradict the exact per-type mix.
+    if len(selected) > total:
+        raise ValueError(
+            "The number of selected topics cannot exceed the requested question count."
+        )
+    emphasis_budget = (
+        total
+        if selected_only
+        else min(total, max(len(selected), round(total * _EMPHASIS_FRACTION)))
+    )
 
     units = [_WEIGHT_UNITS[t.weight] for t in selected]
     unit_sum = sum(units)
@@ -100,6 +111,68 @@ def build_blueprint(selected: list[SelectedTopic], total: int) -> dict:
         for t, c in zip(selected, counts)
     ]
     return {"topics": topics, "general": general, "total": emphasis_total + general}
+
+
+def _validated_generated_quiz(data: object, expected_counts: dict[str, int]) -> BPQuiz:
+    """Validate shape and the teacher's exact requested type distribution."""
+    try:
+        quiz = BPQuiz.model_validate(data)
+    except ValidationError as exc:
+        raise LLMError("Model returned invalid quiz JSON.") from exc
+    if not quiz.questions:
+        raise LLMError("Model returned no questions.")
+    for question in quiz.questions:
+        try:
+            question.check_shape()
+        except ValueError as exc:
+            raise LLMError(f"Model produced a malformed question: {exc}") from exc
+
+    actual = Counter(question.type for question in quiz.questions)
+    expected = Counter(
+        {kind: count for kind, count in expected_counts.items() if count > 0}
+    )
+    if actual != expected:
+        expected_text = ", ".join(
+            f"{kind}={count}" for kind, count in sorted(expected.items())
+        )
+        actual_text = (
+            ", ".join(f"{kind}={count}" for kind, count in sorted(actual.items()))
+            or "none"
+        )
+        raise LLMError(
+            "AI question mix mismatch: "
+            f"requested {sum(expected.values())} ({expected_text}); "
+            f"received {sum(actual.values())} ({actual_text})."
+        )
+    return quiz
+
+
+def _generate_with_exact_mix(
+    system: str, user: str, expected_counts: dict[str, int]
+) -> tuple[BPQuiz, str]:
+    """Generate once, then make one explicit correction attempt for a bad mix."""
+    data, provider = complete_json_with_fallback(system, user)
+    try:
+        return _validated_generated_quiz(data, expected_counts), provider
+    except LLMError as first_error:
+        if "question mix mismatch" not in str(first_error):
+            raise
+
+        expected_text = ", ".join(
+            f"{kind}={count}"
+            for kind, count in sorted(expected_counts.items())
+            if count > 0
+        )
+        corrective_system = (
+            system
+            + "\n\nCORRECTION REQUIRED: Your previous response did not match the exact "
+            f"question-type distribution. Return exactly: {expected_text}. Rebuild the "
+            "complete JSON response and obey every original grounding rule."
+        )
+        corrected, corrected_provider = complete_json_with_fallback(
+            corrective_system, user
+        )
+        return _validated_generated_quiz(corrected, expected_counts), corrected_provider
 
 
 def _get_or_create(service, table: str, tenant_id: str, match: dict, insert: dict) -> str:
@@ -152,28 +225,103 @@ def generate_blueprint_quiz(
         raise ValueError("This document has no extractable text (scanned image PDF?).")
     material = text[: get_settings().generation_max_text_chars]
 
-    # 2) Build the blueprint (exam setter).
-    selected = [SelectedTopic(**t) for t in selected_topics]
-    blueprint = build_blueprint(selected, total_questions)
-
-    # 3) Generate (question writer) with Gemini primary and DeepSeek fallback.
-    system = build_blueprint_system_prompt(question_types, cognitive_level, difficulty)
-    user = build_blueprint_user_prompt(
-        material, blueprint, question_types, cognitive_level, difficulty, type_counts
+    # 2) Generate + persist from the document's own text. (For LARGE documents the
+    #    caller uses generate_and_persist_from_material directly with a Master
+    #    Blueprint as the material instead — same writer + persistence.)
+    return generate_and_persist_from_material(
+        service=service,
+        tenant_id=tid,
+        material=material,
+        subject_id=subject_id,
+        chapter_name=chapter_name,
+        selected_topics=selected_topics,
+        total_questions=total_questions,
+        question_types=question_types,
+        cognitive_level=cognitive_level,
+        difficulty=difficulty,
+        profile=profile,
+        type_counts=type_counts,
+        source_document_id=document_id,
     )
-    data, provider = complete_json_with_fallback(system, user)
-    try:
-        quiz = BPQuiz.model_validate(data)
-    except ValidationError as exc:
-        raise LLMError("Model returned invalid quiz JSON.") from exc
-    questions = quiz.questions
-    if not questions:
-        raise LLMError("Model returned no questions.")
-    for q in questions:
+
+
+def generate_and_persist_from_material(
+    *,
+    service,
+    tenant_id: str,
+    material: str,
+    subject_id: str,
+    chapter_name: str,
+    selected_topics: list[dict],
+    total_questions: int,
+    question_types: list[str],
+    cognitive_level: str,
+    difficulty: str,
+    profile: CurrentProfile,
+    type_counts: dict[str, int] | None = None,
+    selected_only_material: bool = False,
+    source_document_id: str | None = None,
+) -> dict:
+    """Write + persist a blueprint-driven quiz from a block of `material`.
+
+    `material` is either a small document's raw text (single-pass path) or a
+    consolidated Master Blueprint rendered to text (large-document path). For
+    the latter, `selected_only_material=True` tells allocation and prompting
+    that no whole-document/general coverage is available or desired.
+    """
+    tid = tenant_id
+    chapter_name = chapter_name.strip()
+
+    # Build the blueprint (exam setter).
+    selected = [SelectedTopic(**t) for t in selected_topics]
+    blueprint = build_blueprint(
+        selected, total_questions, selected_only=selected_only_material
+    )
+
+    # Generate (question writer) with Gemini primary and DeepSeek fallback.
+    system = build_blueprint_system_prompt(
+        question_types,
+        cognitive_level,
+        difficulty,
+        selected_only_material=selected_only_material,
+    )
+    user = build_blueprint_user_prompt(
+        material,
+        blueprint,
+        question_types,
+        cognitive_level,
+        difficulty,
+        type_counts,
+        selected_only_material=selected_only_material,
+    )
+    expected_counts = (
+        {kind: count for kind, count in type_counts.items() if count > 0}
+        if type_counts
+        else {kind: 0 for kind in question_types}
+    )
+    if not type_counts:
+        # The legacy caller specifies only a total and allowed types. Preserve that
+        # path by validating total count, while exact per-type enforcement is used
+        # by the teacher blueprint UI.
+        data, provider = complete_json_with_fallback(system, user)
         try:
-            q.check_shape()
-        except ValueError as exc:
-            raise LLMError(f"Model produced a malformed question: {exc}") from exc
+            quiz = BPQuiz.model_validate(data)
+        except ValidationError as exc:
+            raise LLMError("Model returned invalid quiz JSON.") from exc
+        questions = quiz.questions
+        if len(questions) != total_questions:
+            raise LLMError(
+                f"AI generated {len(questions)} questions instead of the requested "
+                f"{total_questions}."
+            )
+        for q in questions:
+            try:
+                q.check_shape()
+            except ValueError as exc:
+                raise LLMError(f"Model produced a malformed question: {exc}") from exc
+    else:
+        quiz, provider = _generate_with_exact_mix(system, user, expected_counts)
+        questions = quiz.questions
 
     # 4) Persist chapter + selected topics (exam-setter data; powers analytics).
     chapter_id = _get_or_create(
@@ -191,11 +339,14 @@ def generate_blueprint_quiz(
         )
 
     # 5) quiz_set -> variant -> questions (all pending review).
-    quiz_set = service.table("quiz_sets").insert({
+    quiz_set_values = {
         "tenant_id": tid, "chapter_id": chapter_id, "subject_id": subject_id,
         "title": f"{chapter_name} — {cognitive_level}",
         "status": "draft", "created_by": profile.user_id,
-    }).execute()
+    }
+    if source_document_id:
+        quiz_set_values["document_id"] = source_document_id
+    quiz_set = service.table("quiz_sets").insert(quiz_set_values).execute()
     quiz_set_id = quiz_set.data[0]["id"]
 
     stored: list[dict] = []

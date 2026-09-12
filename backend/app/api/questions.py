@@ -32,7 +32,7 @@ from app.services.rate_limit import (
     QUESTION_REGENERATE,
     enforce_ai_rate_limit,
 )
-from app.services.review import regenerate_question
+from app.services.review import RegenerationSourceError, regenerate_question
 from app.services.student_access import student_has_graded_question
 from app.services.tutor import explain_question
 
@@ -208,6 +208,14 @@ def regenerate(
             subject_id=question_id,
         )
         return result
+    except RegenerationSourceError as exc:
+        raise public_error(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            "This question cannot be regenerated because its original source "
+            "material is unavailable. Edit it manually instead.",
+            operation="load regeneration source material",
+            exception=exc,
+        ) from exc
     except ValueError as exc:
         raise public_error(
             404,

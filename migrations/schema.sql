@@ -23,11 +23,12 @@ create type user_role as enum ('super_admin', 'institution_admin', 'teacher', 's
 create type question_type as enum ('mcq_single', 'mcq_multi', 'numerical', 'true_false', 'fill_blank', 'descriptive');
 create type question_source as enum ('ai_generated', 'manual');
 create type review_status as enum ('pending_review', 'approved', 'rejected', 'needs_edit');
-create type document_status as enum ('uploaded', 'processing', 'completed', 'failed');
+create type document_status as enum ('uploaded', 'processing', 'completed', 'failed', 'archived');
 create type job_status as enum ('queued', 'running', 'succeeded', 'failed');
 create type variant_type as enum ('theory', 'practical', 'mixed');
 create type quiz_status as enum ('draft', 'published', 'archived');
 create type attempt_status as enum ('in_progress', 'submitted', 'graded', 'abandoned');
+create type generation_job_status as enum ('queued', 'running', 'partial', 'completed', 'failed');
 
 
 -- ============================================================================
@@ -231,6 +232,52 @@ create index idx_quizsets_tenant on quiz_sets(tenant_id);
 create index idx_quizsets_subject on quiz_sets(subject_id);
 create index idx_quizsets_tenant_document on quiz_sets(tenant_id, document_id);
 
+-- Transient, resumable state for large-document Map-Reduce analysis.
+create table document_chunks (
+  id uuid primary key default gen_random_uuid(),
+  tenant_id uuid not null references tenants(id),
+  document_id uuid not null references documents(id) on delete cascade,
+  chunk_index int not null,
+  content text not null,
+  content_hash text not null,
+  char_start int,
+  char_end int,
+  page_start int,
+  page_end int,
+  topics_json jsonb,
+  map_status job_status not null default 'queued',
+  attempts int not null default 0,
+  error_message text,
+  updated_at timestamptz not null default now(),
+  unique (document_id, chunk_index),
+  unique (document_id, content_hash)
+);
+create index idx_docchunks_document on document_chunks(document_id);
+create index idx_docchunks_tenant on document_chunks(tenant_id);
+create index idx_docchunks_mapstatus on document_chunks(document_id, map_status);
+
+create table quiz_generation_jobs (
+  id uuid primary key default gen_random_uuid(),
+  tenant_id uuid not null references tenants(id),
+  created_by uuid not null references profiles(id) on delete cascade,
+  document_id uuid not null references documents(id) on delete cascade,
+  subject_id uuid references subjects(id),
+  chapter_name text,
+  params jsonb not null default '{}'::jsonb,
+  master_blueprint jsonb,
+  status generation_job_status not null default 'queued',
+  phase text not null default 'queued',
+  total_chunks int not null default 0,
+  done_chunks int not null default 0,
+  quiz_set_id uuid references quiz_sets(id) on delete set null,
+  error_message text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+create index idx_genjobs_tenant on quiz_generation_jobs(tenant_id);
+create index idx_genjobs_document on quiz_generation_jobs(document_id);
+create index idx_genjobs_status on quiz_generation_jobs(status);
+
 create table quiz_variants (
   id uuid primary key default gen_random_uuid(),
   tenant_id uuid not null references tenants(id),
@@ -413,7 +460,8 @@ create table ai_rate_limits (
     'blueprint_generation',
     'topic_extraction',
     'question_regenerate',
-    'question_explain'
+    'question_explain',
+    'quiz_extraction'
   )),
   window_started_at timestamptz not null,
   request_count integer not null check (request_count > 0),
@@ -797,6 +845,8 @@ alter table chapters enable row level security;
 alter table topics enable row level security;
 alter table documents enable row level security;
 alter table ai_extraction_jobs enable row level security;
+alter table document_chunks enable row level security;
+alter table quiz_generation_jobs enable row level security;
 alter table questions enable row level security;
 alter table quiz_sets enable row level security;
 alter table quiz_variants enable row level security;
@@ -810,6 +860,8 @@ alter table ai_rate_limits enable row level security;
 
 revoke all on table ai_rate_limits from public, anon, authenticated;
 grant select, insert, update, delete on table ai_rate_limits to service_role;
+grant select, insert, update, delete on table document_chunks to service_role;
+grant select, insert, update, delete on table quiz_generation_jobs to service_role;
 
 -- ---------- tenants ----------
 create policy "tenant self or super admin - select" on tenants
@@ -903,6 +955,16 @@ create policy "staff reads own tenant jobs" on ai_extraction_jobs
   for select using (tenant_id = current_tenant_id() and (is_staff() or is_super_admin()));
 -- Inserts/updates to jobs happen from the FastAPI backend using the
 -- service_role key (bypasses RLS) — no client-facing write policy needed.
+
+create policy "staff reads own tenant document chunks" on document_chunks
+  for select using (
+    tenant_id = current_tenant_id() and (is_staff() or is_super_admin())
+  );
+
+create policy "staff reads own tenant generation jobs" on quiz_generation_jobs
+  for select using (
+    tenant_id = current_tenant_id() and (is_staff() or is_super_admin())
+  );
 
 -- ---------- questions ----------
 -- Students only ever see approved questions. Staff sees everything
@@ -1010,6 +1072,7 @@ grant update (full_name, avatar_url) on table profiles to authenticated;
 revoke all on table
   tenants, courses, subjects, enrollments, teacher_subjects, chapters, topics,
   documents, ai_extraction_jobs, questions, quiz_sets, quiz_variants,
+  document_chunks, quiz_generation_jobs,
   quiz_variant_questions, quiz_attempts, attempt_answers, ai_explanations,
   tenant_usage, plan_limits, ai_rate_limits
 from anon, authenticated;

@@ -134,13 +134,15 @@ def build_regen_system_prompt(question_type: str) -> str:
         "- Auto-gradeable with a single unambiguous answer. For MCQs, distractors "
         "must be plausible but clearly wrong.\n"
         "- Do NOT copy the original wording - make it a genuine alternative.\n"
+        "- Use ONLY facts, definitions, formulas, and examples supported by the "
+        "provided ORIGINAL SOURCE MATERIAL. Never introduce outside facts.\n"
         "- Include a short, correct 'explanation'.\n\n"
         'OUTPUT: a JSON object {"questions": [ <one question> ]} - JSON only, no '
         "prose, no markdown fences."
     )
 
 
-def build_regen_user_prompt(question: dict) -> str:
+def build_regen_user_prompt(question: dict, source_material: str) -> str:
     slim = {
         k: question.get(k)
         for k in (
@@ -154,6 +156,10 @@ def build_regen_user_prompt(question: dict) -> str:
         )
     }
     return (
+        "ORIGINAL SOURCE MATERIAL:\n"
+        "=== SOURCE START ===\n"
+        + source_material
+        + "\n=== SOURCE END ===\n\n"
         "EXISTING QUESTION:\n"
         + json.dumps(slim, ensure_ascii=False)
         + "\n\nWrite one fresh alternative question now."

@@ -12,6 +12,7 @@ import httpx
 
 from app.lib.config import get_settings
 from app.services.llm.base import LLMError, LLMProvider
+from app.services.llm.gemini_http import post_gemini
 
 
 class GeminiProvider(LLMProvider):
@@ -22,10 +23,6 @@ class GeminiProvider(LLMProvider):
         if not settings.gemini_api_key:
             raise LLMError("GEMINI_API_KEY is not set — cannot call Gemini.")
 
-        url = (
-            f"{settings.gemini_base_url}/models/"
-            f"{settings.gemini_model}:generateContent"
-        )
         payload = {
             "systemInstruction": {"parts": [{"text": system_prompt}]},
             "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
@@ -40,8 +37,13 @@ class GeminiProvider(LLMProvider):
         }
 
         try:
-            resp = httpx.post(url, json=payload, headers=headers, timeout=120.0)
-            resp.raise_for_status()
+            resp = post_gemini(
+                settings=settings,
+                model=settings.gemini_model,
+                payload=payload,
+                headers=headers,
+                timeout=120.0,
+            )
         except httpx.HTTPStatusError as exc:
             raise LLMError(f"Gemini returned HTTP {exc.response.status_code}.") from exc
         except httpx.HTTPError as exc:
