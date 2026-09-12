@@ -149,11 +149,11 @@ class Settings:
             "DEEPSEEK_BASE_URL", "https://api.deepseek.com"
         )
         self.deepseek_model: str = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
-        # DeepSeek's default max output is small (4096) and silently truncates a
-        # large JSON mid-way. Raise it to the model max so the Map-Reduce
-        # pipeline's rich per-chunk output isn't cut off. Tunable from Railway.
+        # DeepSeek defaults non-thinking responses to 8K output tokens, but its
+        # current API accepts a much larger explicit limit. The REDUCE response
+        # contains retained source material, so reserve Gemini-equivalent room.
         self.deepseek_max_output_tokens: int = _positive_int(
-            "DEEPSEEK_MAX_OUTPUT_TOKENS", 8192
+            "DEEPSEEK_MAX_OUTPUT_TOKENS", 65536
         )
 
         # Gemini (Google). If a key is set, it becomes the PRIMARY model and
@@ -162,7 +162,13 @@ class Settings:
         self.gemini_base_url: str = os.getenv(
             "GEMINI_BASE_URL", "https://generativelanguage.googleapis.com/v1beta"
         )
-        self.gemini_model: str = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+        self.gemini_model: str = os.getenv("GEMINI_MODEL", "gemini-3.5-flash")
+        # A stale/retired model can remain visible in models.list while its
+        # generateContent route returns 404. Retry that one condition with this
+        # current model before moving to the cross-provider fallback.
+        self.gemini_fallback_model: str = os.getenv(
+            "GEMINI_FALLBACK_MODEL", "gemini-3.5-flash"
+        )
 
         if not self.deepseek_api_key and not self.gemini_api_key:
             raise RuntimeError(

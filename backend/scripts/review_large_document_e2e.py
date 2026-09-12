@@ -16,13 +16,14 @@ import re
 import sys
 import threading
 import time
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import httpx
 
 from app.lib.config import get_settings
-from app.services.blueprint import BPQuiz, SelectedTopic, build_blueprint
+from app.services.blueprint import SelectedTopic, _generate_with_exact_mix, build_blueprint
 from app.services.blueprint_prompts import (
     build_blueprint_system_prompt,
     build_blueprint_user_prompt,
@@ -32,7 +33,7 @@ from app.services.document_profile import profile_to_summary
 from app.services.extraction import extract_text_with_pages
 from app.services.llm.structured import (
     complete_json_large,
-    complete_json_with_fallback,
+    _deepseek_json_large,
 )
 from app.services.map_reduce_prompts import (
     MAP_SYSTEM,
@@ -141,17 +142,29 @@ def main() -> int:
     )
 
     raw_topics = [topic for item in mapped for topic in item["topics"]]
+    reduce_user = build_reduce_user_prompt(
+        document_title=pdf_path.name,
+        topics_json=json.dumps(raw_topics, ensure_ascii=False),
+        document_summary=summary,
+    )
     reduced_data, reduce_provider = complete_json_large(
         REDUCE_SYSTEM,
-        build_reduce_user_prompt(
-            document_title=pdf_path.name,
-            topics_json=json.dumps(raw_topics, ensure_ascii=False),
-            document_summary=summary,
-        ),
+        reduce_user,
     )
     calls.append({"stage": "reduce", "provider": reduce_provider})
     consolidated = validate_map_output(reduced_data)
     spot_check = spot_check_verbatim_facts(consolidated, mapped)
+
+    # Explicitly exercise the provider that previously truncated REDUCE at its
+    # old 8,192-token application ceiling. This is test-only and is reported
+    # separately from the production logical call count below.
+    deepseek_reduced = validate_map_output(
+        _deepseek_json_large(
+            REDUCE_SYSTEM,
+            reduce_user,
+            max_tokens=settings.deepseek_max_output_tokens,
+        )
+    )
 
     late_text = "\n".join(
         extracted.text[span.char_start : span.char_end]
@@ -197,9 +210,12 @@ def main() -> int:
         {"mcq_single": 1, "true_false": 1, "fill_blank": 1},
         selected_only_material=True,
     )
-    quiz_data, generation_provider = complete_json_with_fallback(system, user)
+    expected_counts = {"mcq_single": 1, "true_false": 1, "fill_blank": 1}
+    quiz, generation_provider = _generate_with_exact_mix(
+        system, user, expected_counts
+    )
     calls.append({"stage": "generation", "provider": generation_provider})
-    quiz = BPQuiz.model_validate(quiz_data)
+    actual_counts = Counter(question.type for question in quiz.questions)
 
     fact_words = _normal_words(late_fact)
     ranked = sorted(
@@ -244,6 +260,13 @@ def main() -> int:
         "generated_explanation": best.explanation,
         "fact_question_overlap_words": overlap,
         "verbatim_spot_check": spot_check,
+        "deepseek_reduce_verification": {
+            "max_tokens": settings.deepseek_max_output_tokens,
+            "valid_topic_count": len(deepseek_reduced),
+            "completed_without_truncation": True,
+        },
+        "requested_question_type_counts": expected_counts,
+        "generated_question_type_counts": dict(actual_counts),
         "logical_ai_calls": calls,
         "logical_ai_call_count": len(calls),
         "external_ai_http_attempts": http_attempts,

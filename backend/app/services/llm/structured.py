@@ -20,6 +20,7 @@ import httpx
 from app.lib.config import get_settings
 from app.services.llm import complete_with_fallback
 from app.services.llm.base import LLMError
+from app.services.llm.gemini_http import post_gemini
 
 
 def gemini_json(
@@ -47,7 +48,6 @@ def gemini_json(
         raise LLMError("GEMINI_API_KEY is not set — cannot call Gemini.")
 
     model = model or settings.gemini_blueprint_model
-    url = f"{settings.gemini_base_url}/models/{model}:generateContent"
     generation_config: dict = {
         "temperature": temperature,
         "responseMimeType": "application/json",
@@ -65,8 +65,13 @@ def gemini_json(
     }
 
     try:
-        resp = httpx.post(url, json=payload, headers=headers, timeout=180.0)
-        resp.raise_for_status()
+        resp = post_gemini(
+            settings=settings,
+            model=model,
+            payload=payload,
+            headers=headers,
+            timeout=180.0,
+        )
     except httpx.HTTPStatusError as exc:
         raise LLMError(f"Gemini returned HTTP {exc.response.status_code}.") from exc
     except httpx.HTTPError as exc:
@@ -109,7 +114,6 @@ def _gemini_json_large(
     the whole budget goes to the answer, and a high output cap so the response
     isn't truncated mid-JSON. Detects the MAX_TOKENS finish reason explicitly."""
     settings = get_settings()
-    url = f"{settings.gemini_base_url}/models/{model}:generateContent"
     payload = {
         "systemInstruction": {"parts": [{"text": system_prompt}]},
         "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
@@ -122,8 +126,13 @@ def _gemini_json_large(
     }
     headers = {"x-goog-api-key": settings.gemini_api_key, "Content-Type": "application/json"}
     try:
-        resp = httpx.post(url, json=payload, headers=headers, timeout=180.0)
-        resp.raise_for_status()
+        resp = post_gemini(
+            settings=settings,
+            model=model,
+            payload=payload,
+            headers=headers,
+            timeout=180.0,
+        )
     except httpx.HTTPStatusError as exc:
         raise LLMError(f"Gemini returned HTTP {exc.response.status_code}.") from exc
     except httpx.HTTPError as exc:
@@ -261,7 +270,6 @@ def gemini_json_multimodal(
         raise LLMError("GEMINI_API_KEY is not set — cannot call Gemini.")
 
     model = model or settings.gemini_model
-    url = f"{settings.gemini_base_url}/models/{model}:generateContent"
 
     parts: list[dict] = [{"text": user_prompt}]
     for mime_type, raw in files:
@@ -294,13 +302,13 @@ def gemini_json_multimodal(
     }
 
     try:
-        resp = httpx.post(
-            url,
-            json=payload,
+        resp = post_gemini(
+            settings=settings,
+            model=model,
+            payload=payload,
             headers=headers,
             timeout=settings.gemini_vision_timeout_seconds,
         )
-        resp.raise_for_status()
     except httpx.HTTPStatusError as exc:
         raise LLMError(f"Gemini returned HTTP {exc.response.status_code}.") from exc
     except httpx.HTTPError as exc:
