@@ -53,7 +53,12 @@ class _Query:
         self.in_filters.append((column, set(values)))
         return self
 
-    def order(self, _column: str):
+    def order(self, _column: str, **_kwargs):
+        return self
+
+    def range(self, start: int, end: int):
+        self.start = start
+        self.end = end
         return self
 
     def maybe_single(self):
@@ -74,6 +79,8 @@ class _Query:
             for row in rows:
                 row.update(self.updates)
         result = [dict(row) for row in rows]
+        if hasattr(self, "start"):
+            result = result[self.start : self.end + 1]
         return SimpleNamespace(data=(result[0] if result else None) if self.single else result)
 
 
@@ -172,13 +179,25 @@ class InstitutionTeacherManagementTests(unittest.TestCase):
         self.service_patch.stop()
 
     def test_teacher_list_excludes_students_and_other_tenants(self) -> None:
-        teachers = list_users(self.profile)
+        teachers = list_users(profile=self.profile)
 
         self.assertEqual({teacher["id"] for teacher in teachers}, {"teacher-a", "teacher-enrolled"})
         assigned = next(teacher for teacher in teachers if teacher["id"] == "teacher-a")
         self.assertEqual(assigned["courses"], ["First Year"])
         self.assertEqual(assigned["subject_count"], 1)
         self.assertEqual(teachers[0]["id"], "teacher-enrolled")
+
+    def test_teacher_directory_is_bounded_and_pageable(self) -> None:
+        first_page = list_users(page=1, page_size=1, profile=self.profile)
+        second_page = list_users(page=2, page_size=1, profile=self.profile)
+
+        self.assertEqual(len(first_page), 1)
+        self.assertEqual(len(second_page), 1)
+        self.assertNotEqual(first_page[0]["id"], second_page[0]["id"])
+
+        with self.assertRaises(HTTPException) as error:
+            list_users(page=1, page_size=101, profile=self.profile)
+        self.assertEqual(error.exception.status_code, 400)
 
     def test_teacher_course_counts_only_student_enrollments(self) -> None:
         courses = list_teacher_courses("teacher-a", self.profile)

@@ -616,9 +616,9 @@ def publish_quiz_set(
     profile: CurrentProfile = Depends(get_current_profile),
 ) -> dict:
     """
-    Publish the set. Students only ever see questions with review_status
-    'approved' inside a published set (enforced by RLS), so pending/rejected
-    questions simply don't appear.
+    Publish the set. Student-facing application queries explicitly return only
+    questions with review_status 'approved' inside a published set. The backend
+    uses the service-role client, so this filtering is not delegated to RLS.
     """
     _require_teacher(profile)
     service = get_service_client()

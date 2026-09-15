@@ -40,9 +40,22 @@ class AdminAuthPaginationTests(unittest.TestCase):
         self.assertEqual(admin.calls, [(1, 100), (2, 100), (3, 100)])
 
         service, _ = _service(expected)
-        emails = _email_by_auth_user_id(service)
-        self.assertEqual(len(emails), 225)
+        emails = _email_by_auth_user_id(service, {"user-0", "user-224"})
+        self.assertEqual(len(emails), 2)
+        self.assertEqual(emails["user-0"], "user0@example.com")
         self.assertEqual(emails["user-224"], "user224@example.com")
+
+    def test_email_lookup_keeps_only_requested_users_and_stops_early(self) -> None:
+        expected = [
+            SimpleNamespace(id=f"user-{number}", email=f"user{number}@example.com")
+            for number in range(225)
+        ]
+        service, admin = _service(expected)
+
+        emails = _email_by_auth_user_id(service, {"user-0", "user-3"})
+
+        self.assertEqual(set(emails), {"user-0", "user-3"})
+        self.assertEqual(admin.calls, [(1, 1000)])
 
     def test_exact_full_page_fetches_empty_final_page(self) -> None:
         expected = [

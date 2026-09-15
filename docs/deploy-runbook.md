@@ -171,7 +171,7 @@ explicitly in Railway so the production policy is visible and easy to edit:
 | `SUPABASE_URL` | Supabase project URL |
 | `SUPABASE_ANON_KEY` | anon public key |
 | `SUPABASE_SERVICE_ROLE_KEY` | service role key (server-only, **secret**) |
-| `SUPABASE_JWT_SECRET` | for verifying JWTs (ES256 via JWKS) |
+| `SUPABASE_JWT_SECRET` | verifies legacy HS256 JWTs; ES256/RS256 JWTs are verified with Supabase JWKS |
 | `FRONTEND_ORIGIN` | exact deployed **frontend origin** (scheme + hostname, no path or trailing slash) for CORS |
 | `GEMINI_API_KEY` | quiz generation (primary, if set) |
 | `GEMINI_MODEL` | full-tier Gemini model used for generation, blueprint, regeneration, topic extraction, and AI tutor (default `gemini-3.5-flash`; code default in `backend/app/lib/config.py`) |

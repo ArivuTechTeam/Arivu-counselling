@@ -108,6 +108,7 @@ class _Query:
         self.in_filters: list[tuple[str, set[object]]] = []
         self.ordering: tuple[str, bool] | None = None
         self.select_str: str | None = None
+        self.range_bounds: tuple[int, int] | None = None
 
     def select(self, columns: str):
         self.select_str = columns
@@ -125,6 +126,10 @@ class _Query:
         self.ordering = (column, desc)
         return self
 
+    def range(self, start: int, end: int):
+        self.range_bounds = (start, end)
+        return self
+
     def execute(self):
         rows = [dict(row) for row in self.service.tables[self.table]]
         for column, value in self.filters:
@@ -134,6 +139,9 @@ class _Query:
         if self.ordering:
             column, desc = self.ordering
             rows.sort(key=lambda row: row.get(column) or "", reverse=desc)
+        if self.range_bounds:
+            start, end = self.range_bounds
+            rows = rows[start : end + 1]
         if self.select_str:
             embeds = _parse_embeds(self.select_str)
             if embeds:
@@ -324,7 +332,7 @@ class AdminQuizPerformanceTests(unittest.TestCase):
             "app.api.admin._email_by_auth_user_id",
             return_value={"teacher-a": "ada@example.com"},
         ):
-            teachers = list_users(self.profile)
+            teachers = list_users(profile=self.profile)
         stats = institution_stats(self.profile)
         overview = asyncio.run(institution_overview(self.profile))
         analytics = asyncio.run(institution_analytics(self.profile))
@@ -357,7 +365,7 @@ class AdminQuizPerformanceTests(unittest.TestCase):
             "app.api.admin._email_by_auth_user_id",
             return_value={"teacher-a": "ada@example.com"},
         ):
-            list_users(self.profile)
+            list_users(profile=self.profile)
         institution_stats(self.profile)
         asyncio.run(institution_overview(self.profile))
         asyncio.run(institution_analytics(self.profile))

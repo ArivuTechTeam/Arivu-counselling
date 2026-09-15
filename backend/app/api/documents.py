@@ -117,7 +117,9 @@ async def upload_document(
             detail="Only PDF and DOCX files are supported.",
         )
 
-    content = await file.read()
+    # Read at most one byte beyond the configured ceiling. This rejects an
+    # oversized upload without first buffering its entire body in memory.
+    content = await file.read(MAX_BYTES + 1)
     if not content:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -166,7 +168,9 @@ async def upload_document(
         logger.warning("Document extraction failed (%s)", type(exc).__name__)
         service.table("documents").update(
             {"status": "failed", "error_message": "Document extraction failed."}
-        ).eq("id", doc_id).execute()
+        ).eq("id", doc_id).eq("tenant_id", profile.tenant_id).eq(
+            "uploaded_by", profile.user_id
+        ).execute()
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="Could not extract text from this file. It may be corrupted, "
@@ -181,7 +185,9 @@ async def upload_document(
         )
         service.table("documents").update(
             {"status": "failed", "error_message": message}
-        ).eq("id", doc_id).execute()
+        ).eq("id", doc_id).eq("tenant_id", profile.tenant_id).eq(
+            "uploaded_by", profile.user_id
+        ).execute()
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=message,
@@ -189,6 +195,8 @@ async def upload_document(
 
     service.table("documents").update({"status": "completed"}).eq(
         "id", doc_id
+    ).eq("tenant_id", profile.tenant_id).eq(
+        "uploaded_by", profile.user_id
     ).execute()
 
     char_count = len(text)
@@ -286,7 +294,9 @@ def check_duplicate(
             ).hexdigest()
             service.table("documents").update({"content_hash": content_hash}).eq(
                 "id", body.document_id
-            ).eq("tenant_id", profile.tenant_id).execute()
+            ).eq("tenant_id", profile.tenant_id).eq(
+                "uploaded_by", profile.user_id
+            ).execute()
         except Exception:  # noqa: BLE001 - best-effort; a missing hash just skips the check
             return DuplicateCheckResult(duplicate=False)
 
