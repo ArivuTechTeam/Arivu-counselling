@@ -218,14 +218,10 @@ class DuplicateCheckResult(BaseModel):
     previous_uploaded_at: str | None = None
 
 
-def _get_or_create_chapter(
+def _find_chapter(
     service, tenant_id: str, subject_id: str, name: str
-) -> str:
-    """Return the chapter id for (subject, name), creating it if absent.
-
-    Chapters are unique per (tenant, subject, name) (migration-16), so this is a
-    safe get-or-create and mirrors how the generation path files chapters.
-    """
+) -> str | None:
+    """Return an existing chapter without mutating data during an advisory check."""
     rows = (
         service.table("chapters")
         .select("id")
@@ -239,12 +235,7 @@ def _get_or_create_chapter(
     )
     if rows:
         return rows[0]["id"]
-    created = (
-        service.table("chapters")
-        .insert({"tenant_id": tenant_id, "subject_id": subject_id, "name": name})
-        .execute()
-    )
-    return created.data[0]["id"]
+    return None
 
 
 @router.post("/check-duplicate", response_model=DuplicateCheckResult)
@@ -256,9 +247,7 @@ def check_duplicate(
     subject + chapter?
 
     Called when the teacher clicks "Extract topics" (subject + chapter + document
-    are all chosen). It files the current document under the chosen chapter so a
-    later re-upload of the same file can be detected, then reports whether another
-    same-content document is already filed there. This never blocks — the caller
+    are all chosen). This never blocks or creates application records — the caller
     proceeds regardless; it only surfaces a warning the teacher can act on.
     """
     _require_teacher(profile)
@@ -301,10 +290,13 @@ def check_duplicate(
         except Exception:  # noqa: BLE001 - best-effort; a missing hash just skips the check
             return DuplicateCheckResult(duplicate=False)
 
-    # Resolve (creating if needed) the chapter this document is being filed under.
-    chapter_id = _get_or_create_chapter(
+    # A chapter with no successfully generated quiz cannot have a duplicate quiz.
+    # Keep this advisory read free of side effects; generation files the document.
+    chapter_id = _find_chapter(
         service, profile.tenant_id, body.subject_id, chapter_name
     )
+    if chapter_id is None:
+        return DuplicateCheckResult(duplicate=False)
 
     # Another same-content document already filed under this exact chapter is a
     # genuine same-subject + same-chapter re-upload.
@@ -316,19 +308,13 @@ def check_duplicate(
         .eq("content_hash", content_hash)
         .eq("chapter_id", chapter_id)
         .neq("id", body.document_id)
+        .neq("status", "archived")
         .order("created_at", desc=True)
         .limit(1)
         .execute()
         .data
         or []
     )
-
-    # File the current document under this chapter (idempotent) so the NEXT
-    # re-upload of the same file here is detectable.
-    if doc_row.get("chapter_id") != chapter_id:
-        service.table("documents").update({"chapter_id": chapter_id}).eq(
-            "id", body.document_id
-        ).eq("tenant_id", profile.tenant_id).execute()
 
     if others:
         prev = others[0]

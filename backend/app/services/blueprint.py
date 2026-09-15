@@ -10,6 +10,7 @@ tagged with that topic's id; general questions are left untagged (topic_id NULL)
 
 from __future__ import annotations
 
+import logging
 from collections import Counter
 from typing import Any, Literal
 
@@ -40,6 +41,7 @@ _WEIGHT_UNITS = {"high": 3, "medium": 2, "low": 1}
 # Share of the quiz devoted to the selected priority topics; the remainder
 # covers the rest of the document. Tunable without touching the flow.
 _EMPHASIS_FRACTION = 0.7
+logger = logging.getLogger(__name__)
 
 
 class SelectedTopic(BaseModel):
@@ -87,7 +89,7 @@ def build_blueprint(
     # counts (the teacher set them directly). The quiz is built ONLY from these
     # topics — no High/Med/Low weight math and no general coverage. The total is
     # simply the sum of every topic's counts.
-    if any(t.counts for t in selected):
+    if any(t.counts is not None for t in selected):
         topics = []
         for t in selected:
             counts = {k: int(v) for k, v in (t.counts or {}).items() if v and v > 0}
@@ -134,7 +136,11 @@ def build_blueprint(
     return {"topics": topics, "general": general, "total": emphasis_total + general}
 
 
-def _validated_generated_quiz(data: object, expected_counts: dict[str, int]) -> BPQuiz:
+def _validated_generated_quiz(
+    data: object,
+    expected_counts: dict[str, int],
+    expected_topic_counts: dict[str, dict[str, int]] | None = None,
+) -> BPQuiz:
     """Validate shape and the teacher's exact requested type distribution."""
     try:
         quiz = BPQuiz.model_validate(data)
@@ -165,16 +171,43 @@ def _validated_generated_quiz(data: object, expected_counts: dict[str, int]) -> 
             f"requested {sum(expected.values())} ({expected_text}); "
             f"received {sum(actual.values())} ({actual_text})."
         )
+
+    if expected_topic_counts is not None:
+        expected_by_topic = Counter(
+            {
+                (topic.strip().casefold(), kind): count
+                for topic, counts in expected_topic_counts.items()
+                for kind, count in counts.items()
+                if count > 0
+            }
+        )
+        actual_by_topic = Counter(
+            ((question.topic or "").strip().casefold(), question.type)
+            for question in quiz.questions
+        )
+        if actual_by_topic != expected_by_topic:
+            raise LLMError(
+                "AI per-topic question mix mismatch: generated questions did not "
+                "match the exact topic and question-type allocation."
+            )
     return quiz
 
 
 def _generate_with_exact_mix(
-    system: str, user: str, expected_counts: dict[str, int]
+    system: str,
+    user: str,
+    expected_counts: dict[str, int],
+    expected_topic_counts: dict[str, dict[str, int]] | None = None,
 ) -> tuple[BPQuiz, str]:
     """Generate once, then make one explicit correction attempt for a bad mix."""
     data, provider = complete_json_with_fallback(system, user)
     try:
-        return _validated_generated_quiz(data, expected_counts), provider
+        return (
+            _validated_generated_quiz(
+                data, expected_counts, expected_topic_counts
+            ),
+            provider,
+        )
     except LLMError as first_error:
         if "question mix mismatch" not in str(first_error):
             raise
@@ -193,7 +226,12 @@ def _generate_with_exact_mix(
         corrected, corrected_provider = complete_json_with_fallback(
             corrective_system, user
         )
-        return _validated_generated_quiz(corrected, expected_counts), corrected_provider
+        return (
+            _validated_generated_quiz(
+                corrected, expected_counts, expected_topic_counts
+            ),
+            corrected_provider,
+        )
 
 
 def _get_or_create(service, table: str, tenant_id: str, match: dict, insert: dict) -> str:
@@ -297,7 +335,7 @@ def generate_and_persist_from_material(
     selected = [SelectedTopic(**t) for t in selected_topics]
     # A per-topic blueprint (each topic carries its own counts) is inherently
     # selected-topics-only: there is no general/whole-document coverage.
-    per_topic = any(t.counts for t in selected)
+    per_topic = any(t.counts is not None for t in selected)
     selected_only = selected_only_material or per_topic
     blueprint = build_blueprint(selected, total_questions, selected_only=selected_only)
 
@@ -343,7 +381,17 @@ def generate_and_persist_from_material(
             except ValueError as exc:
                 raise LLMError(f"Model produced a malformed question: {exc}") from exc
     else:
-        quiz, provider = _generate_with_exact_mix(system, user, expected_counts)
+        expected_topic_counts = (
+            {topic["name"]: topic["counts"] for topic in blueprint["topics"]}
+            if per_topic
+            else None
+        )
+        quiz, provider = _generate_with_exact_mix(
+            system,
+            user,
+            expected_counts,
+            expected_topic_counts,
+        )
         questions = quiz.questions
 
     # 4) Persist chapter + selected topics (exam-setter data; powers analytics).
@@ -355,7 +403,7 @@ def generate_and_persist_from_material(
     topic_id_by_name: dict[str, str] = {}
     for t in selected:
         name = t.name.strip()
-        topic_id_by_name[name.lower()] = _get_or_create(
+        topic_id_by_name[name.casefold()] = _get_or_create(
             service, "topics", tid,
             {"chapter_id": chapter_id, "name": name},
             {"chapter_id": chapter_id, "name": name},
@@ -383,9 +431,11 @@ def generate_and_persist_from_material(
         variant_id = variant.data[0]["id"]
 
         for index, q in enumerate(questions):
-            tag = (q.topic or "").strip().lower()
+            tag = (q.topic or "").strip().casefold()
             topic_id = (
-                None if tag in ("", GENERAL_TOPIC.lower()) else topic_id_by_name.get(tag)
+                None
+                if tag in ("", GENERAL_TOPIC.casefold())
+                else topic_id_by_name.get(tag)
             )
             qrow = service.table("questions").insert({
                 "tenant_id": tid, "chapter_id": chapter_id, "topic_id": topic_id,
@@ -407,6 +457,17 @@ def generate_and_persist_from_material(
         if created_question_ids:
             service.table("questions").delete().in_("id", created_question_ids).execute()
         raise
+
+    if source_document_id:
+        try:
+            service.table("documents").update({"chapter_id": chapter_id}).eq(
+                "id", source_document_id
+            ).eq("tenant_id", tid).eq("uploaded_by", profile.user_id).execute()
+        except Exception as exc:  # noqa: BLE001 - quiz generation already succeeded
+            logger.warning(
+                "Could not file source document under generated chapter (%s)",
+                type(exc).__name__,
+            )
 
     # Instrument: one 'question.generated' event per question (best-effort).
     log_events(

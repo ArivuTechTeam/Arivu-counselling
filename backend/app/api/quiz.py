@@ -117,11 +117,11 @@ class BlueprintGenerateRequest(BaseModel):
     document_id: str
     subject_id: str
     chapter_name: str
-    selected_topics: list[BlueprintTopicIn] = []
+    selected_topics: list[BlueprintTopicIn] = Field(default_factory=list)
     # Legacy mode: how many questions of EACH type across the whole quiz, e.g.
     # {"mcq_single": 3, "true_false": 2}. Optional — omitted in per-topic mode,
     # where each topic carries its own counts and the total is their sum.
-    type_counts: dict[str, int] = {}
+    type_counts: dict[str, int] = Field(default_factory=dict)
     cognitive_level: Literal["theory", "practical", "mixed"] = "mixed"
     difficulty: Literal["easy", "medium", "hard"] = "medium"
 
@@ -137,24 +137,47 @@ def _resolve_blueprint_plan(
     through to the generator, and the aggregate drives the exact-mix enforcement.
     Legacy mode — no per-topic counts: the global `type_counts` drive the total.
     """
-    per_topic = any(t.counts for t in selected_topics)
+    normalized_names: set[str] = set()
+    for topic in selected_topics:
+        name = topic.name.strip()
+        if not name:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Every selected topic needs a name.",
+            )
+        normalized = name.casefold()
+        if normalized in normalized_names:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Select each topic only once (‘{name}’ is duplicated).",
+            )
+        normalized_names.add(normalized)
+
+    per_topic = any(t.counts is not None for t in selected_topics)
     if per_topic:
         selected: list[dict] = []
         aggregate: dict[str, int] = {}
         for topic in selected_topics:
-            counts = {k: int(v) for k, v in (topic.counts or {}).items() if v and v > 0}
-            invalid = set(counts) - CORE_TYPES
+            raw_counts = topic.counts or {}
+            invalid = set(raw_counts) - CORE_TYPES
             if invalid:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail=f"Unsupported question types: {sorted(invalid)}.",
                 )
+            negative = sorted(kind for kind, count in raw_counts.items() if count < 0)
+            if negative:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Question counts cannot be negative: {negative}.",
+                )
+            counts = {k: int(v) for k, v in raw_counts.items() if v > 0}
             if sum(counts.values()) < 1:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail=f"Every selected topic needs at least one question (‘{topic.name}’).",
                 )
-            selected.append({"name": topic.name, "counts": counts})
+            selected.append({"name": topic.name.strip(), "counts": counts})
             for kind, count in counts.items():
                 aggregate[kind] = aggregate.get(kind, 0) + count
         total = sum(aggregate.values())
@@ -168,7 +191,10 @@ def _resolve_blueprint_plan(
             detail=f"Unsupported question types: {sorted(invalid)}.",
         )
     total = sum(counts.values())
-    return [t.model_dump() for t in selected_topics], counts, total, list(counts.keys())
+    selected = [
+        {**topic.model_dump(), "name": topic.name.strip()} for topic in selected_topics
+    ]
+    return selected, counts, total, list(counts.keys())
 
 
 @router.post("/generate-blueprint")
@@ -455,9 +481,9 @@ def retry_generation_job(
 class JobGenerateRequest(BaseModel):
     subject_id: str
     chapter_name: str
-    selected_topics: list[BlueprintTopicIn] = []
+    selected_topics: list[BlueprintTopicIn] = Field(default_factory=list)
     # Optional in per-topic mode (see BlueprintGenerateRequest.type_counts).
-    type_counts: dict[str, int] = {}
+    type_counts: dict[str, int] = Field(default_factory=dict)
     cognitive_level: Literal["theory", "practical", "mixed"] = "mixed"
     difficulty: Literal["easy", "medium", "hard"] = "medium"
 
