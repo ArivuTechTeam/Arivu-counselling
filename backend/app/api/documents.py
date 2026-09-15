@@ -12,6 +12,7 @@ Flow for POST /api/v1/documents/upload:
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import uuid
 
@@ -20,9 +21,10 @@ from pydantic import BaseModel
 from starlette.concurrency import run_in_threadpool
 
 from app.lib.auth import CurrentProfile, get_current_profile
-from app.lib.storage import signed_url, upload_bytes
+from app.lib.storage import download_bytes, signed_url, upload_bytes
 from app.lib.supabase import get_service_client
 from app.services.extraction import MIN_READABLE_PDF_TEXT_CHARS, extract_text
+from app.services.teacher_access import teacher_has_subject
 
 router = APIRouter(prefix="/api/v1/documents", tags=["documents"])
 logger = logging.getLogger(__name__)
@@ -135,6 +137,8 @@ async def upload_document(
 
     # 2) Record the document. The service client bypasses RLS, so we set
     #    tenant_id and uploaded_by explicitly from the VERIFIED profile.
+    #    content_hash lets a later "same subject + chapter" re-upload be flagged
+    #    (see /check-duplicate) — same SHA-256 the extraction path already stores.
     inserted = (
         service.table("documents")
         .insert(
@@ -145,6 +149,7 @@ async def upload_document(
                 "original_filename": filename,
                 "file_type": ext,
                 "status": "uploaded",
+                "content_hash": hashlib.sha256(content).hexdigest(),
             }
         )
         .execute()
@@ -199,6 +204,140 @@ async def upload_document(
         char_count=char_count,
         truncated=char_count > PREVIEW_CHARS,
     )
+
+
+class DuplicateCheckRequest(BaseModel):
+    document_id: str
+    subject_id: str
+    chapter_name: str
+
+
+class DuplicateCheckResult(BaseModel):
+    duplicate: bool
+    previous_filename: str | None = None
+    previous_uploaded_at: str | None = None
+
+
+def _get_or_create_chapter(
+    service, tenant_id: str, subject_id: str, name: str
+) -> str:
+    """Return the chapter id for (subject, name), creating it if absent.
+
+    Chapters are unique per (tenant, subject, name) (migration-16), so this is a
+    safe get-or-create and mirrors how the generation path files chapters.
+    """
+    rows = (
+        service.table("chapters")
+        .select("id")
+        .eq("tenant_id", tenant_id)
+        .eq("subject_id", subject_id)
+        .eq("name", name)
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    if rows:
+        return rows[0]["id"]
+    created = (
+        service.table("chapters")
+        .insert({"tenant_id": tenant_id, "subject_id": subject_id, "name": name})
+        .execute()
+    )
+    return created.data[0]["id"]
+
+
+@router.post("/check-duplicate", response_model=DuplicateCheckResult)
+def check_duplicate(
+    body: DuplicateCheckRequest,
+    profile: CurrentProfile = Depends(get_current_profile),
+) -> DuplicateCheckResult:
+    """Non-blocking warning: has the SAME file already been filed under this SAME
+    subject + chapter?
+
+    Called when the teacher clicks "Extract topics" (subject + chapter + document
+    are all chosen). It files the current document under the chosen chapter so a
+    later re-upload of the same file can be detected, then reports whether another
+    same-content document is already filed there. This never blocks — the caller
+    proceeds regardless; it only surfaces a warning the teacher can act on.
+    """
+    _require_teacher(profile)
+    service = get_service_client()
+
+    # Authorise: the teacher must own the target subject (same rule as generation).
+    if not teacher_has_subject(service, profile, body.subject_id):
+        raise HTTPException(status_code=404, detail="Subject not found.")
+
+    chapter_name = body.chapter_name.strip()
+    if not chapter_name:
+        raise HTTPException(status_code=400, detail="Chapter is required.")
+
+    # Fetch the current document, scoped to the caller.
+    doc = (
+        service.table("documents")
+        .select("id, storage_path, content_hash, chapter_id")
+        .eq("id", body.document_id)
+        .eq("tenant_id", profile.tenant_id)
+        .eq("uploaded_by", profile.user_id)
+        .maybe_single()
+        .execute()
+    )
+    if doc is None or not doc.data:
+        raise HTTPException(status_code=404, detail="Document not found.")
+    doc_row = doc.data
+
+    # Ensure the content hash exists (backfill documents uploaded before this
+    # feature). Hashing is best-effort: never block extraction if storage read
+    # fails.
+    content_hash = doc_row.get("content_hash")
+    if not content_hash:
+        try:
+            content_hash = hashlib.sha256(
+                download_bytes(doc_row["storage_path"])
+            ).hexdigest()
+            service.table("documents").update({"content_hash": content_hash}).eq(
+                "id", body.document_id
+            ).eq("tenant_id", profile.tenant_id).execute()
+        except Exception:  # noqa: BLE001 - best-effort; a missing hash just skips the check
+            return DuplicateCheckResult(duplicate=False)
+
+    # Resolve (creating if needed) the chapter this document is being filed under.
+    chapter_id = _get_or_create_chapter(
+        service, profile.tenant_id, body.subject_id, chapter_name
+    )
+
+    # Another same-content document already filed under this exact chapter is a
+    # genuine same-subject + same-chapter re-upload.
+    others = (
+        service.table("documents")
+        .select("original_filename, created_at")
+        .eq("tenant_id", profile.tenant_id)
+        .eq("uploaded_by", profile.user_id)
+        .eq("content_hash", content_hash)
+        .eq("chapter_id", chapter_id)
+        .neq("id", body.document_id)
+        .order("created_at", desc=True)
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+
+    # File the current document under this chapter (idempotent) so the NEXT
+    # re-upload of the same file here is detectable.
+    if doc_row.get("chapter_id") != chapter_id:
+        service.table("documents").update({"chapter_id": chapter_id}).eq(
+            "id", body.document_id
+        ).eq("tenant_id", profile.tenant_id).execute()
+
+    if others:
+        prev = others[0]
+        return DuplicateCheckResult(
+            duplicate=True,
+            previous_filename=prev.get("original_filename"),
+            previous_uploaded_at=str(prev.get("created_at") or "")[:10] or None,
+        )
+    return DuplicateCheckResult(duplicate=False)
 
 
 @router.get("", response_model=list[DocumentOut])

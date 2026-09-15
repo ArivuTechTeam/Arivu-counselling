@@ -1604,15 +1604,23 @@ export const extractTopics = (documentId: string) =>
   jsonRequest<ExtractedTopics>(`/api/v1/documents/${documentId}/topics`, "POST");
 
 export type TopicWeight = "high" | "medium" | "low";
-export type BlueprintTopicInput = { name: string; weight: TopicWeight };
+export type BlueprintTopicInput = {
+  name: string;
+  weight?: TopicWeight;
+  // Per-topic blueprint: exact per-format counts for this topic, e.g.
+  // { mcq_single: 2, fill_blank: 1 }. When any topic sets `counts`, the backend
+  // treats the request as per-topic mode (weight ignored, selected topics only).
+  counts?: Record<string, number>;
+};
 
 export type BlueprintGenerateRequest = {
   document_id: string;
   subject_id: string;
   chapter_name: string;
   selected_topics: BlueprintTopicInput[];
-  // How many questions of each type, e.g. { mcq_single: 3, true_false: 2 }.
-  type_counts: Record<string, number>;
+  // Legacy global per-type counts, e.g. { mcq_single: 3, true_false: 2 }.
+  // Optional / omitted in per-topic mode (each topic carries its own counts).
+  type_counts?: Record<string, number>;
   cognitive_level: string;
   difficulty: string;
 };
@@ -1697,3 +1705,23 @@ export const generateFromJob = (
     req,
     90_000,
   );
+
+export type DuplicateCheck = {
+  duplicate: boolean;
+  previous_filename?: string | null;
+  previous_uploaded_at?: string | null;
+};
+
+/** Non-blocking warning: is the SAME file already filed under this SAME subject
+ * + chapter? Called at the "Extract topics" step; the caller proceeds either
+ * way and only surfaces a warning banner when `duplicate` is true. */
+export const checkDocumentDuplicate = (
+  documentId: string,
+  subjectId: string,
+  chapterName: string,
+) =>
+  jsonRequest<DuplicateCheck>("/api/v1/documents/check-duplicate", "POST", {
+    document_id: documentId,
+    subject_id: subjectId,
+    chapter_name: chapterName,
+  });

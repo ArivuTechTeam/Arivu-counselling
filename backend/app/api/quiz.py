@@ -105,7 +105,12 @@ def generate(
 
 class BlueprintTopicIn(BaseModel):
     name: str
-    weight: Literal["high", "medium", "low"]
+    weight: Literal["high", "medium", "low"] = "medium"
+    # Per-topic blueprint: exact per-format counts for THIS topic, e.g.
+    # {"mcq_single": 2, "fill_blank": 1}. When any selected topic sends `counts`,
+    # the whole request is treated as per-topic mode (the weight is ignored and
+    # the quiz is built only from the selected topics).
+    counts: dict[str, int] | None = None
 
 
 class BlueprintGenerateRequest(BaseModel):
@@ -113,12 +118,57 @@ class BlueprintGenerateRequest(BaseModel):
     subject_id: str
     chapter_name: str
     selected_topics: list[BlueprintTopicIn] = []
-    # How many questions of EACH type the teacher wants, e.g.
-    # {"mcq_single": 3, "true_false": 2, "fill_blank": 5}. The total is the sum;
-    # only types with a positive count are generated.
-    type_counts: dict[str, int]
+    # Legacy mode: how many questions of EACH type across the whole quiz, e.g.
+    # {"mcq_single": 3, "true_false": 2}. Optional — omitted in per-topic mode,
+    # where each topic carries its own counts and the total is their sum.
+    type_counts: dict[str, int] = {}
     cognitive_level: Literal["theory", "practical", "mixed"] = "mixed"
     difficulty: Literal["easy", "medium", "hard"] = "medium"
+
+
+def _resolve_blueprint_plan(
+    selected_topics: list[BlueprintTopicIn], type_counts: dict[str, int]
+) -> tuple[list[dict], dict[str, int], int, list[str]]:
+    """Resolve a blueprint request into (selected dicts, aggregate type_counts,
+    total, question_types), validating the question types.
+
+    Per-topic mode — any selected topic carries its own `counts`: the plan is the
+    sum of every topic's per-format counts, the topic dicts carry those counts
+    through to the generator, and the aggregate drives the exact-mix enforcement.
+    Legacy mode — no per-topic counts: the global `type_counts` drive the total.
+    """
+    per_topic = any(t.counts for t in selected_topics)
+    if per_topic:
+        selected: list[dict] = []
+        aggregate: dict[str, int] = {}
+        for topic in selected_topics:
+            counts = {k: int(v) for k, v in (topic.counts or {}).items() if v and v > 0}
+            invalid = set(counts) - CORE_TYPES
+            if invalid:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Unsupported question types: {sorted(invalid)}.",
+                )
+            if sum(counts.values()) < 1:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Every selected topic needs at least one question (‘{topic.name}’).",
+                )
+            selected.append({"name": topic.name, "counts": counts})
+            for kind, count in counts.items():
+                aggregate[kind] = aggregate.get(kind, 0) + count
+        total = sum(aggregate.values())
+        return selected, aggregate, total, list(aggregate.keys())
+
+    counts = {t: n for t, n in type_counts.items() if n and n > 0}
+    invalid = set(counts) - CORE_TYPES
+    if invalid:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Unsupported question types: {sorted(invalid)}.",
+        )
+    total = sum(counts.values())
+    return [t.model_dump() for t in selected_topics], counts, total, list(counts.keys())
 
 
 @router.post("/generate-blueprint")
@@ -140,15 +190,9 @@ def generate_blueprint(
     if not req.chapter_name.strip():
         raise HTTPException(status_code=400, detail="Chapter name is required.")
 
-    # Keep only positive counts; validate the types and the overall total.
-    type_counts = {t: n for t, n in req.type_counts.items() if n and n > 0}
-    invalid = set(type_counts) - CORE_TYPES
-    if invalid:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Unsupported question types: {sorted(invalid)}.",
-        )
-    total = sum(type_counts.values())
+    selected, type_counts, total, question_types = _resolve_blueprint_plan(
+        req.selected_topics, req.type_counts
+    )
     if total < 1:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -178,9 +222,9 @@ def generate_blueprint(
             document_id=req.document_id,
             subject_id=req.subject_id,
             chapter_name=req.chapter_name,
-            selected_topics=[t.model_dump() for t in req.selected_topics],
+            selected_topics=selected,
             total_questions=total,
-            question_types=list(type_counts.keys()),
+            question_types=question_types,
             type_counts=type_counts,
             cognitive_level=req.cognitive_level,
             difficulty=req.difficulty,
@@ -412,7 +456,8 @@ class JobGenerateRequest(BaseModel):
     subject_id: str
     chapter_name: str
     selected_topics: list[BlueprintTopicIn] = []
-    type_counts: dict[str, int]
+    # Optional in per-topic mode (see BlueprintGenerateRequest.type_counts).
+    type_counts: dict[str, int] = {}
     cognitive_level: Literal["theory", "practical", "mixed"] = "mixed"
     difficulty: Literal["easy", "medium", "hard"] = "medium"
 
@@ -430,14 +475,9 @@ def generate_from_job(
     if not req.chapter_name.strip():
         raise HTTPException(status_code=400, detail="Chapter name is required.")
 
-    type_counts = {t: n for t, n in req.type_counts.items() if n and n > 0}
-    invalid = set(type_counts) - CORE_TYPES
-    if invalid:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Unsupported question types: {sorted(invalid)}.",
-        )
-    total = sum(type_counts.values())
+    selected, type_counts, total, question_types = _resolve_blueprint_plan(
+        req.selected_topics, req.type_counts
+    )
     if total < 1:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -467,9 +507,9 @@ def generate_from_job(
             job_id=job_id,
             subject_id=req.subject_id,
             chapter_name=req.chapter_name,
-            selected_topics=[t.model_dump() for t in req.selected_topics],
+            selected_topics=selected,
             total_questions=total,
-            question_types=list(type_counts.keys()),
+            question_types=question_types,
             type_counts=type_counts,
             cognitive_level=req.cognitive_level,
             difficulty=req.difficulty,

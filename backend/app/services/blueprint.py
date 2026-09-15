@@ -43,7 +43,11 @@ _EMPHASIS_FRACTION = 0.7
 
 class SelectedTopic(BaseModel):
     name: str
-    weight: Weight
+    weight: Weight = "medium"
+    # New per-topic blueprint: the teacher sets exact per-format counts for this
+    # topic (e.g. {"mcq_single": 2, "fill_blank": 1}). When present on any topic,
+    # the weight math is bypassed entirely (see build_blueprint).
+    counts: dict[str, int] | None = None
 
 
 class BPQuestion(BaseModel):
@@ -80,6 +84,25 @@ def build_blueprint(
     if not selected:
         total = max(total, 1)
         return {"topics": [], "general": total, "total": total}
+
+    # Per-topic explicit blueprint: each selected topic carries its own per-format
+    # counts (the teacher set them directly). The quiz is built ONLY from these
+    # topics — no High/Med/Low weight math and no general coverage. The total is
+    # simply the sum of every topic's counts.
+    if any(t.counts for t in selected):
+        topics = []
+        for t in selected:
+            counts = {k: int(v) for k, v in (t.counts or {}).items() if v and v > 0}
+            topics.append(
+                {"name": t.name, "counts": counts, "num_questions": sum(counts.values())}
+            )
+        emphasis_total = sum(x["num_questions"] for x in topics)
+        return {
+            "topics": topics,
+            "general": 0,
+            "total": emphasis_total,
+            "mode": "per_topic",
+        }
 
     # Each selected topic must get at least one question. Never silently raise the
     # teacher's requested total: that would contradict the exact per-type mix.
@@ -274,16 +297,18 @@ def generate_and_persist_from_material(
 
     # Build the blueprint (exam setter).
     selected = [SelectedTopic(**t) for t in selected_topics]
-    blueprint = build_blueprint(
-        selected, total_questions, selected_only=selected_only_material
-    )
+    # A per-topic blueprint (each topic carries its own counts) is inherently
+    # selected-topics-only: there is no general/whole-document coverage.
+    per_topic = any(t.counts for t in selected)
+    selected_only = selected_only_material or per_topic
+    blueprint = build_blueprint(selected, total_questions, selected_only=selected_only)
 
     # Generate (question writer) with Gemini primary and DeepSeek fallback.
     system = build_blueprint_system_prompt(
         question_types,
         cognitive_level,
         difficulty,
-        selected_only_material=selected_only_material,
+        selected_only_material=selected_only,
     )
     user = build_blueprint_user_prompt(
         material,
@@ -292,7 +317,7 @@ def generate_and_persist_from_material(
         cognitive_level,
         difficulty,
         type_counts,
-        selected_only_material=selected_only_material,
+        selected_only_material=selected_only,
     )
     expected_counts = (
         {kind: count for kind, count in type_counts.items() if count > 0}

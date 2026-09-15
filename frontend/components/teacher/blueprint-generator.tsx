@@ -14,10 +14,11 @@ import { Button } from "@/components/ui/button";
 import { AlertTriangle, Check, Sparkles, Zap } from "@/components/ui/icons";
 import { useToast } from "@/components/ui/toast";
 import {
+  BlueprintTopicInput,
   Chapter,
   DocumentOut,
-  TopicWeight,
   analyzeDocument,
+  checkDocumentDuplicate,
   generateBlueprintQuiz,
   generateFromJob,
   getGenerationJob,
@@ -34,12 +35,6 @@ const fieldClass =
 const MAX_UPLOAD_MB = 150;
 const MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024;
 const ALLOWED_UPLOAD_EXTENSIONS = new Set(["pdf", "docx"]);
-
-const WEIGHTS: { value: TopicWeight; label: string }[] = [
-  { value: "high", label: "High" },
-  { value: "medium", label: "Medium" },
-  { value: "low", label: "Low" },
-];
 
 const QUESTION_TYPES = [
   { value: "mcq_single", label: "Single choice" },
@@ -134,21 +129,35 @@ export function BlueprintGenerator() {
 
   const [extracting, setExtracting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Non-blocking notice when the same file is already filed under this
+  // subject + chapter (surfaced at the "Extract topics" step; never blocks).
+  const [duplicateWarning, setDuplicateWarning] = useState<string | null>(null);
   const displayError = error ?? coursesQuery.error?.message ?? null;
   const [topics, setTopics] = useState<string[]>([]);
   const [topicPageRanges, setTopicPageRanges] = useState<
     Record<string, { start: number; end: number }[]>
   >({});
-  const [weights, setWeights] = useState<Record<string, TopicWeight>>({});
+  // Per-topic blueprint: for each SELECTED topic, how many of each format. A
+  // topic key present here = selected; {} = selected but nothing set yet.
+  const [topicCounts, setTopicCounts] = useState<
+    Record<string, Record<string, number>>
+  >({});
   const [newTopic, setNewTopic] = useState("");
   const [selectionError, setSelectionError] = useState<string | null>(null);
 
+  // Legacy (no-topic) flow: global per-type counts — used only when the teacher
+  // selects no topic at all (whole-document coverage, current behaviour).
   const [typeCounts, setTypeCounts] = useState<Record<string, number>>({
     mcq_single: 5,
     true_false: 5,
   });
   const [level, setLevel] = useState("mixed");
   const [difficulty, setDifficulty] = useState("medium");
+  // Per-topic flow target: the teacher enters the overall total; the per-topic
+  // counts must sum to it. Only used when at least one topic is selected.
+  const [desiredTotal, setDesiredTotal] = useState(10);
+  // One-time "what to do next" guidance shown after topics are extracted.
+  const [showTopicHelp, setShowTopicHelp] = useState(false);
 
   const [generating, setGenerating] = useState(false);
   const [genError, setGenError] = useState<string | null>(null);
@@ -213,7 +222,8 @@ export function BlueprintGenerator() {
       setAnalysis(null);
       setTopics([]);
       setTopicPageRanges({});
-      setWeights({});
+      setTopicCounts({});
+      setDuplicateWarning(null);
       setDocumentId(res.document.id);
       setUploadedName(res.document.original_filename ?? file.name);
     } catch (err) {
@@ -237,11 +247,34 @@ export function BlueprintGenerator() {
     setError(null);
     setTopics([]);
     setTopicPageRanges({});
-    setWeights({});
+    setTopicCounts({});
+    setShowTopicHelp(false);
     setJobId(null);
     setAnalysis(null);
+    setDuplicateWarning(null);
     setExtracting(true);
     try {
+      // Non-blocking: warn (but never stop) if the same file is already filed
+      // under this subject + chapter. Best-effort — a check failure must not
+      // block extraction.
+      try {
+        const dup = await checkDocumentDuplicate(
+          documentId,
+          subjectId,
+          chapterName,
+        );
+        if (dup.duplicate) {
+          const name = dup.previous_filename ? ` (“${dup.previous_filename}”)` : "";
+          const when = dup.previous_uploaded_at
+            ? ` on ${dup.previous_uploaded_at}`
+            : "";
+          setDuplicateWarning(
+            `You've already uploaded this document${name} under this subject and chapter${when}. Generating again will create a duplicate quiz.`,
+          );
+        }
+      } catch {
+        /* ignore — duplicate check is advisory only */
+      }
       const res = await analyzeDocument(documentId);
       if (res.mode === "job") {
         // Large document → background analysis. The polling effect fills in the
@@ -251,6 +284,7 @@ export function BlueprintGenerator() {
         return;
       }
       setTopics(res.topics);
+      if (res.topics.length > 0) setShowTopicHelp(true);
       if (res.topics.length === 0) {
         setError(
           "No topics found — try a document with clearer text (a scanned image PDF won't work yet).",
@@ -264,24 +298,34 @@ export function BlueprintGenerator() {
   }
 
   function toggleTopic(name: string) {
-    setWeights((prev) => {
+    setTopicCounts((prev) => {
       const next = { ...prev };
       if (name in next) {
         delete next[name];
         setSelectionError(null);
-      } else if (Object.keys(prev).length >= totalQuestions) {
+      } else if (Object.keys(prev).length >= desiredTotal) {
         setSelectionError(
-          `Increase the question total before selecting more than ${totalQuestions} topic${totalQuestions === 1 ? "" : "s"}.`,
+          `Increase the total questions before selecting more than ${desiredTotal} topic${desiredTotal === 1 ? "" : "s"}.`,
         );
+        return prev;
       } else {
-        next[name] = "medium";
+        next[name] = {};
         setSelectionError(null);
       }
       return next;
     });
   }
-  function setWeight(name: string, w: TopicWeight) {
-    setWeights((prev) => ({ ...prev, [name]: w }));
+  function setTopicFormatCount(name: string, format: string, n: number) {
+    const value = Math.max(0, Math.min(30, Number.isFinite(n) ? n : 0));
+    setTopicCounts((prev) => ({
+      ...prev,
+      [name]: { ...(prev[name] || {}), [format]: value },
+    }));
+    setSelectionError(null);
+  }
+  function changeTotal(n: number) {
+    setDesiredTotal(Math.max(1, Math.min(50, Number.isFinite(n) ? n : 1)));
+    setSelectionError(null);
   }
 
   // Teachers can curate the extracted list: add a topic the AI missed, or drop
@@ -291,70 +335,108 @@ export function BlueprintGenerator() {
     if (!name) return;
     const exists = topics.some((t) => t.toLowerCase() === name.toLowerCase());
     if (!exists) {
-      if (Object.keys(weights).length >= totalQuestions) {
+      if (Object.keys(topicCounts).length >= desiredTotal) {
         setSelectionError(
-          `Increase the question total before adding another selected topic.`,
+          `Increase the total questions before adding another selected topic.`,
         );
         return;
       }
       setTopics((prev) => [...prev, name]);
-      setWeights((prev) => ({ ...prev, [name]: "medium" }));
+      setTopicCounts((prev) => ({ ...prev, [name]: {} }));
     }
     setSelectionError(null);
     setNewTopic("");
   }
   function removeTopic(name: string) {
     setTopics((prev) => prev.filter((t) => t !== name));
-    setWeights((prev) => {
+    setTopicCounts((prev) => {
       const next = { ...prev };
       delete next[name];
       return next;
     });
   }
   function setCount(type: string, n: number) {
-    setTypeCounts((prev) => {
-      const next = {
-        ...prev,
-        [type]: Math.max(0, Math.min(30, Number.isFinite(n) ? n : 0)),
-      };
-      const nextTotal = Object.values(next).reduce((sum, count) => sum + count, 0);
-      const selected = Object.keys(weights).length;
-      if (nextTotal < selected) {
-        setSelectionError(
-          `Deselect ${selected - nextTotal} topic${selected - nextTotal === 1 ? "" : "s"} before reducing the quiz to ${nextTotal} questions.`,
-        );
-        return prev;
-      }
-      setSelectionError(null);
-      return next;
-    });
+    setTypeCounts((prev) => ({
+      ...prev,
+      [type]: Math.max(0, Math.min(30, Number.isFinite(n) ? n : 0)),
+    }));
+    setSelectionError(null);
   }
-  const totalQuestions = Object.values(typeCounts).reduce((a, b) => a + (b || 0), 0);
 
-  const selectedCount = Object.keys(weights).length;
+  // Legacy total = sum of the global per-type counts (no-topic path).
+  const legacyTotal = Object.values(typeCounts).reduce((a, b) => a + (b || 0), 0);
+  const selectedTopicNames = Object.keys(topicCounts);
+  const perTopicMode = selectedTopicNames.length > 0;
+  const allocated = selectedTopicNames.reduce(
+    (sum, name) =>
+      sum +
+      Object.values(topicCounts[name] || {}).reduce((a, b) => a + (b || 0), 0),
+    0,
+  );
+  const totalQuestions = perTopicMode ? desiredTotal : legacyTotal;
+  const selectedCount = selectedTopicNames.length;
   const step = topics.length > 0 ? 2 : 1;
 
   async function handleGenerate() {
     setGenError(null);
-    const counts = Object.fromEntries(
-      Object.entries(typeCounts).filter(([, n]) => n > 0),
-    );
-    if (totalQuestions < 1) {
-      setGenError("Set a count of at least 1 for one or more question types.");
-      return;
+
+    let selectedPayload: BlueprintTopicInput[];
+    let typeCountsPayload: Record<string, number>;
+
+    if (perTopicMode) {
+      // New per-topic flow: each selected topic carries its own per-format counts,
+      // and those must add up to the teacher's overall total.
+      const empty = selectedTopicNames.filter(
+        (name) =>
+          Object.values(topicCounts[name] || {}).reduce((a, b) => a + (b || 0), 0) <
+          1,
+      );
+      if (empty.length) {
+        setGenError(`Add at least one question for: ${empty.join(", ")}.`);
+        return;
+      }
+      if (desiredTotal > 50) {
+        setGenError(
+          "That's more than 50 questions in total — please reduce the counts.",
+        );
+        return;
+      }
+      if (allocated !== desiredTotal) {
+        setGenError(
+          `Allocate exactly ${desiredTotal} question${desiredTotal === 1 ? "" : "s"} across your topics (currently ${allocated}).`,
+        );
+        return;
+      }
+      selectedPayload = selectedTopicNames.map((name) => ({
+        name,
+        counts: Object.fromEntries(
+          Object.entries(topicCounts[name]).filter(([, n]) => n > 0),
+        ),
+      }));
+      typeCountsPayload = {};
+    } else {
+      // Legacy flow (no topic selected): whole-document coverage from a global
+      // per-type mix. Large documents require at least one selected topic.
+      if (jobId) {
+        setGenError("Select at least one extracted topic for this large document.");
+        return;
+      }
+      typeCountsPayload = Object.fromEntries(
+        Object.entries(typeCounts).filter(([, n]) => n > 0),
+      );
+      if (legacyTotal < 1) {
+        setGenError("Set a count of at least 1 for one or more question types.");
+        return;
+      }
+      if (legacyTotal > 50) {
+        setGenError(
+          "That's more than 50 questions in total — please reduce the counts.",
+        );
+        return;
+      }
+      selectedPayload = [];
     }
-    if (totalQuestions > 50) {
-      setGenError("That's more than 50 questions in total — please reduce the counts.");
-      return;
-    }
-    const selected = Object.entries(weights).map(([name, weight]) => ({
-      name,
-      weight,
-    }));
-    if (jobId && selected.length === 0) {
-      setGenError("Select at least one extracted topic for this large document.");
-      return;
-    }
+
     setGenerating(true);
     try {
       // Large document → generate from the ready analysis job's blueprint;
@@ -363,8 +445,8 @@ export function BlueprintGenerator() {
         ? await generateFromJob(jobId, {
             subject_id: subjectId,
             chapter_name: chapterName,
-            selected_topics: selected,
-            type_counts: counts,
+            selected_topics: selectedPayload,
+            type_counts: typeCountsPayload,
             cognitive_level: level,
             difficulty,
           })
@@ -372,8 +454,8 @@ export function BlueprintGenerator() {
             document_id: documentId,
             subject_id: subjectId,
             chapter_name: chapterName,
-            selected_topics: selected,
-            type_counts: counts,
+            selected_topics: selectedPayload,
+            type_counts: typeCountsPayload,
             cognitive_level: level,
             difficulty,
           });
@@ -397,6 +479,7 @@ export function BlueprintGenerator() {
         if (s.status === "completed" && s.topics.length > 0) {
           window.clearInterval(timer);
           setTopics(s.topics.map((t) => t.name));
+          setShowTopicHelp(true);
           setTopicPageRanges(
             Object.fromEntries(s.topics.map((t) => [t.name, t.page_ranges || []])),
           );
@@ -455,6 +538,54 @@ export function BlueprintGenerator() {
 
   return (
     <div className="flex flex-col gap-6">
+      {/* Informational guidance shown once topics are extracted. Collects no
+          data — every input lives on the page below. */}
+      {showTopicHelp && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+          role="dialog"
+          aria-modal="true"
+          onClick={() => setShowTopicHelp(false)}
+        >
+          <div
+            className="w-full max-w-md rounded-2xl bg-background p-6 shadow-xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="mb-1 text-3xl">🎉</div>
+            <h3 className="text-lg font-semibold text-foreground">
+              Topics ready!
+            </h3>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Here&apos;s how to build your quiz:
+            </p>
+            <ol className="mt-3 flex flex-col gap-2 text-sm text-foreground">
+              <li>
+                <span className="font-semibold text-primary">1.</span> Set the{" "}
+                <b>total questions</b>, difficulty and style below.
+              </li>
+              <li>
+                <span className="font-semibold text-primary">2.</span>{" "}
+                <b>Click the topics</b> you want to focus on.
+              </li>
+              <li>
+                <span className="font-semibold text-primary">3.</span> Under each
+                selected topic, choose <b>how many of each format</b> (MCQ, fill
+                in the blank, true/false…). The counts must add up to your total.
+              </li>
+            </ol>
+            <p className="mt-3 rounded-lg bg-muted p-2.5 text-xs text-muted-foreground">
+              Prefer whole-document coverage? Just leave every topic unselected
+              and set the overall question mix.
+            </p>
+            <Button
+              className="mt-4 w-full"
+              onClick={() => setShowTopicHelp(false)}
+            >
+              Got it
+            </Button>
+          </div>
+        </div>
+      )}
       <div className="animate-rise">
         <StepBar step={step} />
       </div>
@@ -524,7 +655,8 @@ export function BlueprintGenerator() {
                     setAnalysis(null);
                     setTopics([]);
                     setTopicPageRanges({});
-                    setWeights({});
+                    setTopicCounts({});
+                    setDuplicateWarning(null);
                     setDocumentId(e.target.value);
                     const d = documents.find((x) => x.id === e.target.value);
                     setUploadedName(d?.original_filename ?? null);
@@ -614,6 +746,21 @@ export function BlueprintGenerator() {
               )}
             </Button>
           </div>
+          {/* Non-blocking duplicate notice: same file already under this
+              subject + chapter. Informational only — never stops generation. */}
+          {duplicateWarning && (
+            <div className="flex items-start gap-2 rounded-xl border border-amber-300 bg-amber-50 p-3 text-sm text-amber-800">
+              <AlertTriangle size={16} className="mt-0.5 shrink-0" />
+              <span className="flex-1">{duplicateWarning}</span>
+              <button
+                type="button"
+                onClick={() => setDuplicateWarning(null)}
+                className="shrink-0 font-medium text-amber-700 underline underline-offset-2 hover:text-amber-900"
+              >
+                Dismiss
+              </button>
+            </div>
+          )}
           {/* Large-document analysis progress (chunk → read sections → merge) */}
           {analysis && (
             <div className="flex flex-col gap-3 rounded-xl border border-primary/20 bg-primary/5 p-4">
@@ -667,129 +814,73 @@ export function BlueprintGenerator() {
         </CardContent>
       </Card>
 
-      {/* Step 2 — topics */}
-      {topics.length > 0 && (
-        <Card className="animate-rise">
-          <CardHeader>
-            <CardTitle>Select the important topics</CardTitle>
-            <CardDescription>
-              Click the topics that matter most, then mark each High / Medium /
-              Low — they get more questions. {jobId
-                ? "For this large document, questions use only the topics you select."
-                : "The quiz still covers the whole document."}{" "}
-              <span className="font-medium text-primary">{selectedCount} selected</span>.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="flex flex-col gap-2">
-            {topics.map((name, i) => {
-              const selected = name in weights;
-              return (
-                <div
-                  key={name}
-                  style={{ animationDelay: `${i * 40}ms` }}
-                  className={`flex animate-rise flex-wrap items-center justify-between gap-2 rounded-lg border p-3 text-sm transition-all ${
-                    selected
-                      ? "border-primary bg-primary/5 shadow-sm"
-                      : "border-input hover:border-primary/40 hover:bg-accent"
-                  }`}
-                >
-                  <button
-                    type="button"
-                    onClick={() => toggleTopic(name)}
-                    className="flex items-center gap-2 text-left font-medium"
-                  >
-                    <span
-                      className={`flex h-4 w-4 shrink-0 items-center justify-center rounded border text-[10px] transition-all ${
-                        selected
-                          ? "scale-110 border-primary bg-primary text-primary-foreground"
-                          : "border-input"
-                      }`}
-                    >
-                      {selected && <Check size={11} />}
-                    </span>
-                    {name}
-                    {(topicPageRanges[name] || []).length > 0 && (
-                      <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] font-normal text-muted-foreground">
-                        pages{" "}
-                        {topicPageRanges[name]
-                          .map((range) =>
-                            range.start === range.end
-                              ? range.start
-                              : `${range.start}–${range.end}`,
-                          )
-                          .join(", ")}
-                      </span>
-                    )}
-                  </button>
-
-                  <div className="flex items-center gap-1">
-                    {selected &&
-                      WEIGHTS.map((w) => (
-                        <button
-                          key={w.value}
-                          type="button"
-                          onClick={() => setWeight(name, w.value)}
-                          className={`rounded-md px-2.5 py-1 text-xs font-medium transition-all ${
-                            weights[name] === w.value
-                              ? "bg-primary text-primary-foreground shadow-sm"
-                              : "bg-secondary text-secondary-foreground hover:bg-secondary/80"
-                          }`}
-                        >
-                          {w.label}
-                        </button>
-                      ))}
-                    <button
-                      type="button"
-                      aria-label={`Remove ${name}`}
-                      title="Remove this topic"
-                      onClick={() => removeTopic(name)}
-                      className="ml-1 flex h-7 w-7 items-center justify-center rounded-md text-lg leading-none text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive"
-                    >
-                      ×
-                    </button>
-                  </div>
-                </div>
-              );
-            })}
-
-            {/* A custom topic has no consolidated source block in large-document
-                mode, so only the direct/small-document flow can safely add one. */}
-            {!jobId && (
-              <div className="mt-2 flex items-center gap-2 border-t border-dashed border-input pt-3">
-                <input
-                  className={fieldClass}
-                  value={newTopic}
-                  onChange={(e) => setNewTopic(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") {
-                      e.preventDefault();
-                      addTopic();
-                    }
-                  }}
-                  placeholder="Add a topic the AI missed…"
-                />
-                <Button type="button" onClick={addTopic} disabled={!newTopic.trim()}>
-                  Add
-                </Button>
-              </div>
-            )}
-            {selectionError && <InlineError message={selectionError} />}
-          </CardContent>
-        </Card>
-      )}
-
-      {/* Step 2 — options + generate */}
+      {/* Step 2 — options (total + difficulty + style + generate) */}
       {topics.length > 0 && (
         <Card className="animate-rise" style={{ animationDelay: "80ms" }}>
           <CardHeader>
             <CardTitle>Quiz options</CardTitle>
             <CardDescription>
-              Applies to the whole quiz. High topics get the most questions and
-              Low topics the fewest.
+              {perTopicMode
+                ? "Set the total, then distribute it across your selected topics below — the per-topic counts must add up to the total."
+                : "Choose the difficulty, style and how many of each question type. Covers the whole document."}
             </CardDescription>
           </CardHeader>
           <CardContent className="flex flex-col gap-4">
-            {/* Per-type question counts */}
+            {perTopicMode && (
+              <fieldset className="flex flex-col gap-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-sm font-medium text-muted-foreground">
+                    Total questions for this quiz
+                  </span>
+                  <span
+                    className={`rounded-full px-2.5 py-0.5 text-xs font-semibold ${
+                      allocated === desiredTotal
+                        ? "bg-primary/10 text-primary"
+                        : "bg-amber-100 text-amber-800"
+                    }`}
+                  >
+                    {allocated} / {desiredTotal} allocated
+                  </span>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    aria-label="Fewer total questions"
+                    onClick={() => changeTotal(desiredTotal - 1)}
+                    disabled={desiredTotal <= 1}
+                    className="flex h-9 w-9 items-center justify-center rounded-md border border-input text-lg leading-none text-muted-foreground transition-colors hover:border-primary/50 hover:text-primary disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    −
+                  </button>
+                  <input
+                    type="number"
+                    min={1}
+                    max={50}
+                    value={desiredTotal}
+                    onChange={(e) => changeTotal(Number(e.target.value))}
+                    className="h-9 w-14 rounded-md border border-input text-center text-sm [appearance:textfield] focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20 [&::-webkit-inner-spin-button]:appearance-none"
+                  />
+                  <button
+                    type="button"
+                    aria-label="More total questions"
+                    onClick={() => changeTotal(desiredTotal + 1)}
+                    disabled={desiredTotal >= 50}
+                    className="flex h-9 w-9 items-center justify-center rounded-md border border-input text-lg leading-none text-muted-foreground transition-colors hover:border-primary/50 hover:text-primary disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    +
+                  </button>
+                </div>
+                {allocated !== desiredTotal && (
+                  <p className="text-xs text-amber-700">
+                    {allocated < desiredTotal
+                      ? `Assign ${desiredTotal - allocated} more question${desiredTotal - allocated === 1 ? "" : "s"} across your topics below.`
+                      : `Remove ${allocated - desiredTotal} — you've allocated more than the total.`}
+                  </p>
+                )}
+              </fieldset>
+            )}
+            {/* Per-type question counts — legacy whole-document flow (no topic selected). */}
+            {!perTopicMode && (
             <fieldset className="flex flex-col gap-2">
               <div className="flex items-center justify-between">
                 <span className="text-sm font-medium text-muted-foreground">
@@ -849,6 +940,7 @@ export function BlueprintGenerator() {
                 })}
               </div>
             </fieldset>
+            )}
 
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <label className="flex flex-col gap-1.5 text-sm font-medium">
@@ -877,22 +969,200 @@ export function BlueprintGenerator() {
               </label>
             </div>
 
-            <div>
-              <Button onClick={handleGenerate} disabled={generating}>
-                {generating ? (
-                  <span className="flex items-center gap-2">
-                    <Spinner /> Generating… (20–40s)
-                  </span>
-                ) : (
-                  <span className="flex items-center gap-2">
-                    <Zap size={16} /> Generate quiz →
-                  </span>
-                )}
-              </Button>
-            </div>
-            {genError && <InlineError message={genError} />}
           </CardContent>
         </Card>
+      )}
+
+      {/* Step 2 — topics */}
+      {topics.length > 0 && (
+        <Card className="animate-rise">
+          <CardHeader>
+            <CardTitle>Select the important topics</CardTitle>
+            <CardDescription>
+              Click a topic to include it, then choose how many of each question
+              format you want from it. {jobId
+                ? "For this large document, questions use only the topics you select."
+                : "Leave every topic unselected to cover the whole document instead."}{" "}
+              <span className="font-medium text-primary">{selectedCount} selected</span>.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="flex flex-col gap-2">
+            {topics.map((name, i) => {
+              const selected = name in topicCounts;
+              const counts = topicCounts[name] || {};
+              const topicTotal = Object.values(counts).reduce(
+                (a, b) => a + (b || 0),
+                0,
+              );
+              return (
+                <div
+                  key={name}
+                  style={{ animationDelay: `${i * 40}ms` }}
+                  className={`flex animate-rise flex-col gap-2 rounded-lg border p-3 text-sm transition-all ${
+                    selected
+                      ? "border-primary bg-primary/5 shadow-sm"
+                      : "border-input hover:border-primary/40 hover:bg-accent"
+                  }`}
+                >
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <button
+                      type="button"
+                      onClick={() => toggleTopic(name)}
+                      className="flex items-center gap-2 text-left font-medium"
+                    >
+                      <span
+                        className={`flex h-4 w-4 shrink-0 items-center justify-center rounded border text-[10px] transition-all ${
+                          selected
+                            ? "scale-110 border-primary bg-primary text-primary-foreground"
+                            : "border-input"
+                        }`}
+                      >
+                        {selected && <Check size={11} />}
+                      </span>
+                      {name}
+                      {(topicPageRanges[name] || []).length > 0 && (
+                        <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] font-normal text-muted-foreground">
+                          pages{" "}
+                          {topicPageRanges[name]
+                            .map((range) =>
+                              range.start === range.end
+                                ? range.start
+                                : `${range.start}–${range.end}`,
+                            )
+                            .join(", ")}
+                        </span>
+                      )}
+                    </button>
+
+                    <div className="flex items-center gap-2">
+                      {selected && (
+                        <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[11px] font-semibold text-primary">
+                          {topicTotal} q
+                        </span>
+                      )}
+                      <button
+                        type="button"
+                        aria-label={`Remove ${name}`}
+                        title="Remove this topic"
+                        onClick={() => removeTopic(name)}
+                        className="flex h-7 w-7 items-center justify-center rounded-md text-lg leading-none text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive"
+                      >
+                        ×
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Per-topic blueprint: how many of each format from THIS topic. */}
+                  {selected && (
+                    <div className="grid grid-cols-1 gap-2 border-t border-dashed border-primary/20 pt-2 sm:grid-cols-2">
+                      {QUESTION_TYPES.map((t) => {
+                        const n = counts[t.value] || 0;
+                        return (
+                          <div
+                            key={t.value}
+                            className="flex items-center justify-between gap-2 rounded-md border border-input bg-background px-2.5 py-1.5"
+                          >
+                            <span className="text-xs text-muted-foreground">
+                              {t.label}
+                            </span>
+                            <div className="flex items-center gap-1">
+                              <button
+                                type="button"
+                                aria-label={`Fewer ${t.label} from ${name}`}
+                                onClick={() =>
+                                  setTopicFormatCount(name, t.value, n - 1)
+                                }
+                                disabled={n <= 0}
+                                className="flex h-7 w-7 items-center justify-center rounded-md border border-input text-base leading-none text-muted-foreground transition-colors hover:border-primary/50 hover:text-primary disabled:cursor-not-allowed disabled:opacity-40"
+                              >
+                                −
+                              </button>
+                              <input
+                                type="number"
+                                min={0}
+                                max={30}
+                                value={n}
+                                onChange={(e) =>
+                                  setTopicFormatCount(
+                                    name,
+                                    t.value,
+                                    Number(e.target.value),
+                                  )
+                                }
+                                className="h-7 w-10 rounded-md border border-input text-center text-xs [appearance:textfield] focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20 [&::-webkit-inner-spin-button]:appearance-none"
+                              />
+                              <button
+                                type="button"
+                                aria-label={`More ${t.label} from ${name}`}
+                                onClick={() =>
+                                  setTopicFormatCount(name, t.value, n + 1)
+                                }
+                                className="flex h-7 w-7 items-center justify-center rounded-md border border-input text-base leading-none text-muted-foreground transition-colors hover:border-primary/50 hover:text-primary"
+                              >
+                                +
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+
+            {/* A custom topic has no consolidated source block in large-document
+                mode, so only the direct/small-document flow can safely add one. */}
+            {!jobId && (
+              <div className="mt-2 flex items-center gap-2 border-t border-dashed border-input pt-3">
+                <input
+                  className={fieldClass}
+                  value={newTopic}
+                  onChange={(e) => setNewTopic(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      addTopic();
+                    }
+                  }}
+                  placeholder="Add a topic the AI missed…"
+                />
+                <Button type="button" onClick={addTopic} disabled={!newTopic.trim()}>
+                  Add
+                </Button>
+              </div>
+            )}
+            {selectionError && <InlineError message={selectionError} />}
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Generate — placed last so the teacher clicks it right after picking
+          topics and setting their per-format counts. */}
+      {topics.length > 0 && (
+        <div className="flex flex-col gap-2">
+          <Button
+            onClick={handleGenerate}
+            disabled={generating || (perTopicMode && allocated !== desiredTotal)}
+          >
+            {generating ? (
+              <span className="flex items-center gap-2">
+                <Spinner /> Generating… (20–40s)
+              </span>
+            ) : (
+              <span className="flex items-center gap-2">
+                <Zap size={16} /> Generate quiz →
+              </span>
+            )}
+          </Button>
+          {perTopicMode && allocated !== desiredTotal && (
+            <p className="text-xs text-amber-700">
+              Allocate all {desiredTotal} questions across your topics to enable
+              generation ({allocated}/{desiredTotal} so far).
+            </p>
+          )}
+          {genError && <InlineError message={genError} />}
+        </div>
       )}
     </div>
   );

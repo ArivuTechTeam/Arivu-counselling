@@ -79,15 +79,12 @@ def build_blueprint_user_prompt(
     *,
     selected_only_material: bool = False,
 ) -> str:
-    lines = [
-        f'- "{t["name"]}" ({t["weight"]}): about {t["num_questions"]} questions'
-        for t in blueprint["topics"]
-    ]
-    priority_block = "\n".join(lines) if lines else "(none — general coverage only)"
     types = ", ".join(question_types)
+    per_topic = blueprint.get("mode") == "per_topic"
 
     # EXACT per-type mix: the teacher set how many of each type they want. This is
-    # a HARD count; topic emphasis above stays a soft "roughly" guide.
+    # a HARD count (enforced after generation). For a per-topic blueprint it is the
+    # aggregate across all topics.
     if type_counts:
         mix_lines = "\n".join(
             f"- {t}: exactly {n}" for t, n in type_counts.items() if n > 0
@@ -99,21 +96,50 @@ def build_blueprint_user_prompt(
     else:
         type_mix_block = ""
 
-    general_block = (
-        ""
-        if selected_only_material
-        else f"GENERAL COVERAGE — about {blueprint['general']} more questions covering "
-        "the REST of the document (anything not in the priority list); tag these "
-        f'as "{GENERAL_TOPIC}".\n\n'
-    )
+    if per_topic:
+        # Explicit per-topic, per-format plan set by the teacher.
+        blocks = []
+        for t in blueprint["topics"]:
+            fmt_lines = "\n".join(
+                f"    - {fmt}: exactly {n}" for fmt, n in t["counts"].items()
+            )
+            blocks.append(
+                f'  Topic "{t["name"]}" — exactly {t["num_questions"]} question(s):\n'
+                f"{fmt_lines}"
+            )
+        topic_block = (
+            "PER-TOPIC PLAN — produce EXACTLY the questions listed under each topic, "
+            'and set each question\'s "topic" field to that EXACT topic name. Do NOT '
+            "add any other topic or any extra questions:\n" + "\n".join(blocks) + "\n\n"
+        )
+        general_block = ""
+    else:
+        lines = [
+            f'- "{t["name"]}" ({t["weight"]}): about {t["num_questions"]} questions'
+            for t in blueprint["topics"]
+        ]
+        priority_block = (
+            "\n".join(lines) if lines else "(none — general coverage only)"
+        )
+        topic_block = (
+            "PRIORITY TOPICS — give these MORE questions, roughly as noted:\n"
+            f"{priority_block}\n\n"
+        )
+        general_block = (
+            ""
+            if selected_only_material
+            else f"GENERAL COVERAGE — about {blueprint['general']} more questions covering "
+            "the REST of the document (anything not in the priority list); tag these "
+            f'as "{GENERAL_TOPIC}".\n\n'
+        )
+
     return (
         f"Write exactly {blueprint['total']} questions in total from the "
         "material below.\n"
         f"Allowed types (mix them): {types}.\n"
         f"Cognitive level: {cognitive_level}. Difficulty: {difficulty}.\n\n"
         f"{type_mix_block}"
-        "PRIORITY TOPICS — give these MORE questions, roughly as noted:\n"
-        f"{priority_block}\n\n"
+        f"{topic_block}"
         f"{general_block}"
         "=== MATERIAL START ===\n"
         f"{material}\n"
