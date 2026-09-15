@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import unittest
+from datetime import date
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -286,11 +287,15 @@ class AdminQuizPerformanceTests(unittest.TestCase):
                 self.assertIn(("tenant_id", "tenant-a"), filters)
 
     def test_institution_analytics_adds_actionable_drilldown_metrics(self) -> None:
+        today = f"{date.today().isoformat()}T14:00:00Z"
+        for attempt in self.service.tables["quiz_attempts"]:
+            if attempt.get("status") == "graded":
+                attempt["submitted_at"] = today
         self.service.tables["profiles"].append(
             {"id": "student-risk", "tenant_id": "tenant-a", "role": "student", "full_name": "Riya"}
         )
         self.service.tables["quiz_attempts"].append(
-            {"id": "attempt-risk", "tenant_id": "tenant-a", "student_id": "student-risk", "variant_id": "variant-a1", "status": "graded", "total_score": 1, "submitted_at": "2026-09-08T14:00:00Z"}
+            {"id": "attempt-risk", "tenant_id": "tenant-a", "student_id": "student-risk", "variant_id": "variant-a1", "status": "graded", "total_score": 1, "submitted_at": today}
         )
         result = asyncio.run(institution_analytics(self.profile))
 
