@@ -8,7 +8,10 @@ let latestBearerToken: string | null = null;
 // Base URL of the FastAPI backend (from .env.local).
 const API_BASE = PUBLIC_ENV.apiBaseUrl;
 const DEFAULT_TIMEOUT_MS = 20_000;
-// 150 MB takes about 10 minutes at 2 Mbps before server-side extraction time.
+export const DOCUMENT_UPLOAD_MAX_MB = 30;
+export const DOCUMENT_UPLOAD_MAX_BYTES = DOCUMENT_UPLOAD_MAX_MB * 1024 * 1024;
+// A 30 MiB upload can still take several minutes on a slow connection before
+// server-side extraction begins.
 const DOCUMENT_UPLOAD_TIMEOUT_MS = 15 * 60_000;
 // Includes the default 240-second vision call plus upload/database processing.
 const QUIZ_EXTRACTION_TIMEOUT_MS = 5 * 60_000;
@@ -52,6 +55,24 @@ export class ApiRequestError extends Error {
 
 function requestReference(requestId: string | null): string {
   return requestId ? ` Error reference: ${requestId}.` : "";
+}
+
+type ValidationErrorDetail = {
+  location?: Array<string | number>;
+  message?: string;
+};
+
+function validationErrorMessage(errors: ValidationErrorDetail[] | undefined): string | null {
+  if (!Array.isArray(errors) || errors.length === 0) return null;
+  const messages = errors.slice(0, 3).map((error) => {
+    const field = (error.location ?? [])
+      .filter((part) => !["body", "query", "path"].includes(String(part)))
+      .map((part) => String(part).replaceAll("_", " "))
+      .join(" → ");
+    const message = error.message || "Invalid value.";
+    return field ? `${field}: ${message}` : message;
+  });
+  return messages.join(" ");
 }
 
 async function apiFetch(
@@ -169,6 +190,7 @@ async function apiError(res: Response, fallback: string): Promise<never> {
   }
   const body = (await res.json().catch(() => ({}))) as {
     detail?: string;
+    errors?: ValidationErrorDetail[];
     request_id?: string;
   };
   const requestId = res.headers.get("X-Request-ID") || body.request_id || null;
@@ -176,6 +198,14 @@ async function apiError(res: Response, fallback: string): Promise<never> {
     number,
     { code: ApiErrorCode; message: string; retryable: boolean }
   > = {
+    422: {
+      code: "request_failed",
+      message:
+        validationErrorMessage(body.errors) ||
+        body.detail ||
+        "Please check the submitted fields and try again.",
+      retryable: false,
+    },
     403: {
       code: "permission_denied",
       message: body.detail || "You do not have permission to perform this action.",
@@ -238,6 +268,14 @@ export type UploadResult = {
 
 /** Upload a PDF/DOCX to the backend, which stores + extracts it. */
 export async function uploadDocument(file: File): Promise<UploadResult> {
+  if (file.size === 0) {
+    throw new Error("The selected file is empty.");
+  }
+  if (file.size > DOCUMENT_UPLOAD_MAX_BYTES) {
+    throw new Error(
+      `Choose a file no larger than ${DOCUMENT_UPLOAD_MAX_MB} MB.`,
+    );
+  }
   const headers = await authHeader();
   const form = new FormData();
   form.append("file", file);

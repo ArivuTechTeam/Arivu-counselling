@@ -7,7 +7,7 @@ message — much easier to debug than a mysterious error deep inside a
 request handler later.
 
 Values come from `backend/.env` in local dev (loaded by python-dotenv) or
-from real environment variables in production (Vercel). We never hardcode
+from real environment variables in production (Railway). We never hardcode
 secrets in code.
 """
 

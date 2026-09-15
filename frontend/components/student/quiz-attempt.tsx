@@ -8,6 +8,7 @@ import { StudentDownloads } from "@/components/shared/pdf-buttons";
 import { downloadCardImage } from "@/lib/share-card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Dialog } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { ErrorCard } from "@/components/ui/error-card";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -1003,14 +1004,12 @@ function ScoreCard({
   const waHref = `https://wa.me/?text=${encodeURIComponent(shareText + " " + (typeof window !== "undefined" ? window.location.origin : ""))}`;
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm"
-      onClick={onClose}
+    <Dialog
+      onClose={onClose}
+      ariaLabel="Quiz score"
+      overlayClassName="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm"
+      contentClassName="flex max-h-full animate-rise flex-col items-center gap-3 overflow-y-auto"
     >
-      <div
-        className="flex max-h-full animate-rise flex-col items-center gap-3 overflow-y-auto"
-        onClick={(e) => e.stopPropagation()}
-      >
         {/* The card that gets captured as the shareable image */}
         <div
           ref={cardRef}
@@ -1067,7 +1066,6 @@ function ScoreCard({
         <button onClick={onClose} className="text-xs text-white/50 hover:text-white/80">
           Close
         </button>
-      </div>
-    </div>
+    </Dialog>
   );
 }

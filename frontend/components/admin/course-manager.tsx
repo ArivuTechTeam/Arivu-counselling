@@ -3,6 +3,7 @@
 import { useMemo, useState } from "react";
 import type { ReactNode } from "react";
 
+import { Dialog } from "@/components/ui/dialog";
 import { AlertTriangle, BookOpen, Inbox, Trash, X } from "@/components/ui/icons";
 import {
   Course,
@@ -98,13 +99,18 @@ function Modal({
   maxW?: string;
 }) {
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
-      onClick={(e) => e.target === e.currentTarget && onClose()}
+    <Dialog
+      onClose={onClose}
+      ariaLabelledBy={`course-modal-${title.replace(/[^a-z0-9]+/gi, "-").toLowerCase()}`}
+      contentClassName={`animate-rise w-full ${maxW} rounded-[18px] border border-border bg-card p-7 shadow-2xl`}
     >
-      <div className={`animate-rise w-full ${maxW} rounded-[18px] border border-border bg-card p-7 shadow-2xl`}>
         <div className="mb-4 flex items-center justify-between">
-          <h3 className="text-lg font-extrabold text-foreground">{title}</h3>
+          <h3
+            id={`course-modal-${title.replace(/[^a-z0-9]+/gi, "-").toLowerCase()}`}
+            className="text-lg font-extrabold text-foreground"
+          >
+            {title}
+          </h3>
           <button
             onClick={onClose}
             className="leading-none text-muted-foreground transition hover:text-foreground"
@@ -115,8 +121,7 @@ function Modal({
         </div>
         {children}
         {footer && <div className="mt-6 flex justify-end gap-2">{footer}</div>}
-      </div>
-    </div>
+    </Dialog>
   );
 }
 

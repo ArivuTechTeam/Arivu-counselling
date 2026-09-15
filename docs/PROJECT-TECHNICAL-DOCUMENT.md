@@ -274,7 +274,7 @@ Guards: **public** / **student** / **staff** (teacher+admin+super) / **admin** (
 - `GET /api/v1/me` — identity from JWT
 - `GET /api/v1/me/profile` — tenant_id + role from `profiles`
 
-**Documents** (`/api/v1/documents`) — `POST /upload` and `GET ""` are teacher-only by design. Limits: PDF/DOCX only, 150 MB, 5000-char preview.
+**Documents** (`/api/v1/documents`) — `POST /upload` and `GET ""` are teacher-only by design. Limits: PDF/DOCX only, 30 MiB, 5000-char preview.
 
 **Quiz sets** (`/api/v1/quiz-sets`) — `POST /generate`, `POST /generate-blueprint`, `GET ""`, `GET /{id}`, `POST /{id}/publish`, and `POST /{id}/approve-all` are teacher-only by design.
 

@@ -3,6 +3,7 @@
 import { useMemo, useState } from "react";
 
 import { Button } from "@/components/ui/button";
+import { Dialog } from "@/components/ui/dialog";
 import { AlertTriangle, Check } from "@/components/ui/icons";
 import { changePassword } from "@/lib/api";
 
@@ -87,18 +88,26 @@ export function ChangePasswordModal({
     "h-10 w-full rounded-md border border-input bg-background px-3 pr-16 text-sm shadow-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20";
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-      <div className="animate-rise w-full max-w-md rounded-2xl bg-card p-6 shadow-xl">
-        <h2 className="text-lg font-semibold text-foreground">
+    <Dialog
+      onClose={forced ? undefined : onClose}
+      closeOnBackdrop={!forced}
+      ariaLabelledBy="change-password-title"
+      overlayClassName="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+      contentClassName="animate-rise w-full max-w-md rounded-2xl bg-card p-6 shadow-xl"
+    >
+      <h2
+        id="change-password-title"
+        className="text-lg font-semibold text-foreground"
+      >
           {forced ? "Set a new password" : "Change your password"}
         </h2>
-        <p className="mt-1 text-sm text-muted-foreground">
+      <p className="mt-1 text-sm text-muted-foreground">
           {forced
             ? "For your security, please replace the temporary password your administrator set for you."
             : "Choose a new password for your account."}
-        </p>
+      </p>
 
-        <form onSubmit={submit} className="mt-4 flex flex-col gap-3">
+      <form onSubmit={submit} className="mt-4 flex flex-col gap-3">
           <label className="flex flex-col gap-1.5 text-sm font-medium">
             Current password
             <input
@@ -192,8 +201,7 @@ export function ChangePasswordModal({
               {busy ? "Saving…" : "Change password"}
             </Button>
           </div>
-        </form>
-      </div>
-    </div>
+      </form>
+    </Dialog>
   );
 }

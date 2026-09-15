@@ -156,6 +156,31 @@ create table documents (
 );
 create index idx_documents_tenant on documents(tenant_id);
 
+-- Private source-document bucket. The per-bucket ceiling is 30 MiB, matching
+-- both frontend and backend validation. The image MIME types are retained for
+-- the separate Extract Quiz flow, which also stores its source in this bucket.
+insert into storage.buckets (
+  id,
+  name,
+  public,
+  file_size_limit,
+  allowed_mime_types
+)
+values (
+  'documents',
+  'documents',
+  false,
+  31457280,
+  array[
+    'application/pdf',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    'image/png',
+    'image/jpeg'
+  ]
+)
+on conflict (id) do update
+set file_size_limit = excluded.file_size_limit;
+
 -- One row per AI processing run on a document. Kept separate from
 -- `documents` because a document can be reprocessed (e.g. DeepSeek failed,
 -- Claude fallback retried) — you want that history, not an overwrite.

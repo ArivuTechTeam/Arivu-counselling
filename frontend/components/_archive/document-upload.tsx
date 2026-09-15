@@ -10,6 +10,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import {
+  DOCUMENT_UPLOAD_MAX_MB,
   DocumentOut,
   UploadResult,
   listDocuments,
@@ -59,7 +60,7 @@ export function DocumentUpload() {
         <CardHeader>
           <CardTitle>Upload teaching material</CardTitle>
           <CardDescription>
-            PDF or DOCX, up to 150 MB. We&apos;ll extract the text so you can
+            PDF or DOCX, up to {DOCUMENT_UPLOAD_MAX_MB} MB. We&apos;ll extract the text so you can
             generate quizzes from it.
           </CardDescription>
         </CardHeader>

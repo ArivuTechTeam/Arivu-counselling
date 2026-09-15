@@ -84,6 +84,10 @@ migration-27-challenge-flow-hardening.sql
 migration-28-remove-eager-challenge-session.sql
 migration-29-staff-dashboard-performance.sql
 migration-30-account-data-deletion.sql
+migration-31-chunked-document-generation.sql
+migration-32-reset-chunked-generation-schema.sql
+migration-33-document-archive-status.sql
+migration-34-document-upload-limit-30mb.sql
 ```
 
 The repository does not prove which migrations are applied to a deployed
@@ -110,6 +114,17 @@ before deploying the self-service account-deletion endpoint: it changes the
 relevant ownership foreign keys and installs a service-role-only anonymization
 function. Test migration 30 with a disposable account and verify its private
 Storage object is gone before enabling deletion for production users.
+Migration 31 adds chunked document-generation jobs and chunk storage. Migration
+32 repairs/recreates that transient chunking schema for databases that received
+an earlier version of migration 31; apply it after 31 on an existing database.
+Migration 33 adds the `archived` document status used by the content archive.
+Migration 34 lowers the Supabase document bucket limit to 30 MiB so storage,
+backend validation, and frontend messaging agree.
+
+For a fresh database, `migrations/schema.sql` already includes the final effects
+of migrations 31, 33, and 34. The incremental files remain required for an
+existing database that predates those changes; never infer their live applied
+state solely from the current schema file.
 
 ---
 

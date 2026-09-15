@@ -16,6 +16,8 @@ import { useToast } from "@/components/ui/toast";
 import {
   BlueprintTopicInput,
   Chapter,
+  DOCUMENT_UPLOAD_MAX_BYTES,
+  DOCUMENT_UPLOAD_MAX_MB,
   DocumentOut,
   analyzeDocument,
   checkDocumentDuplicate,
@@ -32,8 +34,6 @@ import { useCourses } from "@/lib/staff-queries";
 const fieldClass =
   "h-10 w-full rounded-md border border-input bg-background px-3 text-sm shadow-sm transition-colors focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20";
 
-const MAX_UPLOAD_MB = 150;
-const MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024;
 const ALLOWED_UPLOAD_EXTENSIONS = new Set(["pdf", "docx"]);
 
 const QUESTION_TYPES = [
@@ -206,8 +206,10 @@ export function BlueprintGenerator() {
       e.target.value = "";
       return;
     }
-    if (file.size > MAX_UPLOAD_BYTES) {
-      setUploadError(`Choose a file no larger than ${MAX_UPLOAD_MB} MB.`);
+    if (file.size > DOCUMENT_UPLOAD_MAX_BYTES) {
+      setUploadError(
+        `Choose a file no larger than ${DOCUMENT_UPLOAD_MAX_MB} MB.`,
+      );
       e.target.value = "";
       return;
     }
@@ -634,7 +636,7 @@ export function BlueprintGenerator() {
                 )}
               </span>
               <span className="text-xs text-muted-foreground">
-                PDF or DOCX · up to {MAX_UPLOAD_MB} MB
+                PDF or DOCX · up to {DOCUMENT_UPLOAD_MAX_MB} MB
               </span>
             </label>
             {uploadError && (

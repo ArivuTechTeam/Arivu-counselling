@@ -1,7 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback, useState } from "react";
 
+import { useEscapeKey } from "@/components/ui/dialog";
 import { createClient } from "@/lib/supabase";
 import { PUBLIC_ENV } from "@/lib/public-env";
 
@@ -65,6 +66,9 @@ function DevSwitcherInner({ currentEmail }: { currentEmail: string }) {
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<DevAccount | null>(null);
   const [password, setPassword] = useState("");
+  const close = useCallback(() => setOpen(false), []);
+
+  useEscapeKey(open, close);
 
   async function switchTo() {
     if (!selected || !password) return;
@@ -98,8 +102,13 @@ function DevSwitcherInner({ currentEmail }: { currentEmail: string }) {
 
       {open && (
         <>
-          <div className="fixed inset-0 z-20" onClick={() => setOpen(false)} />
-          <div className="absolute right-0 top-full z-30 mt-2 w-64 overflow-hidden rounded-lg border bg-card shadow-lg">
+          <div className="fixed inset-0 z-20" onClick={close} />
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-label="Switch development account"
+            className="absolute right-0 top-full z-30 mt-2 w-64 overflow-hidden rounded-lg border bg-card shadow-lg"
+          >
             <div className="border-b bg-amber-50 px-4 py-2 text-[11px] font-semibold uppercase tracking-wide text-amber-700">
               Dev · switch account
             </div>

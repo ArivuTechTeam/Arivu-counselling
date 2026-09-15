@@ -10,6 +10,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { Dialog } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { PageHeader } from "@/components/ui/page-header";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -225,20 +226,20 @@ export function AdminManager({ embedded = false }: { embedded?: boolean }) {
       </Card>
 
       {confirmTarget && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
-          onClick={() => setConfirmTarget(null)}
+        <Dialog
+          onClose={() => setConfirmTarget(null)}
+          ariaLabelledBy="remove-admin-title"
+          contentClassName="w-full max-w-md rounded-2xl border bg-card p-6 shadow-xl"
         >
-          <div
-            className="w-full max-w-md rounded-2xl border bg-card p-6 shadow-xl"
-            onClick={(e) => e.stopPropagation()}
-          >
             <div className="flex items-start justify-between gap-4">
               <div className="flex items-center gap-3">
                 <span className="flex h-10 w-10 items-center justify-center rounded-full bg-destructive/10 text-destructive">
                   <Trash size={18} />
                 </span>
-                <h2 className="text-base font-semibold text-foreground">
+                <h2
+                  id="remove-admin-title"
+                  className="text-base font-semibold text-foreground"
+                >
                   Remove admin
                 </h2>
               </div>
@@ -269,8 +270,7 @@ export function AdminManager({ embedded = false }: { embedded?: boolean }) {
                 Remove
               </button>
             </div>
-          </div>
-        </div>
+        </Dialog>
       )}
     </div>
   );
