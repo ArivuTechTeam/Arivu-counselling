@@ -129,6 +129,11 @@ class ResponseSecurityTests(unittest.TestCase):
         self.assertEqual(invalid.json()["request_id"], invalid.headers["X-Request-ID"])
         self.assertNotIn("input", invalid.json())
 
+        malformed_tenant = self.client.get(
+            "/api/v1/public/courses?tenant_id=not-a-uuid"
+        )
+        self.assertEqual(malformed_tenant.status_code, 422)
+
     def test_cors_allows_only_the_configured_or_local_development_origin(self) -> None:
         allowed_origin = settings.frontend_origin
         allowed = self.client.options(

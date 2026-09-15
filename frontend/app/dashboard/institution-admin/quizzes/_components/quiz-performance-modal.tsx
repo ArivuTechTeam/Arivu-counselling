@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 
 import { ErrorCard } from "@/components/ui/error-card";
+import { Dialog } from "@/components/ui/dialog";
 import { X } from "@/components/ui/icons";
 import { SkeletonList } from "@/components/ui/skeleton";
 import {
@@ -38,25 +39,12 @@ export function QuizPerformanceModal({
   }
 
   useEffect(load, [quiz.id]);
-  useEffect(() => {
-    function closeOnEscape(event: KeyboardEvent) {
-      if (event.key === "Escape") onClose();
-    }
-    window.addEventListener("keydown", closeOnEscape);
-    return () => window.removeEventListener("keydown", closeOnEscape);
-  }, [onClose]);
-
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-4"
-      onMouseDown={(event) => event.target === event.currentTarget && onClose()}
+    <Dialog
+      onClose={onClose}
+      ariaLabelledBy="quiz-performance-title"
+      contentClassName="animate-rise flex max-h-[90vh] w-full max-w-4xl flex-col overflow-hidden rounded-2xl border border-border bg-card shadow-2xl"
     >
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="quiz-performance-title"
-        className="animate-rise flex max-h-[90vh] w-full max-w-4xl flex-col overflow-hidden rounded-2xl border border-border bg-card shadow-2xl"
-      >
         <div className="flex items-start justify-between gap-4 border-b p-5 sm:p-6">
           <div className="min-w-0">
             <p className="text-xs font-semibold uppercase tracking-widest text-primary">Quiz performance</p>
@@ -153,7 +141,6 @@ export function QuizPerformanceModal({
             </div>
           )}
         </div>
-      </div>
-    </div>
+    </Dialog>
   );
 }

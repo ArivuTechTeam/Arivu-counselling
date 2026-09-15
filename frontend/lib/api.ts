@@ -34,6 +34,7 @@ export class ApiRequestError extends Error {
   readonly status: number | null;
   readonly requestId: string | null;
   readonly retryable: boolean;
+  readonly retryAfterSeconds: number | null;
 
   constructor(
     message: string,
@@ -42,6 +43,7 @@ export class ApiRequestError extends Error {
       status?: number | null;
       requestId?: string | null;
       retryable?: boolean;
+      retryAfterSeconds?: number | null;
     },
   ) {
     super(message);
@@ -50,6 +52,7 @@ export class ApiRequestError extends Error {
     this.status = options.status ?? null;
     this.requestId = options.requestId ?? null;
     this.retryable = options.retryable ?? false;
+    this.retryAfterSeconds = options.retryAfterSeconds ?? null;
   }
 }
 
@@ -194,6 +197,13 @@ async function apiError(res: Response, fallback: string): Promise<never> {
     request_id?: string;
   };
   const requestId = res.headers.get("X-Request-ID") || body.request_id || null;
+  const retryAfterHeader = res.headers.get("Retry-After");
+  const parsedRetryAfter = retryAfterHeader
+    ? Number.parseInt(retryAfterHeader, 10)
+    : Number.NaN;
+  const retryAfterSeconds = Number.isFinite(parsedRetryAfter)
+    ? Math.max(0, parsedRetryAfter)
+    : null;
   const statusDetails: Record<
     number,
     { code: ApiErrorCode; message: string; retryable: boolean }
@@ -247,6 +257,7 @@ async function apiError(res: Response, fallback: string): Promise<never> {
       status: res.status,
       requestId,
       retryable: details.retryable,
+      retryAfterSeconds,
     },
   );
 }
@@ -1189,7 +1200,18 @@ export type PlatformStats = {
   per_institution: { id: string; name: string; teachers: number; students: number }[];
 };
 
-export const listUsers = () => jsonRequest<AdminUser[]>("/api/v1/users", "GET");
+export async function listUsers(): Promise<AdminUser[]> {
+  const pageSize = 100;
+  const users: AdminUser[] = [];
+  for (let page = 1; ; page += 1) {
+    const batch = await jsonRequest<AdminUser[]>(
+      `/api/v1/users?page=${page}&page_size=${pageSize}`,
+      "GET",
+    );
+    users.push(...batch);
+    if (batch.length < pageSize) return users;
+  }
+}
 export const createTeacher = (input: TeacherCreateInput) =>
   jsonRequest<{ id: string }>("/api/v1/users", "POST", input);
 export const updateTeacher = (id: string, input: TeacherUpdateInput) =>
@@ -1458,10 +1480,21 @@ export type AdminCreateInput = {
   tenant_id: string;
 };
 
-export const listTenants = () =>
-  jsonRequest<TenantOption[]>("/api/v1/tenants", "GET");
-export const listAdmins = () =>
-  jsonRequest<InstitutionAdmin[]>("/api/v1/admins", "GET");
+async function listDirectoryPages<T>(path: string): Promise<T[]> {
+  const pageSize = 100;
+  const items: T[] = [];
+  for (let page = 1; ; page += 1) {
+    const batch = await jsonRequest<T[]>(
+      `${path}?page=${page}&page_size=${pageSize}`,
+      "GET",
+    );
+    items.push(...batch);
+    if (batch.length < pageSize) return items;
+  }
+}
+
+export const listTenants = () => listDirectoryPages<TenantOption>("/api/v1/tenants");
+export const listAdmins = () => listDirectoryPages<InstitutionAdmin>("/api/v1/admins");
 export const createAdmin = (input: AdminCreateInput) =>
   jsonRequest<{ created: boolean }>("/api/v1/admins", "POST", input);
 export const deleteAdmin = (id: string) =>

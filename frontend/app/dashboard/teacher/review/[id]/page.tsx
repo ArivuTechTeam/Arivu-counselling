@@ -84,8 +84,19 @@ export default function ReviewDetailPage({ params }: { params: { id: string } })
   }
 
   useEffect(() => {
-    load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    let cancelled = false;
+    setError(null);
+    setDetail(null);
+    getQuizSet(params.id)
+      .then((result) => {
+        if (!cancelled) setDetail(result);
+      })
+      .catch((reason) => {
+        if (!cancelled) setError(reason.message);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [params.id]);
 
   function updateQuestion(updated: ReviewQuestion) {

@@ -453,9 +453,13 @@ def generate_and_persist_from_material(
             }).execute()
             stored.append({"id": question_id, **q.model_dump()})
     except Exception:
-        service.table("quiz_sets").delete().eq("id", quiz_set_id).execute()
+        service.table("quiz_sets").delete().eq("id", quiz_set_id).eq(
+            "tenant_id", tid
+        ).eq("created_by", profile.user_id).execute()
         if created_question_ids:
-            service.table("questions").delete().in_("id", created_question_ids).execute()
+            service.table("questions").delete().in_("id", created_question_ids).eq(
+                "tenant_id", tid
+            ).eq("created_by", profile.user_id).execute()
         raise
 
     if source_document_id:

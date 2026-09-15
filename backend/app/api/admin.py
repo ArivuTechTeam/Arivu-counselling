@@ -33,6 +33,7 @@ router = APIRouter(prefix="/api/v1", tags=["admin"])
 
 AUTH_USERS_PAGE_SIZE = 1000
 POSTGREST_PAGE_SIZE = 1000
+ADMIN_DIRECTORY_PAGE_SIZE = 100
 
 
 def _require_admin(profile: CurrentProfile) -> None:
@@ -66,11 +67,27 @@ def _list_all_auth_users(service, *, per_page: int = AUTH_USERS_PAGE_SIZE) -> li
         page += 1
 
 
-def _email_by_auth_user_id(service) -> dict[str, str | None]:
-    return {
-        str(user.id): getattr(user, "email", None)
-        for user in _list_all_auth_users(service)
-    }
+def _email_by_auth_user_id(
+    service, user_ids: list[str] | set[str]
+) -> dict[str, str | None]:
+    """Resolve only requested Auth emails without retaining the whole directory."""
+    remaining = {str(user_id) for user_id in user_ids}
+    emails: dict[str, str | None] = {}
+    page = 1
+    while remaining:
+        response = service.auth.admin.list_users(
+            page=page, per_page=AUTH_USERS_PAGE_SIZE
+        )
+        page_users = list(getattr(response, "users", response) or [])
+        for user in page_users:
+            user_id = str(user.id)
+            if user_id in remaining:
+                emails[user_id] = getattr(user, "email", None)
+                remaining.remove(user_id)
+        if len(page_users) < AUTH_USERS_PAGE_SIZE:
+            break
+        page += 1
+    return emails
 
 
 def _select_all(
@@ -140,53 +157,66 @@ def _rollback_tenant(service, tenant_id: str) -> None:
 
 # ── Institution teacher management ──────────────────────────────────────────
 @router.get("/users")
-def list_users(profile: CurrentProfile = Depends(get_current_profile)) -> list[dict]:
+def list_users(
+    page: int = 1,
+    page_size: int = ADMIN_DIRECTORY_PAGE_SIZE,
+    profile: CurrentProfile = Depends(get_current_profile),
+) -> list[dict]:
     """List teachers managed by this institution admin.
 
     Student accounts are created through self-signup and deliberately excluded
     from this management endpoint.
     """
     _require_admin(profile)
+    if page < 1 or page_size < 1 or page_size > ADMIN_DIRECTORY_PAGE_SIZE:
+        raise HTTPException(
+            status_code=400,
+            detail=f"page must be positive and page_size must be between 1 and {ADMIN_DIRECTORY_PAGE_SIZE}.",
+        )
     service = get_service_client()
 
+    start = (page - 1) * page_size
     teachers = (
         service.table("profiles")
         .select("id, full_name, created_at")
         .eq("tenant_id", profile.tenant_id)
         .eq("role", "teacher")
+        .order("created_at", desc=True)
+        .range(start, start + page_size - 1)
         .execute()
         .data
         or []
     )
-    email_by_id = _email_by_auth_user_id(service)
+    if not teachers:
+        return []
+    teachers.sort(key=lambda teacher: teacher.get("created_at") or "", reverse=True)
+    teacher_ids = {str(teacher["id"]) for teacher in teachers}
+    email_by_id = _email_by_auth_user_id(service, teacher_ids)
 
-    assignments = (
-        service.table("teacher_subjects")
-        .select("teacher_id, subject_id")
-        .eq("tenant_id", profile.tenant_id)
-        .execute()
-        .data
-        or []
+    assignments = _select_all(
+        service,
+        "teacher_subjects",
+        "id, teacher_id, subject_id",
+        configure=lambda query: query.eq("tenant_id", profile.tenant_id).in_(
+            "teacher_id", list(teacher_ids)
+        ),
     )
     subject_ids = list({str(row["subject_id"]) for row in assignments})
     subjects = []
     if subject_ids:
-        subjects = (
-            service.table("subjects")
-            .select("id, course_id")
-            .eq("tenant_id", profile.tenant_id)
-            .in_("id", subject_ids)
-            .execute()
-            .data
-            or []
+        subjects = _select_all(
+            service,
+            "subjects",
+            "id, course_id",
+            configure=lambda query: query.eq(
+                "tenant_id", profile.tenant_id
+            ).in_("id", subject_ids),
         )
-    courses = (
-        service.table("courses")
-        .select("id, name")
-        .eq("tenant_id", profile.tenant_id)
-        .execute()
-        .data
-        or []
+    courses = _select_all(
+        service,
+        "courses",
+        "id, name",
+        configure=lambda query: query.eq("tenant_id", profile.tenant_id),
     )
     course_name = {str(course["id"]): course["name"] for course in courses}
     course_by_subject = {
@@ -202,7 +232,6 @@ def list_users(profile: CurrentProfile = Depends(get_current_profile)) -> list[d
         if course_id:
             course_ids_by_teacher.setdefault(teacher_id, set()).add(course_id)
 
-    teachers.sort(key=lambda teacher: teacher.get("created_at") or "", reverse=True)
     return [
         {
             "id": teacher["id"],
@@ -744,29 +773,32 @@ def list_course_students(
     course = _assert_tenant_course(
         service, course_id=course_id, tenant_id=profile.tenant_id
     )
-    enrollments = (
-        service.table("enrollments")
-        .select("profile_id")
-        .eq("tenant_id", profile.tenant_id)
-        .eq("course_id", course_id)
-        .execute()
-        .data
-        or []
+    enrollments = _select_all(
+        service,
+        "enrollments",
+        "id, profile_id",
+        configure=lambda query: query.eq("tenant_id", profile.tenant_id).eq(
+            "course_id", course_id
+        ),
     )
     profile_ids = list({str(row["profile_id"]) for row in enrollments})
     students = []
     if profile_ids:
-        students = (
-            service.table("profiles")
-            .select("id, full_name")
-            .eq("tenant_id", profile.tenant_id)
-            .eq("role", "student")
-            .in_("id", profile_ids)
-            .execute()
-            .data
-            or []
+        students = _select_all(
+            service,
+            "profiles",
+            "id, full_name",
+            configure=lambda query: query.eq(
+                "tenant_id", profile.tenant_id
+            ).eq("role", "student").in_("id", profile_ids),
         )
-    email_by_id = _email_by_auth_user_id(service) if students else {}
+    email_by_id = (
+        _email_by_auth_user_id(
+            service, {str(student["id"]) for student in students}
+        )
+        if students
+        else {}
+    )
     roster = sorted(
         [
             {
@@ -795,32 +827,61 @@ class AdminCreate(BaseModel):
 
 @router.get("/tenants")
 def list_tenants(
+    page: int = 1,
+    page_size: int = ADMIN_DIRECTORY_PAGE_SIZE,
     profile: CurrentProfile = Depends(get_current_profile),
 ) -> list[dict]:
     """Institutions (tenants) the super-admin can assign an admin to."""
     _require_super(profile)
+    if page < 1 or page_size < 1 or page_size > ADMIN_DIRECTORY_PAGE_SIZE:
+        raise HTTPException(status_code=400, detail="Invalid directory page.")
     service = get_service_client()
-    return sorted(
-        _select_all(service, "tenants", "id, name"),
-        key=lambda tenant: (tenant.get("name") or "").lower(),
+    start = (page - 1) * page_size
+    return (
+        service.table("tenants")
+        .select("id, name")
+        .order("name")
+        .range(start, start + page_size - 1)
+        .execute()
+        .data
+        or []
     )
 
 
 @router.get("/admins")
 def list_admins(
+    page: int = 1,
+    page_size: int = ADMIN_DIRECTORY_PAGE_SIZE,
     profile: CurrentProfile = Depends(get_current_profile),
 ) -> list[dict]:
     """Every institution admin across the platform, with their institution."""
     _require_super(profile)
+    if page < 1 or page_size < 1 or page_size > ADMIN_DIRECTORY_PAGE_SIZE:
+        raise HTTPException(status_code=400, detail="Invalid directory page.")
     service = get_service_client()
-    admins = _select_all(
-        service,
-        "profiles",
-        "id, full_name, tenant_id",
-        configure=lambda query: query.eq("role", "institution_admin"),
+    start = (page - 1) * page_size
+    admins = (
+        service.table("profiles")
+        .select("id, full_name, tenant_id")
+        .eq("role", "institution_admin")
+        .order("id")
+        .range(start, start + page_size - 1)
+        .execute()
+        .data
+        or []
     )
-    email_by_id = _email_by_auth_user_id(service)
-    tenants = _select_all(service, "tenants", "id, name")
+    if not admins:
+        return []
+    email_by_id = _email_by_auth_user_id(
+        service, {str(admin["id"]) for admin in admins}
+    )
+    tenant_ids = list({str(admin["tenant_id"]) for admin in admins})
+    tenants = _select_all(
+        service,
+        "tenants",
+        "id, name",
+        configure=lambda query: query.in_("id", tenant_ids),
+    )
     tname = {t["id"]: t["name"] for t in tenants}
     return [
         {

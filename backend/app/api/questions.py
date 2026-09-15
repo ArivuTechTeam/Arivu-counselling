@@ -32,6 +32,7 @@ from app.services.rate_limit import (
     QUESTION_REGENERATE,
     enforce_ai_rate_limit,
 )
+from app.services.question_validation import validate_question_answer_shape
 from app.services.review import RegenerationSourceError, regenerate_question
 from app.services.student_access import student_has_graded_question
 from app.services.tutor import explain_question
@@ -99,6 +100,34 @@ def edit_question(
             detail="No fields to update.",
         )
     service = get_service_client()
+    existing = (
+        service.table("questions")
+        .select("id,type,options,correct_answer")
+        .eq("id", question_id)
+        .eq("tenant_id", profile.tenant_id)
+        .eq("created_by", profile.user_id)
+        .maybe_single()
+        .execute()
+    )
+    if existing is None or not existing.data:
+        raise HTTPException(status_code=404, detail="Question not found.")
+
+    # Validate the complete post-edit shape. A partial PATCH may change only
+    # options or only the answer, so validating the request body by itself is
+    # insufficient and could leave a question the deterministic grader can no
+    # longer score correctly.
+    try:
+        validate_question_answer_shape(
+            existing.data["type"],
+            updates.get("options", existing.data.get("options")),
+            updates.get("correct_answer", existing.data.get("correct_answer")),
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid answer configuration: {exc}.",
+        ) from exc
+
     updated = (
         service.table("questions")
         .update(updates)

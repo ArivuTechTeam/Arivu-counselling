@@ -71,7 +71,8 @@ app = FastAPI(
 # Browsers block a page on http://localhost:3000 from calling an API on a
 # different origin (http://localhost:8000) unless the API explicitly says
 # "I allow that origin". This middleware adds those permission headers.
-# In production we'll list the real Vercel domain instead of localhost.
+# The allowed browser origin is the deployed Vercel frontend (or localhost in
+# explicit development); the API itself runs on Railway.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[settings.frontend_origin],

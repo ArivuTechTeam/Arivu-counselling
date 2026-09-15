@@ -198,9 +198,13 @@ def generate_quiz(
     except Exception:
         # Compensate across PostgREST calls so failed generations do not leave
         # visible draft sets or orphaned questions.
-        service.table("quiz_sets").delete().eq("id", quiz_set_id).execute()
+        service.table("quiz_sets").delete().eq("id", quiz_set_id).eq(
+            "tenant_id", profile.tenant_id
+        ).eq("created_by", profile.user_id).execute()
         if created_question_ids:
-            service.table("questions").delete().in_("id", created_question_ids).execute()
+            service.table("questions").delete().in_("id", created_question_ids).eq(
+                "tenant_id", profile.tenant_id
+            ).eq("created_by", profile.user_id).execute()
         raise
 
     return {

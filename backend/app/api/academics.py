@@ -97,13 +97,17 @@ def _chapter_named(
 
 
 @router.get("/public/courses")
-def public_courses(tenant_id: str) -> list[dict]:
-    """Unauthenticated list of a tenant's courses — for the signup dropdown."""
+def public_courses(tenant_id: UUID) -> list[dict]:
+    """Public course names for signup using a non-guessable tenant UUID.
+
+    Course names and IDs are intentionally public registration metadata; no
+    student, staff, assessment, or analytics data is exposed here.
+    """
     service = get_service_client()
     return (
         service.table("courses")
         .select("id, name")
-        .eq("tenant_id", tenant_id)
+        .eq("tenant_id", str(tenant_id))
         .order("name")
         .execute()
         .data

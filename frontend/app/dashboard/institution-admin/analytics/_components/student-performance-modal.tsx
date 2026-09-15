@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 
+import { Dialog } from "@/components/ui/dialog";
 import { X } from "@/components/ui/icons";
 import { InstitutionAnalytics } from "@/lib/api";
 
@@ -18,15 +19,12 @@ export function StudentPerformanceModal({
 }) {
   const [selected, setSelected] = useState<Student | null>(initialStudent ?? null);
 
-  useEffect(() => {
-    const close = (event: KeyboardEvent) => event.key === "Escape" && onClose();
-    window.addEventListener("keydown", close);
-    return () => window.removeEventListener("keydown", close);
-  }, [onClose]);
-
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-4" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
-      <div role="dialog" aria-modal="true" aria-labelledby="student-performance-title" className="flex max-h-[88vh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl border bg-card shadow-2xl">
+    <Dialog
+      onClose={onClose}
+      ariaLabelledBy="student-performance-title"
+      contentClassName="flex max-h-[88vh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl border bg-card shadow-2xl"
+    >
         <header className="flex items-start justify-between gap-4 border-b p-5">
           <div>
             <p className="text-xs font-semibold uppercase tracking-widest text-rose-600">Needs attention</p>
@@ -65,7 +63,6 @@ export function StudentPerformanceModal({
             </div>
           )}
         </div>
-      </div>
-    </div>
+    </Dialog>
   );
 }

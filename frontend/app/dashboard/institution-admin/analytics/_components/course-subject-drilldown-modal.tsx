@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 
+import { Dialog } from "@/components/ui/dialog";
 import { ChevronDown, X } from "@/components/ui/icons";
 import { AdminQuizSet, Course } from "@/lib/api";
 
@@ -23,14 +24,6 @@ export function CourseSubjectDrilldownModal({
   onSelectQuiz: (quiz: AdminQuizSet) => void;
 }) {
   const [subjectId, setSubjectId] = useState<string | null>(null);
-
-  useEffect(() => {
-    function closeOnEscape(event: KeyboardEvent) {
-      if (event.key === "Escape") onClose();
-    }
-    window.addEventListener("keydown", closeOnEscape);
-    return () => window.removeEventListener("keydown", closeOnEscape);
-  }, [onClose]);
 
   const subjects = useMemo(() => {
     const values = new Map(course.subjects.map((subject) => [subject.id, subject.name]));
@@ -58,16 +51,12 @@ export function CourseSubjectDrilldownModal({
   );
 
   return (
-    <div
-      className="fixed inset-0 z-40 flex items-center justify-center bg-black/55 p-4"
-      onMouseDown={(event) => event.target === event.currentTarget && onClose()}
+    <Dialog
+      onClose={onClose}
+      ariaLabelledBy="course-subject-drilldown-title"
+      overlayClassName="fixed inset-0 z-40 flex items-center justify-center bg-black/55 p-4"
+      contentClassName="animate-rise flex max-h-[86vh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-border bg-card shadow-2xl"
     >
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="course-subject-drilldown-title"
-        className="animate-rise flex max-h-[86vh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-border bg-card shadow-2xl"
-      >
         <div className="flex items-start justify-between gap-4 border-b p-5">
           <div className="min-w-0">
             {selectedSubject ? (
@@ -172,7 +161,6 @@ export function CourseSubjectDrilldownModal({
             </div>
           )}
         </div>
-      </div>
-    </div>
+    </Dialog>
   );
 }

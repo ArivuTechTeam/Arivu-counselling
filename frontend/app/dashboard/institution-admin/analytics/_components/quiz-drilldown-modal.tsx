@@ -1,7 +1,6 @@
 "use client";
 
-import { useEffect } from "react";
-
+import { Dialog } from "@/components/ui/dialog";
 import { X } from "@/components/ui/icons";
 import { AdminQuizSet } from "@/lib/api";
 
@@ -24,17 +23,13 @@ export function QuizDrilldownModal({
   onClose: () => void;
   onSelect: (quiz: AdminQuizSet) => void;
 }) {
-  useEffect(() => {
-    function closeOnEscape(event: KeyboardEvent) {
-      if (event.key === "Escape") onClose();
-    }
-    window.addEventListener("keydown", closeOnEscape);
-    return () => window.removeEventListener("keydown", closeOnEscape);
-  }, [onClose]);
-
   return (
-    <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/55 p-4" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
-      <div role="dialog" aria-modal="true" aria-labelledby="analytics-drilldown-title" className="animate-rise flex max-h-[86vh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-border bg-card shadow-2xl">
+    <Dialog
+      onClose={onClose}
+      ariaLabelledBy="analytics-drilldown-title"
+      overlayClassName="fixed inset-0 z-40 flex items-center justify-center bg-black/55 p-4"
+      contentClassName="animate-rise flex max-h-[86vh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-border bg-card shadow-2xl"
+    >
         <div className="flex items-start justify-between gap-4 border-b p-5">
           <div><h2 id="analytics-drilldown-title" className="text-lg font-bold text-foreground">{title}</h2><p className="mt-1 text-sm text-muted-foreground">{description}</p></div>
           <button type="button" aria-label="Close drill-down" onClick={onClose} className="inline-flex h-9 w-9 items-center justify-center rounded-lg text-muted-foreground hover:bg-accent hover:text-foreground"><X size={18} /></button>
@@ -55,7 +50,6 @@ export function QuizDrilldownModal({
             </div>
           )}
         </div>
-      </div>
-    </div>
+    </Dialog>
   );
 }
