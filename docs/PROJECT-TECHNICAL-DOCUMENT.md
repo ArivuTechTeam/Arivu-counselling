@@ -1,15 +1,15 @@
 # ArivuPro Quiz Platform (quiz-generator-v1) — Technical Project Document
 
-> **Purpose of this document.** A single, self-contained technical reference for the ArivuPro Quiz Platform. It is written so that **any technically literate reader — with no prior exposure to this codebase — can understand what the system is, how it is built, how it runs, what it costs, and how to extend it.** Technical statements were reviewed against `main` at commit `016830e` and the production deployment verified on 7 September 2026. Provider pricing and operational settings can change independently and must be rechecked before making financial or deployment decisions.
+> **Purpose of this document.** A single, self-contained technical reference for the ArivuPro Quiz Platform. It is written so that **any technically literate reader — with no prior exposure to this codebase — can understand what the system is, how it is built, how it runs, what it costs, and how to extend it.** Technical statements were originally reviewed against `main` at commit `016830e` (7 September 2026) and partially refreshed against `main` at `59e0b27` (15 September 2026) — see the per-section "Verified 2026-09-15" notes for what was re-checked in this pass; sections without such a note still reflect the 7-September basis and should be re-verified before being relied on. The Railway **production deployment itself** (as opposed to the repository) was last independently verified on 2026-09-04/07 per `docs/deploy-runbook.md` — this document does not re-verify production on its own. Provider pricing and operational settings can change independently and must be rechecked before making financial or deployment decisions.
 
 | | |
 |---|---|
 | **Product** | ArivuPro Quiz Platform — multi-tenant AI quiz generator for coaching institutions |
 | **Repository** | `ArivuTechTeam/quiz-generator` |
-| **Document version** | 1.1 |
-| **Document date** | 7 September 2026 |
-| **Basis** | `main` at `016830e`; Railway production deployment and migrations 11–12 verified |
-| **Status of product** | Phase 1 (functional product + multi-tenant foundation) — **live in production pilot** |
+| **Document version** | 1.2 |
+| **Document date** | 7 September 2026; partially refreshed 15 September 2026 |
+| **Basis** | Originally `main` at `016830e` (migrations 11–12); partially refreshed against `main` at `59e0b27` (migrations through 34) — sections not marked "Verified 2026-09-15" were not re-checked in the refresh |
+| **Status of product** | Phase 1 (functional product + multi-tenant foundation) — **live in production pilot** (production status confirmed only as of 2026-09-04/07, not re-verified in this refresh) |
 | **Audience** | Engineering, technical leadership, prospective contributors, stakeholders |
 
 ---
@@ -35,7 +35,7 @@
 
 ## 1. Executive Summary
 
-The ArivuPro Quiz Platform is a **multi-tenant SaaS web application** that lets coaching institutions turn teaching material into reviewed, student-ready quizzes using AI. A teacher uploads a PDF/DOCX; the system extracts the text, asks a Large Language Model (LLM) to generate questions across six question types and three cognitive levels; the teacher reviews/edits/approves them; students then take the quizzes and get auto-graded results, analytics, and a full practice/gamification suite (smart quizzes, daily challenges, exam simulator, leaderboards, challenge-a-friend).
+The ArivuPro Quiz Platform is a **multi-tenant SaaS web application** that lets coaching institutions turn teaching material into reviewed, student-ready quizzes using AI. A teacher uploads a PDF/DOCX; the system extracts the text, asks a Large Language Model (LLM) to generate questions across five question types (verified 2026-09-15 against `generation.py`'s `QuestionType` literal — six were originally planned, but the schema's sixth type, `descriptive`, isn't wired into generation or grading; see §7.1 and §13) and three cognitive levels; the teacher reviews/edits/approves them; students then take the quizzes and get auto-graded results, analytics, and a full practice/gamification suite (smart quizzes, daily challenges, exam simulator, leaderboards, challenge-a-friend).
 
 **Architecturally**, it is a classic three-tier system built on managed cloud services:
 
@@ -152,7 +152,7 @@ flowchart TD
 | Database | PostgreSQL (via Supabase) | 15/16 managed | Supabase |
 | Auth | Supabase Auth (GoTrue), JWT (ES256) | — | Supabase |
 | File storage | Supabase Storage (private bucket) | — | Supabase |
-| Primary LLM | **Google Gemini** — `gemini-2.5-flash` (generation), flash-lite tier (blueprint/topics/tutor) | — | Google |
+| Primary LLM | **Google Gemini** — `GEMINI_MODEL`, code default `gemini-3.5-flash` (verified 2026-09-15 in `backend/app/lib/config.py`; was `gemini-2.5-flash` when this table was first written). Used for **all** text/JSON features (generation, blueprint, regeneration, topic extraction, AI tutor) and vision extraction — see the note in §6.3 correcting the earlier "flash-lite tier" claim | — | Google |
 | Fallback LLM | **DeepSeek** — `deepseek-chat` (OpenAI-compatible) | — | DeepSeek |
 | PDF/DOCX extraction | pdfplumber, python-docx | — | — |
 
@@ -269,20 +269,33 @@ backend/app/
 ### 6.2 API surface (grouped)
 Guards: **public** / **student** / **staff** (teacher+admin+super) / **admin** (institution_admin+super) / **super_admin**.
 
+> **Verified 2026-09-15:** `backend/app/api/` has **14 router modules**, not the
+> 9 this section originally covered — `auth_account.py`, `extraction.py`,
+> `institution_admin.py`, and `super_admin.py` were missing from this list. All
+> four are folded in below; this is still a grouped summary, not an exhaustive
+> route-by-route reference — read the router files directly for the full
+> request/response contracts.
+
 **System / identity (`main.py`)**
 - `GET /health` — liveness (public)
 - `GET /api/v1/me` — identity from JWT
 - `GET /api/v1/me/profile` — tenant_id + role from `profiles`
 
+**Auth account management** (`/api/v1`, `auth_account.py`) — self-service account actions for the signed-in user (e.g. password change enforcement, account deletion); tenant/role come from `profiles`, not the request.
+
 **Documents** (`/api/v1/documents`) — `POST /upload` and `GET ""` are teacher-only by design. Limits: PDF/DOCX only, 30 MiB, 5000-char preview.
 
-**Quiz sets** (`/api/v1/quiz-sets`) — `POST /generate`, `POST /generate-blueprint`, `GET ""`, `GET /{id}`, `POST /{id}/publish`, and `POST /{id}/approve-all` are teacher-only by design.
+**Extraction** (`/api/v1`, `extraction.py`) — teacher-only upload of an *existing* quiz document (PDF/DOCX/image, ≤20 MB) that Gemini vision/text reads into draft questions under a chosen subject+chapter; separate limit and pipeline from `documents.py` — see `docs/pavyaa_changelog/EXTRACTION-FEATURE.md`.
+
+**Topics** (`/api/v1`, `topics.py`) — teacher-only topic extraction from an uploaded document, feeding the blueprint wizard (§8.1).
+
+**Quiz sets** (`/api/v1/quiz-sets`) — `POST /generate`, `POST /generate-blueprint`, `GET ""`, `GET /{id}`, `POST /{id}/publish`, `POST /{id}/archive`, and `POST /{id}/approve-all` are teacher-only by design. Large-document generation additionally exposes `POST /analyze`, `GET /generation-jobs/{id}`, `POST /generation-jobs/{id}/retry`, and `POST /generation-jobs/{id}/generate` — the resumable, chunked map-reduce path for documents over `CHUNKING_TRIGGER_CHARS` (see §8.1 and `docs/chunked-generation-architecture.md`).
 
 **Questions** (`/api/v1/questions`) — `PATCH /{id}`, `POST /{id}/approve`, `POST /{id}/reject`, and `POST /{id}/regenerate` are teacher-only by design; `POST /{id}/explain` is available to a teacher for their own question or to a student after that question has been graded.
 
 **Academics** (`/api/v1`) — `GET /public/courses` (**public**, feeds signup); `GET/POST /courses`, `POST /subjects`, `DELETE …` (read=staff, write=admin); `GET/PUT /teachers/{teacher_id}/subjects` (institution admin); chapters CRUD restricted to explicitly assigned teachers.
 
-**Admin** (`/api/v1`) — user management (`/users` admin), institution onboarding & admin management (`/platform/tenants`, `/admins` super_admin), dashboards (`/admin/overview`, `/admin/analytics`, `/platform/overview`, `/platform/ai-monitoring`).
+**Admin** (`/api/v1`) — user management (`/users` admin), institution onboarding & admin management (`/platform/tenants`, `/admins` super_admin), dashboards (`/admin/overview`, `/admin/analytics`, `/platform/overview`, `/platform/ai-monitoring`). Handler functions live in `admin.py`; `institution_admin.py` and `super_admin.py` are thin, explicit path-allowlist routers that re-export a filtered subset of `admin.py`'s routes for role-scoped registration (each raises at import time if its allowlist and `admin.py`'s actual routes drift) — this two-layer split postdates this document's original write-up.
 
 **Teacher** (`/api/v1`) — `/teacher/class-overview`, `/teacher/class-monitor`, `/teacher/student-report/{id}` (staff).
 
@@ -297,21 +310,47 @@ Guards: **public** / **student** / **staff** (teacher+admin+super) / **admin** (
   1. **Google Gemini** (`generativelanguage.googleapis.com`) — **primary**.
   2. **DeepSeek** (OpenAI-compatible chat completions) — **fallback**.
 - **`complete_with_fallback(system, user)`** tries providers in order and returns the first success (with the provider name); if all fail it raises a clear error. Gemini is primary when `GEMINI_API_KEY` is set; DeepSeek is used if Gemini fails and `DEEPSEEK_API_KEY` is set.
-- **Two Gemini tiers** (configurable by env):
-  - `gemini-2.5-flash` — standard generation & regeneration (JSON response mode, temp 0.3).
-  - flash-lite tier (`GEMINI_BLUEPRINT_MODEL`, default `gemini-3.5-flash-lite`) — blueprint generation, topic extraction, AI tutor (cheaper, temp ~0.2).
+- **Correction, verified 2026-09-15 (this document previously described "two Gemini tiers" — that is no longer accurate for the live call path):**
+  standard generation, regeneration, blueprint generation, topic extraction, AND
+  the AI tutor **all** call `complete_with_fallback()` / `complete_json_with_fallback()`,
+  which route through `GeminiProvider.complete()` — and that always uses
+  `settings.gemini_model` (code default `gemini-3.5-flash`, JSON response mode,
+  temp 0.3). There is **no live code path that uses the cheaper
+  `GEMINI_BLUEPRINT_MODEL` tier** (default `gemini-3.5-flash-lite`): a
+  schema-constrained `gemini_json()` helper defaults to it in
+  `services/llm/structured.py`, but as of 2026-09-15 nothing in the codebase
+  calls that helper (confirmed by grep). Vision extraction
+  (`gemini_json_multimodal`) also explicitly defaults to the full `gemini_model`,
+  not the lite tier, per its own docstring ("vision extraction accuracy
+  matters"). See `docs/llm-prompts.md`'s "Model routing" section for the
+  up-to-date picture, including the large-document map-reduce path
+  (`complete_json_large`, also full `gemini_model`).
 - **No embeddings / no vector search at runtime.** (A `vector(1536)` column exists on `questions` for future dedup, but nothing populates or queries it today.)
-- **Text extraction:** `pdfplumber` (PDF) and `python-docx` (DOCX). **No OCR** — scanned/image PDFs are rejected with a clear error.
+- **Text extraction:** `pdfplumber` (PDF) and `python-docx` (DOCX). **No OCR** — scanned/image PDFs are rejected with a clear error from `documents.py`'s standard upload path; the separate `extraction.py` quiz-extraction path instead uses Gemini vision directly on scanned PDFs/images (no OCR library either way).
 
 ### 6.4 Services (core logic modules)
-- **`generation.py`** — standard quiz generation pipeline (see §8.1).
-- **`blueprint.py`** — weighted "blueprint" generation: converts High/Med/Low topic priorities into a 3:2:1 question mix, emphasises priority topics (~70% of questions), tags each question with its topic.
+
+> **Verified 2026-09-15:** `backend/app/services/` now has 25 modules; this
+> list originally covered 8. The 9 below are unchanged; the rest are new since
+> 7 September and are grouped separately.
+
+- **`generation.py`** — standard, single-call quiz generation pipeline (see §8.1).
+- **`blueprint.py`** — weighted "blueprint" generation. Two modes: the original weighted mode converts High/Med/Low topic priorities into a 3:2:1 question mix, emphasising priority topics (~70% of questions); a newer **per-topic mode** (added after 7 September — see `docs/llm-prompts.md` §2) instead takes exact per-topic, per-question-type counts from the teacher and bypasses the weight math entirely. Both modes tag each question with its topic.
 - **`grading.py`** — `grade_answer()` deterministic scoring per question type (see §8.2).
 - **`selector.py`** — `select_question_ids()` — the shared question picker for all practice modes; always scopes to tenant + enrolled subjects + approved questions.
-- **`review.py`** — assembles quiz-set detail; regenerates a single question in place.
+- **`review.py`** — assembles quiz-set detail; regenerates a single question in place (now also re-sends the original source material so the regenerated question stays grounded — see `docs/llm-prompts.md` §3).
 - **`topics.py`** — extracts a de-duplicated list of teachable topics from a document.
 - **`tutor.py`** — AI Tutor: one cached explanation per question, reused across all students.
 - **`events.py`** — append-only event ledger writer; **never throws** (instrumentation must not break requests).
+
+**New since 7 September 2026 (not previously documented here):**
+- **Large-document map-reduce generation** — `generation_chunking.py`, `generation_jobs.py`, `chunking_service.py`, `document_profile.py`, `master_blueprint_synthesizer.py`, `map_reduce_prompts.py`, `question_validation.py` implement the resumable, chunked pipeline for documents over `CHUNKING_TRIGGER_CHARS` that §8.1's original single-path diagram did not cover. Design intent: `docs/chunked-generation-architecture.md`, `docs/chunked-generation-build-plan.md`, `docs/ai-quiz-generation-large-docs-decision.md`.
+- **`quiz_generator_service.py`** / **`topic_extraction_pipeline.py`** — orchestration layers coordinating the above with the existing single-call and blueprint paths.
+- **`rate_limit.py`** — the Supabase-backed per-user rolling-hour AI rate limiter (see the "AI rate limits" section of both `CLAUDE.md` files).
+- **`account_deletion.py`** — self-service account deletion (migration 30).
+- **`attempt_timing.py`**, **`student_access.py`**, **`teacher_access.py`** — access/timing helpers used across the student and teacher routers.
+- **`quiz_extraction.py`** / **`extraction_prompts.py`** — the existing-quiz-document extraction feature (`extraction.py` router); see `docs/pavyaa_changelog/EXTRACTION-FEATURE.md`.
+- **`pyq_parser.py`** — deterministic past-year-question parser; unwired (see §12).
 
 ### 6.5 Auth model
 - **JWT verification** (`lib/auth.py`): reads the token header; modern Supabase tokens are **ES256**, verified against the project's public keys fetched from the JWKS endpoint (cached). Audience `authenticated` is enforced.
@@ -323,7 +362,7 @@ Guards: **public** / **student** / **staff** (teacher+admin+super) / **admin** (
 
 ## 7. Database Schema
 
-PostgreSQL on Supabase. The repository baseline is `migrations/schema.sql` plus migrations 01, 02, and 04–12. There is no migration 03; migration 04 removed the abandoned seed-library feature. Apply migrations once, in numeric order, using `docs/deploy-runbook.md`.
+PostgreSQL on Supabase. The repository baseline is `migrations/schema.sql` plus migrations 01, 02, and 04–34 (verified 2026-09-15 — was 04–12 when this document was first written). There is no migration 03; migration 04 removed the abandoned seed-library feature. `schema.sql` already includes the final effects of migrations 31, 33, and 34 for a fresh database; the incremental files remain required for an existing database. Apply migrations once, in numeric order, using `docs/deploy-runbook.md`.
 
 ### 7.1 Enums
 `user_role` (super_admin, institution_admin, teacher, student) · `question_type` (mcq_single, mcq_multi, numerical, true_false, fill_blank, **descriptive**) · `question_source` (ai_generated, manual) · `review_status` (pending_review, approved, rejected, needs_edit) · `document_status` · `job_status` · `variant_type` (theory, practical, mixed) · `quiz_status` (draft, published, archived) · `attempt_status` (in_progress, submitted, graded, abandoned).
@@ -402,12 +441,41 @@ erDiagram
 | 10 plan-limits-rls | Plan-limit data and RLS hardening for monetization scaffolding. |
 | 11 auth-hardening | Student-only public signup, course-derived tenant assignment, protected profile updates, forced temporary-password changes, and practice autosave state. |
 | 12 teacher-subjects | Tenant-consistent `teacher_subjects`, assignment RLS, atomic assignment replacement, enrollment derivation, and backfill of existing teacher access. |
+| 13 ai-rate-limits | `ai_rate_limits` table + RPC backing the per-user rolling-hour AI limits (see the "AI rate limits" section of `CLAUDE.md`). |
+| 14 google-oauth-onboarding | Safe Google OAuth student onboarding — permits an incomplete pre-course-selection state. |
+| 15 quiz-extraction | Schema support for the quiz-extraction feature (tags extracted questions/documents). |
+| 16 chapter-uniqueness | DB-enforced no-duplicate-chapters-within-subject (previously app-code-only). |
+| 17 document-hash | SHA-256 content fingerprint on `documents` for duplicate-upload detection. |
+| 18 course-subject-uniqueness | DB-enforced no-duplicate-courses/subjects, mirroring migration 16 one level up. |
+| 19 quiz-extraction-rate-limit | Extends the migration-13 rate limiter to cover the extraction endpoint. |
+| 20 teacher-deletion-content-retention | Preserves content when a teacher account is deleted rather than cascading deletes. |
+| 21 fix-google-signup-ambiguous-column | Fixes an ambiguous-column bug introduced by migration 14. |
+| 22 browser-data-api-hardening | Closes direct browser/Supabase-client access to backend-owned tables and analytics views (auth-only direct access remains). |
+| 23 quiz-set-document-link | Adds `quiz_sets.document_id` so a quiz set links back to its source document. |
+| 24 quiz-attempt-limit | Atomic, backend-cap-driven creation of a student's quiz attempt (`STUDENT_QUIZ_ATTEMPT_LIMIT`). |
+| 25 revision-topic-snapshots | `revised_topics` becomes a performance snapshot (re-surfaces a topic if accuracy drops again) rather than a permanent dismissal. |
+| 26 daily-exam-session-guards | Atomic DB-enforced guards for Daily Challenge / Exam Simulator session starts (`practice_sessions.activity_date`, `active_slot`). |
+| 27 challenge-flow-hardening | Challenge-a-Friend hardening: immutable question snapshots, course scope, expiry/revocation, atomic creator setup, one session per participant. |
+| 28 remove-eager-challenge-session | Removes the obsolete helper that eagerly created the challenge creator's own session at link-creation time. |
+| 29 staff-dashboard-performance | Tenant-scoped indexes for the staff/admin dashboards. |
+| 30 account-data-deletion | Self-service account deletion: ownership-FK changes + a service-role-only anonymization function. |
+| 31 chunked-generation-jobs | Adds the chunked/map-reduce document-generation job and chunk-storage tables (§6.4, §8.1). |
+| 32 reset-chunked-generation | Repairs/recreates the transient chunking schema for databases that received an earlier version of migration 31. |
+| 33 teacher-content-archive | Adds the `archived` `document_status` value used by the teacher content-archive feature. |
+| 34 document-upload-limit | Lowers the Supabase document-bucket limit to 30 MiB so storage, backend validation, and frontend messaging agree. |
+
+> **Verified 2026-09-15:** migrations 13–34 above were added to this table for
+> the first time in this refresh (the table previously stopped at 12).
+> `docs/deploy-runbook.md` is the authoritative source for exact filenames,
+> apply order, and cross-migration dependencies — it was corrected in the same
+> pass after being found to reference four migration-31–34 filenames that
+> don't exist in `migrations/`.
 
 ---
 
 ## 8. Core Logic — How Key Features Work
 
-### 8.1 Quiz generation pipeline (standard)
+### 8.1 Quiz generation pipeline (standard, single-call path)
 ```
 Teacher uploads PDF/DOCX
         │
@@ -418,13 +486,15 @@ Teacher uploads PDF/DOCX
 [2] Extract text  (pdfplumber / python-docx)  → reject if empty (scanned PDF)
         │
         ▼
-[3] Select material window (skip front-matter for long docs; cap ~60,000 chars)
+[3] Select material window (skip front-matter for long docs; cap
+    GENERATION_MAX_TEXT_CHARS — code default 100,000 chars, verified 2026-09-15;
+    this diagram previously said "~60,000 chars")
         │
         ▼
 [4] Build system + user prompt (exact JSON contract per question type & level)
         │
         ▼
-[5] complete_with_fallback()  →  Gemini (primary)  →  DeepSeek (fallback)
+[5] complete_with_fallback()  →  Gemini (GEMINI_MODEL, primary)  →  DeepSeek (fallback)
         │
         ▼
 [6] Validate LLM output (Pydantic), enforce per-question shape, truncate to N
@@ -436,7 +506,8 @@ Teacher uploads PDF/DOCX
 Teacher reviews → approve/edit/reject/regenerate → PUBLISH  →  visible to students
 ```
 - Before generation or chapter management, the backend verifies that the teacher is explicitly assigned to the selected subject through `teacher_subjects`.
-- **Blueprint generation** is a richer variant: the teacher first extracts topics, assigns each a priority (High/Med/Low) and per-type question counts; the system converts priorities to a weighted mix and tags each generated question with its topic. This powers weightage-based question papers.
+- **Blueprint generation** is a richer variant with two modes (verified 2026-09-15 — the per-topic mode is new since 7 September): the original **weighted mode** has the teacher extract topics, assign each a priority (High/Med/Low), and set overall per-type counts; the system converts priorities to a weighted mix (~70% to priority topics, 3:2:1 by weight) and tags each generated question with its topic. The newer **per-topic mode** instead has the teacher set exact per-topic, per-question-type counts directly — no weight math, no "general" coverage, and the quiz is built only from the topics the teacher listed. See `docs/llm-prompts.md` §2 for both prompt shapes.
+- **Large-document path (not shown above — added since 7 September, not previously documented in this section):** documents whose extracted text exceeds `CHUNKING_TRIGGER_CHARS` (default 100,000 chars) skip this single-call flow and instead go through a resumable, chunked map-reduce pipeline (`generation_chunking.py`, `generation_jobs.py`, `chunking_service.py`, `document_profile.py`, `master_blueprint_synthesizer.py`) exposed via `POST /api/v1/quiz-sets/analyze` and the `/generation-jobs/{id}` endpoints (§6.2). See `docs/chunked-generation-architecture.md` for the full design.
 
 ### 8.2 Grading (deterministic — no AI)
 `grade_answer(question, student_answer)` returns `(is_correct, marks_awarded)`:
@@ -504,8 +575,10 @@ SUPABASE (dashboard-configured): Postgres + Auth + Storage — settings apply in
 **Backend (secret):**
 - `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_JWT_SECRET`
 - `FRONTEND_ORIGIN` (CORS allow-list — the Vercel URL)
-- `GEMINI_API_KEY` (+ optional `GEMINI_MODEL`, `GEMINI_BLUEPRINT_MODEL`, `GEMINI_BASE_URL`)
-- `DEEPSEEK_API_KEY` (+ optional `DEEPSEEK_MODEL`, `DEEPSEEK_BASE_URL`)
+- `GEMINI_API_KEY` (+ optional `GEMINI_MODEL`, `GEMINI_FALLBACK_MODEL`, `GEMINI_BLUEPRINT_MODEL` (currently unused, see §6.3), `GEMINI_BASE_URL`)
+- `DEEPSEEK_API_KEY` (+ optional `DEEPSEEK_MODEL`, `DEEPSEEK_BASE_URL`, `DEEPSEEK_MAX_OUTPUT_TOKENS`)
+- Large-document generation and extraction tuning (safe code defaults; see `backend/.env.example` for the full, commented list): `GENERATION_MAX_TEXT_CHARS`, `CHUNKING_TRIGGER_CHARS`, `GENERATION_CHUNK_CHARS`, `GENERATION_CHUNK_OVERLAP_CHARS`, `GENERATION_CHUNK_MIN_CHARS`, `GENERATION_CHUNK_CONCURRENCY`, `GENERATION_MAP_MAX_OUTPUT_TOKENS`, `GENERATION_PROFILE_MAX_CHARS`, `GENERATION_CHUNK_STUCK_SECONDS`, `GEMINI_VISION_TIMEOUT_SECONDS`, `GEMINI_EXTRACTION_MAX_OUTPUT_TOKENS`, `EXTRACTION_TEXT_CHUNK_CHARS`, `EXTRACTION_CHUNK_CONCURRENCY` (added 2026-09-15 to this list — previously undocumented in this section)
+- The six `RATE_LIMIT_*_PER_HOUR` AI rate limits, `STUDENT_QUIZ_ATTEMPT_LIMIT`, `DAILY_CHALLENGE_TIMEZONE`, `CHALLENGE_EXPIRY_DAYS` — see the "AI rate limits" section of `CLAUDE.md` for the rate-limit defaults
 
 > Secrets live in `.env` / `.env.local` (gitignored) and in the Vercel/Railway/Supabase dashboards. Never in code.
 
@@ -516,15 +589,14 @@ Email confirmation and password-reset emails require a custom SMTP provider (e.g
 
 ## 11. Cost Analysis
 
-> **Assumptions.** Prices were rechecked on **7 September 2026** against the official [Gemini](https://ai.google.dev/gemini-api/docs/pricing), [Supabase](https://supabase.com/pricing), [Vercel](https://vercel.com/pricing), and [Railway](https://docs.railway.com/pricing) pricing pages. USD→INR at **₹88 = $1** is illustrative; adjust it and provider usage before making a budget decision. Token estimates are derived from the actual code (material window + JSON output contract).
+> **Assumptions.** Prices were checked on **7 September 2026** against the official [Gemini](https://ai.google.dev/gemini-api/docs/pricing), [Supabase](https://supabase.com/pricing), [Vercel](https://vercel.com/pricing), and [Railway](https://docs.railway.com/pricing) pricing pages, for a model then called `gemini-2.5-flash`. **Not reconfirmed in the 2026-09-15 refresh:** the code's `GEMINI_MODEL` default is now `gemini-3.5-flash` (verified in `backend/app/lib/config.py`), and Google's per-token pricing for that specific model **was not re-checked against the live Gemini pricing page in this pass** — treat the $/1M figures below as the 7-September numbers for the *previous* default model, not a verified current price, and recheck before any budget decision. USD→INR at **₹88 = $1** is illustrative; adjust it and provider usage before making a budget decision. Token estimates are derived from the actual code (material window + JSON output contract).
 
 ### 11.1 Gemini list pricing (models the code uses)
 | Model | Input / 1M tokens | Output / 1M tokens | Used for |
 |---|---|---|---|
-| `gemini-2.5-flash` | **$0.30** | **$2.50** | Standard quiz generation & regeneration |
-| `gemini-3.5-flash-lite` (flash-lite tier) | **$0.30** | **$2.50** | Blueprint generation, topic extraction, AI tutor |
+| `gemini-2.5-flash` (pricing as checked 7-Sep-2026; code default is now `gemini-3.5-flash` — price not reconfirmed, see caveat above) | **$0.30** | **$2.50** | **All** text/JSON features: standard quiz generation & regeneration, blueprint generation (both modes), topic extraction, AI tutor, and large-document map-reduce generation — verified 2026-09-15 that these all share one model tier, not two (see §6.3's correction) |
 
-*(Gemini offers a free tier with rate limits; the figures above are the paid tier used for planning at scale.)*
+*(Gemini offers a free tier with rate limits; the figures above are the paid tier used for planning at scale. The separate `gemini-3.5-flash-lite` "flash-lite tier" row present in earlier drafts of this table was removed 2026-09-15: `GEMINI_BLUEPRINT_MODEL` is configured but has no caller in the current codebase, so it contributes $0 to today's actual spend — see §6.3.)*
 
 ### 11.2 Cost per AI action (variable cost)
 | Action | ~Input tokens | ~Output tokens | Cost (USD) | Cost (INR) |
@@ -580,7 +652,7 @@ The historical project specification described some choices that the **deployed 
 
 | Topic | Original spec said | Deployed reality |
 |---|---|---|
-| Primary LLM | DeepSeek V4 | **Google Gemini** (`gemini-2.5-flash`) |
+| Primary LLM | DeepSeek V4 | **Google Gemini** (`GEMINI_MODEL`, code default `gemini-3.5-flash` as of 2026-09-15 — was `gemini-2.5-flash` when this row was first written; check `backend/app/lib/config.py` for the current value) |
 | Fallback LLM | Anthropic Claude Sonnet | **DeepSeek** (`deepseek-chat`); **no Claude code exists** |
 | ORM | SQLModel | **No ORM** — all DB access via the Supabase (PostgREST) client |
 | Question types | 6 incl. `matching` | Enum has `descriptive`, **not `matching`** |

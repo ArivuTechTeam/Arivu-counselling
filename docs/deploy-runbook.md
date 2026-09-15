@@ -84,11 +84,17 @@ migration-27-challenge-flow-hardening.sql
 migration-28-remove-eager-challenge-session.sql
 migration-29-staff-dashboard-performance.sql
 migration-30-account-data-deletion.sql
-migration-31-chunked-document-generation.sql
-migration-32-reset-chunked-generation-schema.sql
-migration-33-document-archive-status.sql
-migration-34-document-upload-limit-30mb.sql
+migration-31-chunked-generation-jobs.sql
+migration-32-reset-chunked-generation.sql
+migration-33-teacher-content-archive.sql
+migration-34-document-upload-limit.sql
 ```
+
+(Filenames above verified 2026-09-15 against `migrations/` — earlier drafts of this
+runbook named these `migration-31-chunked-document-generation.sql`,
+`migration-32-reset-chunked-generation-schema.sql`,
+`migration-33-document-archive-status.sql`, and
+`migration-34-document-upload-limit-30mb.sql`, which do not exist in the repo.)
 
 The repository does not prove which migrations are applied to a deployed
 Supabase project. Check the target project before skipping any file. Migration
@@ -167,7 +173,10 @@ explicitly in Railway so the production policy is visible and easy to edit:
 | `SUPABASE_SERVICE_ROLE_KEY` | service role key (server-only, **secret**) |
 | `SUPABASE_JWT_SECRET` | for verifying JWTs (ES256 via JWKS) |
 | `FRONTEND_ORIGIN` | exact deployed **frontend origin** (scheme + hostname, no path or trailing slash) for CORS |
-| `GEMINI_API_KEY` | quiz generation (primary) |
+| `GEMINI_API_KEY` | quiz generation (primary, if set) |
+| `GEMINI_MODEL` | full-tier Gemini model used for generation, blueprint, regeneration, topic extraction, and AI tutor (default `gemini-3.5-flash`; code default in `backend/app/lib/config.py`) |
+| `GEMINI_FALLBACK_MODEL` | retried once before falling back to DeepSeek if `GEMINI_MODEL` returns model-not-found (default `gemini-3.5-flash`) |
+| `GEMINI_BLUEPRINT_MODEL` | cheap-tier model read by an unused helper (`gemini_json()`) as of 2026-09-15 — see `backend/.env.example` (default `gemini-3.5-flash-lite`) |
 | `DEEPSEEK_API_KEY` | quiz generation (fallback) |
 | `RATE_LIMIT_QUIZ_GENERATION_PER_HOUR` | per-user standard quiz generations per rolling hour (default `10`) |
 | `RATE_LIMIT_BLUEPRINT_PER_HOUR` | per-user blueprint generations per rolling hour (default `10`) |
@@ -178,6 +187,18 @@ explicitly in Railway so the production policy is visible and easy to edit:
 | `STUDENT_QUIZ_ATTEMPT_LIMIT` | maximum starts per student for the same published quiz variant (default `2`; on Railway redeploy after changing; for local Docker run `docker compose up -d --force-recreate backend` because restarting Docker Desktop preserves the existing container environment) |
 | `DAILY_CHALLENGE_TIMEZONE` | IANA timezone used to decide each student's institution-facing Daily Challenge calendar day (default `Asia/Kolkata`) |
 | `CHALLENGE_EXPIRY_DAYS` | number of days a new friend challenge accepts new participants (default `30`; existing sessions may still resume) |
+
+Document extraction and large-document ("chunked" map-reduce) generation add
+further tunables — `GEMINI_VISION_TIMEOUT_SECONDS`, `GEMINI_EXTRACTION_MAX_OUTPUT_TOKENS`,
+`EXTRACTION_TEXT_CHUNK_CHARS`, `EXTRACTION_CHUNK_CONCURRENCY`,
+`GENERATION_MAX_TEXT_CHARS`, `CHUNKING_TRIGGER_CHARS`, `GENERATION_CHUNK_CHARS`,
+`GENERATION_CHUNK_OVERLAP_CHARS`, `GENERATION_CHUNK_MIN_CHARS`,
+`GENERATION_CHUNK_CONCURRENCY`, `GENERATION_MAP_MAX_OUTPUT_TOKENS`,
+`GENERATION_PROFILE_MAX_CHARS`, `GENERATION_CHUNK_STUCK_SECONDS` — all read at
+startup in `backend/app/lib/config.py` with safe code defaults. See
+`backend/.env.example` for the authoritative, commented list and
+`docs/chunked-generation-architecture.md` for what each one tunes; set them
+explicitly in Railway only if the defaults need overriding.
 
 **Deploying a change (Railway):** merge to `main` first, then run
 `scripts/deploy.sh` from `main` (or `railway up backend --path-as-root

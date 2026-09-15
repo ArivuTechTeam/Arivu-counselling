@@ -73,7 +73,11 @@ POST /api/v1/quiz-sets/extract        (teacher only, multipart/form-data)
 ```
 
 ### Key implementation notes
-- **AI model:** `GEMINI_MODEL` (default `gemini-2.5-flash`) is used for vision + text extraction. No OCR dependency — Gemini reads PDFs/images natively.
+- **AI model:** `GEMINI_MODEL` is used for vision + text extraction (code default
+  `gemini-3.5-flash` as of 2026-09-15, per `backend/app/lib/config.py` — was
+  `gemini-2.5-flash` when this doc was originally written; check `config.py` for
+  the current value before relying on this figure). No OCR dependency — Gemini
+  reads PDFs/images natively.
 - **Accuracy guarantee = the review gate.** Extraction is never trusted blindly: questions land as `pending_review`; the teacher reviews/edits before publish. Per-question `confidence_score` is stored (low = scrutinise).
 - **Mapping guarantee:** the chapter is validated to belong to the subject + tenant; the resolved `chapter_id` is written to the quiz set, **every** question, and the source document → clean `Subject → Chapter → Questions`.
 - **Duplicate guard is a *soft warning*, not a block** — multiple different quizzes per chapter are still allowed; only the exact same file re-upload is flagged.

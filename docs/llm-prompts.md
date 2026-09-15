@@ -10,21 +10,41 @@ with `responseMimeType: application/json`.
 
 ## Model routing
 
-- **Text / JSON features** → `complete_with_fallback`: **Gemini `gemini-2.5-flash`**
-  (temp 0.3) → fallback **DeepSeek `deepseek-chat`** (temp 0.3).
+> Verified 2026-09-15 against `backend/app/lib/config.py` and
+> `backend/app/services/llm/`. `GEMINI_MODEL` (code default `gemini-3.5-flash`,
+> Railway-overridable) is the **full** Gemini tier and is what every text/JSON
+> feature below actually calls — there is currently **no separate cheap tier in
+> the live call path**, despite `GEMINI_BLUEPRINT_MODEL` (default
+> `gemini-3.5-flash-lite`) existing as a setting; see the last bullet.
+
+- **Text / JSON features (items 1, 2, 3, 5, 6 below)** → `complete_with_fallback`
+  / `complete_json_with_fallback`: **Gemini `GEMINI_MODEL`** (temp 0.3, full
+  tier) → fallback **DeepSeek `deepseek-chat`** (temp 0.3).
 - **Extraction – vision path only** → `gemini_json_multimodal`: **Gemini
-  `gemini-2.5-flash`** vision, temp 0.1, thinking disabled, `maxOutputTokens`, **no
-  fallback**.
-- A `gemini_json` helper on `gemini-3.5-flash-lite` exists but is currently unused.
+  `GEMINI_MODEL`** vision, temp 0.1, thinking disabled, `maxOutputTokens`, **no
+  fallback** (this call explicitly defaults to the full model, not a cheap
+  tier — see the docstring in `services/llm/structured.py`).
+- **Large-document map-reduce generation** (documents over
+  `CHUNKING_TRIGGER_CHARS`; see §7 below) → `complete_json_large`: **Gemini
+  `GEMINI_MODEL`** (thinking disabled, high output cap) → fallback **DeepSeek**
+  (raised output cap).
+- A schema-constrained `gemini_json()` helper defaulting to
+  `GEMINI_BLUEPRINT_MODEL` (the cheap Flash-Lite tier) exists in
+  `services/llm/structured.py` but, confirmed by `grep` on 2026-09-15, has **no
+  callers anywhere in the codebase** — blueprint generation, topic extraction,
+  and the AI tutor all run on the full `GEMINI_MODEL` tier via
+  `complete_json_with_fallback`, not this helper. Setting `GEMINI_BLUEPRINT_MODEL`
+  in Railway currently has no effect until a call site is wired to `gemini_json()`.
 
 | # | Feature | File | Providers |
 |---|---|---|---|
-| 1 | Quiz generation (single-call) | `generation.py` / `quiz_prompts.py` | Gemini 2.5-flash → DeepSeek |
-| 2 | Blueprint generation (wizard) | `blueprint.py` / `blueprint_prompts.py` | Gemini 2.5-flash → DeepSeek |
-| 3 | Regenerate one question | `review.py` / `quiz_prompts.py` | Gemini 2.5-flash → DeepSeek |
-| 4 | Quiz extraction | `quiz_extraction.py` / `extraction_prompts.py` | text: Gemini→DeepSeek · scan: Gemini vision |
-| 5 | Topic extraction | `topics.py` | Gemini 2.5-flash → DeepSeek |
-| 6 | AI Tutor explanations | `tutor.py` | Gemini 2.5-flash → DeepSeek |
+| 1 | Quiz generation (single-call) | `generation.py` / `quiz_prompts.py` | Gemini (`GEMINI_MODEL`) → DeepSeek |
+| 2 | Blueprint generation (wizard) | `blueprint.py` / `blueprint_prompts.py` | Gemini (`GEMINI_MODEL`) → DeepSeek |
+| 3 | Regenerate one question | `review.py` / `quiz_prompts.py` | Gemini (`GEMINI_MODEL`) → DeepSeek |
+| 4 | Quiz extraction | `quiz_extraction.py` / `extraction_prompts.py` | text: Gemini→DeepSeek · scan: Gemini vision (both `GEMINI_MODEL`) |
+| 5 | Topic extraction | `topics.py` | Gemini (`GEMINI_MODEL`) → DeepSeek |
+| 6 | AI Tutor explanations | `tutor.py` | Gemini (`GEMINI_MODEL`) → DeepSeek |
+| 7 | Large-document map-reduce generation | `generation_chunking.py` / `master_blueprint_synthesizer.py` / `map_reduce_prompts.py` | Gemini (`GEMINI_MODEL`) → DeepSeek, not individually catalogued below (see §7) |
 
 ---
 
@@ -67,7 +87,7 @@ Allowed types (mix them): mcq_single, mcq_multi, true_false, numerical, fill_bla
 Cognitive level: mixed. Difficulty: medium.
 
 === MATERIAL START ===
-<<< FULL DOCUMENT TEXT INSERTED HERE (up to GENERATION_MAX_TEXT_CHARS = 60000 chars) >>>
+<<< FULL DOCUMENT TEXT INSERTED HERE (up to GENERATION_MAX_TEXT_CHARS, code default 100000 chars, env-tunable) >>>
 === MATERIAL END ===
 ```
 
@@ -110,6 +130,15 @@ STRICT RULES:
 Return the JSON object now — JSON only.
 ```
 
+> **Verified 2026-09-15 — `blueprint_prompts.py` has a second COVERAGE RULE
+> variant not shown above.** When the caller passes
+> `selected_only_material=True` (the material sent to the model was pre-trimmed
+> to only the selected topics), the COVERAGE RULE paragraph is replaced with:
+> "The supplied material contains ONLY the teacher-selected topics. Cover those
+> topics according to the blueprint; do not introduce any topic or fact that is
+> absent from the supplied material." Everything else in the system prompt is
+> unchanged.
+
 **USER:**
 ```
 Write exactly 20 questions in total from the material below.
@@ -127,12 +156,29 @@ PRIORITY TOPICS — give these MORE questions, roughly as noted:
 GENERAL COVERAGE — about 6 more questions covering the REST of the document (anything not in the priority list); tag these as "General".
 
 === MATERIAL START ===
-<<< FULL DOCUMENT TEXT INSERTED HERE (up to GENERATION_MAX_TEXT_CHARS = 60000 chars) >>>
+<<< FULL DOCUMENT TEXT INSERTED HERE (up to GENERATION_MAX_TEXT_CHARS, code default 100000 chars, env-tunable) >>>
 === MATERIAL END ===
 ```
 
 > The `EXACT TYPE MIX` block only appears when the teacher set per-type counts.
 > The priority-topic lines and counts come from the computed blueprint.
+
+> **Verified 2026-09-15 — per-topic blueprint mode (added after this doc was
+> first written).** When every selected topic carries explicit per-format
+> `counts` (the newer per-topic UI, `SelectedTopic.counts` in `blueprint.py`),
+> `build_blueprint()` returns `{"mode": "per_topic", ...}` and the user prompt's
+> `PRIORITY TOPICS` + `GENERAL COVERAGE` blocks above are replaced entirely by:
+> ```
+> PER-TOPIC PLAN — produce EXACTLY the questions listed under each topic, and set each question's "topic" field to that EXACT topic name. Do NOT add any other topic or any extra questions:
+>   Topic "Ratio Analysis" — exactly 3 question(s):
+>     - mcq_single: exactly 2
+>     - fill_blank: exactly 1
+>   Topic "Depreciation" — exactly 2 question(s):
+>     - true_false: exactly 2
+> ```
+> In this mode there is no weight math, no 3:2:1 mix, and no "general" coverage
+> — the quiz is built only from the exact topics/counts the teacher entered, and
+> `blueprint['total']` is simply the sum of every topic's counts.
 
 ---
 
@@ -147,6 +193,7 @@ RULES:
   mcq_single: exactly 4 options. "options": [{"id":"a","text":"..."},{"id":"b",...},{"id":"c",...},{"id":"d",...}]. "correct_answer": the id of the one correct option, e.g. "b".
 - Auto-gradeable with a single unambiguous answer. For MCQs, distractors must be plausible but clearly wrong.
 - Do NOT copy the original wording - make it a genuine alternative.
+- Use ONLY facts, definitions, formulas, and examples supported by the provided ORIGINAL SOURCE MATERIAL. Never introduce outside facts.
 - Include a short, correct 'explanation'.
 
 OUTPUT: a JSON object {"questions": [ <one question> ]} - JSON only, no prose, no markdown fences.
@@ -154,6 +201,11 @@ OUTPUT: a JSON object {"questions": [ <one question> ]} - JSON only, no prose, n
 
 **USER:**
 ```
+ORIGINAL SOURCE MATERIAL:
+=== SOURCE START ===
+<<< SOURCE DOCUMENT TEXT >>>
+=== SOURCE END ===
+
 EXISTING QUESTION:
 {"type": "mcq_single", "question_text": "What is depreciation?", "options": [...], "correct_answer": "a", "explanation": "...", "difficulty": "medium", "marks": 1}
 
@@ -162,6 +214,12 @@ Write one fresh alternative question now.
 
 > `'mcq_single'` and its JSON shape are substituted with whatever type the original
 > question is. The user prompt is the original question serialised to JSON.
+> **Verified 2026-09-15:** the grounding rule and the `ORIGINAL SOURCE MATERIAL`
+> block were added to `quiz_prompts.py`'s `build_regen_system_prompt()` /
+> `build_regen_user_prompt()` after this doc was first written — they were
+> previously missing here. Regeneration now re-sends the source document text
+> (not just the existing question JSON) so the rewritten question stays grounded
+> in the original material.
 
 ---
 
@@ -256,7 +314,7 @@ RULES:
 Extract the teachable topics from the material below.
 
 === MATERIAL START ===
-<<< DOCUMENT TEXT (up to GENERATION_MAX_TEXT_CHARS = 60000 chars) >>>
+<<< DOCUMENT TEXT (up to GENERATION_MAX_TEXT_CHARS, code default 100000 chars, env-tunable) >>>
 === MATERIAL END ===
 ```
 
@@ -286,6 +344,22 @@ EXISTING SHORT NOTE: Depreciation spreads an asset's cost across the periods it 
 > `OPTIONS` is omitted for question types without options; `EXISTING SHORT NOTE`
 > only appears if the question already has an explanation. Results are cached per
 > question in `ai_explanations`, so this call runs at most once per question.
+
+---
+
+## 7. Large-document map-reduce generation (`generation_chunking.py` / `master_blueprint_synthesizer.py` / `map_reduce_prompts.py`)
+
+**Not catalogued verbatim in this document (gap, noted 2026-09-15).** Documents
+whose extracted text exceeds `CHUNKING_TRIGGER_CHARS` (default 100,000 chars)
+skip the single-call prompts in §1/§2 above and instead run a resumable,
+chunked background job: a "document profile" pass, then per-chunk MAP calls,
+then a REDUCE/synthesis call, via `complete_json_large()` (see the Model
+routing note above). The prompt bodies live in `map_reduce_prompts.py` and
+`master_blueprint_synthesizer.py` (188 lines each as of 2026-09-15) and were
+not re-extracted verbatim for this pass — treat those files, plus
+`docs/chunked-generation-architecture.md` (design intent) and
+`docs/ai-quiz-generation-large-docs-decision.md`, as the source of truth for
+this path until someone extracts the prompts here the way §1–§6 do.
 
 ---
 
