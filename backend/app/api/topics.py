@@ -17,7 +17,8 @@ from app.lib.config import get_settings
 from app.lib.supabase import get_service_client
 from app.services.llm import LLMError
 from app.services.rate_limit import TOPIC_EXTRACTION, enforce_ai_rate_limit
-from app.services.topics import extract_topics_for_document
+from app.services.topic_capacity import selectable_topic_choices
+from app.services.topics import extract_topic_details_for_document
 
 router = APIRouter(prefix="/api/v1", tags=["topics"])
 
@@ -51,7 +52,9 @@ def extract_document_topics(
         action_label="topic extraction",
     )
     try:
-        topics = extract_topics_for_document(document_id, profile.tenant_id)
+        topic_details = extract_topic_details_for_document(
+            document_id, profile.tenant_id
+        )
     except ValueError as exc:
         raise public_error(
             status.HTTP_400_BAD_REQUEST,
@@ -66,4 +69,12 @@ def extract_document_topics(
             operation="extract document topics with AI",
             exception=exc,
         ) from exc
-    return {"document_id": document_id, "topics": topics}
+    topic_choices = selectable_topic_choices(topic_details)
+    return {
+        "document_id": document_id,
+        "topics": [topic["name"] for topic in topic_choices],
+        "topic_question_limits": {
+            topic["name"]: topic["suggested_question_limit"]
+            for topic in topic_choices
+        },
+    }

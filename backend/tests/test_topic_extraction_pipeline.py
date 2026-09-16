@@ -157,6 +157,18 @@ class ValidateOutputTests(unittest.TestCase):
         self.assertEqual(validate_map_output(None), [])
         self.assertEqual(validate_map_output([]), [])
 
+    def test_normalises_source_excerpt_and_page_provenance(self) -> None:
+        topic = validate_map_output({"topics": [{
+            "topic_name": "Treaty",
+            "source_excerpts": [{
+                "text": "The treaty was signed in Versailles on 28 June 1919.",
+                "page_start": "90",
+                "page_end": "91",
+            }],
+        }]})[0]
+        self.assertEqual(topic["source_excerpts"][0]["page_start"], 90)
+        self.assertEqual(topic["source_excerpts"][0]["page_end"], 91)
+
 
 class PromptTests(unittest.TestCase):
     def test_system_prompt_states_contract(self) -> None:
@@ -167,6 +179,8 @@ class PromptTests(unittest.TestCase):
             self.assertIn(token, MAP_SYSTEM)
         # ...and to return no topics for a non-teachable section.
         self.assertIn('{"topics": []}', MAP_SYSTEM)
+        self.assertIn("own top-level topic_name", MAP_SYSTEM)
+        self.assertIn("Do not hide named", MAP_SYSTEM)
 
     def test_user_prompt_injects_context(self) -> None:
         p = build_map_user_prompt(
@@ -188,6 +202,70 @@ class PromptTests(unittest.TestCase):
 
 
 class RunTests(unittest.TestCase):
+    def test_map_keeps_compact_formula_evidence_and_drops_invented_formula(self) -> None:
+        pipe = TopicExtractionPipeline(service=_Fake())
+        data = {"topics": [{
+            "topic_name": "Ohm's Law",
+            "formulas": [
+                {"name": "Ohm's Law", "formula": "V = IR"},
+                {"name": "Invented", "formula": "V = I / R"},
+            ],
+            "source_excerpts": [{"text": "V = IR"}],
+        }]}
+        with patch(f"{MODULE}.complete_json_large", return_value=(data, "gemini")):
+            topics = pipe._extract(
+                document_title="Physics",
+                chunk_number=0,
+                total_chunks=1,
+                content="Equation Focus: Ohm's Law\nV = IR",
+                page_start=2,
+                page_end=2,
+            )
+
+        self.assertEqual(topics[0]["source_excerpts"][0]["text"], "V = IR")
+        self.assertEqual(
+            [formula["formula"] for formula in topics[0]["formulas"]], ["V = IR"]
+        )
+
+    def test_map_replaces_broader_invented_topic_with_explicit_source_term(self) -> None:
+        pipe = TopicExtractionPipeline(service=_Fake())
+        data = {"topics": [{
+            "topic_name": "Conservation of Energy",
+            "formulas": [{"name": "Potential Energy", "formula": "PE = mgh"}],
+            "source_excerpts": [{"text": "PE = mgh"}],
+        }]}
+        with patch(f"{MODULE}.complete_json_large", return_value=(data, "gemini")):
+            topics = pipe._extract(
+                document_title="Physics",
+                chunk_number=0,
+                total_chunks=1,
+                content="Equation Focus: Potential Energy\nPE = mgh",
+            )
+
+        self.assertEqual(topics[0]["topic_name"], "Potential Energy")
+
+    def test_map_keeps_only_excerpts_found_verbatim_in_chunk(self) -> None:
+        pipe = TopicExtractionPipeline(service=_Fake())
+        data = {"topics": [{
+            "topic_name": "Treaty",
+            "source_excerpts": [
+                {"text": "The treaty was signed in Versailles on 28 June 1919."},
+                {"text": "This passage was invented and is not in the source."},
+            ],
+        }]}
+        source = "The treaty was signed in Versailles on 28 June 1919."
+        with patch(f"{MODULE}.complete_json_large", return_value=(data, "gemini")):
+            topics = pipe._extract(
+                document_title="History",
+                chunk_number=0,
+                total_chunks=1,
+                content=source,
+                page_start=90,
+                page_end=90,
+            )
+        self.assertEqual(len(topics[0]["source_excerpts"]), 1)
+        self.assertEqual(topics[0]["source_excerpts"][0]["page_start"], 90)
+
     def test_all_chunks_mapped_and_checkpointed(self) -> None:
         fake = _Fake()
         fake.seed_chunks("d1", "t1", 3)
@@ -203,7 +281,13 @@ class RunTests(unittest.TestCase):
         self.assertEqual(call.call_count, 3)  # one AI call per chunk
         for row in fake.db["document_chunks"]:
             self.assertEqual(row["map_status"], "succeeded")
-            expected = {"topics": [{**SAMPLE_TOPICS["topics"][0], "source_page_ranges": []}]}
+            expected = {
+                "topics": [{
+                    **SAMPLE_TOPICS["topics"][0],
+                    "source_excerpts": [],
+                    "source_page_ranges": [],
+                }]
+            }
             self.assertEqual(row["topics_json"], expected)
             self.assertEqual(row["attempts"], 1)
             self.assertIsNone(row["error_message"])

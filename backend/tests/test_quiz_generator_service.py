@@ -40,6 +40,16 @@ class RenderTests(unittest.TestCase):
         self.assertEqual(render_blueprint_material({"topics": [{"topic_name": ""}]}), "")
         self.assertEqual(render_blueprint_material({}), "")
 
+    def test_selecting_child_renders_its_parent_evidence(self) -> None:
+        blueprint = {"topics": [{
+            "topic_name": "Electromagnetism",
+            "subtopics": ["Ohm's Law", "Coulomb's Law"],
+            "formulas": [{"name": "Ohm's Law", "formula": "V = IR"}],
+        }]}
+        text = render_blueprint_material(blueprint, {"ohm's law"})
+        self.assertIn("## Electromagnetism", text)
+        self.assertIn("V = IR", text)
+
 
 # --- fake supabase supporting the job load + link update --------------------
 
@@ -199,6 +209,31 @@ class GenerateFromJobTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "Subject not found"):
                 self._call(fake)
         gen.assert_not_called()
+
+    def test_accepts_promoted_child_as_selected_topic(self) -> None:
+        blueprint = {"topics": [{
+            "topic_name": "Electromagnetism",
+            "subtopics": ["Ohm's Law", "Coulomb's Law"],
+            "formulas": [
+                {"name": "Ohm's Law", "formula": "V = IR"},
+                {"name": "Coulomb's Law", "formula": "F = k(q1q2)/r²"},
+            ],
+        }]}
+        fake = _Fake(); _seed_job(fake, blueprint=blueprint)
+        svc = QuizGeneratorService(service=fake)
+        with patch(f"{GEN_MODULE}.get_settings", return_value=SimpleNamespace(
+            generation_max_text_chars=1_000_000
+        )), patch(f"{GEN_MODULE}.teacher_has_subject", return_value=True), patch(
+            f"{GEN_MODULE}.generate_and_persist_from_material",
+            return_value={"quiz_set_id": "qs1", "questions": []},
+        ) as gen:
+            svc.generate_from_job(
+                job_id="j1", subject_id="s1", chapter_name="Physics",
+                selected_topics=[{"name": "Ohm's Law", "weight": "high"}],
+                total_questions=2, question_types=["mcq_single"],
+                cognitive_level="mixed", difficulty="medium", profile=_profile(),
+            )
+        self.assertIn("V = IR", gen.call_args.kwargs["material"])
 
 
 if __name__ == "__main__":

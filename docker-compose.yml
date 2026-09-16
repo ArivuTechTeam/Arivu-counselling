@@ -20,6 +20,12 @@ services:
       FRONTEND_ORIGIN: http://localhost:3001
       DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY}
       GEMINI_API_KEY: ${GEMINI_API_KEY}
+      # Large documents consume one profile call, one call per chunk, and one
+      # or two consolidation attempts. Pass these explicitly so editing .env
+      # actually changes the recreated backend container.
+      RATE_LIMIT_TOPIC_EXTRACTION_PER_HOUR: ${RATE_LIMIT_TOPIC_EXTRACTION_PER_HOUR:-30}
+      GENERATION_LARGE_REQUEST_TIMEOUT_SECONDS: ${GENERATION_LARGE_REQUEST_TIMEOUT_SECONDS:-600}
+      GENERATION_CHUNK_STUCK_SECONDS: ${GENERATION_CHUNK_STUCK_SECONDS:-900}
       STUDENT_QUIZ_ATTEMPT_LIMIT: ${STUDENT_QUIZ_ATTEMPT_LIMIT:-2}
       DAILY_CHALLENGE_TIMEZONE: ${DAILY_CHALLENGE_TIMEZONE:-Asia/Kolkata}
       CHALLENGE_EXPIRY_DAYS: ${CHALLENGE_EXPIRY_DAYS:-30}

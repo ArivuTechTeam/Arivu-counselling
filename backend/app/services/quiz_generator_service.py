@@ -19,6 +19,7 @@ from app.lib.config import get_settings
 from app.lib.supabase import get_service_client
 from app.services.blueprint import generate_and_persist_from_material
 from app.services.teacher_access import teacher_has_subject
+from app.services.topic_capacity import topic_choice_names
 
 
 def render_blueprint_material(
@@ -32,7 +33,9 @@ def render_blueprint_material(
         name = str(topic.get("topic_name", "")).strip()
         if not name:
             continue
-        if selected_topic_names is not None and name.casefold() not in selected_topic_names:
+        if selected_topic_names is not None and not (
+            topic_choice_names(topic) & selected_topic_names
+        ):
             continue
         lines.append(f"## {name}")
         ranges = topic.get("source_page_ranges") or []
@@ -62,6 +65,10 @@ def render_blueprint_material(
             body = w.get("full_example_text") or w.get("description")
             if body:
                 lines.append(f"- Worked example: {body}")
+        for excerpt in topic.get("source_excerpts") or []:
+            body = str(excerpt.get("text") or "").strip()
+            if body:
+                lines.append(f'- Source excerpt: "{" ".join(body.split())}"')
         lines.append("")
     return "\n".join(lines).strip()
 
@@ -120,10 +127,11 @@ class QuizGeneratorService:
         if not requested_names:
             raise ValueError("Select at least one extracted topic before generating.")
 
-        available_names = {
-            str(topic.get("topic_name") or "").strip().casefold()
-            for topic in (job["master_blueprint"].get("topics") or [])
-        }
+        # Accept both currently exposed leaf choices and their parent names so a
+        # page opened before an analysis/UI update does not become invalid.
+        available_names: set[str] = set()
+        for topic in job["master_blueprint"].get("topics") or []:
+            available_names.update(topic_choice_names(topic))
         missing_names = requested_names - available_names
         if missing_names:
             raise ValueError("One or more selected topics are not in the completed analysis.")

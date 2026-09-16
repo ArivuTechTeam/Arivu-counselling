@@ -34,6 +34,7 @@ _TOPIC_SCHEMA = (
     '    "key_facts_and_figures": ["verbatim fact / statistic / figure"],\n'
     '    "formulas": [{"name": "string", "formula": "exact", "variables_explained": "string"}],\n'
     '    "worked_examples": [{"description": "string", "full_example_text": "verbatim with all values and steps"}],\n'
+    '    "source_excerpts": [{"text": "meaningful verbatim passage", "page_start": 1, "page_end": 2}],\n'
     '    "source_page_ranges": [{"start": 1, "end": 2}]\n'
     '  }\n'
     "]}"
@@ -66,10 +67,28 @@ PROFILE_SYSTEM = (
     "teachable themes. Look past front matter — title, author, copyright, table "
     "of contents, foreword, testimonials, 'how to use', marketing — and focus on "
     "what a student is actually meant to learn.\n\n"
+    "This platform accepts every academic domain: sciences, mathematics, history, "
+    "geography, accounting, economics, technology, literature, arts, law, and "
+    "interdisciplinary material. Do not force the document into a STEM template.\n\n"
+    "Identify whether its teachable evidence is mainly conceptual, factual, "
+    "chronological, interpretive, quantitative, procedural, textual, visual, or a "
+    "mixture. Note the reasoning students are expected to use and any obvious source "
+    "quality caution without correcting the source.\n\n"
     "Return ONLY valid JSON (no commentary), exactly this shape:\n"
-    '{"subject": "a short phrase naming the subject", '
-    '"summary": "2-4 sentences on what this document teaches and the main topics '
-    'a student should learn from it"}'
+    '{"language":"primary language/script","subject":"short subject phrase","domain":"broad academic domain",'
+    '"content_style":"conceptual/factual/chronological/interpretive/quantitative/procedural/mixed",'
+    '"reasoning_style":"the reasoning the material supports",'
+    '"definitions_and_terminology":["important definition/term signals"],'
+    '"chronology_signals":["dates, people, events, sequences"],'
+    '"quantitative_signals":["formulas, units, calculations"],'
+    '"process_signals":["processes, mechanisms, cause/effect relationships"],'
+    '"structured_data_signals":["tables or structured data"],'
+    '"example_signals":["case studies or worked examples"],'
+    '"code_signals":["code languages, snippets, or behaviour"],'
+    '"visual_dependencies":["diagram/figure-dependent concepts that text alone may not support"],'
+    '"supported_question_types":["mcq_single, mcq_multi, true_false, numerical, fill_blank as supported"],'
+    '"source_quality_warnings":["only obvious cautions; empty when none"],'
+    '"summary":"2-4 sentences on what the document teaches"}'
 )
 
 
@@ -99,14 +118,33 @@ MAP_SYSTEM = (
     '{"topics": []}.\n\n'
     "BE GRANULAR: break the material into the DISTINCT concepts a student must "
     "understand — do NOT merely echo chapter or section headings. One heading "
-    "usually contains several teachable concepts; capture each as its own topic "
-    "or as clearly-named subtopics.\n\n"
+    "usually contains several teachable concepts. Every independently selectable "
+    "or testable concept MUST be its own top-level topic_name. Do not hide named "
+    "laws, formulas, events, processes, methods, works, algorithms, accounting "
+    "principles, or literary concepts inside a broad parent topic or only inside "
+    "subtopics. For example, use separate top-level topics for Ohm's Law and "
+    "Coulomb's Law, or for the Estates-General and the Reign of Terror, rather "
+    "than returning only Electromagnetism or the French Revolution. Use subtopics "
+    "only for subordinate detail that would not be a useful quiz selection by "
+    "itself. Keep a broad container as a topic only when the source directly "
+    "teaches that umbrella concept as an independently assessable idea.\n\n"
+    "TOPIC NAMES must be faithful to the source. Prefer an explicit heading, named "
+    "principle, event, person, work, method, or term found in this section. You may "
+    "make a label clearer, but never broaden it into a theory or concept the source "
+    "does not actually state or demonstrate. For example, a lone potential-energy "
+    "formula does not establish a topic called 'Conservation of Energy'.\n\n"
     "For the content you DO keep, so a correct question can be written from it:\n"
     "- keep definitions, facts, figures, formulas, and worked examples VERBATIM "
     "(or near-verbatim); never paraphrase them;\n"
     "- preserve exact numbers, units, formulas, terminology, and the full steps "
     "of worked examples;\n"
     "- extract the KEY gradeable items, not the entire prose.\n\n"
+    "For every topic, also include 1-3 complete source_excerpts copied exactly "
+    "from this section. An excerpt can be a prose passage or compact evidence such "
+    "as an equation, code line, date, quotation, or table row; do not pad a complete "
+    "short equation merely to satisfy a length target. Each excerpt must support a "
+    "future question and answer. Use the supplied approximate page range when available; "
+    "otherwise use null for page_start/page_end.\n\n"
     "Return ONLY valid JSON (no commentary), exactly this shape:\n"
     f"{_TOPIC_SCHEMA}"
 )
@@ -141,48 +179,51 @@ def build_map_user_prompt(
 
 # --- REDUCE ----------------------------------------------------------------
 REDUCE_SYSTEM = (
-    "You are consolidating extracted study content from multiple OVERLAPPING "
-    "sections of ONE document into a single clean Master Blueprint for an exam. "
-    "You are told what the document is about.\n\n"
+    "You are creating a compact semantic merge PLAN for topics extracted from "
+    "multiple OVERLAPPING sections of ONE document. The backend will apply your "
+    "plan to the original verbatim material deterministically, so you must NOT "
+    "repeat definitions, facts, formulas, examples, or excerpts in your output.\n\n"
     "Do THREE things:\n"
     "1) DROP any topic that is not genuinely teachable subject matter — e.g. "
     "book/document metadata, table of contents, foreword or preface, about-the-"
     "author, testimonials, licensing, 'how to use the book', bonus material, "
     "marketing, or a bare exercise prompt. When unsure whether something is core "
     "to the document's subject, drop it.\n"
-    "2) MERGE semantically-equivalent topics into ONE (combine their subtopics, "
-    "definitions, facts, formulas, and examples) and REMOVE duplicate or "
-    "near-duplicate items, keeping the most complete version.\n"
+    "2) MERGE semantically-equivalent topics into ONE group by listing their "
+    "source_topic_ids together. Use every retained source id exactly once.\n"
     "3) Keep the result GRANULAR and well-organised: preserve the distinct "
     "teachable concepts — do NOT over-merge everything into a few broad "
     "headings — and keep them in natural teaching order.\n\n"
-    "For source_page_ranges, union the ranges supplied on merged topics. Preserve "
-    "only ranges present in the input; never infer or invent a page number.\n\n"
-    "Incidental numbers (ISBNs, years, prices, page counts, reading times) are "
-    "NOT gradeable facts; remove them. Keep definitions, facts, figures, "
-    "formulas, and worked examples VERBATIM — do NOT paraphrase them. Do NOT "
-    "invent, infer, or add anything not present in the input.\n\n"
-    "Return ONLY valid JSON (no commentary), exactly this shape:\n"
-    f"{_TOPIC_SCHEMA}"
+    "Put genuinely non-teachable source ids in discarded_source_topic_ids. Do "
+    "not discard a topic merely because it is specialised or appears only once. "
+    "Never invent an id and never place an id in more than one group.\n\n"
+    "Return ONLY valid JSON (no commentary), exactly this compact shape:\n"
+    '{"topic_groups":[{"topic_name":"merged display name",'
+    '"source_topic_ids":["T0001","T0002"]}],'
+    '"discarded_source_topic_ids":["T0003"]}'
 )
 
 
 def build_reduce_user_prompt(
     *, document_title: str, topics_json: str, document_summary: str = ""
 ) -> str:
-    """User prompt for REDUCE. `topics_json` is the concatenated per-chunk topics
-    (a JSON array) that the model must consolidate."""
+    """User prompt for REDUCE. ``topics_json`` is a compact topic catalogue.
+
+    Rich verbatim fields deliberately stay out of this call: the model only
+    decides semantic grouping, then the backend merges the saved source objects.
+    This prevents large documents from exhausting provider output limits.
+    """
     title = document_title or "Untitled document"
     header = f'Document: "{title}".'
     if document_summary:
         header += f"\nWhat this document is about: {document_summary}"
     return (
         f"{header}\n"
-        "Below is the study content extracted from every section of this "
-        "document (sections overlap, so expect duplicates, and some items may not "
-        "be core to the subject). Consolidate it into a single de-duplicated "
-        "Master Blueprint following the rules above.\n\n"
-        "=== EXTRACTED TOPICS (JSON) ===\n"
+        "Below is a compact catalogue of topics extracted from every section of "
+        "this document. Sections overlap, so expect semantic duplicates. Return "
+        "only the merge plan; the backend retains and combines the complete "
+        "verbatim source material.\n\n"
+        "=== TOPIC CATALOGUE (JSON) ===\n"
         f"{topics_json}\n"
         "=== END ==="
     )

@@ -131,7 +131,7 @@ def _gemini_json_large(
             model=model,
             payload=payload,
             headers=headers,
-            timeout=180.0,
+            timeout=getattr(settings, "generation_large_request_timeout_seconds", 600.0),
         )
     except httpx.HTTPStatusError as exc:
         raise LLMError(f"Gemini returned HTTP {exc.response.status_code}.") from exc
@@ -178,7 +178,12 @@ def _deepseek_json_large(
         "Content-Type": "application/json",
     }
     try:
-        resp = httpx.post(url, json=payload, headers=headers, timeout=180.0)
+        resp = httpx.post(
+            url,
+            json=payload,
+            headers=headers,
+            timeout=getattr(settings, "generation_large_request_timeout_seconds", 600.0),
+        )
         resp.raise_for_status()
     except httpx.HTTPStatusError as exc:
         raise LLMError(f"DeepSeek returned HTTP {exc.response.status_code}.") from exc

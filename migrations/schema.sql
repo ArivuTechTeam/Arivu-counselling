@@ -222,16 +222,36 @@ create table questions (
   marks numeric not null default 1,
   source question_source not null default 'manual',
   confidence_score numeric,                 -- null for manual questions
+  source_excerpt text,                      -- verbatim evidence for generated questions
+  source_page_start integer,
+  source_page_end integer,
+  grounding_confidence numeric check (
+    grounding_confidence is null or (grounding_confidence >= 0 and grounding_confidence <= 1)
+  ),
+  verification_status text not null default 'needs_teacher_review' check (
+    verification_status in ('verified', 'needs_teacher_review', 'unsupported', 'ambiguous')
+  ),
+  verification_warnings jsonb not null default '[]'::jsonb check (
+    jsonb_typeof(verification_warnings) = 'array'
+  ),
   review_status review_status not null default 'approved',
   reviewed_by uuid references profiles(id) on delete set null,
   reviewed_at timestamptz,
   embedding vector(1536),                   -- for semantic duplicate detection
   created_by uuid references profiles(id) on delete set null,
-  created_at timestamptz not null default now()
+  created_at timestamptz not null default now(),
+  constraint questions_source_page_range_check check (
+    (source_page_start is null and source_page_end is null)
+    or (
+      source_page_start is not null and source_page_end is not null
+      and source_page_start > 0 and source_page_end >= source_page_start
+    )
+  )
 );
 create index idx_questions_tenant on questions(tenant_id);
 create index idx_questions_chapter on questions(chapter_id);
 create index idx_questions_review_status on questions(review_status);
+create index idx_questions_verification_status on questions(tenant_id, verification_status);
 -- HNSW index for fast cosine-similarity search (duplicate detection)
 create index idx_questions_embedding on questions using hnsw (embedding vector_cosine_ops);
 

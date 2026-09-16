@@ -137,6 +137,10 @@ export function BlueprintGenerator() {
   const [topicPageRanges, setTopicPageRanges] = useState<
     Record<string, { start: number; end: number }[]>
   >({});
+  const [topicQuestionLimits, setTopicQuestionLimits] = useState<
+    Record<string, number>
+  >({});
+  const [sourceQualityWarnings, setSourceQualityWarnings] = useState<string[]>([]);
   // Per-topic blueprint: for each SELECTED topic, how many of each format. A
   // topic key present here = selected; {} = selected but nothing set yet.
   const [topicCounts, setTopicCounts] = useState<
@@ -145,12 +149,6 @@ export function BlueprintGenerator() {
   const [newTopic, setNewTopic] = useState("");
   const [selectionError, setSelectionError] = useState<string | null>(null);
 
-  // Legacy (no-topic) flow: global per-type counts — used only when the teacher
-  // selects no topic at all (whole-document coverage, current behaviour).
-  const [typeCounts, setTypeCounts] = useState<Record<string, number>>({
-    mcq_single: 5,
-    true_false: 5,
-  });
   const [level, setLevel] = useState("mixed");
   const [difficulty, setDifficulty] = useState("medium");
   // Per-topic flow target: the teacher enters the overall total; the per-topic
@@ -224,6 +222,7 @@ export function BlueprintGenerator() {
       setAnalysis(null);
       setTopics([]);
       setTopicPageRanges({});
+      setTopicQuestionLimits({});
       setTopicCounts({});
       setDuplicateWarning(null);
       setDocumentId(res.document.id);
@@ -249,6 +248,8 @@ export function BlueprintGenerator() {
     setError(null);
     setTopics([]);
     setTopicPageRanges({});
+    setTopicQuestionLimits({});
+    setSourceQualityWarnings([]);
     setTopicCounts({});
     setShowTopicHelp(false);
     setJobId(null);
@@ -286,6 +287,8 @@ export function BlueprintGenerator() {
         return;
       }
       setTopics(res.topics);
+      setTopicQuestionLimits(res.topic_question_limits || {});
+      setSourceQualityWarnings(res.source_quality_warnings || []);
       if (res.topics.length > 0) setShowTopicHelp(true);
       if (res.topics.length === 0) {
         setError(
@@ -319,6 +322,14 @@ export function BlueprintGenerator() {
   }
   function setTopicFormatCount(name: string, format: string, n: number) {
     const value = Math.max(0, Math.min(30, Number.isFinite(n) ? n : 0));
+    const currentValue = topicCounts[name]?.[format] || 0;
+    const nextAllocated = allocated - currentValue + value;
+    if (nextAllocated > desiredTotal) {
+      const message = `You’ve reached the ${desiredTotal}-question total. Increase “Total questions for this quiz” above to add more.`;
+      setSelectionError(message);
+      notify(message, "info");
+      return;
+    }
     setTopicCounts((prev) => ({
       ...prev,
       [name]: { ...(prev[name] || {}), [format]: value },
@@ -357,87 +368,45 @@ export function BlueprintGenerator() {
       return next;
     });
   }
-  function setCount(type: string, n: number) {
-    setTypeCounts((prev) => ({
-      ...prev,
-      [type]: Math.max(0, Math.min(30, Number.isFinite(n) ? n : 0)),
-    }));
-    setSelectionError(null);
-  }
-
-  // Legacy total = sum of the global per-type counts (no-topic path).
-  const legacyTotal = Object.values(typeCounts).reduce((a, b) => a + (b || 0), 0);
   const selectedTopicNames = Object.keys(topicCounts);
-  const perTopicMode = selectedTopicNames.length > 0;
   const allocated = selectedTopicNames.reduce(
     (sum, name) =>
       sum +
       Object.values(topicCounts[name] || {}).reduce((a, b) => a + (b || 0), 0),
     0,
   );
-  const totalQuestions = perTopicMode ? desiredTotal : legacyTotal;
   const selectedCount = selectedTopicNames.length;
   const step = topics.length > 0 ? 2 : 1;
 
   async function handleGenerate() {
     setGenError(null);
 
-    let selectedPayload: BlueprintTopicInput[];
-    let typeCountsPayload: Record<string, number>;
-
-    if (perTopicMode) {
-      // New per-topic flow: each selected topic carries its own per-format counts,
-      // and those must add up to the teacher's overall total.
-      const empty = selectedTopicNames.filter(
-        (name) =>
-          Object.values(topicCounts[name] || {}).reduce((a, b) => a + (b || 0), 0) <
-          1,
-      );
-      if (empty.length) {
-        setGenError(`Add at least one question for: ${empty.join(", ")}.`);
-        return;
-      }
-      if (desiredTotal > 50) {
-        setGenError(
-          "That's more than 50 questions in total — please reduce the counts.",
-        );
-        return;
-      }
-      if (allocated !== desiredTotal) {
-        setGenError(
-          `Allocate exactly ${desiredTotal} question${desiredTotal === 1 ? "" : "s"} across your topics (currently ${allocated}).`,
-        );
-        return;
-      }
-      selectedPayload = selectedTopicNames.map((name) => ({
-        name,
-        counts: Object.fromEntries(
-          Object.entries(topicCounts[name]).filter(([, n]) => n > 0),
-        ),
-      }));
-      typeCountsPayload = {};
-    } else {
-      // Legacy flow (no topic selected): whole-document coverage from a global
-      // per-type mix. Large documents require at least one selected topic.
-      if (jobId) {
-        setGenError("Select at least one extracted topic for this large document.");
-        return;
-      }
-      typeCountsPayload = Object.fromEntries(
-        Object.entries(typeCounts).filter(([, n]) => n > 0),
-      );
-      if (legacyTotal < 1) {
-        setGenError("Set a count of at least 1 for one or more question types.");
-        return;
-      }
-      if (legacyTotal > 50) {
-        setGenError(
-          "That's more than 50 questions in total — please reduce the counts.",
-        );
-        return;
-      }
-      selectedPayload = [];
+    if (selectedTopicNames.length === 0) {
+      setGenError("Select at least one topic and assign its question types.");
+      return;
     }
+    const empty = selectedTopicNames.filter(
+      (name) =>
+        Object.values(topicCounts[name] || {}).reduce((a, b) => a + (b || 0), 0) <
+        1,
+    );
+    if (empty.length) {
+      setGenError(`Add at least one question for: ${empty.join(", ")}.`);
+      return;
+    }
+    if (allocated !== desiredTotal) {
+      setGenError(
+        `Allocate exactly ${desiredTotal} question${desiredTotal === 1 ? "" : "s"} across your topics (currently ${allocated}).`,
+      );
+      return;
+    }
+    const selectedPayload: BlueprintTopicInput[] = selectedTopicNames.map((name) => ({
+      name,
+      counts: Object.fromEntries(
+        Object.entries(topicCounts[name]).filter(([, n]) => n > 0),
+      ),
+    }));
+    const typeCountsPayload: Record<string, number> = {};
 
     setGenerating(true);
     try {
@@ -485,12 +454,19 @@ export function BlueprintGenerator() {
           setTopicPageRanges(
             Object.fromEntries(s.topics.map((t) => [t.name, t.page_ranges || []])),
           );
+          setTopicQuestionLimits(
+            Object.fromEntries(
+              s.topics.map((t) => [t.name, t.suggested_question_limit]),
+            ),
+          );
+          setSourceQualityWarnings(s.source_quality_warnings || []);
           setAnalysis(null); // ready → reveal topic picker
           return;
         }
         if (s.status === "partial") {
           window.clearInterval(timer);
           setTopics([]);
+          setTopicQuestionLimits({});
           setAnalysis({
             status: "partial",
             phase: s.phase,
@@ -575,10 +551,6 @@ export function BlueprintGenerator() {
                 in the blank, true/false…). The counts must add up to your total.
               </li>
             </ol>
-            <p className="mt-3 rounded-lg bg-muted p-2.5 text-xs text-muted-foreground">
-              Prefer whole-document coverage? Just leave every topic unselected
-              and set the overall question mix.
-            </p>
             <Button
               className="mt-4 w-full"
               onClick={() => setShowTopicHelp(false)}
@@ -657,6 +629,7 @@ export function BlueprintGenerator() {
                     setAnalysis(null);
                     setTopics([]);
                     setTopicPageRanges({});
+                    setTopicQuestionLimits({});
                     setTopicCounts({});
                     setDuplicateWarning(null);
                     setDocumentId(e.target.value);
@@ -769,7 +742,9 @@ export function BlueprintGenerator() {
               <div className="flex items-center gap-2 text-sm font-medium text-primary">
                 {analyzing && <Spinner />}
                 {analyzing
-                  ? "Analysing a large document — reading it section by section…"
+                  ? analysis.phase === "reducing"
+                    ? "Consolidating the extracted topics…"
+                    : "Analysing a large document — reading it section by section…"
                   : analysis.status === "partial"
                     ? "Some document sections could not be processed"
                     : "Analysis incomplete"}
@@ -787,10 +762,12 @@ export function BlueprintGenerator() {
                 />
               </div>
               <p className="text-xs text-muted-foreground">
-                {analysis.total > 0
-                  ? `Read ${analysis.done} of ${analysis.total} sections`
+                {analysis.phase === "reducing"
+                  ? `All ${analysis.total} sections are saved. Building the final topic list`
+                  : analysis.total > 0
+                    ? `Read ${analysis.done} of ${analysis.total} sections`
                   : "Splitting the document into sections…"}{" "}
-                · this can take a couple of minutes. Topics appear here
+                · very large documents can take several minutes. Topics appear here
                 automatically when it&apos;s ready.
               </p>
               {analysis.status === "partial" && (
@@ -822,14 +799,12 @@ export function BlueprintGenerator() {
           <CardHeader>
             <CardTitle>Quiz options</CardTitle>
             <CardDescription>
-              {perTopicMode
-                ? "Set the total, then distribute it across your selected topics below — the per-topic counts must add up to the total."
-                : "Choose the difficulty, style and how many of each question type. Covers the whole document."}
+              Set the total, then distribute it across your selected topics below —
+              the per-topic counts must add up to the total.
             </CardDescription>
           </CardHeader>
           <CardContent className="flex flex-col gap-4">
-            {perTopicMode && (
-              <fieldset className="flex flex-col gap-2">
+            <fieldset className="flex flex-col gap-2">
                 <div className="flex items-center justify-between">
                   <span className="text-sm font-medium text-muted-foreground">
                     Total questions for this quiz
@@ -874,75 +849,14 @@ export function BlueprintGenerator() {
                 </div>
                 {allocated !== desiredTotal && (
                   <p className="text-xs text-amber-700">
-                    {allocated < desiredTotal
-                      ? `Assign ${desiredTotal - allocated} more question${desiredTotal - allocated === 1 ? "" : "s"} across your topics below.`
+                    {allocated === 0
+                      ? "No questions assigned yet. Choose the question counts for your selected topics below."
+                      : allocated < desiredTotal
+                        ? `${desiredTotal - allocated} question${desiredTotal - allocated === 1 ? "" : "s"} remaining to assign across your selected topics.`
                       : `Remove ${allocated - desiredTotal} — you've allocated more than the total.`}
                   </p>
                 )}
-              </fieldset>
-            )}
-            {/* Per-type question counts — legacy whole-document flow (no topic selected). */}
-            {!perTopicMode && (
-            <fieldset className="flex flex-col gap-2">
-              <div className="flex items-center justify-between">
-                <span className="text-sm font-medium text-muted-foreground">
-                  How many of each question type?
-                </span>
-                <span className="rounded-full bg-primary/10 px-2.5 py-0.5 text-xs font-semibold text-primary">
-                  {totalQuestions} total
-                </span>
-              </div>
-              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-                {QUESTION_TYPES.map((t) => {
-                  const n = typeCounts[t.value] || 0;
-                  const on = n > 0;
-                  return (
-                    <div
-                      key={t.value}
-                      className={`flex items-center justify-between gap-2 rounded-lg border p-2.5 transition-colors ${
-                        on ? "border-primary/40 bg-primary/5" : "border-input"
-                      }`}
-                    >
-                      <span
-                        className={`text-sm ${
-                          on ? "font-medium text-foreground" : "text-muted-foreground"
-                        }`}
-                      >
-                        {t.label}
-                      </span>
-                      <div className="flex items-center gap-1.5">
-                        <button
-                          type="button"
-                          aria-label={`Fewer ${t.label}`}
-                          onClick={() => setCount(t.value, n - 1)}
-                          disabled={n <= 0}
-                          className="flex h-9 w-9 items-center justify-center rounded-md border border-input text-lg leading-none text-muted-foreground transition-colors hover:border-primary/50 hover:text-primary disabled:cursor-not-allowed disabled:opacity-40"
-                        >
-                          −
-                        </button>
-                        <input
-                          type="number"
-                          min={0}
-                          max={30}
-                          value={n}
-                          onChange={(e) => setCount(t.value, Number(e.target.value))}
-                          className="h-9 w-11 rounded-md border border-input text-center text-sm [appearance:textfield] focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20 [&::-webkit-inner-spin-button]:appearance-none"
-                        />
-                        <button
-                          type="button"
-                          aria-label={`More ${t.label}`}
-                          onClick={() => setCount(t.value, n + 1)}
-                          className="flex h-9 w-9 items-center justify-center rounded-md border border-input text-lg leading-none text-muted-foreground transition-colors hover:border-primary/50 hover:text-primary"
-                        >
-                          +
-                        </button>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
             </fieldset>
-            )}
 
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <label className="flex flex-col gap-1.5 text-sm font-medium">
@@ -982,13 +896,24 @@ export function BlueprintGenerator() {
             <CardTitle>Select the important topics</CardTitle>
             <CardDescription>
               Click a topic to include it, then choose how many of each question
-              format you want from it. {jobId
-                ? "For this large document, questions use only the topics you select."
-                : "Leave every topic unselected to cover the whole document instead."}{" "}
+              format you want from it. Questions use only the topics you select.{" "}
               <span className="font-medium text-primary">{selectedCount} selected</span>.
             </CardDescription>
           </CardHeader>
           <CardContent className="flex flex-col gap-2">
+            {sourceQualityWarnings.length > 0 && (
+              <div className="mb-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                <p className="font-semibold">Source note</p>
+                <ul className="mt-1 space-y-1">
+                  {sourceQualityWarnings.map((warning, index) => (
+                    <li key={`${warning}-${index}`}>• {warning}</li>
+                  ))}
+                </ul>
+                <p className="mt-1 text-amber-800">
+                  The app does not silently rewrite source claims. Review generated evidence before publishing.
+                </p>
+              </div>
+            )}
             {topics.map((name, i) => {
               const selected = name in topicCounts;
               const counts = topicCounts[name] || {};
@@ -996,6 +921,7 @@ export function BlueprintGenerator() {
                 (a, b) => a + (b || 0),
                 0,
               );
+              const suggestedLimit = topicQuestionLimits[name];
               return (
                 <div
                   key={name}
@@ -1107,6 +1033,13 @@ export function BlueprintGenerator() {
                           </div>
                         );
                       })}
+                      {suggestedLimit && topicTotal > suggestedLimit && (
+                        <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 sm:col-span-2">
+                          This topic appears to support about {suggestedLimit} distinct
+                          question{suggestedLimit === 1 ? "" : "s"}. Reduce its count or
+                          expect similar questions.
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
@@ -1145,7 +1078,9 @@ export function BlueprintGenerator() {
         <div className="flex flex-col gap-2">
           <Button
             onClick={handleGenerate}
-            disabled={generating || (perTopicMode && allocated !== desiredTotal)}
+            disabled={
+              generating || selectedCount === 0 || allocated !== desiredTotal
+            }
           >
             {generating ? (
               <span className="flex items-center gap-2">
@@ -1157,10 +1092,11 @@ export function BlueprintGenerator() {
               </span>
             )}
           </Button>
-          {perTopicMode && allocated !== desiredTotal && (
+          {(selectedCount === 0 || allocated !== desiredTotal) && (
             <p className="text-xs text-amber-700">
-              Allocate all {desiredTotal} questions across your topics to enable
-              generation ({allocated}/{desiredTotal} so far).
+              {selectedCount === 0
+                ? "Select at least one topic, then assign its question types."
+                : `Allocate all ${desiredTotal} questions across your topics to enable generation (${allocated}/${desiredTotal} so far).`}
             </p>
           )}
           {genError && <InlineError message={genError} />}

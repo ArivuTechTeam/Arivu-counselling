@@ -18,6 +18,7 @@ SETTINGS = SimpleNamespace(
     deepseek_base_url="https://api.deepseek.example",
     deepseek_model="deepseek-chat",
     deepseek_api_key="test-key",
+    generation_large_request_timeout_seconds=600,
 )
 
 
@@ -38,6 +39,7 @@ class DeepSeekLargeOutputTests(unittest.TestCase):
             result = _deepseek_json_large("system", "user", max_tokens=8192)
         self.assertEqual(result, {"topics": []})
         self.assertEqual(post.call_args.kwargs["json"]["max_tokens"], 8192)
+        self.assertEqual(post.call_args.kwargs["timeout"], 600)
 
     def test_finish_reason_length_is_an_explicit_failure(self) -> None:
         response = SimpleNamespace(
@@ -63,6 +65,7 @@ class GeminiModelFallbackTests(unittest.TestCase):
             gemini_base_url="https://generativelanguage.googleapis.test/v1beta",
             gemini_api_key="test-key",
             gemini_fallback_model="gemini-current",
+            generation_large_request_timeout_seconds=600,
         )
         missing = httpx.Response(
             404,
@@ -86,6 +89,7 @@ class GeminiModelFallbackTests(unittest.TestCase):
 
         self.assertEqual(result, {"topics": []})
         self.assertEqual(post.call_count, 2)
+        self.assertEqual(post.call_args.kwargs["timeout"], 600)
         self.assertIn("gemini-retired:generateContent", post.call_args_list[0].args[0])
         self.assertIn("gemini-current:generateContent", post.call_args_list[1].args[0])
 
@@ -95,6 +99,7 @@ class GeminiModelFallbackTests(unittest.TestCase):
             gemini_base_url="https://generativelanguage.googleapis.test/v1beta",
             gemini_api_key="test-key",
             gemini_fallback_model="gemini-current",
+            generation_large_request_timeout_seconds=600,
         )
         missing = httpx.Response(
             404,

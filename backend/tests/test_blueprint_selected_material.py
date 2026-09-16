@@ -42,6 +42,18 @@ class SelectedMaterialBlueprintTests(unittest.TestCase):
         self.assertIn("ONLY the teacher-selected topics", system)
         self.assertNotIn("REST of the document", user)
 
+    def test_hard_prompt_forbids_formula_and_document_clues(self) -> None:
+        system = build_blueprint_system_prompt(
+            ["numerical", "true_false"],
+            "practical",
+            "hard",
+            selected_only_material=True,
+        )
+        self.assertIn("Never put the answer-bearing formula", system)
+        self.assertIn("Never say 'according to the handbook'", system)
+        self.assertIn("multi-step", system)
+        self.assertIn("Do not use direct definition recall", system)
+
     def test_more_selected_topics_than_questions_is_rejected(self) -> None:
         selected = [
             SelectedTopic(name="One", weight="high"),

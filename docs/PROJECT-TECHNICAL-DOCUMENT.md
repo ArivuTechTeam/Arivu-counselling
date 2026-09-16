@@ -362,7 +362,7 @@ Guards: **public** / **student** / **staff** (teacher+admin+super) / **admin** (
 
 ## 7. Database Schema
 
-PostgreSQL on Supabase. The repository baseline is `migrations/schema.sql` plus migrations 01, 02, and 04–34 (verified 2026-09-15 — was 04–12 when this document was first written). There is no migration 03; migration 04 removed the abandoned seed-library feature. `schema.sql` already includes the final effects of migrations 31, 33, and 34 for a fresh database; the incremental files remain required for an existing database. Apply migrations once, in numeric order, using `docs/deploy-runbook.md`.
+PostgreSQL on Supabase. The repository baseline is `migrations/schema.sql` plus migrations 01, 02, and 04–35 (verified 2026-09-16 — was 04–12 when this document was first written). There is no migration 03; migration 04 removed the abandoned seed-library feature. `schema.sql` already includes the final effects of migrations 31, 33, 34, and 35 for a fresh database; the incremental files remain required for an existing database. Apply migrations once, in numeric order, using `docs/deploy-runbook.md`.
 
 ### 7.1 Enums
 `user_role` (super_admin, institution_admin, teacher, student) · `question_type` (mcq_single, mcq_multi, numerical, true_false, fill_blank, **descriptive**) · `question_source` (ai_generated, manual) · `review_status` (pending_review, approved, rejected, needs_edit) · `document_status` · `job_status` · `variant_type` (theory, practical, mixed) · `quiz_status` (draft, published, archived) · `attempt_status` (in_progress, submitted, graded, abandoned).
@@ -378,7 +378,7 @@ PostgreSQL on Supabase. The repository baseline is `migrations/schema.sql` plus 
 **Content & question bank**
 - `documents` — uploaded files (storage path, type, status).
 - `ai_extraction_jobs` — one row per AI processing run on a document (history for reprocessing).
-- `questions` — the question bank: type, text, `options` (jsonb), `correct_answer` (jsonb), explanation, difficulty, marks, `source`, `review_status`, `topic_id`, and a (currently unused) `embedding` vector column.
+- `questions` — the question bank: type, text, `options` (jsonb), `correct_answer` (jsonb), explanation, difficulty, marks, `source`, `review_status`, `topic_id`, verbatim source evidence/page provenance, grounding confidence, verification status/warnings, and a (currently unused) `embedding` vector column.
 - `quiz_sets` → `quiz_variants` → `quiz_variant_questions` — one upload produces a set; a set has variants (by cognitive level); a variant links to ordered questions.
 
 **Student activity**
@@ -463,9 +463,10 @@ erDiagram
 | 32 reset-chunked-generation | Repairs/recreates the transient chunking schema for databases that received an earlier version of migration 31. |
 | 33 teacher-content-archive | Adds the `archived` `document_status` value used by the teacher content-archive feature. |
 | 34 document-upload-limit | Lowers the Supabase document-bucket limit to 30 MiB so storage, backend validation, and frontend messaging agree. |
+| 35 universal-question-grounding | Adds per-question verbatim evidence, approximate page provenance, grounding confidence, and verification status/warnings. |
 
-> **Verified 2026-09-15:** migrations 13–34 above were added to this table for
-> the first time in this refresh (the table previously stopped at 12).
+> **Verified 2026-09-16:** migrations 13–35 above are recorded in this table
+> (the table originally stopped at 12).
 > `docs/deploy-runbook.md` is the authoritative source for exact filenames,
 > apply order, and cross-migration dependencies — it was corrected in the same
 > pass after being found to reference four migration-31–34 filenames that
@@ -577,7 +578,7 @@ SUPABASE (dashboard-configured): Postgres + Auth + Storage — settings apply in
 - `FRONTEND_ORIGIN` (CORS allow-list — the Vercel URL)
 - `GEMINI_API_KEY` (+ optional `GEMINI_MODEL`, `GEMINI_FALLBACK_MODEL`, `GEMINI_BLUEPRINT_MODEL` (currently unused, see §6.3), `GEMINI_BASE_URL`)
 - `DEEPSEEK_API_KEY` (+ optional `DEEPSEEK_MODEL`, `DEEPSEEK_BASE_URL`, `DEEPSEEK_MAX_OUTPUT_TOKENS`)
-- Large-document generation and extraction tuning (safe code defaults; see `backend/.env.example` for the full, commented list): `GENERATION_MAX_TEXT_CHARS`, `CHUNKING_TRIGGER_CHARS`, `GENERATION_CHUNK_CHARS`, `GENERATION_CHUNK_OVERLAP_CHARS`, `GENERATION_CHUNK_MIN_CHARS`, `GENERATION_CHUNK_CONCURRENCY`, `GENERATION_MAP_MAX_OUTPUT_TOKENS`, `GENERATION_PROFILE_MAX_CHARS`, `GENERATION_CHUNK_STUCK_SECONDS`, `GEMINI_VISION_TIMEOUT_SECONDS`, `GEMINI_EXTRACTION_MAX_OUTPUT_TOKENS`, `EXTRACTION_TEXT_CHUNK_CHARS`, `EXTRACTION_CHUNK_CONCURRENCY` (added 2026-09-15 to this list — previously undocumented in this section)
+- Large-document generation and extraction tuning (safe code defaults; see `backend/.env.example` for the full, commented list): `GENERATION_MAX_TEXT_CHARS`, `CHUNKING_TRIGGER_CHARS`, `GENERATION_CHUNK_CHARS`, `GENERATION_CHUNK_OVERLAP_CHARS`, `GENERATION_CHUNK_MIN_CHARS`, `GENERATION_CHUNK_CONCURRENCY`, `GENERATION_MAP_MAX_OUTPUT_TOKENS`, `GENERATION_LARGE_REQUEST_TIMEOUT_SECONDS`, `GENERATION_PROFILE_MAX_CHARS`, `GENERATION_CHUNK_STUCK_SECONDS`, `GEMINI_VISION_TIMEOUT_SECONDS`, `GEMINI_EXTRACTION_MAX_OUTPUT_TOKENS`, `EXTRACTION_TEXT_CHUNK_CHARS`, `EXTRACTION_CHUNK_CONCURRENCY`.
 - The six `RATE_LIMIT_*_PER_HOUR` AI rate limits, `STUDENT_QUIZ_ATTEMPT_LIMIT`, `DAILY_CHALLENGE_TIMEZONE`, `CHALLENGE_EXPIRY_DAYS` — see the "AI rate limits" section of `CLAUDE.md` for the rate-limit defaults
 
 > Secrets live in `.env` / `.env.local` (gitignored) and in the Vercel/Railway/Supabase dashboards. Never in code.

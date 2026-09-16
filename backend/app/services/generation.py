@@ -20,10 +20,15 @@ from app.lib.auth import CurrentProfile
 from app.lib.config import get_settings
 from app.lib.storage import download_bytes
 from app.lib.supabase import get_service_client
-from app.services.extraction import extract_text
+from app.services.extraction import ExtractedText, extract_text_with_pages
 from app.services.llm import LLMError, complete_with_fallback
 from app.services.quiz_prompts import build_system_prompt, build_user_prompt
-from app.services.question_validation import validate_question_answer_shape
+from app.services.question_validation import (
+    validate_question_answer_shape,
+    validate_question_presentation,
+)
+from app.services.question_verification import verify_generated_questions
+from app.services.source_material import render_extracted_material
 from app.services.teacher_access import teacher_has_subject
 
 # For long documents we skip likely front-matter (cover, copyright page, table
@@ -34,15 +39,15 @@ _FRONT_MATTER_SKIP_FRACTION = 0.08
 _FRONT_MATTER_MIN_DOC_CHARS = 20000
 
 
-def _select_material(text: str) -> str:
+def _select_material(extracted: ExtractedText) -> str:
     max_chars = get_settings().generation_max_text_chars
     # Only skip front-matter on genuinely long docs; short notes are used whole.
     start = (
-        int(len(text) * _FRONT_MATTER_SKIP_FRACTION)
-        if len(text) > _FRONT_MATTER_MIN_DOC_CHARS
+        int(len(extracted.text) * _FRONT_MATTER_SKIP_FRACTION)
+        if len(extracted.text) > _FRONT_MATTER_MIN_DOC_CHARS
         else 0
     )
-    return text[start : start + max_chars]
+    return render_extracted_material(extracted, start=start, max_chars=max_chars)
 
 QuestionType = Literal[
     "mcq_single", "mcq_multi", "true_false", "numerical", "fill_blank"
@@ -57,6 +62,10 @@ class GeneratedQuestion(BaseModel):
     explanation: str | None = None
     difficulty: str = "medium"
     marks: float = 1
+    source_excerpt: str = ""
+    source_page_start: int | None = None
+    source_page_end: int | None = None
+    grounding_confidence: float = 0
 
     def check_shape(self) -> None:
         """Reject output that cannot be graded deterministically."""
@@ -65,6 +74,33 @@ class GeneratedQuestion(BaseModel):
 
 class GeneratedQuiz(BaseModel):
     questions: list[GeneratedQuestion]
+
+
+def _parse_and_validate_generated_quiz(
+    raw: str, num_questions: int, requested_difficulty: str
+) -> list[GeneratedQuestion]:
+    try:
+        quiz = GeneratedQuiz.model_validate_json(raw)
+    except ValidationError as exc:
+        raise LLMError("Model returned invalid quiz JSON.") from exc
+
+    questions = quiz.questions[:num_questions]
+    if not questions:
+        raise LLMError("Model returned no questions.")
+    for question in questions:
+        try:
+            question.check_shape()
+            validate_question_presentation(
+                question_type=question.type,
+                question_text=question.question_text,
+                explanation=question.explanation,
+                source_excerpt=question.source_excerpt,
+                requested_difficulty=requested_difficulty,
+                declared_difficulty=question.difficulty,
+            )
+        except ValueError as exc:
+            raise LLMError(f"Model produced an unsuitable question: {exc}") from exc
+    return questions
 
 
 def generate_quiz(
@@ -100,10 +136,10 @@ def generate_quiz(
 
     # 2) Re-extract text from the stored original.
     content = download_bytes(doc_row["storage_path"])
-    text = extract_text(content, doc_row["file_type"])
-    if not text.strip():
+    extracted = extract_text_with_pages(content, doc_row["file_type"])
+    if not extracted.text.strip():
         raise ValueError("This document has no extractable text (scanned PDF?).")
-    material = _select_material(text)
+    material = _select_material(extracted)
 
     # 3) Build prompts and call the model (DeepSeek, with fallback slot).
     system = build_system_prompt(question_types, cognitive_level, difficulty)
@@ -112,20 +148,33 @@ def generate_quiz(
     )
     raw, provider = complete_with_fallback(system, user)
 
-    # 4) Validate the model's JSON.
+    # 4) Validate the model's JSON and student-facing wording. If the provider
+    # violates a presentation rule, give it one explicit rewrite opportunity;
+    # never persist a formula giveaway or document-reference question.
     try:
-        quiz = GeneratedQuiz.model_validate_json(raw)
-    except ValidationError as exc:
-        raise LLMError("Model returned invalid quiz JSON.") from exc
-
-    questions = quiz.questions[:num_questions]
-    if not questions:
-        raise LLMError("Model returned no questions.")
-    for q in questions:
+        questions = _parse_and_validate_generated_quiz(
+            raw, num_questions, difficulty
+        )
+    except LLMError as first_error:
+        corrective_system = (
+            system
+            + "\n\nCORRECTION REQUIRED: Rewrite the complete quiz. No question stem "
+            "may reveal its answer-bearing formula/rule, and no question or "
+            "explanation may refer to a handbook, document, PDF, source material, "
+            "notes, passage, page, or uploaded file. Preserve the requested "
+            f"{difficulty} difficulty and all original JSON/type rules."
+        )
+        corrected_raw, corrected_provider = complete_with_fallback(
+            corrective_system, user
+        )
         try:
-            q.check_shape()
-        except ValueError as exc:
-            raise LLMError(f"Model produced a malformed question: {exc}") from exc
+            questions = _parse_and_validate_generated_quiz(
+                corrected_raw, num_questions, difficulty
+            )
+        except LLMError:
+            raise first_error
+        provider = corrected_provider
+    verification = verify_generated_questions(questions, material)
 
     # 5) Store: quiz_set -> variant -> questions (all pending review).
     quiz_set = (
@@ -164,6 +213,7 @@ def generate_quiz(
         variant_id = variant.data[0]["id"]
 
         for index, q in enumerate(questions):
+            verified = verification[index]
             question_row = (
                 service.table("questions")
                 .insert(
@@ -177,6 +227,12 @@ def generate_quiz(
                         "explanation": q.explanation,
                         "difficulty": q.difficulty,
                         "marks": q.marks,
+                        "source_excerpt": q.source_excerpt,
+                        "source_page_start": q.source_page_start,
+                        "source_page_end": q.source_page_end,
+                        "grounding_confidence": q.grounding_confidence,
+                        "verification_status": verified.status,
+                        "verification_warnings": verified.warnings,
                         "source": "ai_generated",
                         "review_status": "pending_review",
                         "created_by": profile.user_id,
@@ -194,7 +250,12 @@ def generate_quiz(
                     "order_index": index,
                 }
             ).execute()
-            stored.append({"id": question_id, **q.model_dump()})
+            stored.append({
+                "id": question_id,
+                **q.model_dump(),
+                "verification_status": verified.status,
+                "verification_warnings": verified.warnings,
+            })
     except Exception:
         # Compensate across PostgREST calls so failed generations do not leave
         # visible draft sets or orphaned questions.

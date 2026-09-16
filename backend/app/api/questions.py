@@ -83,6 +83,12 @@ class QuestionOut(BaseModel):
     difficulty: str
     marks: float
     review_status: str
+    source_excerpt: str | None = None
+    source_page_start: int | None = None
+    source_page_end: int | None = None
+    grounding_confidence: float | None = None
+    verification_status: str | None = None
+    verification_warnings: list[str] = Field(default_factory=list)
 
 
 @router.patch("/{question_id}", response_model=QuestionOut)
@@ -102,7 +108,7 @@ def edit_question(
     service = get_service_client()
     existing = (
         service.table("questions")
-        .select("id,type,options,correct_answer")
+        .select("id,type,options,correct_answer,verification_status,verification_warnings")
         .eq("id", question_id)
         .eq("tenant_id", profile.tenant_id)
         .eq("created_by", profile.user_id)
@@ -127,6 +133,23 @@ def edit_question(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Invalid answer configuration: {exc}.",
         ) from exc
+
+    # Editing is the explicit escape hatch for a blocked unsupported question.
+    # It must be reviewed again because the earlier verifier assessed different
+    # wording/answer content.
+    if any(
+        field in updates
+        for field in ("question_text", "options", "correct_answer", "explanation")
+    ):
+        prior_warnings = existing.data.get("verification_warnings") or []
+        updates["verification_status"] = "needs_teacher_review"
+        updates["verification_warnings"] = [
+            *prior_warnings,
+            "Question was edited after automatic verification; confirm it against the source evidence.",
+        ]
+        updates["review_status"] = "pending_review"
+        updates["reviewed_by"] = None
+        updates["reviewed_at"] = None
 
     updated = (
         service.table("questions")
@@ -182,6 +205,21 @@ def approve_question(
     profile: CurrentProfile = Depends(get_current_profile),
 ) -> dict:
     _require_teacher(profile)
+    service = get_service_client()
+    question = (
+        service.table("questions")
+        .select("verification_status")
+        .eq("id", question_id)
+        .eq("tenant_id", profile.tenant_id)
+        .eq("created_by", profile.user_id)
+        .maybe_single()
+        .execute()
+    )
+    if question and question.data and question.data.get("verification_status") == "unsupported":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This question is unsupported by its source evidence. Edit or regenerate it before approval.",
+        )
     result = _set_review_status(question_id, profile, "approved")
     log_event(
         tenant_id=profile.tenant_id,

@@ -27,10 +27,191 @@ from app.lib.supabase import get_service_client
 from app.services.llm.base import LLMError
 from app.services.llm.structured import complete_json_large
 from app.services.map_reduce_prompts import REDUCE_SYSTEM, build_reduce_user_prompt
-from app.services.topic_extraction_pipeline import validate_map_output
 from app.services.rate_limit import TOPIC_EXTRACTION, enforce_ai_rate_limit
+from app.services.source_material import evidence_occurs_in_material
 
 logger = logging.getLogger(__name__)
+
+
+_LIST_FIELDS = (
+    "subtopics",
+    "key_definitions",
+    "key_facts_and_figures",
+    "formulas",
+    "worked_examples",
+    "source_excerpts",
+    "source_page_ranges",
+)
+
+
+def _stable_unique(items: list, *, key) -> list:
+    """Keep reading order while removing exact/normalised overlap duplicates."""
+    seen: set[str] = set()
+    result: list = []
+    for item in items:
+        marker = key(item)
+        if not marker or marker in seen:
+            continue
+        seen.add(marker)
+        result.append(item)
+    return result
+
+
+def _item_key(item: object) -> str:
+    if isinstance(item, str):
+        return _word_stream(item)
+    if isinstance(item, dict):
+        return json.dumps(item, ensure_ascii=False, sort_keys=True).casefold()
+    return str(item).casefold()
+
+
+def _name_tokens(value: str) -> set[str]:
+    return {
+        token[:-1] if token.endswith("s") and len(token) > 3 else token
+        for token in _word_stream(value).split()
+        if len(token) > 1
+    }
+
+
+def _supported_group_name(candidate: str, sources: list[dict]) -> str:
+    """Reject a reduce-stage label that broadens beyond every mapped topic."""
+    candidate_tokens = _name_tokens(candidate)
+    if candidate_tokens:
+        for source in sources:
+            source_tokens = _name_tokens(str(source.get("topic_name") or ""))
+            if len(candidate_tokens & source_tokens) / len(candidate_tokens) >= 0.67:
+                return candidate
+    return str(sources[0].get("topic_name") or "Untitled topic").strip()
+
+
+def _distinct_source_topic_names(sources: list[dict], merged_name: str) -> list[str]:
+    """Keep original concept labels when a reduce plan over-groups topics.
+
+    Exact and word-order variants are one concept ("String slicing" and
+    "Slicing strings"). Genuinely different names remain available as child
+    choices even if the model places them under a broad parent.
+    """
+    merged_tokens = _name_tokens(merged_name)
+    seen_token_sets: set[frozenset[str]] = set()
+    names: list[str] = []
+    for source in sources:
+        source_name = " ".join(str(source.get("topic_name") or "").split())
+        tokens = frozenset(_name_tokens(source_name))
+        if not source_name or not tokens or tokens in seen_token_sets:
+            continue
+        seen_token_sets.add(tokens)
+        if tokens == frozenset(merged_tokens):
+            continue
+        names.append(source_name)
+    return names
+
+
+def build_topic_catalogue(topics: list[dict]) -> list[dict]:
+    """Create the small payload the model needs for semantic topic grouping.
+
+    The large verbatim fields remain server-side and therefore never need to be
+    generated again by the model.
+    """
+    catalogue: list[dict] = []
+    for index, topic in enumerate(topics, start=1):
+        catalogue.append(
+            {
+                "source_topic_id": f"T{index:04d}",
+                "topic_name": str(topic.get("topic_name") or "").strip(),
+                "subtopics": (topic.get("subtopics") or [])[:20],
+                "definition_terms": [
+                    str(item.get("term") or "").strip()
+                    for item in (topic.get("key_definitions") or [])
+                    if isinstance(item, dict) and str(item.get("term") or "").strip()
+                ][:20],
+                "formula_names": [
+                    str(item.get("name") or item.get("formula") or "").strip()
+                    for item in (topic.get("formulas") or [])
+                    if isinstance(item, dict)
+                    and str(item.get("name") or item.get("formula") or "").strip()
+                ][:20],
+                "source_page_ranges": topic.get("source_page_ranges") or [],
+            }
+        )
+    return catalogue
+
+
+def apply_merge_plan(topics: list[dict], plan: object) -> list[dict]:
+    """Apply an LLM semantic plan without letting it rewrite source evidence.
+
+    Unknown/duplicate ids are ignored. Any id the model forgets is retained as a
+    standalone topic, preventing a malformed or truncated plan from silently
+    dropping document content.
+    """
+    if not isinstance(plan, dict):
+        raise LLMError("Blueprint consolidation returned an invalid merge plan.")
+    groups = plan.get("topic_groups")
+    if not isinstance(groups, list):
+        raise LLMError("Blueprint consolidation omitted topic_groups.")
+
+    indexed = {f"T{index:04d}": topic for index, topic in enumerate(topics, start=1)}
+    discarded = {
+        value
+        for value in (plan.get("discarded_source_topic_ids") or [])
+        if isinstance(value, str) and value in indexed
+    }
+    used: set[str] = set()
+    merged_with_order: list[tuple[int, dict]] = []
+
+    for group in groups:
+        if not isinstance(group, dict):
+            continue
+        ids = [
+            value
+            for value in (group.get("source_topic_ids") or [])
+            if isinstance(value, str)
+            and value in indexed
+            and value not in used
+            and value not in discarded
+        ]
+        if not ids:
+            continue
+        used.update(ids)
+        sources = [indexed[value] for value in ids]
+        name = str(group.get("topic_name") or "").strip()
+        if not name:
+            name = str(sources[0].get("topic_name") or "Untitled topic").strip()
+        else:
+            name = _supported_group_name(name, sources)
+        merged: dict = {"topic_name": name}
+        if len(sources) > 1:
+            source_names = _distinct_source_topic_names(sources, "")
+            if len(source_names) > 1:
+                # Retain the original labels explicitly. This is both an audit
+                # trail and a deterministic escape hatch when REDUCE groups
+                # different assessable concepts under one broad label.
+                merged["source_topic_names"] = source_names
+        for field in _LIST_FIELDS:
+            values = [item for source in sources for item in (source.get(field) or [])]
+            if field == "subtopics" and len(sources) > 1:
+                values = _distinct_source_topic_names(sources, name) + values
+            if field == "source_page_ranges":
+                values = sorted(
+                    _stable_unique(values, key=_item_key),
+                    key=lambda value: (value.get("start", 0), value.get("end", 0)),
+                )
+            else:
+                values = _stable_unique(values, key=_item_key)
+            merged[field] = values
+        first_index = min(int(value[1:]) for value in ids)
+        merged_with_order.append((first_index, merged))
+
+    # Fail safe: preserve anything not explicitly grouped or discarded.
+    for source_id, source in indexed.items():
+        if source_id in used or source_id in discarded:
+            continue
+        preserved = {"topic_name": str(source.get("topic_name") or "Untitled topic")}
+        for field in _LIST_FIELDS:
+            preserved[field] = _stable_unique(list(source.get(field) or []), key=_item_key)
+        merged_with_order.append((int(source_id[1:]), preserved))
+
+    merged_with_order.sort(key=lambda item: item[0])
+    return [topic for _order, topic in merged_with_order]
 
 
 def _word_stream(value: str) -> str:
@@ -90,6 +271,37 @@ def spot_check_verbatim_facts(
     return {"checked": checked, "matched": matched, "warnings": checked - matched}
 
 
+def keep_verified_source_excerpts(topics: list[dict], chunks: list[dict]) -> int:
+    """Drop reduce-stage excerpts that cannot be found in attributed raw chunks."""
+    dropped = 0
+    for topic in topics:
+        ranges = topic.get("source_page_ranges") or []
+        attributed = [
+            chunk
+            for chunk in chunks
+            if not ranges
+            or chunk.get("page_start") is None
+            or any(
+                int(r.get("end", 0)) >= int(chunk.get("page_start") or 0)
+                and int(r.get("start", 0)) <= int(chunk.get("page_end") or 0)
+                for r in ranges
+                if isinstance(r, dict)
+            )
+        ]
+        source = "\n".join(str(chunk.get("content") or "") for chunk in attributed)
+        kept = []
+        for excerpt in topic.get("source_excerpts") or []:
+            text = str(excerpt.get("text") or "").strip()
+            if text and evidence_occurs_in_material(text, source):
+                kept.append(excerpt)
+            else:
+                dropped += 1
+        topic["source_excerpts"] = kept
+    if dropped:
+        logger.warning("Dropped %d consolidated source excerpts not found verbatim.", dropped)
+    return dropped
+
+
 class MasterBlueprintSynthesizer:
     def __init__(self, service=None) -> None:
         self._service = service  # injectable for tests
@@ -130,13 +342,14 @@ class MasterBlueprintSynthesizer:
         profile: CurrentProfile | None = None,
     ) -> list[dict]:
         """One LLM call to merge/de-duplicate, retrying once on a transient error."""
+        catalogue = build_topic_catalogue(topics)
         user = build_reduce_user_prompt(
             document_title=document_title,
-            topics_json=json.dumps(topics, ensure_ascii=False),
+            topics_json=json.dumps(catalogue, ensure_ascii=False),
             document_summary=document_summary,
         )
         last_error: Exception | None = None
-        for _ in range(2):
+        for attempt in range(2):
             try:
                 if profile is not None:
                     enforce_ai_rate_limit(
@@ -146,9 +359,14 @@ class MasterBlueprintSynthesizer:
                         action_label="large-document analysis",
                     )
                 data, _provider = complete_json_large(REDUCE_SYSTEM, user)
-                return validate_map_output(data)
+                return apply_merge_plan(topics, data)
             except (LLMError, ValidationError) as exc:
                 last_error = exc
+                logger.warning(
+                    "Blueprint consolidation attempt %d of 2 failed: %s",
+                    attempt + 1,
+                    exc,
+                )
         raise last_error or LLMError("Blueprint synthesis failed.")
 
     def synthesize(
@@ -179,10 +397,12 @@ class MasterBlueprintSynthesizer:
             document_summary=document_summary,
             profile=profile,
         )
+        dropped_excerpts = keep_verified_source_excerpts(merged, chunks)
         spot_check = spot_check_verbatim_facts(merged, chunks)
         return {
             "document_title": document_title,
             "source_topic_count": len(raw_topics),
             "topics": merged,
             "verbatim_spot_check": spot_check,
+            "dropped_unverified_excerpts": dropped_excerpts,
         }

@@ -10,7 +10,12 @@ stay auto-gradeable.
 
 from __future__ import annotations
 
-from app.services.quiz_prompts import LEVEL_GUIDANCE, TYPE_SPECS
+from app.services.quiz_prompts import (
+    DIFFICULTY_GUIDANCE,
+    LEVEL_GUIDANCE,
+    STUDENT_FACING_RULES,
+    TYPE_SPECS,
+)
 
 GENERAL_TOPIC = "General"
 
@@ -24,6 +29,9 @@ def build_blueprint_system_prompt(
 ) -> str:
     specs = "\n".join(f"- {TYPE_SPECS[t]}" for t in question_types)
     level = LEVEL_GUIDANCE.get(cognitive_level, LEVEL_GUIDANCE["mixed"])
+    difficulty_guidance = DIFFICULTY_GUIDANCE.get(
+        difficulty, DIFFICULTY_GUIDANCE["medium"]
+    )
     coverage_rule = (
         "- The supplied material contains ONLY the teacher-selected topics. Cover "
         "those topics according to the blueprint; do not introduce any topic or "
@@ -51,20 +59,37 @@ def build_blueprint_system_prompt(
         "1. GROUNDING: use ONLY concepts present in the material; never invent "
         "facts. If the material is thin for a topic, write fewer questions there "
         "rather than padding.\n"
+        "Application questions may introduce neutral exercise inputs only when "
+        "all inputs are stated in the question and the answer is derived directly "
+        "from a formula/rule in the source. Do not call those inputs source facts.\n"
         '2. OUTPUT: respond with ONLY a JSON object {"questions": [ ... ]}. No '
         "markdown fences, no prose outside the JSON.\n"
         '3. Each question object has: "topic", "type", "question_text", '
         '"options" (or null), "correct_answer", "explanation", "difficulty", '
-        '"marks" (number, default 1).\n'
+        '"marks" (number, default 1), "source_excerpt", "source_page_start", '
+        '"source_page_end", and "grounding_confidence".\n'
         "4. QUESTION TYPES — use ONLY these, each in EXACTLY this JSON shape:\n"
         f"{specs}\n"
         "5. Every question must be auto-gradeable with a single unambiguous "
         "answer; MCQ distractors plausible but clearly wrong per the material.\n"
-        "6. No duplicate questions.\n"
+        "6. Do not test the same evidence with the same skill twice, even through "
+        "different wording or question types. Recall, rearrangement, and application "
+        "are distinct skills; repeated recall of one formula is a duplicate.\n"
         f"7. COGNITIVE LEVEL for all questions: {level}\n"
         f"8. DIFFICULTY for all questions: {difficulty} (judge by conceptual "
         "depth, not sentence length).\n"
         "9. Give a short, correct 'explanation' for each question.\n"
+        f"{STUDENT_FACING_RULES}"
+        f"DIFFICULTY STANDARD: {difficulty_guidance}\n"
+        "10. For every question, copy the smallest complete supporting evidence "
+        "EXACTLY from the supplied material into 'source_excerpt'. It may be prose, "
+        "a short equation, chemical formula, code line, date, quotation, or table "
+        "value; a complete short equation is valid evidence. For a derived exercise, "
+        "cite its source formula/rule. Do not paraphrase it. Preserve symbols, "
+        "superscripts, subscripts, signs, units, names, dates, and code exactly; "
+        "never replace a Greek symbol such as θ with a Latin letter. "
+        "Use the nearest explicit page/range label for source_page_start/end; use "
+        "null/null when no page label exists. Set grounding_confidence from 0 to 1.\n"
         "Return the JSON object now — JSON only."
     )
 
