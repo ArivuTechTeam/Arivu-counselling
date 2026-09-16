@@ -1,11 +1,11 @@
 """
 Topic extraction (blueprint quiz — Slice 6).
 
-Reads a stored document's text and asks Gemini, with DeepSeek fallback, for a
-clean list of teachable TOPICS. The teacher then picks the important ones and
-marks each High/Medium/Low; those choices drive the blueprint in Slice 7.
+Reads a stored document and uses the shared grounded extraction pipeline for a
+clean list of teachable topics plus verified supporting material. The teacher
+then chooses topics and exact question-format counts for the blueprint.
 
-Extraction is deliberately its own step (and its own cheap model call) so the
+Extraction is deliberately its own step (and its own model call) so the
 teacher can review/correct topics BEFORE any question generation happens —
 "exam setter first, question writer second".
 """
@@ -16,46 +16,32 @@ from app.lib.config import get_settings
 from app.lib.storage import download_bytes
 from app.lib.supabase import get_service_client
 from app.services.extraction import extract_text
-from app.services.llm.structured import complete_json_with_fallback
-
-_SYSTEM = (
-    "You analyse study material for an exam-prep quiz platform. Extract the list "
-    "of DISTINCT teachable TOPICS/concepts a teacher would recognise (for "
-    "example 'Capital Budgeting', 'Ratio Analysis', 'Depreciation Methods').\n"
-    "RULES:\n"
-    "- Each topic is a short noun phrase (2-6 words), NOT a sentence or question.\n"
-    "- Cover the real subject concepts. IGNORE document metadata: title, author, "
-    "edition, table of contents, index, preface, copyright, page numbers.\n"
-    "- No duplicates and no near-duplicates.\n"
-    "- Return the main teachable topics only (roughly 8-25 for a chapter).\n"
-    '- Output ONLY JSON of the form {"topics": ["...", ...]}.'
-)
-
+from app.services.topic_extraction_pipeline import TopicExtractionPipeline
 
 def _window(text: str) -> str:
-    """Cap how much text we send (cost control). Front matter is kept — a table
-    of contents is actually helpful for naming topics."""
+    """Cap the direct-document extraction input using the configured ceiling."""
     return text[: get_settings().generation_max_text_chars]
 
 
-def extract_topics(material: str) -> list[str]:
-    """Ask the configured LLMs for a de-duplicated topic list."""
-    user = (
-        "Extract the teachable topics from the material below.\n\n"
-        "=== MATERIAL START ===\n" + _window(material) + "\n=== MATERIAL END ==="
+def extract_topic_details(material: str, document_summary: str = "") -> list[dict]:
+    """Use the same grounded rich extraction contract for every document size."""
+    topics = TopicExtractionPipeline()._extract(
+        document_title="Uploaded study material",
+        chunk_number=0,
+        total_chunks=1,
+        content=_window(material),
+        document_summary=document_summary,
     )
-    data, _provider = complete_json_with_fallback(_SYSTEM, user)
-
-    raw = data.get("topics", [])
-    seen: set[str] = set()
-    topics: list[str] = []
-    for item in raw if isinstance(raw, list) else []:
-        name = item.strip() if isinstance(item, str) else ""
-        key = name.lower()
-        if name and key not in seen:
-            seen.add(key)
-            topics.append(name)
     return topics[:50]
+
+
+def extract_topics(material: str, document_summary: str = "") -> list[str]:
+    """Backward-compatible topic-name view of grounded rich extraction."""
+    return [
+        str(topic.get("topic_name") or "").strip()
+        for topic in extract_topic_details(material, document_summary)
+        if str(topic.get("topic_name") or "").strip()
+    ]
 
 
 def extract_topics_for_document(document_id: str, tenant_id: str) -> list[str]:
@@ -77,3 +63,22 @@ def extract_topics_for_document(document_id: str, tenant_id: str) -> list[str]:
     if not text.strip():
         raise ValueError("This document has no extractable text (scanned image PDF?).")
     return extract_topics(text)
+
+
+def extract_topic_details_for_document(document_id: str, tenant_id: str) -> list[dict]:
+    """Fetch a stored document and return verified rich topic details."""
+    service = get_service_client()
+    doc = (
+        service.table("documents")
+        .select("storage_path,file_type")
+        .eq("id", document_id)
+        .eq("tenant_id", tenant_id)
+        .maybe_single()
+        .execute()
+    )
+    if doc is None or not doc.data:
+        raise ValueError("Document not found.")
+    text = extract_text(download_bytes(doc.data["storage_path"]), doc.data["file_type"])
+    if not text.strip():
+        raise ValueError("This document has no extractable text (scanned image PDF?).")
+    return extract_topic_details(text)

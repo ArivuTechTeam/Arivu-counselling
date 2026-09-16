@@ -162,6 +162,8 @@ class RateLimitConfigurationTests(unittest.TestCase):
         self.assertEqual(settings.student_quiz_attempt_limit, 7)
         self.assertEqual(settings.challenge_expiry_days, 45)
         self.assertEqual(settings.deepseek_max_output_tokens, 65536)
+        self.assertEqual(settings.generation_large_request_timeout_seconds, 600)
+        self.assertEqual(settings.generation_chunk_stuck_seconds, 900)
         self.assertEqual(settings.gemini_fallback_model, "gemini-3.5-flash")
 
 

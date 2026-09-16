@@ -12,11 +12,14 @@ from __future__ import annotations
 from app.lib.config import get_settings
 from app.lib.storage import download_bytes
 from app.lib.supabase import get_service_client
-from app.services.extraction import extract_text
+from app.services.extraction import extract_text_with_pages
 from app.services.generation import GeneratedQuiz
 from app.services.llm import LLMError, complete_with_fallback
 from app.services.quiz_generator_service import render_blueprint_material
 from app.services.quiz_prompts import build_regen_system_prompt, build_regen_user_prompt
+from app.services.question_verification import verify_generated_questions
+from app.services.question_validation import validate_question_presentation
+from app.services.source_material import render_extracted_material
 
 
 class RegenerationSourceError(ValueError):
@@ -67,7 +70,9 @@ def get_quiz_set_detail(quiz_set_id: str, tenant_id: str) -> dict:
                 service.table("questions")
                 .select(
                     "id, type, question_text, options, correct_answer, explanation, "
-                    "difficulty, marks, review_status"
+                    "difficulty, marks, review_status, source_excerpt, "
+                    "source_page_start, source_page_end, grounding_confidence, "
+                    "verification_status, verification_warnings"
                 )
                 .in_("id", question_ids)
                 .eq("tenant_id", tenant_id)
@@ -166,9 +171,11 @@ def _question_source_material(service, question: dict, tenant_id: str) -> str:
         )
         if not document or not document.data:
             raise RegenerationSourceError("Question source document was not found.")
-        material = extract_text(
-            download_bytes(document.data["storage_path"]),
-            document.data["file_type"],
+        material = render_extracted_material(
+            extract_text_with_pages(
+                download_bytes(document.data["storage_path"]),
+                document.data["file_type"],
+            )
         )
 
     material = material.strip()
@@ -201,7 +208,9 @@ def regenerate_question(question_id: str, tenant_id: str) -> dict:
     existing = row.data
     source_material = _question_source_material(service, existing, tenant_id)
 
-    system = build_regen_system_prompt(existing["type"])
+    system = build_regen_system_prompt(
+        existing["type"], existing.get("difficulty") or "medium"
+    )
     user = build_regen_user_prompt(existing, source_material)
     raw, _provider = complete_with_fallback(system, user)
 
@@ -212,6 +221,43 @@ def regenerate_question(question_id: str, tenant_id: str) -> dict:
     new_q.check_shape()
     if new_q.type != existing["type"]:
         raise LLMError("Regeneration changed the question type.")
+    try:
+        validate_question_presentation(
+            question_type=new_q.type,
+            question_text=new_q.question_text,
+            explanation=new_q.explanation,
+            source_excerpt=new_q.source_excerpt,
+            requested_difficulty=existing.get("difficulty") or "medium",
+            declared_difficulty=new_q.difficulty,
+        )
+    except ValueError:
+        corrective_system = (
+            system
+            + "\n\nCORRECTION REQUIRED: Rewrite the question again. The stem must not "
+            "reveal the answer-bearing formula/rule. Neither the question nor its "
+            "explanation may mention a handbook, document, PDF, source material, "
+            "notes, passage, page, or uploaded file."
+        )
+        corrected_raw, _provider = complete_with_fallback(corrective_system, user)
+        corrected_quiz = GeneratedQuiz.model_validate_json(corrected_raw)
+        if not corrected_quiz.questions:
+            raise LLMError("Regeneration correction returned no question.")
+        new_q = corrected_quiz.questions[0]
+        new_q.check_shape()
+        if new_q.type != existing["type"]:
+            raise LLMError("Regeneration changed the question type.")
+        try:
+            validate_question_presentation(
+                question_type=new_q.type,
+                question_text=new_q.question_text,
+                explanation=new_q.explanation,
+                source_excerpt=new_q.source_excerpt,
+                requested_difficulty=existing.get("difficulty") or "medium",
+                declared_difficulty=new_q.difficulty,
+            )
+        except ValueError as exc:
+            raise LLMError(f"Regeneration produced an unsuitable question: {exc}") from exc
+    verified = verify_generated_questions([new_q], source_material)[0]
 
     # Replace content, keep the same row + type, reset review state.
     updated = (
@@ -224,6 +270,12 @@ def regenerate_question(question_id: str, tenant_id: str) -> dict:
                 "explanation": new_q.explanation,
                 "difficulty": new_q.difficulty,
                 "marks": new_q.marks,
+                "source_excerpt": new_q.source_excerpt,
+                "source_page_start": new_q.source_page_start,
+                "source_page_end": new_q.source_page_end,
+                "grounding_confidence": new_q.grounding_confidence,
+                "verification_status": verified.status,
+                "verification_warnings": verified.warnings,
                 "review_status": "pending_review",
                 "reviewed_by": None,
                 "reviewed_at": None,

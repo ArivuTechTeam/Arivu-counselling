@@ -115,12 +115,48 @@ class AnalyzeTests(unittest.TestCase):
             f"{MOD}.download_bytes", return_value=b""
         ), patch(f"{MOD}.extract_text", return_value="short text"), patch(
             f"{MOD}.enforce_ai_rate_limit"
-        ), patch(f"{MOD}.extract_topics", return_value=["Alpha", "Beta"]):
+        ), patch(f"{MOD}.profile_document", return_value={}), patch(
+            f"{MOD}.extract_topic_details",
+            return_value=[
+                {"topic_name": "Alpha", "source_excerpts": [{"text": "Alpha fact"}]},
+                {
+                    "topic_name": "Beta",
+                    "formulas": [{"formula": "x = 2"}],
+                    "source_excerpts": [{"text": "x = 2"}],
+                },
+            ],
+        ):
             res = _client().post("/api/v1/quiz-sets/analyze", json={"document_id": "d1"})
         self.assertEqual(res.status_code, 200)
         body = res.json()
         self.assertEqual(body["mode"], "direct")
         self.assertEqual(body["topics"], ["Alpha", "Beta"])
+        self.assertEqual(body["topic_question_limits"], {"Alpha": 1, "Beta": 3})
+
+    def test_small_document_promotes_assessable_children_from_broad_parent(self) -> None:
+        with patch(f"{MOD}.get_settings", return_value=SETTINGS), patch(
+            f"{MOD}.get_service_client", return_value=_Fake(dict(DOC_DB))
+        ), patch(f"{MOD}.download_bytes", return_value=b""), patch(
+            f"{MOD}.extract_text", return_value="short text"
+        ), patch(f"{MOD}.enforce_ai_rate_limit"), patch(
+            f"{MOD}.profile_document", return_value={}
+        ), patch(
+            f"{MOD}.extract_topic_details",
+            return_value=[{
+                "topic_name": "Electromagnetism",
+                "subtopics": ["Ohm's Law", "Coulomb's Law"],
+                "formulas": [
+                    {"name": "Ohm's Law", "formula": "V = IR"},
+                    {"name": "Coulomb's Law", "formula": "F = k(q1q2)/r²"},
+                ],
+            }],
+        ):
+            res = _client().post(
+                "/api/v1/quiz-sets/analyze", json={"document_id": "d1"}
+            )
+
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["topics"], ["Ohm's Law", "Coulomb's Law"])
 
     def test_large_document_creates_job(self) -> None:
         big = "x" * 200_000  # > default 100k trigger

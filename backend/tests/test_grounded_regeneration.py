@@ -84,6 +84,10 @@ class GroundedRegenerationTests(unittest.TestCase):
             ],
             "correct_answer": "b", "explanation": "Because PAGE 95 FACT",
             "difficulty": "medium", "marks": 1,
+            "source_excerpt": "PAGE 95 FACT",
+            "source_page_start": None,
+            "source_page_end": None,
+            "grounding_confidence": 0.9,
         }]})
 
         with patch("app.services.review.get_service_client", return_value=service), patch(
@@ -91,7 +95,10 @@ class GroundedRegenerationTests(unittest.TestCase):
             return_value=SimpleNamespace(generation_max_text_chars=100_000),
         ), patch(
             "app.services.review.complete_with_fallback", return_value=(regenerated, "gemini")
-        ) as complete:
+        ) as complete, patch(
+            "app.services.review.verify_generated_questions",
+            return_value=[SimpleNamespace(status="verified", warnings=[])],
+        ):
             result = regenerate_question("q1", "t1")
 
         prompt = complete.call_args.args[1]

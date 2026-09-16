@@ -88,9 +88,10 @@ migration-31-chunked-generation-jobs.sql
 migration-32-reset-chunked-generation.sql
 migration-33-teacher-content-archive.sql
 migration-34-document-upload-limit.sql
+migration-35-universal-question-grounding.sql
 ```
 
-(Filenames above verified 2026-09-15 against `migrations/` — earlier drafts of this
+(Filenames above verified 2026-09-16 against `migrations/` — earlier drafts of this
 runbook named these `migration-31-chunked-document-generation.sql`,
 `migration-32-reset-chunked-generation-schema.sql`,
 `migration-33-document-archive-status.sql`, and
@@ -126,9 +127,11 @@ an earlier version of migration 31; apply it after 31 on an existing database.
 Migration 33 adds the `archived` document status used by the content archive.
 Migration 34 lowers the Supabase document bucket limit to 30 MiB so storage,
 backend validation, and frontend messaging agree.
+Migration 35 must be applied before deploying universal question grounding;
+generated-question reads and writes use its provenance and verification columns.
 
 For a fresh database, `migrations/schema.sql` already includes the final effects
-of migrations 31, 33, and 34. The incremental files remain required for an
+of migrations 31, 33, 34, and 35. The incremental files remain required for an
 existing database that predates those changes; never infer their live applied
 state solely from the current schema file.
 
@@ -180,7 +183,7 @@ explicitly in Railway so the production policy is visible and easy to edit:
 | `DEEPSEEK_API_KEY` | quiz generation (fallback) |
 | `RATE_LIMIT_QUIZ_GENERATION_PER_HOUR` | per-user standard quiz generations per rolling hour (default `10`) |
 | `RATE_LIMIT_BLUEPRINT_PER_HOUR` | per-user blueprint generations per rolling hour (default `10`) |
-| `RATE_LIMIT_TOPIC_EXTRACTION_PER_HOUR` | per-user topic extractions per rolling hour (default `10`) |
+| `RATE_LIMIT_TOPIC_EXTRACTION_PER_HOUR` | per-user document-analysis AI calls per rolling hour (default `30`; a 300-page document can require 10–11 calls including profiling and consolidation retry) |
 | `RATE_LIMIT_QUESTION_REGENERATE_PER_HOUR` | per-user question regenerations per rolling hour (default `10`) |
 | `RATE_LIMIT_QUESTION_EXPLAIN_PER_HOUR` | per-user question explanations per rolling hour (default `10`) |
 | `RATE_LIMIT_QUIZ_EXTRACTION_PER_HOUR` | per-user existing-quiz document extractions per rolling hour (default `10`) |
@@ -194,7 +197,9 @@ further tunables — `GEMINI_VISION_TIMEOUT_SECONDS`, `GEMINI_EXTRACTION_MAX_OUT
 `GENERATION_MAX_TEXT_CHARS`, `CHUNKING_TRIGGER_CHARS`, `GENERATION_CHUNK_CHARS`,
 `GENERATION_CHUNK_OVERLAP_CHARS`, `GENERATION_CHUNK_MIN_CHARS`,
 `GENERATION_CHUNK_CONCURRENCY`, `GENERATION_MAP_MAX_OUTPUT_TOKENS`,
-`GENERATION_PROFILE_MAX_CHARS`, `GENERATION_CHUNK_STUCK_SECONDS` — all read at
+`GENERATION_LARGE_REQUEST_TIMEOUT_SECONDS` (default `600` for large background calls),
+`GENERATION_PROFILE_MAX_CHARS`, `GENERATION_CHUNK_STUCK_SECONDS` (default `900`,
+kept above the large-request timeout) — all read at
 startup in `backend/app/lib/config.py` with safe code defaults. See
 `backend/.env.example` for the authoritative, commented list and
 `docs/chunked-generation-architecture.md` for what each one tunes; set them

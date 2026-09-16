@@ -26,10 +26,15 @@ from app.services.blueprint_prompts import (
     build_blueprint_user_prompt,
 )
 from app.services.events import QUESTION_GENERATED, log_events, make_event
-from app.services.extraction import extract_text
+from app.services.extraction import extract_text_with_pages
 from app.services.llm.base import LLMError
 from app.services.llm.structured import complete_json_with_fallback
-from app.services.question_validation import validate_question_answer_shape
+from app.services.question_validation import (
+    validate_question_answer_shape,
+    validate_question_presentation,
+)
+from app.services.question_verification import verify_generated_questions
+from app.services.source_material import render_extracted_material
 from app.services.teacher_access import teacher_has_subject
 
 QuestionType = Literal[
@@ -62,6 +67,10 @@ class BPQuestion(BaseModel):
     explanation: str | None = None
     difficulty: str = "medium"
     marks: float = 1
+    source_excerpt: str = ""
+    source_page_start: int | None = None
+    source_page_end: int | None = None
+    grounding_confidence: float = 0
 
     def check_shape(self) -> None:
         validate_question_answer_shape(self.type, self.options, self.correct_answer)
@@ -140,6 +149,7 @@ def _validated_generated_quiz(
     data: object,
     expected_counts: dict[str, int],
     expected_topic_counts: dict[str, dict[str, int]] | None = None,
+    requested_difficulty: str | None = None,
 ) -> BPQuiz:
     """Validate shape and the teacher's exact requested type distribution."""
     try:
@@ -151,8 +161,16 @@ def _validated_generated_quiz(
     for question in quiz.questions:
         try:
             question.check_shape()
+            validate_question_presentation(
+                question_type=question.type,
+                question_text=question.question_text,
+                explanation=question.explanation,
+                source_excerpt=question.source_excerpt,
+                requested_difficulty=requested_difficulty,
+                declared_difficulty=question.difficulty,
+            )
         except ValueError as exc:
-            raise LLMError(f"Model produced a malformed question: {exc}") from exc
+            raise LLMError(f"Model produced an unsuitable question: {exc}") from exc
 
     actual = Counter(question.type for question in quiz.questions)
     expected = Counter(
@@ -198,18 +216,22 @@ def _generate_with_exact_mix(
     user: str,
     expected_counts: dict[str, int],
     expected_topic_counts: dict[str, dict[str, int]] | None = None,
+    requested_difficulty: str | None = None,
 ) -> tuple[BPQuiz, str]:
     """Generate once, then make one explicit correction attempt for a bad mix."""
     data, provider = complete_json_with_fallback(system, user)
     try:
         return (
             _validated_generated_quiz(
-                data, expected_counts, expected_topic_counts
+                data, expected_counts, expected_topic_counts, requested_difficulty
             ),
             provider,
         )
     except LLMError as first_error:
-        if "question mix mismatch" not in str(first_error):
+        if not any(
+            reason in str(first_error)
+            for reason in ("question mix mismatch", "unsuitable question")
+        ):
             raise
 
         expected_text = ", ".join(
@@ -219,16 +241,21 @@ def _generate_with_exact_mix(
         )
         corrective_system = (
             system
-            + "\n\nCORRECTION REQUIRED: Your previous response did not match the exact "
-            f"question-type distribution. Return exactly: {expected_text}. Rebuild the "
-            "complete JSON response and obey every original grounding rule."
+            + "\n\nCORRECTION REQUIRED: Rebuild the complete JSON response. Return "
+            f"exactly this type distribution: {expected_text}. No question stem may "
+            "reveal its answer-bearing formula/rule, and no question or explanation "
+            "may refer to a handbook, document, PDF, source material, notes, passage, "
+            "page, or uploaded file. Obey every original grounding and difficulty rule."
         )
         corrected, corrected_provider = complete_json_with_fallback(
             corrective_system, user
         )
         return (
             _validated_generated_quiz(
-                corrected, expected_counts, expected_topic_counts
+                corrected,
+                expected_counts,
+                expected_topic_counts,
+                requested_difficulty,
             ),
             corrected_provider,
         )
@@ -279,10 +306,14 @@ def generate_blueprint_quiz(
     )
     if doc is None or not doc.data:
         raise ValueError("Document not found.")
-    text = extract_text(download_bytes(doc.data["storage_path"]), doc.data["file_type"])
-    if not text.strip():
+    extracted = extract_text_with_pages(
+        download_bytes(doc.data["storage_path"]), doc.data["file_type"]
+    )
+    if not extracted.text.strip():
         raise ValueError("This document has no extractable text (scanned image PDF?).")
-    material = text[: get_settings().generation_max_text_chars]
+    material = render_extracted_material(
+        extracted, max_chars=get_settings().generation_max_text_chars
+    )
 
     # 2) Generate + persist from the document's own text. (For LARGE documents the
     #    caller uses generate_and_persist_from_material directly with a Master
@@ -378,8 +409,49 @@ def generate_and_persist_from_material(
         for q in questions:
             try:
                 q.check_shape()
+                validate_question_presentation(
+                    question_type=q.type,
+                    question_text=q.question_text,
+                    explanation=q.explanation,
+                    source_excerpt=q.source_excerpt,
+                    requested_difficulty=difficulty,
+                    declared_difficulty=q.difficulty,
+                )
             except ValueError as exc:
-                raise LLMError(f"Model produced a malformed question: {exc}") from exc
+                corrective_system = (
+                    system
+                    + "\n\nCORRECTION REQUIRED: Rewrite the complete quiz. No question "
+                    "stem may reveal its answer-bearing formula/rule, and no question "
+                    "or explanation may refer to a handbook, document, PDF, source "
+                    "material, notes, passage, page, or uploaded file. Preserve the "
+                    f"requested {difficulty} difficulty and all JSON/type rules."
+                )
+                corrected, corrected_provider = complete_json_with_fallback(
+                    corrective_system, user
+                )
+                try:
+                    corrected_quiz = BPQuiz.model_validate(corrected)
+                    if len(corrected_quiz.questions) != total_questions:
+                        raise LLMError(
+                            "AI generated the wrong number of questions after correction."
+                        )
+                    for corrected_question in corrected_quiz.questions:
+                        corrected_question.check_shape()
+                        validate_question_presentation(
+                            question_type=corrected_question.type,
+                            question_text=corrected_question.question_text,
+                            explanation=corrected_question.explanation,
+                            source_excerpt=corrected_question.source_excerpt,
+                            requested_difficulty=difficulty,
+                            declared_difficulty=corrected_question.difficulty,
+                        )
+                except (ValidationError, ValueError) as corrected_error:
+                    raise LLMError(
+                        f"Model produced an unsuitable question: {corrected_error}"
+                    ) from corrected_error
+                questions = corrected_quiz.questions
+                provider = corrected_provider
+                break
     else:
         expected_topic_counts = (
             {topic["name"]: topic["counts"] for topic in blueprint["topics"]}
@@ -391,8 +463,11 @@ def generate_and_persist_from_material(
             user,
             expected_counts,
             expected_topic_counts,
+            difficulty,
         )
         questions = quiz.questions
+
+    verification = verify_generated_questions(questions, material)
 
     # 4) Persist chapter + selected topics (exam-setter data; powers analytics).
     chapter_id = _get_or_create(
@@ -431,6 +506,7 @@ def generate_and_persist_from_material(
         variant_id = variant.data[0]["id"]
 
         for index, q in enumerate(questions):
+            verified = verification[index]
             tag = (q.topic or "").strip().casefold()
             topic_id = (
                 None
@@ -442,6 +518,12 @@ def generate_and_persist_from_material(
                 "type": q.type, "question_text": q.question_text, "options": q.options,
                 "correct_answer": q.correct_answer, "explanation": q.explanation,
                 "difficulty": q.difficulty, "marks": q.marks,
+                "source_excerpt": q.source_excerpt,
+                "source_page_start": q.source_page_start,
+                "source_page_end": q.source_page_end,
+                "grounding_confidence": q.grounding_confidence,
+                "verification_status": verified.status,
+                "verification_warnings": verified.warnings,
                 "source": "ai_generated", "review_status": "pending_review",
                 "created_by": profile.user_id,
             }).execute()
@@ -451,7 +533,12 @@ def generate_and_persist_from_material(
                 "tenant_id": tid, "variant_id": variant_id,
                 "question_id": question_id, "order_index": index,
             }).execute()
-            stored.append({"id": question_id, **q.model_dump()})
+            stored.append({
+                "id": question_id,
+                **q.model_dump(),
+                "verification_status": verified.status,
+                "verification_warnings": verified.warnings,
+            })
     except Exception:
         service.table("quiz_sets").delete().eq("id", quiz_set_id).eq(
             "tenant_id", tid

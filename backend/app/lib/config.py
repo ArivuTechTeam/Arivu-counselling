@@ -255,6 +255,13 @@ class Settings:
         self.generation_map_max_output_tokens: int = _positive_int(
             "GENERATION_MAP_MAX_OUTPUT_TOKENS", 65536
         )
+        # A 300-page REDUCE request can legitimately carry 200k+ characters and
+        # return tens of thousands of JSON tokens. It runs in a background job,
+        # so give the provider enough time instead of applying the shorter
+        # interactive-call timeout.
+        self.generation_large_request_timeout_seconds: float = _positive_float(
+            "GENERATION_LARGE_REQUEST_TIMEOUT_SECONDS", 600
+        )
         # How much text the "understand the document first" profiling call reads.
         # Big enough to cover most documents whole; bounded for cost/latency and to
         # stay within the fallback model's context. Tunable from Railway.
@@ -264,7 +271,7 @@ class Settings:
         # A chunk left "running" longer than this is considered stuck and is
         # re-queued by the sweeper / on retry (resumability).
         self.generation_chunk_stuck_seconds: int = _positive_int(
-            "GENERATION_CHUNK_STUCK_SECONDS", 300
+            "GENERATION_CHUNK_STUCK_SECONDS", 900
         )
 
         # --- Per-user AI request limits (rolling one-hour windows) ---
@@ -277,7 +284,7 @@ class Settings:
             "RATE_LIMIT_BLUEPRINT_PER_HOUR", 10
         )
         self.rate_limit_topic_extraction_per_hour = _positive_int(
-            "RATE_LIMIT_TOPIC_EXTRACTION_PER_HOUR", 10
+            "RATE_LIMIT_TOPIC_EXTRACTION_PER_HOUR", 30
         )
         self.rate_limit_question_regenerate_per_hour = _positive_int(
             "RATE_LIMIT_QUESTION_REGENERATE_PER_HOUR", 10

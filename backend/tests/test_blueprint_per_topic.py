@@ -204,6 +204,39 @@ class GeneratedPerTopicValidationTests(unittest.TestCase):
         self.assertEqual(len(result.questions), 2)
         self.assertEqual(complete.call_count, 2)
 
+    def test_formula_giveaway_uses_the_single_correction_attempt(self) -> None:
+        leaked = self._question("Alpha", "true_false")
+        leaked.update({
+            "question_text": "According to the handbook, voltage is V = IR.",
+            "source_excerpt": "V = IR",
+            "difficulty": "hard",
+        })
+        corrected = self._question("Alpha", "true_false")
+        corrected.update({
+            "question_text": (
+                "Doubling resistance while current remains constant doubles voltage."
+            ),
+            "source_excerpt": "V = IR",
+            "difficulty": "hard",
+        })
+        with patch(
+            "app.services.blueprint.complete_json_with_fallback",
+            side_effect=[
+                ({"questions": [leaked]}, "gemini"),
+                ({"questions": [corrected]}, "gemini"),
+            ],
+        ) as complete:
+            result, _provider = _generate_with_exact_mix(
+                "system",
+                "user",
+                {"true_false": 1},
+                {"Alpha": {"true_false": 1}},
+                "hard",
+            )
+
+        self.assertEqual(result.questions[0].question_text, corrected["question_text"])
+        self.assertEqual(complete.call_count, 2)
+
 
 if __name__ == "__main__":
     unittest.main()

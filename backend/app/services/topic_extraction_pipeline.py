@@ -26,6 +26,11 @@ from app.services.llm.base import LLMError
 from app.services.llm.structured import complete_json_large
 from app.services.map_reduce_prompts import MAP_SYSTEM, build_map_user_prompt
 from app.services.rate_limit import TOPIC_EXTRACTION, enforce_ai_rate_limit
+from app.services.source_material import (
+    evidence_occurs_in_material,
+    is_meaningful_evidence,
+    normalise_evidence,
+)
 
 
 def _now() -> str:
@@ -75,6 +80,24 @@ def validate_map_output(data: object) -> list[dict]:
                         or str(w.get("description", "")).strip()
                     )
                 ],
+                "source_excerpts": [
+                    {
+                        "text": str(excerpt.get("text", "")).strip(),
+                        "page_start": (
+                            int(excerpt["page_start"])
+                            if str(excerpt.get("page_start", "")).isdigit()
+                            else None
+                        ),
+                        "page_end": (
+                            int(excerpt["page_end"])
+                            if str(excerpt.get("page_end", "")).isdigit()
+                            else None
+                        ),
+                    }
+                    for excerpt in (t.get("source_excerpts") or [])
+                    if isinstance(excerpt, dict)
+                    and is_meaningful_evidence(str(excerpt.get("text", "")).strip())
+                ],
                 "source_page_ranges": [
                     {"start": int(r["start"]), "end": int(r["end"])}
                     for r in (t.get("source_page_ranges") or [])
@@ -87,6 +110,33 @@ def validate_map_output(data: object) -> list[dict]:
             }
         )
     return out
+
+
+def align_topic_name_to_source(topic: dict, content: str) -> None:
+    """Prefer an explicit source term when the model invents a broader label."""
+    name = str(topic.get("topic_name") or "").strip()
+    source = normalise_evidence(content)
+    if name and normalise_evidence(name) in source:
+        return
+    candidates = [
+        str(item.get("name") or "").strip()
+        for item in (topic.get("formulas") or [])
+        if isinstance(item, dict)
+    ] + [
+        str(item.get("term") or "").strip()
+        for item in (topic.get("key_definitions") or [])
+        if isinstance(item, dict)
+    ]
+    replacement = next(
+        (
+            candidate
+            for candidate in candidates
+            if candidate and normalise_evidence(candidate) in source
+        ),
+        None,
+    )
+    if replacement:
+        topic["topic_name"] = replacement
 
 
 class TopicExtractionPipeline:
@@ -127,11 +177,28 @@ class TopicExtractionPipeline:
                     )
                 data, _provider = complete_json_large(MAP_SYSTEM, user)
                 topics = validate_map_output(data)
+                for topic in topics:
+                    align_topic_name_to_source(topic, content)
+                    topic["formulas"] = [
+                        formula
+                        for formula in (topic.get("formulas") or [])
+                        if evidence_occurs_in_material(
+                            str(formula.get("formula") or ""), content
+                        )
+                    ]
+                    topic["source_excerpts"] = [
+                        excerpt
+                        for excerpt in (topic.get("source_excerpts") or [])
+                        if evidence_occurs_in_material(excerpt["text"], content)
+                    ]
                 if page_start is not None and page_end is not None:
                     for topic in topics:
                         topic["source_page_ranges"] = [
                             {"start": page_start, "end": page_end}
                         ]
+                        for excerpt in topic.get("source_excerpts") or []:
+                            excerpt["page_start"] = page_start
+                            excerpt["page_end"] = page_end
                 return topics
             except (LLMError, ValidationError) as exc:
                 last_error = exc

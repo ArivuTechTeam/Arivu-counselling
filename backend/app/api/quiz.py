@@ -25,6 +25,7 @@ from app.services.events import QUIZ_PUBLISHED, log_event
 from app.services.extraction import extract_text
 from app.services.generation import generate_quiz
 from app.services.generation_jobs import create_generation_job, launch_job
+from app.services.document_profile import profile_document, profile_to_summary
 from app.services.llm import LLMError
 from app.services.quiz_generator_service import QuizGeneratorService
 from app.services.rate_limit import (
@@ -34,7 +35,8 @@ from app.services.rate_limit import (
     enforce_ai_rate_limit,
 )
 from app.services.review import get_quiz_set_detail
-from app.services.topics import extract_topics
+from app.services.topics import extract_topic_details
+from app.services.topic_capacity import selectable_topic_choices
 
 router = APIRouter(prefix="/api/v1/quiz-sets", tags=["quiz"])
 
@@ -282,9 +284,9 @@ def _require_teacher(profile: CurrentProfile) -> None:
 
 
 # --- Large-document (chunked Map-Reduce) generation -------------------------
-# Small documents (<= trigger) keep the existing single-pass topic extraction,
-# untouched. Large ones are analysed in the background (chunk -> MAP -> REDUCE)
-# and the teacher picks topics from the resulting Master Blueprint.
+# Small documents use one grounded rich extraction call. Large ones are analysed
+# in the background (chunk -> MAP -> REDUCE). Both paths expose the same verified
+# topic evidence and capacity guidance before the teacher generates a quiz.
 
 
 class AnalyzeRequest(BaseModel):
@@ -311,9 +313,8 @@ def analyze_document(
     req: AnalyzeRequest,
     profile: CurrentProfile = Depends(get_current_profile),
 ) -> dict:
-    """Route a document by size. Small documents return their topics directly
-    (unchanged behaviour); large ones kick off a background analysis job and
-    return its id for the client to poll."""
+    """Route a document by size. Small documents return grounded topics directly;
+    large ones start a background analysis job and return its id for polling."""
     if profile.role != "teacher":
         raise HTTPException(status_code=403, detail="Only teachers can analyze documents.")
 
@@ -346,15 +347,25 @@ def analyze_document(
         )
         return {"mode": "job", "document_id": req.document_id, "job_id": job_id, "status": "queued"}
 
-    # Small document → existing single-pass topic extraction.
+    # Small document → profile first, then use that subject-neutral context for
+    # one focused topic-extraction call.
     enforce_ai_rate_limit(
         profile=profile,
         endpoint=TOPIC_EXTRACTION,
         hourly_limit=get_settings().rate_limit_topic_extraction_per_hour,
-        action_label="topic extraction",
+        action_label="document profiling",
     )
     try:
-        topics = extract_topics(text)
+        document_profile = profile_document(text)
+        enforce_ai_rate_limit(
+            profile=profile,
+            endpoint=TOPIC_EXTRACTION,
+            hourly_limit=get_settings().rate_limit_topic_extraction_per_hour,
+            action_label="topic extraction",
+        )
+        topic_details = extract_topic_details(
+            text, profile_to_summary(document_profile)
+        )
     except LLMError as exc:
         raise public_error(
             status.HTTP_502_BAD_GATEWAY,
@@ -362,7 +373,17 @@ def analyze_document(
             operation="extract document topics with AI",
             exception=exc,
         ) from exc
-    return {"mode": "direct", "document_id": req.document_id, "topics": topics}
+    topic_choices = selectable_topic_choices(topic_details)
+    return {
+        "mode": "direct",
+        "document_id": req.document_id,
+        "topics": [topic["name"] for topic in topic_choices],
+        "topic_question_limits": {
+            topic["name"]: topic["suggested_question_limit"]
+            for topic in topic_choices
+        },
+        "source_quality_warnings": document_profile.get("source_quality_warnings") or [],
+    }
 
 
 def _owned_job(service, job_id: str, profile: CurrentProfile) -> dict:
@@ -435,14 +456,16 @@ def get_generation_job(
     job = _fail_if_stuck(service, job, profile)
 
     blueprint = job.get("master_blueprint") or {}
+    document_profile = (job.get("params") or {}).get("document_profile") or {}
+    topic_choices = selectable_topic_choices(blueprint.get("topics") or [])
     topics = [
         {
-            "name": t.get("topic_name"),
-            "subtopics": t.get("subtopics") or [],
-            "page_ranges": t.get("source_page_ranges") or [],
+            "name": topic["name"],
+            "subtopics": [],
+            "page_ranges": [],
+            "suggested_question_limit": topic["suggested_question_limit"],
         }
-        for t in (blueprint.get("topics") or [])
-        if t.get("topic_name")
+        for topic in topic_choices
     ]
     return {
         "job_id": job["id"],
@@ -453,6 +476,7 @@ def get_generation_job(
         "error_message": job.get("error_message"),
         "topics": topics,
         "quiz_set_id": job.get("quiz_set_id"),
+        "source_quality_warnings": document_profile.get("source_quality_warnings") or [],
     }
 
 
@@ -765,6 +789,25 @@ def approve_all_questions(
     if not question_ids:
         return {"approved": 0}
 
+    eligible_rows = (
+        service.table("questions")
+        .select("id,verification_status")
+        .in_("id", question_ids)
+        .eq("tenant_id", profile.tenant_id)
+        .eq("created_by", profile.user_id)
+        .eq("review_status", "pending_review")
+        .execute()
+        .data
+        or []
+    )
+    eligible_ids = [
+        row["id"]
+        for row in eligible_rows
+        if row.get("verification_status") != "unsupported"
+    ]
+    if not eligible_ids:
+        return {"approved": 0}
+
     updated = (
         service.table("questions")
         .update(
@@ -774,7 +817,7 @@ def approve_all_questions(
                 "reviewed_at": datetime.now(timezone.utc).isoformat(),
             }
         )
-        .in_("id", question_ids)
+        .in_("id", eligible_ids)
         .eq("review_status", "pending_review")
         .eq("tenant_id", profile.tenant_id)
         .execute()

@@ -68,6 +68,20 @@ const DIFFICULTY_TONE: Record<string, string> = {
   hard: "border-rose-200 bg-rose-50 text-rose-700",
 };
 
+const VERIFICATION_TONE: Record<string, string> = {
+  verified: "border-emerald-200 bg-emerald-50 text-emerald-700",
+  needs_teacher_review: "border-amber-200 bg-amber-50 text-amber-800",
+  unsupported: "border-rose-200 bg-rose-50 text-rose-700",
+  ambiguous: "border-orange-200 bg-orange-50 text-orange-800",
+};
+
+const VERIFICATION_LABEL: Record<string, string> = {
+  verified: "Evidence verified",
+  needs_teacher_review: "Check evidence",
+  unsupported: "Unsupported",
+  ambiguous: "Ambiguous",
+};
+
 function CheckIcon({ className }: { className?: string }) {
   return (
     <svg
@@ -128,6 +142,7 @@ export function QuestionReviewCard({
   const accent = ACCENT[question.review_status] ?? "#cbd5e1";
   const isApproved = question.review_status === "approved";
   const isRejected = question.review_status === "rejected";
+  const approvalBlocked = question.verification_status === "unsupported";
   const flashClass =
     flash === "approve"
       ? "animate-approve"
@@ -209,7 +224,11 @@ export function QuestionReviewCard({
                           : "bg-muted text-muted-foreground"
                       }`}
                     >
-                      {o.id}
+                      {question.type === "true_false"
+                        ? o.id === "true"
+                          ? "✓"
+                          : "×"
+                        : o.id}
                     </span>
                     <span className="flex-1">{o.text}</span>
                     {isCorrect && (
@@ -227,11 +246,67 @@ export function QuestionReviewCard({
             <p className="mt-1 text-muted-foreground">Why: {question.explanation}</p>
           )}
 
+          {(question.source_excerpt || question.verification_status) && (
+            <div className="mt-3 rounded-lg border border-input bg-muted/25 p-3">
+              <div className="flex flex-wrap items-center gap-2">
+                <p className="text-xs font-semibold text-foreground">Source evidence</p>
+                {question.verification_status && (
+                  <span
+                    className={`rounded-full border px-2 py-0.5 text-[11px] font-medium ${
+                      VERIFICATION_TONE[question.verification_status] ??
+                      "border-input bg-muted text-muted-foreground"
+                    }`}
+                  >
+                    {VERIFICATION_LABEL[question.verification_status] ??
+                      question.verification_status.replaceAll("_", " ")}
+                  </span>
+                )}
+                {question.source_page_start != null && (
+                  <span className="text-[11px] text-muted-foreground">
+                    Page {question.source_page_start}
+                    {question.source_page_end != null &&
+                    question.source_page_end !== question.source_page_start
+                      ? `–${question.source_page_end}`
+                      : ""}
+                  </span>
+                )}
+                {question.grounding_confidence != null && (
+                  <span className="text-[11px] text-muted-foreground">
+                    {Math.round(question.grounding_confidence * 100)}% grounding
+                  </span>
+                )}
+              </div>
+              {question.source_excerpt && (
+                <blockquote className="mt-2 border-l-2 border-primary/30 pl-3 text-xs leading-relaxed text-muted-foreground">
+                  “{question.source_excerpt}”
+                </blockquote>
+              )}
+              {!!question.verification_warnings?.length && (
+                <ul className="mt-2 space-y-1 text-xs text-amber-800">
+                  {question.verification_warnings.map((warning, warningIndex) => (
+                    <li key={`${warning}-${warningIndex}`}>• {warning}</li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          )}
+
+          {approvalBlocked && (
+            <p className="mt-3 rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-medium text-rose-700">
+              Edit or regenerate this question before approving it.
+            </p>
+          )}
+
           <div className="mt-3 flex flex-wrap gap-2">
             <Button
               size="sm"
               onClick={() => run("approve", () => approveQuestion(question.id))}
-              disabled={!!busy || isApproved}
+              disabled={!!busy || isApproved || approvalBlocked}
+              title={
+                approvalBlocked
+                  ? "Unsupported questions must be edited or regenerated first"
+                  : undefined
+              }
               className={
                 isApproved
                   ? "bg-emerald-600 text-white hover:bg-emerald-600 disabled:opacity-100"

@@ -1,10 +1,22 @@
 import {
   Document,
+  Font,
   Page,
   StyleSheet,
   Text,
   View,
 } from "@react-pdf/renderer";
+
+Font.register({
+  family: "Noto Sans",
+  fonts: [
+    { src: "/fonts/NotoSans-Regular.ttf", fontWeight: 400 },
+    { src: "/fonts/NotoSans-Bold.ttf", fontWeight: 700 },
+  ],
+});
+// Preserve technical terms, formulas, names, and non-English words exactly as
+// authored instead of inserting language-dependent automatic hyphens.
+Font.registerHyphenationCallback((word) => [word]);
 
 // --- shared look --------------------------------------------------------------
 const BRAND = "#15603d";
@@ -15,7 +27,7 @@ const s = StyleSheet.create({
     paddingHorizontal: 44,
     fontSize: 11,
     color: "#1a1a1a",
-    fontFamily: "Helvetica",
+    fontFamily: "Noto Sans",
     lineHeight: 1.4,
   },
   headerBar: {
@@ -24,18 +36,19 @@ const s = StyleSheet.create({
     paddingBottom: 8,
     marginBottom: 16,
   },
-  brand: { fontSize: 9, color: BRAND, fontFamily: "Helvetica-Bold", letterSpacing: 1 },
-  title: { fontSize: 16, fontFamily: "Helvetica-Bold", marginTop: 4 },
+  brand: { fontSize: 9, color: BRAND, fontFamily: "Noto Sans", fontWeight: 700, letterSpacing: 1 },
+  title: { fontSize: 16, fontFamily: "Noto Sans", fontWeight: 700, marginTop: 4 },
   meta: { fontSize: 9, color: "#666", marginTop: 4 },
   sectionTitle: {
     fontSize: 11,
-    fontFamily: "Helvetica-Bold",
+    fontFamily: "Noto Sans",
+    fontWeight: 700,
     color: BRAND,
     marginTop: 14,
     marginBottom: 6,
   },
   qBlock: { marginBottom: 11 },
-  qText: { fontFamily: "Helvetica-Bold", marginBottom: 3 },
+  qText: { fontFamily: "Noto Sans", fontWeight: 700, marginBottom: 3 },
   option: { marginLeft: 12, marginBottom: 1.5 },
   answer: { marginTop: 3, color: BRAND, fontSize: 10 },
   explanation: { marginTop: 1.5, color: "#666", fontSize: 9 },
@@ -48,7 +61,7 @@ const s = StyleSheet.create({
     flexGrow: 1,
     marginRight: 8,
   },
-  bigNum: { fontSize: 18, fontFamily: "Helvetica-Bold" },
+  bigNum: { fontSize: 18, fontFamily: "Noto Sans", fontWeight: 700 },
   small: { fontSize: 8, color: "#666", marginTop: 2 },
   row: {
     flexDirection: "row",
@@ -57,7 +70,7 @@ const s = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: "#eee",
   },
-  tag: { fontSize: 9, fontFamily: "Helvetica-Bold" },
+  tag: { fontSize: 9, fontFamily: "Noto Sans", fontWeight: 700 },
   footer: {
     position: "absolute",
     bottom: 24,
@@ -85,13 +98,34 @@ function marksOf(q: { marks?: number | null }) {
   return Number(q.marks) || 1;
 }
 
+const SUPERSCRIPT_DIGITS: Record<string, string> = {
+  "0": "⁰",
+  "1": "¹",
+  "2": "²",
+  "3": "³",
+  "4": "⁴",
+  "5": "⁵",
+  "6": "⁶",
+  "7": "⁷",
+  "8": "⁸",
+  "9": "⁹",
+};
+
+// Render ordinary caret exponents cleanly without attempting to reinterpret
+// variables or rewrite the mathematical meaning supplied by the generator.
+function displayText(value: unknown): string {
+  return String(value ?? "").replace(/\^([0-9]+)/g, (_match, digits: string) =>
+    digits.split("").map((digit) => SUPERSCRIPT_DIGITS[digit] ?? digit).join(""),
+  );
+}
+
 // Turn a raw answer value into readable text (maps MCQ ids to "A. text").
 function answerText(value: unknown, options?: Option[] | null): string {
   if (value == null) return "—";
   if (options && options.length) {
     const one = (id: string) => {
       const i = options.findIndex((o) => o.id === id);
-      return i >= 0 ? `${LETTER[i] ?? i + 1}. ${options[i].text}` : String(id);
+      return i >= 0 ? `${LETTER[i] ?? i + 1}. ${displayText(options[i].text)}` : displayText(id);
     };
     if (Array.isArray(value)) return value.map((v) => one(String(v))).join(", ");
     if (typeof value === "string") return one(value);
@@ -99,10 +133,12 @@ function answerText(value: unknown, options?: Option[] | null): string {
   if (Array.isArray(value)) return value.join(", ");
   if (value && typeof value === "object") {
     const o = value as Record<string, unknown>;
-    if ("value" in o) return `${o.value}${o.tolerance ? ` (±${o.tolerance})` : ""}`;
-    if ("answers" in o) return (o.answers as string[]).join(" / ");
+    if ("value" in o) {
+      return displayText(`${o.value}${o.tolerance ? ` (±${o.tolerance})` : ""}`);
+    }
+    if ("answers" in o) return (o.answers as string[]).map(displayText).join(" / ");
   }
-  return String(value);
+  return displayText(value);
 }
 
 function Footer() {
@@ -138,11 +174,11 @@ export function QuestionPaperDoc({
         {questions.map((q, i) => (
           <View key={i} style={s.qBlock} wrap={false}>
             <Text style={s.qText}>
-              {i + 1}. {q.question_text}  ({marksOf(q)} {marksOf(q) === 1 ? "mark" : "marks"})
+              {i + 1}. {displayText(q.question_text)}  ({marksOf(q)} {marksOf(q) === 1 ? "mark" : "marks"})
             </Text>
             {q.options?.map((o, oi) => (
               <Text key={oi} style={s.option}>
-                {LETTER[oi] ?? oi + 1}. {o.text}
+                {LETTER[oi] ?? oi + 1}. {displayText(o.text)}
               </Text>
             ))}
             {q.type === "fill_blank" && !q.options && (
@@ -154,7 +190,7 @@ export function QuestionPaperDoc({
               </Text>
             )}
             {withAnswers && q.explanation ? (
-              <Text style={s.explanation}>Why: {q.explanation}</Text>
+              <Text style={s.explanation}>Why: {displayText(q.explanation)}</Text>
             ) : null}
           </View>
         ))}
@@ -221,7 +257,7 @@ export function ReportCardDoc({
               <Text style={{ ...s.tag, color: r.is_correct ? BRAND : "#c02" }}>
                 {r.is_correct ? "[Correct] " : "[Wrong] "}
               </Text>
-              {i + 1}. {r.question_text}
+              {i + 1}. {displayText(r.question_text)}
             </Text>
             <Text style={s.option}>
               Your answer: {answerText(r.student_answer, r.options)}

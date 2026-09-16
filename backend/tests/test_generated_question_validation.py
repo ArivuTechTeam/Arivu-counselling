@@ -4,6 +4,7 @@ import pytest
 
 from app.services.blueprint import BPQuestion
 from app.services.generation import GeneratedQuestion
+from app.services.question_validation import validate_question_presentation
 
 
 QUESTION_CLASSES = (GeneratedQuestion, BPQuestion)
@@ -61,3 +62,82 @@ def test_malformed_gradeable_shapes_are_rejected(
     )
     with pytest.raises(ValueError, match=message):
         question.check_shape()
+
+
+@pytest.mark.parametrize(
+    ("question_text", "source_excerpt"),
+    [
+        (
+            "According to the provided handbook, electrical power is P = I²R.",
+            "P = VI = I²R",
+        ),
+        (
+            "A resistor carries 4 A. Using the formula P = I²R, calculate its power.",
+            "P = VI = I²R",
+        ),
+        (
+            "The kinematics relationship is v² = u² - 2as. True or false?",
+            "v² = u² + 2as",
+        ),
+    ],
+)
+def test_student_question_rejects_source_references_and_formula_giveaways(
+    question_text: str,
+    source_excerpt: str,
+) -> None:
+    with pytest.raises(ValueError):
+        validate_question_presentation(
+            question_type="true_false",
+            question_text=question_text,
+            explanation="Apply the relevant relationship to determine the result.",
+            source_excerpt=source_excerpt,
+            requested_difficulty="hard",
+            declared_difficulty="hard",
+        )
+
+
+def test_standalone_application_keeps_formula_for_post_answer_explanation() -> None:
+    validate_question_presentation(
+        question_type="numerical",
+        question_text=(
+            "A resistor of 5 ohms carries a current of 4 amperes. "
+            "Calculate the power dissipated."
+        ),
+        explanation="Power is I²R, so 4² × 5 gives 80 watts.",
+        source_excerpt="P = VI = I²R",
+        requested_difficulty="hard",
+        declared_difficulty="hard",
+    )
+
+
+def test_explanation_must_not_refer_to_teacher_material() -> None:
+    with pytest.raises(ValueError, match="explanation"):
+        validate_question_presentation(
+            question_type="mcq_single",
+            question_text="Which relationship describes electrical power?",
+            explanation="The handbook lists the correct relationship.",
+            source_excerpt="P = VI = I²R",
+        )
+
+
+def test_requested_difficulty_must_be_preserved() -> None:
+    with pytest.raises(ValueError, match="difficulty must be hard"):
+        validate_question_presentation(
+            question_type="numerical",
+            question_text="Calculate the power dissipated by the resistor.",
+            explanation="Apply the electrical power relationship.",
+            source_excerpt="P = VI = I²R",
+            requested_difficulty="hard",
+            declared_difficulty="medium",
+        )
+
+
+def test_programming_question_may_include_code_needed_for_analysis() -> None:
+    validate_question_presentation(
+        question_type="mcq_single",
+        question_text="Given `def add(x, y): return x + y`, what does add(2, 3) return?",
+        explanation="The function returns the sum of its two arguments.",
+        source_excerpt="def add(x, y): return x + y",
+        requested_difficulty="medium",
+        declared_difficulty="medium",
+    )

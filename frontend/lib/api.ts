@@ -463,6 +463,12 @@ export type GeneratedQuestion = {
   explanation?: string | null;
   difficulty?: string;
   marks?: number;
+  source_excerpt?: string | null;
+  source_page_start?: number | null;
+  source_page_end?: number | null;
+  grounding_confidence?: number | null;
+  verification_status?: string | null;
+  verification_warnings?: string[];
 };
 
 export type GenerateResponse = {
@@ -525,6 +531,12 @@ export type ReviewQuestion = {
   difficulty?: string;
   marks?: number;
   review_status: string;
+  source_excerpt?: string | null;
+  source_page_start?: number | null;
+  source_page_end?: number | null;
+  grounding_confidence?: number | null;
+  verification_status?: string | null;
+  verification_warnings?: string[];
 };
 
 export type QuizSetDetail = QuizSetSummary & {
@@ -1668,6 +1680,7 @@ export const getAdminQuizSetDetail = (id: string) =>
 export type ExtractedTopics = {
   document_id: string;
   topics: string[];
+  topic_question_limits: Record<string, number>;
 };
 
 /** Extract the teachable topics from an uploaded document (Gemini). ~5-15s. */
@@ -1724,7 +1737,13 @@ export const generateBlueprintQuiz = (req: BlueprintGenerateRequest) =>
 // Route a document by size: a small document returns its topics immediately;
 // a large one starts a resumable background analysis job to poll.
 export type AnalyzeResponse =
-  | { mode: "direct"; document_id: string; topics: string[] }
+  | {
+      mode: "direct";
+      document_id: string;
+      topics: string[];
+      topic_question_limits: Record<string, number>;
+      source_quality_warnings: string[];
+    }
   | { mode: "job"; document_id: string; job_id: string; status: string };
 
 /** Route a document by size (extract text server-side; ~5-20s for large PDFs). */
@@ -1748,8 +1767,10 @@ export type GenerationJobStatus = {
     name: string;
     subtopics: string[];
     page_ranges: { start: number; end: number }[];
+    suggested_question_limit: number;
   }[];
   quiz_set_id: string | null;
+  source_quality_warnings: string[];
 };
 
 export const getGenerationJob = (jobId: string) =>

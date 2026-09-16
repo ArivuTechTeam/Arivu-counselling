@@ -6,7 +6,7 @@ from unittest.mock import patch
 import pytest
 from fastapi import HTTPException
 
-from app.api.questions import QuestionEdit, edit_question
+from app.api.questions import QuestionEdit, approve_question, edit_question
 from app.lib.auth import CurrentProfile
 
 
@@ -65,6 +65,8 @@ class _Service:
                 "difficulty": "medium",
                 "marks": 1,
                 "review_status": "pending_review",
+                "verification_status": "verified",
+                "verification_warnings": [],
             }
         ]
 
@@ -89,6 +91,9 @@ def test_text_only_edit_preserves_and_validates_existing_answer_shape() -> None:
 
     assert result["question_text"] == "Updated question"
     assert result["correct_answer"] == "a"
+    assert result["verification_status"] == "needs_teacher_review"
+    assert result["review_status"] == "pending_review"
+    assert any("edited after" in warning for warning in result["verification_warnings"])
 
 
 @pytest.mark.parametrize(
@@ -143,3 +148,16 @@ def test_cross_tenant_question_is_not_visible() -> None:
             )
 
     assert raised.value.status_code == 404
+
+
+def test_unsupported_question_cannot_be_approved_until_fixed() -> None:
+    service = _Service()
+    service.rows[0]["verification_status"] = "unsupported"
+    with patch("app.api.questions.get_service_client", return_value=service), patch(
+        "app.api.questions.log_event"
+    ):
+        with pytest.raises(HTTPException) as raised:
+            approve_question("question-1", PROFILE)
+
+    assert raised.value.status_code == 409
+    assert service.rows[0]["review_status"] == "pending_review"

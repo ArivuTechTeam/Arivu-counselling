@@ -143,7 +143,11 @@ export default function ReviewDetailPage({ params }: { params: { id: string } })
     const count = detail
       ? detail.variants
           .flatMap((v) => v.questions)
-          .filter((q) => q.review_status === "pending_review").length
+          .filter(
+            (q) =>
+              q.review_status === "pending_review" &&
+              q.verification_status !== "unsupported",
+          ).length
       : 0;
     try {
       await approveAllQuestions(params.id);
@@ -198,6 +202,11 @@ export default function ReviewDetailPage({ params }: { params: { id: string } })
   const pending = all.filter((q) => q.review_status === "pending_review").length;
   const approved = all.filter((q) => q.review_status === "approved").length;
   const rejected = all.filter((q) => q.review_status === "rejected").length;
+  const approvablePending = all.filter(
+    (q) =>
+      q.review_status === "pending_review" &&
+      q.verification_status !== "unsupported",
+  ).length;
   const questionNumbers = Object.fromEntries(
     all.map((question, index) => [question.id, index + 1]),
   );
@@ -307,14 +316,14 @@ export default function ReviewDetailPage({ params }: { params: { id: string } })
                 ? "Unpublish & archive"
                 : "Archive"}
           </Button>
-          {pending > 0 && (
+          {approvablePending > 0 && (
             <Button
               size="sm"
               variant="outline"
               onClick={handleApproveAll}
               disabled={approving || publishing}
             >
-              {approving ? "Approving…" : `Approve all (${pending})`}
+              {approving ? "Approving…" : `Approve all (${approvablePending})`}
             </Button>
           )}
           <Button

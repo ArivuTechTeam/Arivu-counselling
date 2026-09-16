@@ -23,11 +23,10 @@ logger = logging.getLogger(__name__)
 
 
 def profile_document(text: str) -> dict:
-    """Return {'subject': str, 'summary': str} describing the document, or {} on
-    any failure (profiling must never break a generation job)."""
-    window = text[: get_settings().generation_profile_max_chars]
-    if not window.strip():
+    """Return a subject-neutral content profile, or ``{}`` on any failure."""
+    if not text.strip():
         return {}
+    window = text[: get_settings().generation_profile_max_chars]
     try:
         data, _provider = complete_json_large(
             PROFILE_SYSTEM, build_profile_user_prompt(window)
@@ -39,11 +38,58 @@ def profile_document(text: str) -> dict:
     summary = str(data.get("summary", "")).strip()
     if not (subject or summary):
         return {}
-    return {"subject": subject, "summary": summary}
+    profile = {"subject": subject, "summary": summary}
+    for field in ("language", "domain", "content_style", "reasoning_style"):
+        value = str(data.get(field, "")).strip()
+        if value:
+            profile[field] = value
+    for field in (
+        "definitions_and_terminology",
+        "chronology_signals",
+        "quantitative_signals",
+        "process_signals",
+        "structured_data_signals",
+        "example_signals",
+        "code_signals",
+        "visual_dependencies",
+        "supported_question_types",
+        "source_quality_warnings",
+    ):
+        values = data.get(field)
+        if isinstance(values, list):
+            cleaned = [str(value).strip() for value in values if str(value).strip()]
+            if cleaned:
+                profile[field] = cleaned[:12]
+    return profile
 
 
 def profile_to_summary(profile: dict | None) -> str:
     """Flatten a profile dict into the single guidance string passed to MAP/REDUCE."""
     profile = profile or {}
-    parts = [profile.get("subject", ""), profile.get("summary", "")]
+    parts = [
+        profile.get("subject", ""),
+        profile.get("language", ""),
+        profile.get("domain", ""),
+        profile.get("content_style", ""),
+        profile.get("reasoning_style", ""),
+        profile.get("summary", ""),
+    ]
+    signal_fields = {
+        "definitions_and_terminology": "Definitions/terms",
+        "chronology_signals": "Chronology",
+        "quantitative_signals": "Quantitative material",
+        "process_signals": "Processes/causality",
+        "structured_data_signals": "Tables/data",
+        "example_signals": "Examples/cases",
+        "code_signals": "Code",
+        "visual_dependencies": "Visual dependencies",
+        "supported_question_types": "Supported question types",
+    }
+    for field, label in signal_fields.items():
+        values = profile.get(field) or []
+        if values:
+            parts.append(f"{label}: " + ", ".join(map(str, values)))
+    warnings = profile.get("source_quality_warnings") or []
+    if warnings:
+        parts.append("Source cautions: " + ", ".join(map(str, warnings)))
     return " ".join(p for p in parts if p).strip()
