@@ -43,6 +43,7 @@ from app.api.student import (
     mark_topic_revised,
     revision_topics,
     start_attempt,
+    student_stats,
     student_attempts,
     submit_attempt,
 )
@@ -235,6 +236,51 @@ class GradingTests(unittest.TestCase):
 
 
 class StudentAnalyticsTests(unittest.TestCase):
+    def test_dashboard_only_labels_topics_below_sixty_as_weak(self) -> None:
+        service = MemoryService(
+            {
+                "quiz_attempts": [
+                    {
+                        "id": "a1",
+                        "tenant_id": "t1",
+                        "student_id": "u1",
+                        "status": "graded",
+                    }
+                ],
+                "practice_sessions": [],
+                "attempt_answers": [
+                    {
+                        "attempt_id": "a1",
+                        "tenant_id": "t1",
+                        "question_id": "q-weak",
+                        "is_correct": False,
+                    },
+                    {
+                        "attempt_id": "a1",
+                        "tenant_id": "t1",
+                        "question_id": "q-strong",
+                        "is_correct": True,
+                    },
+                ],
+                "questions": [
+                    {"id": "q-weak", "tenant_id": "t1", "topic_id": "tw"},
+                    {"id": "q-strong", "tenant_id": "t1", "topic_id": "ts"},
+                ],
+                "topics": [
+                    {"id": "tw", "tenant_id": "t1", "name": "Needs work"},
+                    {"id": "ts", "tenant_id": "t1", "name": "Mastered"},
+                ],
+            }
+        )
+        with patch("app.api.student.get_service_client", return_value=service):
+            result = student_stats(profile())
+
+        self.assertEqual(
+            result["weak_areas"],
+            [{"topic": "Needs work", "accuracy": 0, "attempted": 1}],
+        )
+        self.assertEqual(len(result["topic_accuracy"]), 2)
+
     def test_history_derives_subject_for_chapter_practice(self) -> None:
         service = MemoryService(
             {
@@ -395,12 +441,18 @@ class QuizAttemptFlowTests(unittest.TestCase):
                         "tenant_id": "t1",
                         "quiz_set_id": "set1",
                         "variant_type": "mixed",
-                        "total_marks": 3,
+                        "total_marks": 5,
                         "time_limit_minutes": 10,
                     }
                 ],
                 "quiz_variant_questions": [
-                    {"tenant_id": "t1", "variant_id": "v1", "question_id": "q1", "order_index": 0},
+                    {
+                        "tenant_id": "t1",
+                        "variant_id": "v1",
+                        "question_id": "q1",
+                        "order_index": 0,
+                        "marks_override": 4,
+                    },
                     {"tenant_id": "t1", "variant_id": "v1", "question_id": "q2", "order_index": 1},
                 ],
                 "questions": [
@@ -449,16 +501,31 @@ class QuizAttemptFlowTests(unittest.TestCase):
             self.assertEqual(
                 sum(q["suggested_seconds"] for q in started["questions"]), 600
             )
+            saved_attempt = service.tables["quiz_attempts"][0]
+            self.assertEqual(len(saved_attempt["question_snapshot"]), 2)
+
+            # Once started, later teacher edits must not change this paper or its
+            # answer key, marks, or denominator.
+            service.tables["questions"][0].update(
+                {
+                    "question_text": "Edited after start",
+                    "correct_answer": "A",
+                    "marks": 99,
+                    "review_status": "pending_review",
+                }
+            )
             # Starting returns the already-loaded state. The eighth query is the
             # backend-enforced two-attempt limit check.
             self.assertEqual(len(service.calls), 8)
 
             taking = get_attempt(attempt_id, profile())
-            # The timed state adds one tenant-scoped variant lookup so refreshes
-            # can restore the server-authoritative deadline.
-            self.assertEqual(len(service.calls), 12)
+            # The immutable snapshot avoids reloading the link and question rows;
+            # only the owned attempt and its timing configuration are fetched.
+            self.assertEqual(len(service.calls), 10)
             self.assertEqual(taking["status"], "in_progress")
             self.assertNotIn("correct_answer", taking["questions"][0])
+            self.assertEqual(taking["questions"][0]["question_text"], "Pick B")
+            self.assertEqual(taking["questions"][0]["marks"], 4)
 
             with self.assertRaises(HTTPException) as incomplete:
                 submit_attempt(
@@ -484,18 +551,26 @@ class QuizAttemptFlowTests(unittest.TestCase):
                 profile(),
             )
             self.assertEqual(result["quiz_title"], "Known answers")
-            self.assertEqual(result["total_score"], 2.0)
-            self.assertEqual(result["max_score"], 3.0)
+            self.assertEqual(result["total_score"], 4.0)
+            self.assertEqual(result["max_score"], 5.0)
             self.assertEqual([r["is_correct"] for r in result["results"]], [True, False])
 
             reviewed = get_attempt(attempt_id, profile())
-            self.assertEqual(reviewed["total_score"], 2.0)
+            self.assertEqual(reviewed["total_score"], 4.0)
             history = student_attempts(profile())
             self.assertEqual(history[0]["attempt_id"], attempt_id)
             self.assertEqual(history[0]["variant_id"], "v1")
             self.assertEqual(history[0]["subject_id"], "s1")
             self.assertIsNone(history[0]["chapter_id"])
 
+            service.tables["questions"][0].update(
+                {
+                    "question_text": "Pick B",
+                    "correct_answer": "B",
+                    "marks": 2,
+                    "review_status": "approved",
+                }
+            )
             second = start_attempt(StartAttemptRequest(variant_id="v1"), profile())
             abandoned = submit_attempt(
                 second["attempt_id"],
@@ -507,7 +582,7 @@ class QuizAttemptFlowTests(unittest.TestCase):
                 ),
                 profile(),
             )
-            self.assertEqual(abandoned["total_score"], 2.0)
+            self.assertEqual(abandoned["total_score"], 4.0)
             self.assertIsNone(abandoned["results"][1]["student_answer"])
             self.assertEqual(abandoned["results"][1]["marks_awarded"], 0.0)
             with self.assertRaises(HTTPException) as limit_reached:
@@ -582,12 +657,25 @@ class PracticeAndRevisionFlowTests(unittest.TestCase):
             session_id = started["session_id"]
             self.assertEqual(len(started["questions"]), 2)
             self.assertNotIn("correct_answer", started["questions"][0])
+            self.assertEqual(
+                len(service.tables["practice_sessions"][0]["question_snapshot"]),
+                2,
+            )
+            service.tables["questions"][0].update(
+                {
+                    "question_text": "Edited after start",
+                    "correct_answer": "B",
+                    "marks": 50,
+                }
+            )
 
             autosave_practice(
                 session_id, AutosavePractice(answers={"q1": "A"}), profile()
             )
             restored = get_practice(session_id, profile())
             self.assertEqual(restored["autosave_state"], {"q1": "A"})
+            restored_by_id = {question["id"]: question for question in restored["questions"]}
+            self.assertEqual(restored_by_id["q1"]["question_text"], "Pick A")
 
             result = submit_practice(
                 session_id,

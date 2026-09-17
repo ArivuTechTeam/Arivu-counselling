@@ -90,6 +90,7 @@ migration-33-teacher-content-archive.sql
 migration-34-document-upload-limit.sql
 migration-35-universal-question-grounding.sql
 migration-36-super-admin-aggregates.sql
+migration-37-student-attempt-snapshots.sql
 ```
 
 (Filenames above verified 2026-09-16 against `migrations/` — earlier drafts of this
@@ -102,6 +103,8 @@ The repository does not prove which migrations are applied to a deployed
 Supabase project. Check the target project before skipping any file. Migration
 12 must be applied before deploying backend code that reads `teacher_subjects`.
 Migration 13 must be applied before deploying backend code with AI rate limits.
+Migration 37 must be applied before deploying backend code that starts student
+quiz or practice attempts; it stores the immutable question and scoring snapshot.
 Migrations 15–19 must be applied in order before deploying quiz extraction;
 run the duplicate checks documented in migrations 16 and 18 first.
 Migration 22 must be applied to close direct browser access to backend-owned

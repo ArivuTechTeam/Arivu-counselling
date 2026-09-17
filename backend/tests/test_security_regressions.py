@@ -205,6 +205,19 @@ class MigrationSecurityTests(unittest.TestCase):
         self.assertIn("drop function if exists", sql)
         self.assertIn("create_challenge_with_session", sql)
 
+    def test_student_attempt_snapshots_are_atomic_and_backend_only(self) -> None:
+        root = Path(__file__).resolve().parents[2]
+        sql = (
+            root / "migrations/migration-37-student-attempt-snapshots.sql"
+        ).read_text().lower()
+        self.assertEqual(sql.count("add column if not exists question_snapshot"), 2)
+        self.assertIn("p_question_snapshot jsonb", sql)
+        self.assertIn("jsonb_array_length(p_question_snapshot) < 1", sql)
+        self.assertIn("security invoker", sql)
+        self.assertIn("set search_path = ''", sql)
+        self.assertIn("from public, anon, authenticated", sql)
+        self.assertIn("to service_role", sql)
+
     def test_browser_data_api_cannot_expose_quiz_answers(self) -> None:
         root = Path(__file__).resolve().parents[2]
         sql = (

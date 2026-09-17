@@ -1,8 +1,5 @@
-"use client";
-
-import { useEffect } from "react";
-
 import { Button } from "@/components/ui/button";
+import { Dialog } from "@/components/ui/dialog";
 
 type AttemptReadinessProps = {
   open: boolean;
@@ -33,30 +30,17 @@ export function AttemptReadiness({
   onCancel,
   onConfirm,
 }: AttemptReadinessProps) {
-  useEffect(() => {
-    if (!open) return;
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && !busy) onCancel();
-    };
-    window.addEventListener("keydown", closeOnEscape);
-    return () => window.removeEventListener("keydown", closeOnEscape);
-  }, [busy, onCancel, open]);
-
   if (!open) return null;
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 p-4 backdrop-blur-[2px]"
-      onMouseDown={(event) => {
-        if (event.target === event.currentTarget && !busy) onCancel();
-      }}
+    <Dialog
+      onClose={busy ? undefined : onCancel}
+      ariaLabelledBy="attempt-readiness-title"
+      closeOnBackdrop={!busy}
+      overlayClassName="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 p-4 backdrop-blur-[2px]"
+      contentClassName="w-full max-w-lg rounded-2xl border bg-card p-5 shadow-2xl sm:p-6"
     >
-      <section
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="attempt-readiness-title"
-        className="w-full max-w-lg rounded-2xl border bg-card p-5 shadow-2xl sm:p-6"
-      >
+      <section>
         <p className="text-xs font-semibold uppercase tracking-[0.18em] text-primary">
           Ready when you are
         </p>
@@ -131,7 +115,11 @@ export function AttemptReadiness({
           <Button variant="outline" onClick={onCancel} disabled={busy}>
             Not yet
           </Button>
-          <Button onClick={onConfirm} disabled={busy} autoFocus>
+          <Button
+            onClick={onConfirm}
+            disabled={busy}
+            data-dialog-initial-focus
+          >
             {busy
               ? "Starting…"
               : attemptNumber && maxAttempts
@@ -140,7 +128,7 @@ export function AttemptReadiness({
           </Button>
         </div>
       </section>
-    </div>
+    </Dialog>
   );
 }
 

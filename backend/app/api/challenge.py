@@ -550,6 +550,7 @@ def accept_challenge(
                         or int(effective_time_limit_minutes(questions)),
                     },
                     "question_ids": ch["question_ids"],
+                    "question_snapshot": questions,
                     "status": "in_progress",
                     "challenge_id": ch["id"],
                     "started_at": started_at,

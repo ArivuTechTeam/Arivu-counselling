@@ -106,6 +106,7 @@ class RecordingService:
                         "variant_id": variant["id"],
                         "question_id": questions[index * 2 + offset]["id"],
                         "order_index": offset,
+                        "marks_override": 3 if index == 0 and offset == 0 else None,
                     }
                 )
         self.tables = {
@@ -185,6 +186,8 @@ class StudentQuizQueryEfficiencyTests(unittest.TestCase):
         )
 
         self.assertEqual(len(questions), 2)
+        self.assertEqual(questions[0]["marks"], 3)
+        self.assertEqual(questions[1]["marks"], 1)
         question_selects = [
             columns for table, columns in self.service.calls if table == "questions"
         ]

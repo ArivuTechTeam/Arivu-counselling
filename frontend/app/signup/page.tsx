@@ -217,7 +217,7 @@ export default function SignupPage() {
           <div className="left-inner">
             <div className="eyebrow">
               <div className="eline" />
-              <span className="etxt">South India&apos;s No.1 Commerce Academy</span>
+              <span className="etxt">Learning built for every subject</span>
             </div>
             <h1 className="headline">
               <SplitText text="Start your " />
@@ -226,8 +226,8 @@ export default function SignupPage() {
               <SplitText text="with ArivuPro today." />
             </h1>
             <p className="subtext">
-              Create your account, pick your course, and join 1,00,000+ students
-              cracking CA, CS, ACCA, CMA, CFA and more.
+              Create your account, choose your course, and learn through quizzes
+              grounded in the material your teachers provide.
             </p>
             <div className="stats">
               <div className="stat">
@@ -239,17 +239,17 @@ export default function SignupPage() {
               <div className="stat">
                 <span className="stat-icon">🏆</span>
                 <div className="stat-num gold"><span className="counter" data-to="300" data-suffix="+">0</span></div>
-                <div className="stat-lbl">National Rank Holders</div>
+                <div className="stat-lbl">Learning Milestones</div>
                 <div className="stat-bar"><div className="stat-fill" style={{ width: "75%" }} /></div>
               </div>
               <div className="stat wide">
                 <div className="wide-left">
                   <span className="stat-icon">📚</span>
                   <div className="stat-num"><span className="counter" data-to="16">0</span></div>
-                  <div className="stat-lbl">Professional Programs</div>
+                  <div className="stat-lbl">Subjects Supported</div>
                 </div>
                 <div className="badges">
-                  {["CA", "CS", "ACCA", "CMA", "CFA", "FRM", "CPA", "EA"].map((b) => (
+                  {["Science", "Maths", "History", "Arts", "Commerce", "Technology"].map((b) => (
                     <span className="badge" key={b}>{b}</span>
                   ))}
                 </div>

@@ -21,6 +21,7 @@ from app.lib.auth import CurrentProfile, get_current_profile
 from app.lib.api_errors import public_error
 from app.lib.config import get_settings
 from app.lib.supabase import get_service_client
+from app.lib.supabase_queries import select_all, select_all_in
 from app.services.attempt_timing import (
     DEFAULT_PACING_SECONDS,
     QUESTION_PACING_SECONDS,
@@ -56,7 +57,7 @@ def _ordered_approved_questions(
     """The variant's APPROVED questions, in the teacher's chosen order."""
     links = (
         service.table("quiz_variant_questions")
-        .select("question_id, order_index")
+        .select("question_id, order_index, marks_override")
         .eq("variant_id", variant_id)
         .eq("tenant_id", tenant_id)
         .order("order_index")
@@ -76,7 +77,24 @@ def _ordered_approved_questions(
     )
     rows = rows.execute().data or []
     by_id = {row["id"]: row for row in rows}
-    return [by_id[link["question_id"]] for link in links if link["question_id"] in by_id]
+    ordered = []
+    for link in links:
+        question = by_id.get(link["question_id"])
+        if question is None:
+            continue
+        effective_question = dict(question)
+        if link.get("marks_override") is not None:
+            effective_question["marks"] = link["marks_override"]
+        ordered.append(effective_question)
+    return ordered
+
+
+def _attempt_questions(service, attempt: dict, tenant_id: str) -> list[dict]:
+    """Return the immutable paper saved at start, with a legacy fallback."""
+    snapshot = attempt.get("question_snapshot")
+    if isinstance(snapshot, list) and snapshot:
+        return snapshot
+    return _ordered_approved_questions(service, attempt["variant_id"], tenant_id)
 
 
 def _approved_question_stats(
@@ -85,15 +103,15 @@ def _approved_question_stats(
     """Count questions and derive their base duration in one round trip."""
     if not variant_ids:
         return {}
-    links = (
-        service.table("quiz_variant_questions")
-        .select("variant_id, questions!inner(id, type)")
-        .in_("variant_id", variant_ids)
-        .eq("tenant_id", tenant_id)
-        .eq("questions.review_status", "approved")
-        .execute()
-        .data
-        or []
+    links = select_all_in(
+        service,
+        "quiz_variant_questions",
+        "variant_id, questions!inner(id, type)",
+        in_column="variant_id",
+        values=variant_ids,
+        configure=lambda query: query.eq("tenant_id", tenant_id).eq(
+            "questions.review_status", "approved"
+        ),
     )
     stats: dict[str, dict[str, int]] = {}
     for link in links:
@@ -151,56 +169,54 @@ def list_quizzes(profile: CurrentProfile = Depends(get_current_profile)) -> list
     attempt_limit = get_settings().student_quiz_attempt_limit
 
     # 1) Which courses is this student enrolled in?
-    enrollments = (
-        service.table("enrollments")
-        .select("course_id")
-        .eq("profile_id", profile.user_id)
-        .eq("tenant_id", profile.tenant_id)
-        .execute()
-        .data
-        or []
+    enrollments = select_all(
+        service,
+        "enrollments",
+        "course_id",
+        configure=lambda query: query.eq("profile_id", profile.user_id).eq(
+            "tenant_id", profile.tenant_id
+        ),
     )
     course_ids = [e["course_id"] for e in enrollments]
     if not course_ids:
         return []  # not enrolled in anything -> no quizzes
 
     # 2) Which subjects belong to those courses?
-    subjects = (
-        service.table("subjects")
-        .select("id")
-        .in_("course_id", course_ids)
-        .eq("tenant_id", profile.tenant_id)
-        .execute()
-        .data
-        or []
+    subjects = select_all_in(
+        service,
+        "subjects",
+        "id",
+        in_column="course_id",
+        values=course_ids,
+        configure=lambda query: query.eq("tenant_id", profile.tenant_id),
     )
     subject_ids = [s["id"] for s in subjects]
     if not subject_ids:
         return []
 
     # 3) Published quizzes tagged with one of those subjects.
-    sets = (
-        service.table("quiz_sets")
-        .select("id, title, published_at, subject_id, chapter_id")
-        .eq("tenant_id", profile.tenant_id)
-        .eq("status", "published")
-        .in_("subject_id", subject_ids)
-        .order("published_at", desc=True)
-        .execute()
-        .data
-        or []
+    sets = select_all_in(
+        service,
+        "quiz_sets",
+        "id, title, published_at, subject_id, chapter_id",
+        in_column="subject_id",
+        values=subject_ids,
+        configure=lambda query: query.eq("tenant_id", profile.tenant_id).eq(
+            "status", "published"
+        ),
+        order_column="published_at",
+        order_desc=True,
     )
     # Resolve subject + chapter NAMES so the student can browse by subject/chapter.
     subj_name = {
         s["id"]: s["name"]
-        for s in (
-            service.table("subjects")
-            .select("id, name")
-            .in_("id", subject_ids)
-            .eq("tenant_id", profile.tenant_id)
-            .execute()
-            .data
-            or []
+        for s in select_all_in(
+            service,
+            "subjects",
+            "id, name",
+            in_column="id",
+            values=subject_ids,
+            configure=lambda query: query.eq("tenant_id", profile.tenant_id),
         )
     }
     chapter_ids = list({s.get("chapter_id") for s in sets if s.get("chapter_id")})
@@ -208,14 +224,13 @@ def list_quizzes(profile: CurrentProfile = Depends(get_current_profile)) -> list
     if chapter_ids:
         chap_name = {
             c["id"]: c["name"]
-            for c in (
-                service.table("chapters")
-                .select("id, name")
-                .in_("id", chapter_ids)
-                .eq("tenant_id", profile.tenant_id)
-                .execute()
-                .data
-                or []
+            for c in select_all_in(
+                service,
+                "chapters",
+                "id, name",
+                in_column="id",
+                values=chapter_ids,
+                configure=lambda query: query.eq("tenant_id", profile.tenant_id),
             )
         }
     # Fetch every variant and all approved-question counts in two catalog-sized
@@ -223,14 +238,13 @@ def list_quizzes(profile: CurrentProfile = Depends(get_current_profile)) -> list
     set_variants: list[tuple[dict, list[dict]]] = []
     all_variant_ids: list[str] = []
     set_ids = [quiz_set["id"] for quiz_set in sets]
-    variants = (
-        service.table("quiz_variants")
-        .select("id, quiz_set_id, variant_type, total_marks, time_limit_minutes")
-        .in_("quiz_set_id", set_ids)
-        .eq("tenant_id", profile.tenant_id)
-        .execute()
-        .data
-        or []
+    variants = select_all_in(
+        service,
+        "quiz_variants",
+        "id, quiz_set_id, variant_type, total_marks, time_limit_minutes",
+        in_column="quiz_set_id",
+        values=set_ids,
+        configure=lambda query: query.eq("tenant_id", profile.tenant_id),
     )
     question_stats = _approved_question_stats(
         service, [variant["id"] for variant in variants], profile.tenant_id
@@ -260,15 +274,15 @@ def list_quizzes(profile: CurrentProfile = Depends(get_current_profile)) -> list
     # quizzes they HAVEN'T attended yet, and show a best score on the ones they have.
     attempts_by_variant: dict[str, list[dict]] = {}
     if all_variant_ids:
-        atts = (
-            service.table("quiz_attempts")
-            .select("variant_id, status, total_score")
-            .eq("tenant_id", profile.tenant_id)
-            .eq("student_id", profile.user_id)
-            .in_("variant_id", all_variant_ids)
-            .execute()
-            .data
-            or []
+        atts = select_all_in(
+            service,
+            "quiz_attempts",
+            "variant_id, status, total_score",
+            in_column="variant_id",
+            values=all_variant_ids,
+            configure=lambda query: query.eq("tenant_id", profile.tenant_id).eq(
+                "student_id", profile.user_id
+            ),
         )
         for a in atts:
             attempts_by_variant.setdefault(a["variant_id"], []).append(a)
@@ -390,6 +404,7 @@ def start_attempt(
                     "p_student_id": profile.user_id,
                     "p_started_at": started_at,
                     "p_max_attempts": attempt_limit,
+                    "p_question_snapshot": questions,
                 },
             ).execute()
             attempt_id = str(created.data)
@@ -403,6 +418,7 @@ def start_attempt(
                         "student_id": profile.user_id,
                         "status": "in_progress",
                         "started_at": started_at,
+                        "question_snapshot": questions,
                     }
                 )
                 .execute()
@@ -453,9 +469,7 @@ def get_attempt(
     _require_student(profile)
     service = get_service_client()
     attempt = _load_attempt(service, attempt_id, profile)
-    questions = _ordered_approved_questions(
-        service, attempt["variant_id"], profile.tenant_id
-    )
+    questions = _attempt_questions(service, attempt, profile.tenant_id)
     variant = (
         service.table("quiz_variants")
         .select("time_limit_minutes")
@@ -556,9 +570,7 @@ def autosave_attempt(
         .maybe_single()
         .execute()
     )
-    questions = _ordered_approved_questions(
-        service, attempt["variant_id"], profile.tenant_id
-    )
+    questions = _attempt_questions(service, attempt, profile.tenant_id)
     time_limit = effective_time_limit_minutes(
         questions,
         (variant.data or {}).get("time_limit_minutes") if variant else None,
@@ -594,9 +606,7 @@ def submit_attempt(
     if attempt["status"] != "in_progress":
         raise HTTPException(status_code=400, detail="This attempt is already submitted.")
 
-    questions = _ordered_approved_questions(
-        service, attempt["variant_id"], profile.tenant_id
-    )
+    questions = _attempt_questions(service, attempt, profile.tenant_id)
     submitted = {a.question_id: a.student_answer for a in body.answers}
     variant = (
         service.table("quiz_variants")
@@ -743,49 +753,47 @@ def _student_graded_answers(
     Daily, Exam, Challenge and Revision use practice_sessions/practice_answers.
     Student analytics must combine both or the dashboard contradicts History.
     """
-    quiz_attempts = (
-        service.table("quiz_attempts")
-        .select("id")
-        .eq("tenant_id", tenant_id)
+    quiz_attempts = select_all(
+        service,
+        "quiz_attempts",
+        "id",
+        configure=lambda query: query.eq("tenant_id", tenant_id)
         .eq("student_id", student_id)
-        .eq("status", "graded")
-        .execute()
-        .data
-        or []
+        .eq("status", "graded"),
     )
-    practice_sessions = (
-        service.table("practice_sessions")
-        .select("id")
-        .eq("tenant_id", tenant_id)
+    practice_sessions = select_all(
+        service,
+        "practice_sessions",
+        "id",
+        configure=lambda query: query.eq("tenant_id", tenant_id)
         .eq("student_id", student_id)
-        .eq("status", "graded")
-        .execute()
-        .data
-        or []
+        .eq("status", "graded"),
     )
 
     answers: list[dict] = []
     attempt_ids = [row["id"] for row in quiz_attempts]
     if attempt_ids:
         answers.extend(
-            service.table("attempt_answers")
-            .select("question_id, is_correct")
-            .in_("attempt_id", attempt_ids)
-            .eq("tenant_id", tenant_id)
-            .execute()
-            .data
-            or []
+            select_all_in(
+                service,
+                "attempt_answers",
+                "question_id, is_correct",
+                in_column="attempt_id",
+                values=attempt_ids,
+                configure=lambda query: query.eq("tenant_id", tenant_id),
+            )
         )
     session_ids = [row["id"] for row in practice_sessions]
     if session_ids:
         answers.extend(
-            service.table("practice_answers")
-            .select("question_id, is_correct")
-            .in_("session_id", session_ids)
-            .eq("tenant_id", tenant_id)
-            .execute()
-            .data
-            or []
+            select_all_in(
+                service,
+                "practice_answers",
+                "question_id, is_correct",
+                in_column="session_id",
+                values=session_ids,
+                configure=lambda query: query.eq("tenant_id", tenant_id),
+            )
         )
     return answers, len(quiz_attempts) + len(practice_sessions)
 
@@ -810,14 +818,13 @@ def student_stats(profile: CurrentProfile = Depends(get_current_profile)) -> dic
     topic_accuracy: list[dict] = []
     if answers:
         qids = list({a["question_id"] for a in answers})
-        qrows = (
-            service.table("questions")
-            .select("id, topic_id")
-            .in_("id", qids)
-            .eq("tenant_id", tid)
-            .execute()
-            .data
-            or []
+        qrows = select_all_in(
+            service,
+            "questions",
+            "id, topic_id",
+            in_column="id",
+            values=qids,
+            configure=lambda query: query.eq("tenant_id", tid),
         )
         topic_of = {q["id"]: q.get("topic_id") for q in qrows}
         agg: dict[str, tuple[int, int]] = {}
@@ -828,14 +835,13 @@ def student_stats(profile: CurrentProfile = Depends(get_current_profile)) -> dic
             c, t = agg.get(top, (0, 0))
             agg[top] = (c + (1 if a.get("is_correct") else 0), t + 1)
         if agg:
-            names = (
-                service.table("topics")
-                .select("id, name")
-                .in_("id", list(agg.keys()))
-                .eq("tenant_id", tid)
-                .execute()
-                .data
-                or []
+            names = select_all_in(
+                service,
+                "topics",
+                "id, name",
+                in_column="id",
+                values=list(agg.keys()),
+                configure=lambda query: query.eq("tenant_id", tid),
             )
             name_of = {n["id"]: n["name"] for n in names}
             for top, (c, t) in agg.items():
@@ -852,7 +858,9 @@ def student_stats(profile: CurrentProfile = Depends(get_current_profile)) -> dic
         "quizzes_taken": graded_work_count,
         "questions_solved": total,
         "overall_accuracy": accuracy,
-        "weak_areas": topic_accuracy[:3],
+        "weak_areas": [topic for topic in topic_accuracy if topic["accuracy"] < 60][
+            :3
+        ],
         "topic_accuracy": topic_accuracy,
     }
 
@@ -879,31 +887,41 @@ def student_weak_analysis(
         return empty
 
     qids = list({a["question_id"] for a in answers})
-    qrows = (
-        service.table("questions")
-        .select("id, chapter_id, topic_id")
-        .in_("id", qids)
-        .eq("tenant_id", tid)
-        .execute()
-        .data
-        or []
+    qrows = select_all_in(
+        service,
+        "questions",
+        "id, chapter_id, topic_id",
+        in_column="id",
+        values=qids,
+        configure=lambda query: query.eq("tenant_id", tid),
     )
     qmap = {q["id"]: q for q in qrows}
 
     chapter_ids = list({q["chapter_id"] for q in qrows if q.get("chapter_id")})
     chapters = (
-        service.table("chapters").select("id, name, subject_id").in_("id", chapter_ids).eq("tenant_id", tid).execute().data
+        select_all_in(
+            service,
+            "chapters",
+            "id, name, subject_id",
+            in_column="id",
+            values=chapter_ids,
+            configure=lambda query: query.eq("tenant_id", tid),
+        )
         if chapter_ids
         else []
-    ) or []
+    )
     chmap = {c["id"]: c for c in chapters}
     subject_ids = list({c["subject_id"] for c in chapters})
     subjects = (
         {
             s["id"]: s["name"]
-            for s in (
-                service.table("subjects").select("id, name").in_("id", subject_ids).eq("tenant_id", tid).execute().data
-                or []
+            for s in select_all_in(
+                service,
+                "subjects",
+                "id, name",
+                in_column="id",
+                values=subject_ids,
+                configure=lambda query: query.eq("tenant_id", tid),
             )
         }
         if subject_ids
@@ -913,9 +931,13 @@ def student_weak_analysis(
     topics = (
         {
             t["id"]: t["name"]
-            for t in (
-                service.table("topics").select("id, name").in_("id", topic_ids).eq("tenant_id", tid).execute().data
-                or []
+            for t in select_all_in(
+                service,
+                "topics",
+                "id, name",
+                in_column="id",
+                values=topic_ids,
+                configure=lambda query: query.eq("tenant_id", tid),
             )
         }
         if topic_ids
@@ -1012,30 +1034,40 @@ def _flat_weak_topics(service, tid: str, uid: str, threshold: int = 60) -> list[
     if not answers:
         return []
     qids = list({a["question_id"] for a in answers})
-    qrows = (
-        service.table("questions")
-        .select("id, chapter_id, topic_id")
-        .in_("id", qids)
-        .eq("tenant_id", tid)
-        .execute()
-        .data
-        or []
+    qrows = select_all_in(
+        service,
+        "questions",
+        "id, chapter_id, topic_id",
+        in_column="id",
+        values=qids,
+        configure=lambda query: query.eq("tenant_id", tid),
     )
     qmap = {q["id"]: q for q in qrows}
     chapter_ids = list({q["chapter_id"] for q in qrows if q.get("chapter_id")})
     chapters = (
-        service.table("chapters").select("id, name, subject_id").in_("id", chapter_ids).eq("tenant_id", tid).execute().data
+        select_all_in(
+            service,
+            "chapters",
+            "id, name, subject_id",
+            in_column="id",
+            values=chapter_ids,
+            configure=lambda query: query.eq("tenant_id", tid),
+        )
         if chapter_ids
         else []
-    ) or []
+    )
     chmap = {c["id"]: c for c in chapters}
     subject_ids = list({c["subject_id"] for c in chapters})
     subjects = (
         {
             s["id"]: s["name"]
-            for s in (
-                service.table("subjects").select("id, name").in_("id", subject_ids).eq("tenant_id", tid).execute().data
-                or []
+            for s in select_all_in(
+                service,
+                "subjects",
+                "id, name",
+                in_column="id",
+                values=subject_ids,
+                configure=lambda query: query.eq("tenant_id", tid),
             )
         }
         if subject_ids
@@ -1045,9 +1077,13 @@ def _flat_weak_topics(service, tid: str, uid: str, threshold: int = 60) -> list[
     topics = (
         {
             t["id"]: t["name"]
-            for t in (
-                service.table("topics").select("id, name").in_("id", topic_ids).eq("tenant_id", tid).execute().data
-                or []
+            for t in select_all_in(
+                service,
+                "topics",
+                "id, name",
+                in_column="id",
+                values=topic_ids,
+                configure=lambda query: query.eq("tenant_id", tid),
             )
         }
         if topic_ids
@@ -1105,14 +1141,14 @@ def revision_topics(
     _require_student(profile)
     service = get_service_client()
     weak = _flat_weak_topics(service, profile.tenant_id, profile.user_id)
-    revised = (
-        service.table("revised_topics")
-        .select("topic_key, answered_at_revision")
-        .eq("student_id", profile.user_id)
-        .eq("tenant_id", profile.tenant_id)
-        .execute()
-        .data
-        or []
+    revised = select_all(
+        service,
+        "revised_topics",
+        "topic_key, answered_at_revision",
+        configure=lambda query: query.eq("student_id", profile.user_id).eq(
+            "tenant_id", profile.tenant_id
+        ),
+        order_column="topic_key",
     )
     # A revised topic stays cleared until the student answers another question
     # in it. If it is still weak after new work, surface it again for revision.
@@ -1169,42 +1205,39 @@ def student_attempts(
     service = get_service_client()
     tid, uid = profile.tenant_id, profile.user_id
 
-    attempts = (
-        service.table("quiz_attempts")
-        .select("id, variant_id, total_score, submitted_at")
-        .eq("tenant_id", tid)
+    attempts = select_all(
+        service,
+        "quiz_attempts",
+        "id, variant_id, total_score, submitted_at",
+        configure=lambda query: query.eq("tenant_id", tid)
         .eq("student_id", uid)
-        .eq("status", "graded")
-        .order("submitted_at", desc=True)
-        .execute()
-        .data
-        or []
+        .eq("status", "graded"),
+        order_column="submitted_at",
+        order_desc=True,
     )
     variant_ids = list({a["variant_id"] for a in attempts})
     vrows = []
     if variant_ids:
-        vrows = (
-            service.table("quiz_variants")
-            .select("id, variant_type, total_marks, quiz_set_id")
-            .in_("id", variant_ids)
-            .eq("tenant_id", tid)
-            .execute()
-            .data
-            or []
+        vrows = select_all_in(
+            service,
+            "quiz_variants",
+            "id, variant_type, total_marks, quiz_set_id",
+            in_column="id",
+            values=variant_ids,
+            configure=lambda query: query.eq("tenant_id", tid),
         )
     variants = {v["id"]: v for v in vrows}
 
     set_ids = list({v["quiz_set_id"] for v in variants.values()})
     quiz_sets: dict[str, dict] = {}
     if set_ids:
-        srows = (
-            service.table("quiz_sets")
-            .select("id, title, subject_id, chapter_id")
-            .in_("id", set_ids)
-            .eq("tenant_id", tid)
-            .execute()
-            .data
-            or []
+        srows = select_all_in(
+            service,
+            "quiz_sets",
+            "id, title, subject_id, chapter_id",
+            in_column="id",
+            values=set_ids,
+            configure=lambda query: query.eq("tenant_id", tid),
         )
         quiz_sets = {s["id"]: s for s in srows}
 
@@ -1227,18 +1260,16 @@ def student_attempts(
             }
         )
 
-    practice = (
-        service.table("practice_sessions")
-        .select(
-            "id, mode, subject_id, chapter_id, total_score, max_score, submitted_at"
-        )
-        .eq("tenant_id", tid)
+    practice = select_all(
+        service,
+        "practice_sessions",
+        "id, mode, subject_id, chapter_id, total_score, max_score, submitted_at",
+        configure=lambda query: query.eq("tenant_id", tid)
         .eq("student_id", uid)
         .eq("status", "graded")
-        .neq("mode", "challenge")
-        .execute()
-        .data
-        or []
+        .neq("mode", "challenge"),
+        order_column="submitted_at",
+        order_desc=True,
     )
     chapter_ids = list(
         {
@@ -1249,14 +1280,13 @@ def student_attempts(
     )
     chapter_subjects: dict[str, str] = {}
     if chapter_ids:
-        chapter_rows = (
-            service.table("chapters")
-            .select("id, subject_id")
-            .in_("id", chapter_ids)
-            .eq("tenant_id", tid)
-            .execute()
-            .data
-            or []
+        chapter_rows = select_all_in(
+            service,
+            "chapters",
+            "id, subject_id",
+            in_column="id",
+            values=chapter_ids,
+            configure=lambda query: query.eq("tenant_id", tid),
         )
         chapter_subjects = {
             chapter["id"]: chapter["subject_id"] for chapter in chapter_rows
