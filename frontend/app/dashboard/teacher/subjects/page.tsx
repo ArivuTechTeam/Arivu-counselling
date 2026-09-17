@@ -160,10 +160,10 @@ function SubjectCard({
             {m.quizzes_draft} draft
           </span>
         )}
-        {m.pending_review > 0 && (
+        {m.pending_review + m.needs_edit > 0 && (
           <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2.5 py-0.5 text-[11px] font-semibold text-amber-700">
             <AlertTriangle size={11} />
-            {m.pending_review} to review
+            {m.pending_review + m.needs_edit} to review
           </span>
         )}
       </div>
@@ -191,7 +191,7 @@ export default function TeacherSubjectsPage() {
       quizzes: m.reduce((a, s) => a + s.quizzes_total, 0),
       questions: m.reduce((a, s) => a + s.questions, 0),
       attempts: m.reduce((a, s) => a + s.attempts, 0),
-      pending: m.reduce((a, s) => a + s.pending_review, 0),
+      pending: m.reduce((a, s) => a + s.pending_review + s.needs_edit, 0),
       avg:
         scored.reduce((a, s) => a + s.score_possible, 0) > 0
           ? Math.round(

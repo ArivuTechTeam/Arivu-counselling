@@ -20,6 +20,7 @@ from pydantic import BaseModel, Field
 from app.lib.auth import CurrentProfile, get_current_profile
 from app.lib.api_errors import public_error
 from app.lib.supabase import get_service_client
+from app.lib.supabase_queries import select_all, select_all_in
 from app.services.teacher_access import (
     replace_teacher_subjects,
     teacher_subject_ids,
@@ -520,41 +521,38 @@ def teacher_subject_metrics(
     if not assigned:
         return []
 
-    subjects = (
-        service.table("subjects")
-        .select("id, name, course_id")
-        .in_("id", assigned)
-        .eq("tenant_id", tenant)
-        .execute()
-        .data
-        or []
+    subjects = select_all_in(
+        service,
+        "subjects",
+        "id, name, course_id",
+        in_column="id",
+        values=assigned,
+        configure=lambda query: query.eq("tenant_id", tenant),
     )
 
     course_name: dict[str, str] = {}
     course_ids = list({s["course_id"] for s in subjects if s.get("course_id")})
     if course_ids:
-        for c in (
-            service.table("courses")
-            .select("id, name")
-            .in_("id", course_ids)
-            .eq("tenant_id", tenant)
-            .execute()
-            .data
-            or []
+        for c in select_all_in(
+            service,
+            "courses",
+            "id, name",
+            in_column="id",
+            values=course_ids,
+            configure=lambda query: query.eq("tenant_id", tenant),
         ):
             course_name[c["id"]] = c["name"]
 
     # Chapters → per-subject count + a chapter→subject map for the question join.
     chapter_subject: dict[str, str] = {}
     chapters_per_subject: dict[str, int] = {}
-    for ch in (
-        service.table("chapters")
-        .select("id, subject_id")
-        .in_("subject_id", assigned)
-        .eq("tenant_id", tenant)
-        .execute()
-        .data
-        or []
+    for ch in select_all_in(
+        service,
+        "chapters",
+        "id, subject_id",
+        in_column="subject_id",
+        values=assigned,
+        configure=lambda query: query.eq("tenant_id", tenant),
     ):
         chapter_subject[ch["id"]] = ch["subject_id"]
         chapters_per_subject[ch["subject_id"]] = (
@@ -564,17 +562,18 @@ def teacher_subject_metrics(
     # Questions authored by this teacher (by chapter) → count + pending count.
     questions_per_subject: dict[str, int] = {}
     pending_per_subject: dict[str, int] = {}
+    needs_edit_per_subject: dict[str, int] = {}
     chapter_ids = list(chapter_subject.keys())
     if chapter_ids:
-        for q in (
-            service.table("questions")
-            .select("chapter_id, review_status")
-            .in_("chapter_id", chapter_ids)
+        for q in select_all_in(
+            service,
+            "questions",
+            "id, chapter_id, review_status",
+            in_column="chapter_id",
+            values=chapter_ids,
+            configure=lambda query: query
             .eq("tenant_id", tenant)
-            .eq("created_by", profile.user_id)
-            .execute()
-            .data
-            or []
+            .eq("created_by", profile.user_id),
         ):
             sid = chapter_subject.get(q["chapter_id"])
             if not sid:
@@ -582,21 +581,23 @@ def teacher_subject_metrics(
             questions_per_subject[sid] = questions_per_subject.get(sid, 0) + 1
             if q.get("review_status") == "pending_review":
                 pending_per_subject[sid] = pending_per_subject.get(sid, 0) + 1
+            elif q.get("review_status") == "needs_edit":
+                needs_edit_per_subject[sid] = needs_edit_per_subject.get(sid, 0) + 1
 
     # Quiz sets → totals + status split, and a quizset→subject map.
     quizset_subject: dict[str, str] = {}
     quizzes_total: dict[str, int] = {}
     quizzes_published: dict[str, int] = {}
     quizzes_draft: dict[str, int] = {}
-    for qs in (
-        service.table("quiz_sets")
-        .select("id, subject_id, status")
-        .in_("subject_id", assigned)
+    for qs in select_all_in(
+        service,
+        "quiz_sets",
+        "id, subject_id, status",
+        in_column="subject_id",
+        values=assigned,
+        configure=lambda query: query
         .eq("tenant_id", tenant)
-        .eq("created_by", profile.user_id)
-        .execute()
-        .data
-        or []
+        .eq("created_by", profile.user_id),
     ):
         sid = qs["subject_id"]
         quizset_subject[qs["id"]] = sid
@@ -611,14 +612,13 @@ def teacher_subject_metrics(
     variant_marks: dict[str, float] = {}
     quizset_ids = list(quizset_subject.keys())
     if quizset_ids:
-        for v in (
-            service.table("quiz_variants")
-            .select("id, quiz_set_id, total_marks")
-            .in_("quiz_set_id", quizset_ids)
-            .eq("tenant_id", tenant)
-            .execute()
-            .data
-            or []
+        for v in select_all_in(
+            service,
+            "quiz_variants",
+            "id, quiz_set_id, total_marks",
+            in_column="quiz_set_id",
+            values=quizset_ids,
+            configure=lambda query: query.eq("tenant_id", tenant),
         ):
             sid = quizset_subject.get(v["quiz_set_id"])
             if not sid:
@@ -634,15 +634,15 @@ def teacher_subject_metrics(
     maximum_sum: dict[str, float] = {}
     variant_ids = list(variant_subject.keys())
     if variant_ids:
-        for a in (
-            service.table("quiz_attempts")
-            .select("variant_id, student_id, total_score")
-            .in_("variant_id", variant_ids)
+        for a in select_all_in(
+            service,
+            "quiz_attempts",
+            "id, variant_id, student_id, total_score",
+            in_column="variant_id",
+            values=variant_ids,
+            configure=lambda query: query
             .eq("tenant_id", tenant)
-            .eq("status", "graded")
-            .execute()
-            .data
-            or []
+            .eq("status", "graded"),
         ):
             sid = variant_subject.get(a["variant_id"])
             if not sid:
@@ -672,6 +672,7 @@ def teacher_subject_metrics(
                 "quizzes_draft": quizzes_draft.get(sid, 0),
                 "questions": questions_per_subject.get(sid, 0),
                 "pending_review": pending_per_subject.get(sid, 0),
+                "needs_edit": needs_edit_per_subject.get(sid, 0),
                 "attempts": attempts_per_subject.get(sid, 0),
                 "students": len(students_per_subject.get(sid, set())),
                 "avg_score_pct": round(earned / possible * 100, 1)

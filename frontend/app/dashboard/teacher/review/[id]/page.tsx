@@ -22,7 +22,12 @@ import {
   publishQuizSet,
 } from "@/lib/api";
 
-type ReviewFilter = "all" | "pending_review" | "approved" | "rejected";
+type ReviewFilter =
+  | "all"
+  | "pending_review"
+  | "approved"
+  | "rejected"
+  | "needs_edit";
 
 function StatusFilter({
   label,
@@ -202,6 +207,8 @@ export default function ReviewDetailPage({ params }: { params: { id: string } })
   const pending = all.filter((q) => q.review_status === "pending_review").length;
   const approved = all.filter((q) => q.review_status === "approved").length;
   const rejected = all.filter((q) => q.review_status === "rejected").length;
+  const needsEdit = all.filter((q) => q.review_status === "needs_edit").length;
+  const unresolved = pending + needsEdit;
   const approvablePending = all.filter(
     (q) =>
       q.review_status === "pending_review" &&
@@ -288,6 +295,13 @@ export default function ReviewDetailPage({ params }: { params: { id: string } })
                 onClick={() => chooseFilter("pending_review")}
               />
               <StatusFilter
+                label="Needs edit"
+                value={needsEdit}
+                color="text-orange-600"
+                active={reviewFilter === "needs_edit"}
+                onClick={() => chooseFilter("needs_edit")}
+              />
+              <StatusFilter
                 label="Approved"
                 value={approved}
                 color="text-emerald-600"
@@ -329,7 +343,12 @@ export default function ReviewDetailPage({ params }: { params: { id: string } })
           <Button
             size="sm"
             onClick={handlePublish}
-            disabled={publishing || detail.status === "published"}
+            disabled={publishing || detail.status === "published" || unresolved > 0}
+            title={
+              unresolved > 0
+                ? `Review ${unresolved} remaining question${unresolved === 1 ? "" : "s"} before publishing`
+                : undefined
+            }
           >
             {detail.status === "published"
               ? "Published"
@@ -344,6 +363,12 @@ export default function ReviewDetailPage({ params }: { params: { id: string } })
 
       {error && (
         <p className="text-sm text-destructive">{error}</p>
+      )}
+      {detail.status !== "published" && unresolved > 0 && (
+        <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+          Review {unresolved} remaining question{unresolved === 1 ? "" : "s"} before
+          publishing. Questions marked “Needs edit” must be edited or regenerated.
+        </p>
       )}
 
       <div className="grid min-h-0 flex-1 items-start gap-4 lg:grid-cols-[210px_minmax(0,1fr)]">

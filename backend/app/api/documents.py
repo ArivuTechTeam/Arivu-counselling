@@ -23,6 +23,7 @@ from starlette.concurrency import run_in_threadpool
 from app.lib.auth import CurrentProfile, get_current_profile
 from app.lib.storage import download_bytes, signed_url, upload_bytes
 from app.lib.supabase import get_service_client
+from app.lib.supabase_queries import select_all, select_all_in
 from app.services.extraction import MIN_READABLE_PDF_TEXT_CHARS, extract_text
 from app.services.teacher_access import teacher_has_subject
 
@@ -342,13 +343,15 @@ def list_documents(
 ) -> list[DocumentOut]:
     _require_teacher(profile)
     service = get_service_client()
-    rows = (
-        service.table("documents")
-        .select("id, original_filename, file_type, status, created_at")
-        .eq("tenant_id", profile.tenant_id)  # tenant isolation enforced here
-        .eq("uploaded_by", profile.user_id)
-        .order("created_at", desc=True)
-        .execute()
+    rows = select_all(
+        service,
+        "documents",
+        "id, original_filename, file_type, status, created_at",
+        configure=lambda query: query.eq(
+            "tenant_id", profile.tenant_id
+        ).eq("uploaded_by", profile.user_id),
+        order_column="created_at",
+        order_desc=True,
     )
     return [
         DocumentOut(
@@ -358,7 +361,7 @@ def list_documents(
             status=r["status"],
             created_at=str(r["created_at"]),
         )
-        for r in rows.data
+        for r in rows
         if r.get("status") != "archived"
     ]
 
@@ -374,15 +377,15 @@ def document_log(
 
     # Own uploads only, tenant-scoped. Both filters are required — the service
     # client bypasses RLS, so isolation lives here.
-    docs = (
-        service.table("documents")
-        .select("id, original_filename, file_type, status, created_at, chapter_id")
-        .eq("tenant_id", profile.tenant_id)
-        .eq("uploaded_by", profile.user_id)
-        .order("created_at", desc=True)
-        .execute()
-        .data
-        or []
+    docs = select_all(
+        service,
+        "documents",
+        "id, original_filename, file_type, status, created_at, chapter_id",
+        configure=lambda query: query.eq("tenant_id", profile.tenant_id).eq(
+            "uploaded_by", profile.user_id
+        ),
+        order_column="created_at",
+        order_desc=True,
     )
     docs = [doc for doc in docs if doc.get("status") != "archived"]
     if not docs:
@@ -395,14 +398,13 @@ def document_log(
     chapter_to_subject: dict[str, str] = {}
     subject_name: dict[str, str] = {}
     if chapter_ids:
-        chapters = (
-            service.table("chapters")
-            .select("id, name, subject_id")
-            .in_("id", chapter_ids)
-            .eq("tenant_id", profile.tenant_id)
-            .execute()
-            .data
-            or []
+        chapters = select_all_in(
+            service,
+            "chapters",
+            "id, name, subject_id",
+            in_column="id",
+            values=chapter_ids,
+            configure=lambda query: query.eq("tenant_id", profile.tenant_id),
         )
         chapter_name = {c["id"]: c["name"] for c in chapters}
         chapter_to_subject = {
@@ -410,14 +412,13 @@ def document_log(
         }
         subject_ids = list(set(chapter_to_subject.values()))
         if subject_ids:
-            subjects = (
-                service.table("subjects")
-                .select("id, name")
-                .in_("id", subject_ids)
-                .eq("tenant_id", profile.tenant_id)
-                .execute()
-                .data
-                or []
+            subjects = select_all_in(
+                service,
+                "subjects",
+                "id, name",
+                in_column="id",
+                values=subject_ids,
+                configure=lambda query: query.eq("tenant_id", profile.tenant_id),
             )
             subject_name = {s["id"]: s["name"] for s in subjects}
 
@@ -427,14 +428,13 @@ def document_log(
     # their source). Tenant-scoped. Quizzes made before that link existed carry a
     # NULL document_id and simply don't match.
     quiz_by_doc: dict[str, set[str]] = {}
-    for q in (
-        service.table("quiz_sets")
-        .select("document_id, status")
-        .in_("document_id", doc_ids)
-        .eq("tenant_id", profile.tenant_id)
-        .execute()
-        .data
-        or []
+    for q in select_all_in(
+        service,
+        "quiz_sets",
+        "id, document_id, status",
+        in_column="document_id",
+        values=doc_ids,
+        configure=lambda query: query.eq("tenant_id", profile.tenant_id),
     ):
         did = q.get("document_id")
         if did:
@@ -443,15 +443,15 @@ def document_log(
     # Latest extraction job per document, so a running/failed attempt is visible
     # even when it produced no quiz (rows are newest-first; keep the first seen).
     latest_job: dict[str, str] = {}
-    for j in (
-        service.table("ai_extraction_jobs")
-        .select("document_id, status, created_at")
-        .in_("document_id", doc_ids)
-        .eq("tenant_id", profile.tenant_id)
-        .order("created_at", desc=True)
-        .execute()
-        .data
-        or []
+    for j in select_all_in(
+        service,
+        "ai_extraction_jobs",
+        "id, document_id, status, created_at",
+        in_column="document_id",
+        values=doc_ids,
+        configure=lambda query: query.eq("tenant_id", profile.tenant_id),
+        order_column="created_at",
+        order_desc=True,
     ):
         did = j.get("document_id")
         if did and did not in latest_job:

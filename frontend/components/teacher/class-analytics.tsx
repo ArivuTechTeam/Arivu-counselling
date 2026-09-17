@@ -165,6 +165,7 @@ export function ClassAnalytics() {
     pending_review: 0,
     approved: 0,
     rejected: 0,
+    needs_edit: 0,
   };
   const classAccuracy = data?.class_accuracy ?? 0;
   const students = data?.students ?? 0;
@@ -324,6 +325,16 @@ export function ClassAnalytics() {
               </span>
               <span className="text-lg font-bold text-amber-700">
                 {pipeline.pending_review}
+              </span>
+            </button>
+            <button
+              type="button"
+              onClick={() => router.push("/dashboard/teacher/review")}
+              className="flex items-center justify-between rounded-lg border border-orange-200 bg-orange-50 p-3 text-left transition-colors hover:bg-orange-100"
+            >
+              <span className="text-sm font-medium text-orange-800">Needs edit</span>
+              <span className="text-lg font-bold text-orange-700">
+                {pipeline.needs_edit}
               </span>
             </button>
             <div className="flex items-center justify-between rounded-lg border border-emerald-200 bg-emerald-50 p-3">

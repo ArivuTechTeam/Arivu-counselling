@@ -3,6 +3,7 @@
 import { useState } from "react";
 
 import { getQuizSet, getStudentReport } from "@/lib/api";
+import { variantLabel } from "@/lib/format";
 
 const btn =
   "inline-flex items-center gap-1 rounded-md border border-input px-3 py-1.5 text-xs font-medium text-foreground transition-colors hover:border-primary/50 hover:text-primary disabled:opacity-50";
@@ -34,12 +35,22 @@ export function QuestionPaperButtons({
         import("@/lib/pdf/documents"),
       ]);
       const detail = await getQuizSet(quizSetId);
-      const questions = detail.variants?.[0]?.questions ?? [];
+      const sections = detail.variants
+        .map((variant) => ({
+          title: `${variantLabel(variant.variant_type)} version`,
+          questions: variant.questions.filter(
+            (question) => question.review_status === "approved",
+          ),
+        }))
+        .filter((section) => section.questions.length > 0);
+      if (sections.length === 0) {
+        throw new Error("Approve at least one question before downloading the paper.");
+      }
       await downloadPdf(
         <QuestionPaperDoc
           title={title}
           meta={meta}
-          questions={questions as never}
+          sections={sections as never}
           withAnswers={withAnswers}
         />,
         `${slug(title)}${withAnswers ? "-answer-key" : "-question-paper"}`,
