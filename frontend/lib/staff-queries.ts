@@ -99,6 +99,9 @@ export function usePlatformAdmins() {
   return useSWR(STAFF_QUERY_KEYS.platformAdmins, listAdmins);
 }
 
-export function useInstitutionUsers() {
-  return useSWR(STAFF_QUERY_KEYS.institutionUsers, listUsers);
+export function useInstitutionUsers(page = 1, query = "") {
+  return useSWR(
+    [STAFF_QUERY_KEYS.institutionUsers, page, query],
+    () => listUsers(page, query),
+  );
 }

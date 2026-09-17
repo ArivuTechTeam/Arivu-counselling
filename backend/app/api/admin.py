@@ -40,6 +40,68 @@ class StrictApiResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+class DirectoryUser(StrictApiResponse):
+    id: str
+    full_name: str | None
+    email: str | None
+    courses: list[str]
+    subject_count: int = 0
+
+
+class DirectoryPage(StrictApiResponse):
+    items: list[DirectoryUser]
+    page: int
+    page_size: int
+    total: int
+
+
+class IdentifierResult(StrictApiResponse):
+    id: str
+
+
+class ChangedResult(StrictApiResponse):
+    changed: bool
+
+
+class CourseImpact(StrictApiResponse):
+    subjects: int
+    students: int
+    teacher_assignments: int
+    quiz_sets: int
+    documents: int
+
+
+class NamedIdentifier(StrictApiResponse):
+    id: str
+    name: str
+
+
+class TeacherCourseOut(NamedIdentifier):
+    subjects: list[NamedIdentifier]
+    student_count: int
+
+
+class CourseStudentOut(StrictApiResponse):
+    id: str
+    full_name: str | None
+    email: str | None
+
+
+class CourseRosterOut(StrictApiResponse):
+    course: NamedIdentifier
+    count: int
+    students: list[CourseStudentOut]
+
+
+class InstitutionStats(StrictApiResponse):
+    teachers: int
+    students: int
+    courses: int
+    subjects: int
+    quiz_sets: int
+    published_quizzes: int
+
+
 class TenantOption(StrictApiResponse):
     id: str
     name: str
@@ -287,6 +349,21 @@ def _email_by_auth_user_id(
     return emails
 
 
+def _email_by_auth_user_id_direct(
+    service, user_ids: list[str] | set[str]
+) -> dict[str, str | None]:
+    """Resolve a bounded directory page without scanning the global Auth list."""
+    emails: dict[str, str | None] = {}
+    for user_id in user_ids:
+        try:
+            response = service.auth.admin.get_user_by_id(str(user_id))
+            user = getattr(response, "user", response)
+            emails[str(user_id)] = getattr(user, "email", None)
+        except Exception:  # noqa: BLE001 - one missing Auth row must not hide the page
+            emails[str(user_id)] = None
+    return emails
+
+
 def _select_all(
     service,
     table: str,
@@ -353,17 +430,14 @@ def _rollback_tenant(service, tenant_id: str) -> None:
 
 
 # ── Institution teacher management ──────────────────────────────────────────
-@router.get("/users")
+@router.get("/users", response_model=DirectoryPage)
 def list_users(
     page: int = 1,
-    page_size: int = ADMIN_DIRECTORY_PAGE_SIZE,
+    page_size: int = 12,
+    q: str = "",
     profile: CurrentProfile = Depends(get_current_profile),
-) -> list[dict]:
-    """List teachers managed by this institution admin.
-
-    Student accounts are created through self-signup and deliberately excluded
-    from this management endpoint.
-    """
+) -> DirectoryPage:
+    """Return one tenant-scoped page of institution teachers."""
     _require_admin(profile)
     if page < 1 or page_size < 1 or page_size > ADMIN_DIRECTORY_PAGE_SIZE:
         raise HTTPException(
@@ -372,23 +446,31 @@ def list_users(
         )
     service = get_service_client()
 
+    normalized_query = q.strip()
+    if len(normalized_query) > 100:
+        raise HTTPException(status_code=400, detail="Search text is too long.")
+
     start = (page - 1) * page_size
-    teachers = (
+    profiles_query = (
         service.table("profiles")
-        .select("id, full_name, created_at")
+        .select("id, full_name, created_at", count="exact")
         .eq("tenant_id", profile.tenant_id)
         .eq("role", "teacher")
-        .order("created_at", desc=True)
+    )
+    if normalized_query:
+        profiles_query = profiles_query.ilike("full_name", f"%{normalized_query}%")
+    response = (
+        profiles_query.order("created_at", desc=True)
         .range(start, start + page_size - 1)
         .execute()
-        .data
-        or []
     )
+    teachers = response.data or []
+    total = int(response.count or 0)
     if not teachers:
-        return []
+        return DirectoryPage(items=[], page=page, page_size=page_size, total=total)
     teachers.sort(key=lambda teacher: teacher.get("created_at") or "", reverse=True)
     teacher_ids = {str(teacher["id"]) for teacher in teachers}
-    email_by_id = _email_by_auth_user_id(service, teacher_ids)
+    email_by_id = _email_by_auth_user_id_direct(service, teacher_ids)
 
     assignments = _select_all(
         service,
@@ -429,8 +511,8 @@ def list_users(
         if course_id:
             course_ids_by_teacher.setdefault(teacher_id, set()).add(course_id)
 
-    return [
-        {
+    return DirectoryPage(
+        items=[DirectoryUser(**{
             "id": teacher["id"],
             "full_name": teacher["full_name"],
             "email": email_by_id.get(teacher["id"]),
@@ -442,9 +524,11 @@ def list_users(
             "subject_count": len(
                 subjects_by_teacher.get(str(teacher["id"]), set())
             ),
-        }
-        for teacher in teachers
-    ]
+        }) for teacher in teachers],
+        page=page,
+        page_size=page_size,
+        total=total,
+    )
 
 
 class TeacherCreate(BaseModel):
@@ -452,7 +536,7 @@ class TeacherCreate(BaseModel):
 
     full_name: str
     email: str
-    password: str
+    password: str = Field(min_length=12, max_length=128)
     course_id: str
     subject_ids: list[str] = Field(min_length=1, max_length=500)
 
@@ -543,12 +627,13 @@ def _tenant_course_exists(service, tenant_id: str, course_id: str) -> str:
     return str(course.data["id"])
 
 
-@router.post("/users")
+@router.post("/users", response_model=IdentifierResult)
 def create_user(
     body: TeacherCreate, profile: CurrentProfile = Depends(get_current_profile)
 ) -> dict:
     """Create a teacher; students join through the public signup flow."""
     _require_admin(profile)
+    _validate_temporary_password(body.password)
     service = get_service_client()
 
     if not body.full_name.strip():
@@ -618,7 +703,7 @@ def create_user(
     return {"id": created.user.id}
 
 
-@router.delete("/users/{user_id}")
+@router.delete("/users/{user_id}", response_model=DeletedResult)
 def delete_user(
     user_id: str, profile: CurrentProfile = Depends(get_current_profile)
 ) -> dict:
@@ -716,7 +801,7 @@ def reset_teacher_temporary_password(
     return TemporaryPasswordResetResult(changed=True)
 
 
-@router.put("/users/{user_id}")
+@router.put("/users/{user_id}", response_model=ChangedResult)
 def update_user(
     user_id: str,
     body: TeacherUpdate,
@@ -858,7 +943,7 @@ def _assert_tenant_course(service, *, course_id: str, tenant_id: str) -> dict:
     return course.data
 
 
-@router.get("/teachers/{teacher_id}/courses")
+@router.get("/teachers/{teacher_id}/courses", response_model=list[TeacherCourseOut])
 def list_teacher_courses(
     teacher_id: str, profile: CurrentProfile = Depends(get_current_profile)
 ) -> list[dict]:
@@ -960,7 +1045,7 @@ def list_teacher_courses(
     )
 
 
-@router.get("/courses/{course_id}/students")
+@router.get("/courses/{course_id}/students", response_model=CourseRosterOut)
 def list_course_students(
     course_id: str, profile: CurrentProfile = Depends(get_current_profile)
 ) -> dict:
@@ -1012,6 +1097,89 @@ def list_course_students(
         "count": len(roster),
         "students": roster,
     }
+
+
+@router.get("/admin/courses/{course_id}/impact", response_model=CourseImpact)
+def get_course_impact(
+    course_id: str, profile: CurrentProfile = Depends(get_current_profile)
+) -> CourseImpact:
+    """Describe everything a hard course deletion can remove or disconnect."""
+    _require_admin(profile)
+    service = get_service_client()
+    _assert_tenant_course(service, course_id=course_id, tenant_id=profile.tenant_id)
+    subjects = _select_all(
+        service,
+        "subjects",
+        "id",
+        configure=lambda item: item.eq("tenant_id", profile.tenant_id).eq(
+            "course_id", course_id
+        ),
+    )
+    subject_ids = [str(subject["id"]) for subject in subjects]
+    enrollments = _select_all(
+        service,
+        "enrollments",
+        "id, profile_id",
+        configure=lambda item: item.eq("tenant_id", profile.tenant_id).eq(
+            "course_id", course_id
+        ),
+    )
+    enrolled_profile_ids = list({str(row["profile_id"]) for row in enrollments})
+    students: list[dict] = []
+    if enrolled_profile_ids:
+        students = _select_all(
+            service,
+            "profiles",
+            "id",
+            configure=lambda item: item.eq("tenant_id", profile.tenant_id)
+            .eq("role", "student")
+            .in_("id", enrolled_profile_ids),
+        )
+    teacher_assignments: list[dict] = []
+    quiz_sets: list[dict] = []
+    documents: list[dict] = []
+    if subject_ids:
+        teacher_assignments = _select_all(
+            service,
+            "teacher_subjects",
+            "id",
+            configure=lambda item: item.eq("tenant_id", profile.tenant_id).in_(
+                "subject_id", subject_ids
+            ),
+        )
+        quiz_sets = _select_all(
+            service,
+            "quiz_sets",
+            "id",
+            configure=lambda item: item.eq("tenant_id", profile.tenant_id).in_(
+                "subject_id", subject_ids
+            ),
+        )
+        chapters = _select_all(
+            service,
+            "chapters",
+            "id",
+            configure=lambda item: item.eq("tenant_id", profile.tenant_id).in_(
+                "subject_id", subject_ids
+            ),
+        )
+        chapter_ids = [str(chapter["id"]) for chapter in chapters]
+        if chapter_ids:
+            documents = _select_all(
+                service,
+                "documents",
+                "id",
+                configure=lambda item: item.eq("tenant_id", profile.tenant_id).in_(
+                    "chapter_id", chapter_ids
+                ),
+            )
+    return CourseImpact(
+        subjects=len(subjects),
+        students=len(students),
+        teacher_assignments=len(teacher_assignments),
+        quiz_sets=len(quiz_sets),
+        documents=len(documents),
+    )
 
 
 # ── Super-admin: institution admins ──────────────────────────────────────────
@@ -1196,7 +1364,7 @@ def remove_admin(
 
 
 # ── Analytics ────────────────────────────────────────────────────────────────
-@router.get("/admin/stats")
+@router.get("/admin/stats", response_model=InstitutionStats)
 def institution_stats(
     profile: CurrentProfile = Depends(get_current_profile),
 ) -> dict:
@@ -1232,61 +1400,15 @@ async def institution_overview(
     # than converted into valid-looking zero metrics.
     data = await _gather(
         {
-            "profiles": lambda client: client.table("profiles")
-            .select("id, role")
-            .eq("tenant_id", t)
-            .execute()
-            .data
-            or [],
-            "courses": lambda client: client.table("courses")
-            .select("id, name")
-            .eq("tenant_id", t)
-            .execute()
-            .data
-            or [],
-            "subjects": lambda client: client.table("subjects")
-            .select("id")
-            .eq("tenant_id", t)
-            .execute()
-            .data
-            or [],
-            "documents": lambda client: client.table("documents")
-            .select("id")
-            .eq("tenant_id", t)
-            .execute()
-            .data
-            or [],
-            "quiz_sets": lambda client: client.table("quiz_sets")
-            .select("id, title, status, created_at")
-            .eq("tenant_id", t)
-            .order("created_at", desc=True)
-            .execute()
-            .data
-            or [],
-            "questions": lambda client: client.table("questions")
-            .select("review_status")
-            .eq("tenant_id", t)
-            .execute()
-            .data
-            or [],
-            "variants": lambda client: client.table("quiz_variants")
-            .select("id, total_marks")
-            .eq("tenant_id", t)
-            .execute()
-            .data
-            or [],
-            "attempts": lambda client: client.table("quiz_attempts")
-            .select("status, total_score, variant_id, submitted_at")
-            .eq("tenant_id", t)
-            .execute()
-            .data
-            or [],
-            "enrollments": lambda client: client.table("enrollments")
-            .select("profile_id, course_id")
-            .eq("tenant_id", t)
-            .execute()
-            .data
-            or [],
+            "profiles": lambda client: _select_all(client, "profiles", "id, role", configure=lambda item: item.eq("tenant_id", t)),
+            "courses": lambda client: _select_all(client, "courses", "id, name", configure=lambda item: item.eq("tenant_id", t)),
+            "subjects": lambda client: _select_all(client, "subjects", "id", configure=lambda item: item.eq("tenant_id", t)),
+            "documents": lambda client: _select_all(client, "documents", "id", configure=lambda item: item.eq("tenant_id", t)),
+            "quiz_sets": lambda client: _select_all(client, "quiz_sets", "id, title, status, created_at", configure=lambda item: item.eq("tenant_id", t)),
+            "questions": lambda client: _select_all(client, "questions", "id, review_status", configure=lambda item: item.eq("tenant_id", t)),
+            "variants": lambda client: _select_all(client, "quiz_variants", "id, total_marks", configure=lambda item: item.eq("tenant_id", t)),
+            "attempts": lambda client: _select_all(client, "quiz_attempts", "id, status, total_score, variant_id, submitted_at", configure=lambda item: item.eq("tenant_id", t)),
+            "enrollments": lambda client: _select_all(client, "enrollments", "id, profile_id, course_id", configure=lambda item: item.eq("tenant_id", t)),
         }
     )
 
@@ -1301,12 +1423,13 @@ async def institution_overview(
     documents = len(data["documents"])
 
     quiz_sets = data["quiz_sets"]
+    quiz_sets.sort(key=lambda row: row.get("created_at") or "", reverse=True)
     published = sum(1 for q in quiz_sets if q["status"] == "published")
     draft = sum(1 for q in quiz_sets if q["status"] == "draft")
 
     # Question review pipeline
     questions = data["questions"]
-    pipeline = {"pending_review": 0, "approved": 0, "rejected": 0}
+    pipeline = {"pending_review": 0, "approved": 0, "rejected": 0, "needs_edit": 0}
     for q in questions:
         st = q.get("review_status")
         if st in pipeline:
@@ -1434,6 +1557,7 @@ class AnalyticsPipeline(BaseModel):
     pending_review: int
     approved: int
     rejected: int
+    needs_edit: int
 
 
 class CoursePerformance(BaseModel):
@@ -1618,12 +1742,13 @@ def _admin_findings(
         )
 
     # 6) Review backlog.
-    if pipeline["pending_review"] > 0:
+    review_backlog = pipeline["pending_review"] + pipeline.get("needs_edit", 0)
+    if review_backlog > 0:
         out.append(
             {
-                "severity": "critical" if pipeline["pending_review"] >= 10 else "warn",
-                "title": f"{pipeline['pending_review']} questions await review",
-                "detail": "Unreviewed questions can't be published to students.",
+                "severity": "critical" if review_backlog >= 10 else "warn",
+                "title": f"{review_backlog} questions need review or edits",
+                "detail": "Pending and needs-edit questions can't be published to students.",
                 "action": "Nudge teachers to clear their review queue.",
                 "action_type": "pending_review",
                 "action_label": "View pending",
@@ -1704,66 +1829,16 @@ async def institution_analytics(
 
     data = await _gather(
         {
-            "profiles": lambda client: client.table("profiles")
-            .select("id, role, full_name")
-            .eq("tenant_id", t)
-            .execute()
-            .data
-            or [],
-            "courses": lambda client: client.table("courses")
-            .select("id, name")
-            .eq("tenant_id", t)
-            .execute()
-            .data
-            or [],
-            "subjects": lambda client: client.table("subjects")
-            .select("id, course_id")
-            .eq("tenant_id", t)
-            .execute()
-            .data
-            or [],
-            "quiz_sets": lambda client: client.table("quiz_sets")
-            .select("id, title, status, created_by, subject_id, created_at")
-            .eq("tenant_id", t)
-            .execute()
-            .data
-            or [],
-            "questions": lambda client: client.table("questions")
-            .select("id, review_status, source, type, reviewed_by")
-            .eq("tenant_id", t)
-            .execute()
-            .data
-            or [],
-            "variant_questions": lambda client: client.table("quiz_variant_questions")
-            .select("variant_id, question_id")
-            .eq("tenant_id", t)
-            .execute()
-            .data
-            or [],
-            "variants": lambda client: client.table("quiz_variants")
-            .select("id, total_marks, quiz_set_id")
-            .eq("tenant_id", t)
-            .execute()
-            .data
-            or [],
-            "attempts": lambda client: client.table("quiz_attempts")
-            .select("student_id, status, total_score, variant_id, submitted_at")
-            .eq("tenant_id", t)
-            .execute()
-            .data
-            or [],
-            "enrollments": lambda client: client.table("enrollments")
-            .select("profile_id, course_id")
-            .eq("tenant_id", t)
-            .execute()
-            .data
-            or [],
-            "documents": lambda client: client.table("documents")
-            .select("id")
-            .eq("tenant_id", t)
-            .execute()
-            .data
-            or [],
+            "profiles": lambda client: _select_all(client, "profiles", "id, role, full_name", configure=lambda item: item.eq("tenant_id", t)),
+            "courses": lambda client: _select_all(client, "courses", "id, name", configure=lambda item: item.eq("tenant_id", t)),
+            "subjects": lambda client: _select_all(client, "subjects", "id, course_id", configure=lambda item: item.eq("tenant_id", t)),
+            "quiz_sets": lambda client: _select_all(client, "quiz_sets", "id, title, status, created_by, subject_id, created_at", configure=lambda item: item.eq("tenant_id", t)),
+            "questions": lambda client: _select_all(client, "questions", "id, review_status, source, type, reviewed_by", configure=lambda item: item.eq("tenant_id", t)),
+            "variant_questions": lambda client: _select_all(client, "quiz_variant_questions", "variant_id, question_id", configure=lambda item: item.eq("tenant_id", t)),
+            "variants": lambda client: _select_all(client, "quiz_variants", "id, total_marks, quiz_set_id", configure=lambda item: item.eq("tenant_id", t)),
+            "attempts": lambda client: _select_all(client, "quiz_attempts", "id, student_id, status, total_score, variant_id, submitted_at", configure=lambda item: item.eq("tenant_id", t)),
+            "enrollments": lambda client: _select_all(client, "enrollments", "id, profile_id, course_id", configure=lambda item: item.eq("tenant_id", t)),
+            "documents": lambda client: _select_all(client, "documents", "id", configure=lambda item: item.eq("tenant_id", t)),
         }
     )
     profiles = data["profiles"]
@@ -1914,7 +1989,9 @@ async def institution_analytics(
         quizset_course.get(q["id"]) for q in quiz_sets if q["status"] == "published"
     )
     pending_question_ids = {
-        q["id"] for q in questions if q.get("review_status") == "pending_review"
+        q["id"]
+        for q in questions
+        if q.get("review_status") in {"pending_review", "needs_edit"}
     }
     pending_by_course: dict[str, set[str]] = defaultdict(set)
     for link in variant_questions:
@@ -1970,6 +2047,17 @@ async def institution_analytics(
             teacher_attempts[teacher_id] += quizset_attempts.get(quiz_set["id"], 0)
             teacher_scores[teacher_id][0] += quizset_scores[quiz_set["id"]][0]
             teacher_scores[teacher_id][1] += quizset_scores[quiz_set["id"]][1]
+
+    active_since = datetime.now(timezone.utc) - timedelta(days=30)
+
+    def teacher_is_active(value: str | None) -> bool:
+        if not value:
+            return False
+        try:
+            return datetime.fromisoformat(value.replace("Z", "+00:00")) >= active_since
+        except ValueError:
+            return False
+
     teacher_activity = sorted(
         [
             {
@@ -1991,14 +2079,16 @@ async def institution_analytics(
                 "last_quiz_created": qs_by_teacher.get(tt["id"], {}).get(
                     "last_quiz_created"
                 ),
-                "is_active": qs_by_teacher.get(tt["id"], {}).get("sets", 0) > 0,
+                "is_active": teacher_is_active(
+                    qs_by_teacher.get(tt["id"], {}).get("last_quiz_created")
+                ),
             }
             for tt in teachers
         ],
         key=lambda x: (-x["attempts"], -x["quiz_sets"], x["name"].lower()),
     )
 
-    pipeline = {"pending_review": 0, "approved": 0, "rejected": 0}
+    pipeline = {"pending_review": 0, "approved": 0, "rejected": 0, "needs_edit": 0}
     for q in questions:
         st = q.get("review_status")
         if st in pipeline:
