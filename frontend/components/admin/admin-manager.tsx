@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 
 import {
   Card,
@@ -16,18 +16,16 @@ import { PageHeader } from "@/components/ui/page-header";
 import { EmptyState } from "@/components/ui/empty-state";
 import { SkeletonList } from "@/components/ui/skeleton";
 import { AlertTriangle, Trash, X } from "@/components/ui/icons";
-import {
-  InstitutionAdmin,
-  TenantOption,
-  createAdmin,
-  deleteAdmin,
-  listAdmins,
-  listTenants,
-} from "@/lib/api";
+import { InstitutionAdmin, createAdmin, deleteAdmin } from "@/lib/api";
+import { usePlatformAdmins, usePlatformTenants } from "@/lib/staff-queries";
 
 export function AdminManager({ embedded = false }: { embedded?: boolean }) {
-  const [tenants, setTenants] = useState<TenantOption[]>([]);
-  const [admins, setAdmins] = useState<InstitutionAdmin[] | null>(null);
+  const { data: tenants = [], error: tenantsError } = usePlatformTenants();
+  const {
+    data: admins = null,
+    error: adminsError,
+    mutate: refreshAdmins,
+  } = usePlatformAdmins();
   const [form, setForm] = useState({
     full_name: "",
     email: "",
@@ -40,37 +38,23 @@ export function AdminManager({ embedded = false }: { embedded?: boolean }) {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
-  function refresh() {
-    setError(null);
-    listAdmins()
-      .then(setAdmins)
-      .catch((e) => setError(e.message));
-  }
-
-  useEffect(() => {
-    listTenants()
-      .then((t) => {
-        setTenants(t);
-        setForm((f) => ({ ...f, tenant_id: t[0]?.id ?? "" }));
-      })
-      .catch((e) => setError(e.message));
-    refresh();
-  }, []);
+  const selectedTenant = form.tenant_id || tenants[0]?.id || "";
+  const directoryError = error ?? tenantsError?.message ?? adminsError?.message ?? null;
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
     setNotice(null);
-    if (!form.full_name || !form.email || !form.password || !form.tenant_id) {
+    if (!form.full_name || !form.email || !form.password || !selectedTenant) {
       setError("Please fill in all fields.");
       return;
     }
     setBusy(true);
     try {
-      await createAdmin(form);
+      await createAdmin({ ...form, tenant_id: selectedTenant });
       setNotice(`Admin ${form.email} created — they can sign in now.`);
       setForm((f) => ({ full_name: "", email: "", password: "", tenant_id: f.tenant_id }));
-      refresh();
+      await refreshAdmins();
     } catch (e2) {
       setError(e2 instanceof Error ? e2.message : "Could not create admin");
     } finally {
@@ -88,7 +72,7 @@ export function AdminManager({ embedded = false }: { embedded?: boolean }) {
     try {
       await deleteAdmin(a.id);
       setNotice(`Removed ${a.email ?? a.full_name}.`);
-      refresh();
+      await refreshAdmins();
     } catch (e2) {
       setError(e2 instanceof Error ? e2.message : "Could not remove admin");
     } finally {
@@ -129,7 +113,7 @@ export function AdminManager({ embedded = false }: { embedded?: boolean }) {
                 Institution
                 <select
                   className="h-10 rounded-md border border-input bg-background px-3 text-sm shadow-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
-                  value={form.tenant_id}
+                  value={selectedTenant}
                   onChange={(e) =>
                     setForm((f) => ({ ...f, tenant_id: e.target.value }))
                   }
@@ -164,10 +148,10 @@ export function AdminManager({ embedded = false }: { embedded?: boolean }) {
                 />
               </label>
             </div>
-            {error && (
+            {directoryError && (
               <div className="flex items-start gap-2 rounded-lg border border-destructive/20 bg-destructive/5 px-3 py-2 text-sm text-destructive">
                 <AlertTriangle size={16} className="mt-0.5 shrink-0" />
-                <span>{error}</span>
+                <span>{directoryError}</span>
               </div>
             )}
             {notice && (

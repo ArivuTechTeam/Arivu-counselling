@@ -11,13 +11,16 @@ from fastapi import HTTPException
 from app.api.admin import (
     AdminCreate,
     TenantCreate,
+    TenantUpdate,
     _select_all,
     _set_provisioned_profile,
     create_admin,
     onboard_institution,
     platform_ai_monitoring,
     platform_overview,
+    platform_stats,
     remove_admin,
+    update_institution,
 )
 from app.lib.auth import CurrentProfile
 
@@ -71,15 +74,31 @@ class _Query:
         return SimpleNamespace(data=selected[self.start : self.end + 1])
 
 
+class _RpcQuery:
+    def __init__(self, payload: dict) -> None:
+        self.payload = payload
+
+    def execute(self):
+        return SimpleNamespace(data=self.payload)
+
+
 class _Service:
-    def __init__(self, tables: dict[str, list[dict]]) -> None:
+    def __init__(
+        self,
+        tables: dict[str, list[dict]],
+        rpc_payloads: dict[str, dict] | None = None,
+    ) -> None:
         self.tables = tables
+        self.rpc_payloads = rpc_payloads or {}
         self.queries: list[tuple[str, _Query]] = []
 
     def table(self, name: str):
         query = _Query(self.tables.setdefault(name, []))
         self.queries.append((name, query))
         return query
+
+    def rpc(self, name: str, _params: dict):
+        return _RpcQuery(self.rpc_payloads[name])
 
 
 class _ProvisionQuery:
@@ -230,23 +249,53 @@ class SuperAdminRegressionTests(unittest.TestCase):
 
     def test_ai_monitoring_uses_current_quiz_state_for_published_count(self) -> None:
         service = _Service(
+            {},
             {
-                "questions": [
-                    {
-                        "id": "question-1",
-                        "type": "mcq_single",
-                        "difficulty": "medium",
-                        "review_status": "approved",
-                        "source": "ai_generated",
-                        "created_at": "2026-09-09T10:00:00Z",
-                    }
-                ],
-                "events": [],
-                "quiz_sets": [
-                    {"id": "quiz-1", "status": "published"},
-                    {"id": "quiz-2", "status": "draft"},
-                ],
-            }
+                "platform_ai_monitoring_metrics": {
+                    "total_generated": 1,
+                    "approval_rate": 100,
+                    "published_quizzes": 1,
+                    "failures_14d": 0,
+                    "pipeline": {
+                        "pending_review": 0,
+                        "approved": 1,
+                        "rejected": 0,
+                        "needs_edit": 0,
+                    },
+                    "by_type": [
+                        {"type": "mcq_single", "total": 1, "approved": 1, "approval": 100}
+                    ],
+                    "by_difficulty": {"medium": 1},
+                    "difficulty_quality": [
+                        {"difficulty": "medium", "total": 1, "approved": 1, "approval": 100}
+                    ],
+                    "volume": [],
+                    "trend": {
+                        "keep_rate_last7": 0,
+                        "keep_rate_prev7": 0,
+                        "keep_rate_delta": 0,
+                        "approved_last7": 0,
+                        "approved_prev7": 0,
+                        "has_trend": False,
+                    },
+                    "funnel": [],
+                    "signals": {
+                        "measured_from": None,
+                        "generated": 0,
+                        "reviewed": 0,
+                        "approved": 0,
+                        "rejected": 0,
+                        "kept_as_is": 0,
+                        "approved_after_edit": 0,
+                        "regenerated": 0,
+                        "pending": 0,
+                        "approval_rate": 0,
+                        "kept_as_is_rate": 0,
+                        "by_type": [],
+                        "most_edited_fields": [],
+                    },
+                }
+            },
         )
 
         with patch("app.api.admin.get_service_client", return_value=service):
@@ -254,11 +303,53 @@ class SuperAdminRegressionTests(unittest.TestCase):
 
         self.assertEqual(result["published_quizzes"], 1)
 
+    def test_super_admin_can_update_safe_tenant_lifecycle_fields(self) -> None:
+        service = _ProvisionService()
+        with patch("app.api.admin.get_service_client", return_value=service):
+            result = update_institution(
+                "tenant-a",
+                TenantUpdate(name="Renamed Institution", plan_tier="growth", is_active=False),
+                SUPER,
+            )
+
+        self.assertEqual(result["name"], "Renamed Institution")
+        self.assertEqual(result["plan_tier"], "growth")
+        self.assertFalse(result["is_active"])
+        stored = next(row for row in service.tables["tenants"] if row["id"] == "tenant-a")
+        self.assertEqual(stored["name"], "Renamed Institution")
+        self.assertFalse(stored["is_active"])
+
     def test_platform_overview_is_super_only(self) -> None:
         admin = CurrentProfile(user_id="admin", tenant_id="tenant-a", role="institution_admin")
         with self.assertRaises(HTTPException) as caught:
             asyncio.run(platform_overview(admin))
         self.assertEqual(caught.exception.status_code, 403)
+
+    def test_platform_stats_reuses_database_aggregate(self) -> None:
+        service = _Service(
+            {},
+            {
+                "platform_overview_metrics": {
+                    "institutions": 2,
+                    "teachers": 5,
+                    "students": 30,
+                    "institutions_table": [
+                        {"id": "b", "name": "Beta", "teachers": 2, "students": 10},
+                        {"id": "a", "name": "Alpha", "teachers": 3, "students": 20},
+                    ],
+                }
+            },
+        )
+        with patch("app.api.admin.get_service_client", return_value=service):
+            result = platform_stats(SUPER)
+
+        self.assertEqual(result["total_teachers"], 5)
+        self.assertEqual(result["total_students"], 30)
+        self.assertEqual(
+            [tenant["name"] for tenant in result["per_institution"]],
+            ["Alpha", "Beta"],
+        )
+        self.assertEqual(service.queries, [])
 
     def test_create_and_remove_admin_keeps_auth_and_profile_in_sync(self) -> None:
         service = _ProvisionService()

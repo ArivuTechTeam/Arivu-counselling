@@ -446,7 +446,11 @@ class PasswordGateTests(unittest.TestCase):
             "full_name": "Teacher",
             "must_change_password": True,
         }
-        service = SimpleNamespace(table=lambda _name: _ProfileQuery(row))
+        service = SimpleNamespace(
+            table=lambda name: _ProfileQuery(
+                row if name == "profiles" else {"id": "t1", "is_active": True}
+            )
+        )
         user = CurrentUser(user_id="u1", email="teacher@example.com")
         with patch("app.lib.auth.get_service_client", return_value=service):
             request = Request({"type": "http", "method": "GET", "path": "/api/v1/documents", "headers": []})

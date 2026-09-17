@@ -171,6 +171,19 @@ def get_current_profile(
         )
 
     row = result.data
+    if str(row["role"]) != "super_admin":
+        tenant = (
+            client.table("tenants")
+            .select("id,is_active")
+            .eq("id", row["tenant_id"])
+            .maybe_single()
+            .execute()
+        )
+        if tenant is None or not tenant.data or not tenant.data.get("is_active", False):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="This institution is inactive. Contact the platform administrator.",
+            )
     must_change_password = bool(row.get("must_change_password", False))
     if (
         must_change_password

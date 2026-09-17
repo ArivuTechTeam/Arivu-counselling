@@ -89,6 +89,7 @@ migration-32-reset-chunked-generation.sql
 migration-33-teacher-content-archive.sql
 migration-34-document-upload-limit.sql
 migration-35-universal-question-grounding.sql
+migration-36-super-admin-aggregates.sql
 ```
 
 (Filenames above verified 2026-09-16 against `migrations/` — earlier drafts of this
@@ -129,11 +130,15 @@ Migration 34 lowers the Supabase document bucket limit to 30 MiB so storage,
 backend validation, and frontend messaging agree.
 Migration 35 must be applied before deploying universal question grounding;
 generated-question reads and writes use its provenance and verification columns.
+Migration 36 must be applied before deploying the scalable super-admin dashboard;
+the platform overview, question bank, and AI-monitoring endpoints call its
+service-role-only aggregate functions.
 
 For a fresh database, `migrations/schema.sql` already includes the final effects
 of migrations 31, 33, 34, and 35. The incremental files remain required for an
 existing database that predates those changes; never infer their live applied
-state solely from the current schema file.
+state solely from the current schema file. Migration 36 is required after the
+baseline schema for both fresh and existing databases.
 
 ---
 

@@ -362,7 +362,7 @@ Guards: **public** / **student** / **staff** (teacher+admin+super) / **admin** (
 
 ## 7. Database Schema
 
-PostgreSQL on Supabase. The repository baseline is `migrations/schema.sql` plus migrations 01, 02, and 04–35 (verified 2026-09-16 — was 04–12 when this document was first written). There is no migration 03; migration 04 removed the abandoned seed-library feature. `schema.sql` already includes the final effects of migrations 31, 33, 34, and 35 for a fresh database; the incremental files remain required for an existing database. Apply migrations once, in numeric order, using `docs/deploy-runbook.md`.
+PostgreSQL on Supabase. The repository baseline is `migrations/schema.sql` plus migrations 01, 02, and 04–36 (verified 2026-09-17 — was 04–12 when this document was first written). There is no migration 03; migration 04 removed the abandoned seed-library feature. `schema.sql` already includes the final effects of migrations 31, 33, 34, and 35 for a fresh database; migration 36 is still required after the baseline schema. The incremental files remain required for an existing database. Apply migrations once, in numeric order, using `docs/deploy-runbook.md`.
 
 ### 7.1 Enums
 `user_role` (super_admin, institution_admin, teacher, student) · `question_type` (mcq_single, mcq_multi, numerical, true_false, fill_blank, **descriptive**) · `question_source` (ai_generated, manual) · `review_status` (pending_review, approved, rejected, needs_edit) · `document_status` · `job_status` · `variant_type` (theory, practical, mixed) · `quiz_status` (draft, published, archived) · `attempt_status` (in_progress, submitted, graded, abandoned).
