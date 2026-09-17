@@ -14,6 +14,7 @@ from app.api.admin import (
     AdminCreate,
     TenantCreate,
     TenantUpdate,
+    TemporaryPasswordReset,
     _select_all,
     _set_provisioned_profile,
     create_admin,
@@ -22,6 +23,7 @@ from app.api.admin import (
     platform_overview,
     platform_stats,
     remove_admin,
+    reset_admin_temporary_password,
     update_institution,
 )
 from app.lib.api_errors import auth_provisioning_error
@@ -189,12 +191,19 @@ class _ProvisionAuthAdmin:
             row for row in self.service.tables["profiles"] if row["id"] != user_id
         ]
 
+    def update_user_by_id(self, user_id: str, attributes: dict):
+        if user_id not in self.service.auth_users:
+            raise RuntimeError("Auth user not found")
+        self.service.updated_auth_payloads.append((user_id, attributes))
+        return SimpleNamespace(user=SimpleNamespace(id=user_id))
+
 
 class _ProvisionService:
     def __init__(self) -> None:
         self.next_id = 1
         self.auth_users: set[str] = set()
         self.created_auth_payloads: list[dict] = []
+        self.updated_auth_payloads: list[tuple[str, dict]] = []
         self.tables = {
             "tenants": [{"id": "tenant-a", "name": "Existing", "subdomain": "existing", "is_active": True}],
             "profiles": [],
@@ -474,6 +483,66 @@ class SuperAdminRegressionTests(unittest.TestCase):
         payload = service.created_auth_payloads[-1]
         self.assertTrue(payload["user_metadata"]["_backend_provisioning_intent"])
         self.assertTrue(payload["app_metadata"]["provisioned_by_backend"])
+
+    def test_super_admin_can_reset_institution_admin_temporary_password(self) -> None:
+        service = _ProvisionService()
+        with patch("app.api.admin.get_service_client", return_value=service):
+            create_admin(
+                AdminCreate(
+                    full_name="Demo Admin",
+                    email="admin@example.com",
+                    password=temporary_password(),
+                    tenant_id="tenant-a",
+                ),
+                SUPER,
+            )
+            created_id = next(iter(service.auth_users))
+            stored_profile = next(
+                row for row in service.tables["profiles"] if row["id"] == created_id
+            )
+            stored_profile["must_change_password"] = False
+            new_password = temporary_password()
+
+            result = reset_admin_temporary_password(
+                created_id,
+                TemporaryPasswordReset(password=new_password),
+                SUPER,
+            )
+
+        self.assertTrue(result.changed)
+        self.assertTrue(stored_profile["must_change_password"])
+        self.assertEqual(
+            service.updated_auth_payloads,
+            [(created_id, {"password": new_password})],
+        )
+
+    def test_institution_admin_cannot_reset_another_admin_password(self) -> None:
+        institution_admin = CurrentProfile(
+            user_id="admin-a",
+            tenant_id="tenant-a",
+            role="institution_admin",
+        )
+        with self.assertRaises(HTTPException) as caught:
+            reset_admin_temporary_password(
+                "admin-b",
+                TemporaryPasswordReset(password=temporary_password()),
+                institution_admin,
+            )
+        self.assertEqual(caught.exception.status_code, 403)
+
+    def test_super_admin_cannot_reset_non_admin_account(self) -> None:
+        service = _ProvisionService()
+        service.tables["profiles"].append(
+            {"id": "student-a", "tenant_id": "tenant-a", "role": "student"}
+        )
+        with patch("app.api.admin.get_service_client", return_value=service):
+            with self.assertRaises(HTTPException) as caught:
+                reset_admin_temporary_password(
+                    "student-a",
+                    TemporaryPasswordReset(password=temporary_password()),
+                    SUPER,
+                )
+        self.assertEqual(caught.exception.status_code, 400)
 
 
 if __name__ == "__main__":

@@ -15,9 +15,29 @@ import { Input } from "@/components/ui/input";
 import { PageHeader } from "@/components/ui/page-header";
 import { EmptyState } from "@/components/ui/empty-state";
 import { SkeletonList } from "@/components/ui/skeleton";
-import { AlertTriangle, Trash, X } from "@/components/ui/icons";
-import { InstitutionAdmin, createAdmin, deleteAdmin } from "@/lib/api";
+import {
+  AlertTriangle,
+  Eye,
+  EyeOff,
+  Sparkles,
+  Trash,
+  X,
+} from "@/components/ui/icons";
+import {
+  TemporaryCredentials,
+  TemporaryCredentialsDialog,
+} from "@/components/admin/temporary-credentials-dialog";
+import {
+  InstitutionAdmin,
+  createAdmin,
+  deleteAdmin,
+  resetAdminTemporaryPassword,
+} from "@/lib/api";
 import { usePlatformAdmins, usePlatformTenants } from "@/lib/staff-queries";
+import {
+  generateTemporaryPassword,
+  validTemporaryPassword,
+} from "@/lib/temporary-password";
 
 export function AdminManager({ embedded = false }: { embedded?: boolean }) {
   const { data: tenants = [], error: tenantsError } = usePlatformTenants();
@@ -35,6 +55,11 @@ export function AdminManager({ embedded = false }: { embedded?: boolean }) {
   const [busy, setBusy] = useState(false);
   const [removing, setRemoving] = useState<string | null>(null);
   const [confirmTarget, setConfirmTarget] = useState<InstitutionAdmin | null>(null);
+  const [resetTarget, setResetTarget] = useState<InstitutionAdmin | null>(null);
+  const [resetPassword, setResetPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
+  const [resetting, setResetting] = useState(false);
+  const [credentials, setCredentials] = useState<TemporaryCredentials | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
@@ -49,16 +74,69 @@ export function AdminManager({ embedded = false }: { embedded?: boolean }) {
       setError("Please fill in all fields.");
       return;
     }
+    if (!validTemporaryPassword(form.password)) {
+      setError(
+        "Temporary password must have at least 12 characters with uppercase, lowercase, and a number.",
+      );
+      return;
+    }
     setBusy(true);
     try {
       await createAdmin({ ...form, tenant_id: selectedTenant });
       setNotice(`Admin ${form.email} created — they can sign in now.`);
-      setForm((f) => ({ full_name: "", email: "", password: "", tenant_id: f.tenant_id }));
+      setCredentials({
+        email: form.email,
+        password: form.password,
+        institution:
+          tenants.find((tenant) => tenant.id === selectedTenant)?.name ??
+          "Institution",
+      });
+      setForm((current) => ({
+        full_name: "",
+        email: "",
+        password: "",
+        tenant_id: current.tenant_id,
+      }));
       await refreshAdmins();
     } catch (e2) {
       setError(e2 instanceof Error ? e2.message : "Could not create admin");
     } finally {
       setBusy(false);
+    }
+  }
+
+  function openReset(admin: InstitutionAdmin) {
+    setResetTarget(admin);
+    setResetPassword(generateTemporaryPassword());
+    setShowPassword(false);
+    setError(null);
+    setNotice(null);
+  }
+
+  async function confirmReset() {
+    if (!resetTarget || !validTemporaryPassword(resetPassword)) return;
+    setResetting(true);
+    setError(null);
+    try {
+      await resetAdminTemporaryPassword(resetTarget.id, resetPassword);
+      setCredentials({
+        email: resetTarget.email ?? "",
+        password: resetPassword,
+        institution: resetTarget.institution,
+      });
+      setNotice(
+        `Temporary login reset for ${resetTarget.email ?? resetTarget.full_name}.`,
+      );
+      setResetTarget(null);
+      setResetPassword("");
+    } catch (reason) {
+      setError(
+        reason instanceof Error
+          ? reason.message
+          : "Could not reset administrator login.",
+      );
+    } finally {
+      setResetting(false);
     }
   }
 
@@ -138,14 +216,31 @@ export function AdminManager({ embedded = false }: { embedded?: boolean }) {
               </label>
               <label className="flex flex-col gap-1.5 text-sm font-medium">
                 Temporary password
-                <Input
-                  type="text"
-                  value={form.password}
-                  onChange={(e) =>
-                    setForm((f) => ({ ...f, password: e.target.value }))
-                  }
-                  placeholder="Share this with them"
-                />
+                <div className="flex gap-2">
+                  <Input
+                    type={showPassword ? "text" : "password"}
+                    autoComplete="new-password"
+                    value={form.password}
+                    onChange={(e) =>
+                      setForm((f) => ({ ...f, password: e.target.value }))
+                    }
+                    placeholder="Share this with them"
+                  />
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => {
+                      setForm((current) => ({
+                        ...current,
+                        password: generateTemporaryPassword(),
+                      }));
+                      setShowPassword(true);
+                    }}
+                  >
+                    <Sparkles size={15} className="mr-1.5" />
+                    Generate
+                  </Button>
+                </div>
               </label>
             </div>
             {directoryError && (
@@ -194,6 +289,14 @@ export function AdminManager({ embedded = false }: { embedded?: boolean }) {
                   <span className="rounded-full bg-brand-50 px-2 py-0.5 text-xs font-medium text-brand-700">
                     {a.institution}
                   </span>
+                  <button
+                    type="button"
+                    onClick={() => openReset(a)}
+                    className="inline-flex items-center gap-1 text-xs font-medium text-primary transition-colors hover:underline"
+                  >
+                    <Sparkles size={13} />
+                    Reset &amp; copy
+                  </button>
                   <button
                     onClick={() => setConfirmTarget(a)}
                     disabled={removing === a.id}
@@ -255,6 +358,97 @@ export function AdminManager({ embedded = false }: { embedded?: boolean }) {
               </button>
             </div>
         </Dialog>
+      )}
+
+      {resetTarget && (
+        <Dialog
+          onClose={() => !resetting && setResetTarget(null)}
+          ariaLabelledBy="reset-admin-title"
+          contentClassName="w-full max-w-lg rounded-2xl border bg-card p-6 shadow-xl"
+        >
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <h2 id="reset-admin-title" className="text-lg font-semibold">
+                Reset administrator login
+              </h2>
+              <p className="mt-1 text-sm text-muted-foreground">
+                This replaces the current password for {resetTarget.email}. They
+                must change it after signing in.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setResetTarget(null)}
+              disabled={resetting}
+              aria-label="Close"
+              className="rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-50"
+            >
+              <X size={18} />
+            </button>
+          </div>
+
+          <label className="mt-5 flex flex-col gap-1.5 text-sm font-medium">
+            New temporary password
+            <div className="flex gap-2">
+              <div className="relative min-w-0 flex-1">
+                <Input
+                  type={showPassword ? "text" : "password"}
+                  autoComplete="new-password"
+                  value={resetPassword}
+                  onChange={(event) => setResetPassword(event.target.value)}
+                  className="pr-10"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword((current) => !current)}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
+                  aria-label={showPassword ? "Hide password" : "Show password"}
+                >
+                  {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                </button>
+              </div>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => {
+                  setResetPassword(generateTemporaryPassword());
+                  setShowPassword(true);
+                }}
+              >
+                <Sparkles size={15} className="mr-1.5" />
+                Generate
+              </Button>
+            </div>
+          </label>
+          <p className="mt-2 text-xs text-muted-foreground">
+            The previous password will stop working immediately.
+          </p>
+
+          <div className="mt-6 flex justify-end gap-3">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setResetTarget(null)}
+              disabled={resetting}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              onClick={confirmReset}
+              disabled={resetting || !validTemporaryPassword(resetPassword)}
+            >
+              {resetting ? "Resetting…" : "Reset and show credentials"}
+            </Button>
+          </div>
+        </Dialog>
+      )}
+
+      {credentials && (
+        <TemporaryCredentialsDialog
+          credentials={credentials}
+          onClose={() => setCredentials(null)}
+        />
       )}
     </div>
   );

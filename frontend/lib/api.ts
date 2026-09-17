@@ -1537,6 +1537,12 @@ export const listTenants = () => listDirectoryPages<TenantOption>("/api/v1/tenan
 export const listAdmins = () => listDirectoryPages<InstitutionAdmin>("/api/v1/admins");
 export const createAdmin = (input: AdminCreateInput) =>
   jsonRequest<{ created: boolean }>("/api/v1/admins", "POST", input);
+export const resetAdminTemporaryPassword = (id: string, password: string) =>
+  jsonRequest<{ changed: boolean }>(
+    `/api/v1/platform/admins/${id}/temporary-password`,
+    "POST",
+    { password },
+  );
 export const deleteAdmin = (id: string) =>
   jsonRequest<{ deleted: boolean }>(`/api/v1/platform/admins/${id}`, "DELETE");
 

@@ -1368,6 +1368,57 @@ def remove_admin(
     return {"deleted": True}
 
 
+@router.post(
+    "/platform/admins/{user_id}/temporary-password",
+    response_model=TemporaryPasswordResetResult,
+)
+def reset_admin_temporary_password(
+    user_id: str,
+    body: TemporaryPasswordReset,
+    profile: CurrentProfile = Depends(get_current_profile),
+) -> TemporaryPasswordResetResult:
+    """Replace an institution admin password without ever returning plaintext."""
+    _require_super(profile)
+    _validate_temporary_password(body.password)
+    service = get_service_client()
+
+    target = (
+        service.table("profiles")
+        .select("id, role")
+        .eq("id", user_id)
+        .maybe_single()
+        .execute()
+    )
+    if target is None or not target.data:
+        raise HTTPException(status_code=404, detail="Admin not found.")
+    if target.data["role"] != "institution_admin":
+        raise HTTPException(
+            status_code=400,
+            detail="That user is not an institution admin.",
+        )
+
+    try:
+        updated_profile = (
+            service.table("profiles")
+            .update({"must_change_password": True})
+            .eq("id", user_id)
+            .eq("role", "institution_admin")
+            .execute()
+        )
+        if not updated_profile.data:
+            raise RuntimeError("The administrator profile could not be updated.")
+        service.auth.admin.update_user_by_id(user_id, {"password": body.password})
+    except Exception as exc:  # noqa: BLE001
+        raise public_error(
+            503,
+            "We couldn't reset this administrator's login. Please try again.",
+            operation="reset institution administrator password",
+            exception=exc,
+        ) from exc
+
+    return TemporaryPasswordResetResult(changed=True)
+
+
 # ── Analytics ────────────────────────────────────────────────────────────────
 @router.get("/admin/stats", response_model=InstitutionStats)
 def institution_stats(

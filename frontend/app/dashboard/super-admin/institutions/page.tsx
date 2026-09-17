@@ -5,6 +5,10 @@ import Link from "next/link";
 import { useSWRConfig } from "swr";
 
 import { AdminManager } from "@/components/admin/admin-manager";
+import {
+  TemporaryCredentials,
+  TemporaryCredentialsDialog,
+} from "@/components/admin/temporary-credentials-dialog";
 import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
 import {
@@ -46,6 +50,7 @@ function OnboardForm({ onDone }: { onDone: () => void | Promise<void> }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [ok, setOk] = useState<string | null>(null);
+  const [credentials, setCredentials] = useState<TemporaryCredentials | null>(null);
 
   function generatePassword() {
     setAdminPassword(generateTemporaryPassword());
@@ -82,6 +87,13 @@ function OnboardForm({ onDone }: { onDone: () => void | Promise<void> }) {
       setOk(
         `Created "${name.trim()}"${adminEmail.trim() ? ` with admin ${adminEmail.trim()}` : ""}.`,
       );
+      if (adminEmail.trim() && adminPassword) {
+        setCredentials({
+          email: adminEmail.trim(),
+          password: adminPassword,
+          institution: name.trim(),
+        });
+      }
       notify(`Institution "${name.trim()}" created successfully.`, "success");
       setName("");
       setSubdomain("");
@@ -225,6 +237,12 @@ function OnboardForm({ onDone }: { onDone: () => void | Promise<void> }) {
           </div>
         </form>
       </CardContent>
+      {credentials && (
+        <TemporaryCredentialsDialog
+          credentials={credentials}
+          onClose={() => setCredentials(null)}
+        />
+      )}
     </Card>
   );
 }
