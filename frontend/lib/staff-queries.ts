@@ -11,11 +11,13 @@ import {
   getQuestionBank,
   getTeacherAnalytics,
   getTeacherClassOverview,
+  listAdmins,
   listCourses,
   listDocumentLog,
   listQuizSets,
   listUsers,
   listSubjectMetrics,
+  listTenants,
 } from "@/lib/api";
 
 // Stable, role-scoped keys let pages reuse fresh data when users navigate back
@@ -34,6 +36,8 @@ export const STAFF_QUERY_KEYS = {
   platformAiMonitoring: "staff:platform:ai-monitoring",
   platformQuestionBank: "staff:platform:question-bank",
   institutionUsers: "staff:institution:users",
+  platformTenants: "staff:platform:tenants",
+  platformAdmins: "staff:platform:admins",
 } as const;
 
 export function useInstitutionAnalytics() {
@@ -85,6 +89,14 @@ export function usePlatformAiMonitoring() {
 
 export function usePlatformQuestionBank() {
   return useSWR(STAFF_QUERY_KEYS.platformQuestionBank, getQuestionBank);
+}
+
+export function usePlatformTenants() {
+  return useSWR(STAFF_QUERY_KEYS.platformTenants, listTenants);
+}
+
+export function usePlatformAdmins() {
+  return useSWR(STAFF_QUERY_KEYS.platformAdmins, listAdmins);
 }
 
 export function useInstitutionUsers() {

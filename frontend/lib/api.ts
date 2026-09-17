@@ -1398,6 +1398,22 @@ export type OnboardInstitutionInput = {
 export const onboardInstitution = (input: OnboardInstitutionInput) =>
   jsonRequest<{ created: boolean }>("/api/v1/platform/tenants", "POST", input);
 
+export type InstitutionUpdateInput = {
+  name?: string;
+  plan_tier?: "free" | "starter" | "growth" | "enterprise";
+  is_active?: boolean;
+};
+export type InstitutionDetails = {
+  id: string;
+  name: string;
+  subdomain: string;
+  plan_tier: string;
+  is_active: boolean;
+  created_at: string | null;
+};
+export const updateInstitution = (id: string, input: InstitutionUpdateInput) =>
+  jsonRequest<InstitutionDetails>(`/api/v1/platform/tenants/${id}`, "PATCH", input);
+
 export type QuestionBankCourse = {
   course: string;
   tenant: string | null;
@@ -1406,6 +1422,7 @@ export type QuestionBankCourse = {
   chapters: number;
   difficulty: Record<string, number>;
   types: Record<string, number>;
+  review_status: ReviewPipelineFull;
 };
 export type QuestionBank = {
   total: number;

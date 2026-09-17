@@ -36,6 +36,203 @@ POSTGREST_PAGE_SIZE = 1000
 ADMIN_DIRECTORY_PAGE_SIZE = 100
 
 
+class StrictApiResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class TenantOption(StrictApiResponse):
+    id: str
+    name: str
+
+
+class CreatedResult(StrictApiResponse):
+    created: bool
+
+
+class DeletedResult(StrictApiResponse):
+    deleted: bool
+
+
+class InstitutionAdminOut(StrictApiResponse):
+    id: str
+    full_name: str | None
+    email: str | None
+    institution: str
+
+
+class ReviewPipelineFull(StrictApiResponse):
+    pending_review: int = 0
+    approved: int = 0
+    rejected: int = 0
+    needs_edit: int = 0
+
+
+class InstitutionRow(StrictApiResponse):
+    id: str
+    name: str
+    subdomain: str | None
+    created_at: datetime | None
+    plan_tier: str | None
+    is_active: bool
+    teachers: int
+    students: int
+    admins: int
+    quiz_sets: int
+    published: int
+    attempts: int
+    accuracy: int
+
+
+class PlatformActivityPoint(StrictApiResponse):
+    date: str
+    attempts: int
+
+
+class PlatformOverviewResponse(StrictApiResponse):
+    institutions: int
+    active_institutions: int
+    teachers: int
+    students: int
+    admins: int
+    quiz_sets: int
+    published_quizzes: int
+    questions: int
+    documents: int
+    attempts: int
+    accuracy: int
+    approval_rate: int
+    pipeline: ReviewPipelineFull
+    activity: list[PlatformActivityPoint]
+    institutions_table: list[InstitutionRow]
+
+
+class PlatformTenantStats(StrictApiResponse):
+    id: str
+    name: str
+    teachers: int
+    students: int
+
+
+class PlatformStatsResponse(StrictApiResponse):
+    institutions: int
+    total_teachers: int
+    total_students: int
+    per_institution: list[PlatformTenantStats]
+
+
+class TenantDetails(StrictApiResponse):
+    id: str
+    name: str
+    subdomain: str
+    plan_tier: str
+    is_active: bool
+    created_at: datetime | None = None
+
+
+class QuestionBankCourse(StrictApiResponse):
+    course: str
+    tenant: str | None
+    questions: int
+    subjects: int
+    chapters: int
+    difficulty: dict[str, int]
+    types: dict[str, int]
+    review_status: ReviewPipelineFull
+
+
+class QuestionBankResponse(StrictApiResponse):
+    total: int
+    courses: list[QuestionBankCourse]
+    uncategorised: int
+
+
+class AiTypeQuality(StrictApiResponse):
+    type: str
+    total: int
+    approved: int
+    approval: int
+
+
+class AiDifficultyQuality(StrictApiResponse):
+    difficulty: str
+    total: int
+    approved: int
+    approval: int
+
+
+class AiSignalType(StrictApiResponse):
+    type: str
+    generated: int
+    approved: int
+    kept_as_is: int
+    kept_rate: int
+
+
+class AiQualitySignals(StrictApiResponse):
+    measured_from: str | None
+    generated: int
+    reviewed: int
+    approved: int
+    rejected: int
+    kept_as_is: int
+    approved_after_edit: int
+    regenerated: int
+    pending: int
+    approval_rate: int
+    kept_as_is_rate: int
+    by_type: list[AiSignalType]
+    most_edited_fields: list[dict[str, int | str]]
+
+
+class QualityTrend(StrictApiResponse):
+    keep_rate_last7: int
+    keep_rate_prev7: int
+    keep_rate_delta: int
+    approved_last7: int
+    approved_prev7: int
+    has_trend: bool
+
+
+class PlatformQualityFinding(StrictApiResponse):
+    severity: Literal["critical", "warn", "good", "info"]
+    title: str
+    detail: str
+    action: str
+
+
+class AiMonitoringResponse(StrictApiResponse):
+    updated_at: datetime
+    total_generated: int
+    approval_rate: int
+    published_quizzes: int
+    failures_14d: int
+    pipeline: ReviewPipelineFull
+    by_type: list[AiTypeQuality]
+    by_difficulty: dict[str, int]
+    difficulty_quality: list[AiDifficultyQuality]
+    volume: list[dict[str, int | str]]
+    trend: QualityTrend
+    funnel: list[dict[str, int | str]]
+    findings: list[PlatformQualityFinding]
+    signals: AiQualitySignals
+
+
+def _rpc_json(service, function_name: str) -> dict:
+    """Return one JSON object from a service-role-only Postgres RPC."""
+    data = service.rpc(function_name, {}).execute().data
+    if isinstance(data, dict):
+        return data
+    if isinstance(data, list) and len(data) == 1:
+        row = data[0]
+        if isinstance(row, dict) and len(row) == 1:
+            value = next(iter(row.values()))
+            if isinstance(value, dict):
+                return value
+        if isinstance(row, dict):
+            return row
+    raise RuntimeError(f"{function_name} returned an invalid analytics payload")
+
+
 def _require_admin(profile: CurrentProfile) -> None:
     if profile.role != "institution_admin":
         raise HTTPException(status_code=403, detail="Institution admins only.")
@@ -825,7 +1022,7 @@ class AdminCreate(BaseModel):
     tenant_id: str
 
 
-@router.get("/tenants")
+@router.get("/tenants", response_model=list[TenantOption])
 def list_tenants(
     page: int = 1,
     page_size: int = ADMIN_DIRECTORY_PAGE_SIZE,
@@ -848,7 +1045,7 @@ def list_tenants(
     )
 
 
-@router.get("/admins")
+@router.get("/admins", response_model=list[InstitutionAdminOut])
 def list_admins(
     page: int = 1,
     page_size: int = ADMIN_DIRECTORY_PAGE_SIZE,
@@ -894,7 +1091,7 @@ def list_admins(
     ]
 
 
-@router.post("/admins")
+@router.post("/admins", response_model=CreatedResult)
 def create_admin(
     body: AdminCreate, profile: CurrentProfile = Depends(get_current_profile)
 ) -> dict:
@@ -955,7 +1152,7 @@ def create_admin(
     return {"created": True}
 
 
-@router.delete("/platform/admins/{user_id}")
+@router.delete("/platform/admins/{user_id}", response_model=DeletedResult)
 def remove_admin(
     user_id: str, profile: CurrentProfile = Depends(get_current_profile)
 ) -> dict:
@@ -1855,41 +2052,32 @@ async def institution_analytics(
     })
 
 
-@router.get("/platform/stats")
+@router.get("/platform/stats", response_model=PlatformStatsResponse)
 def platform_stats(profile: CurrentProfile = Depends(get_current_profile)) -> dict:
     _require_super(profile)
-    service = get_service_client()
-
-    tenants = sorted(
-        _select_all(service, "tenants", "id, name"),
-        key=lambda tenant: (tenant.get("name") or "").lower(),
-    )
-    all_profiles = _select_all(service, "profiles", "id, tenant_id, role")
-
-    per_tenant = []
-    total_teachers = total_students = 0
-    for ten in tenants:
-        teachers = sum(
-            1 for p in all_profiles if p["tenant_id"] == ten["id"] and p["role"] == "teacher"
+    overview = _rpc_json(get_service_client(), "platform_overview_metrics")
+    per_tenant = [
+        {
+            "id": tenant["id"],
+            "name": tenant["name"],
+            "teachers": tenant["teachers"],
+            "students": tenant["students"],
+        }
+        for tenant in sorted(
+            overview["institutions_table"],
+            key=lambda tenant: (tenant.get("name") or "").lower(),
         )
-        students = sum(
-            1 for p in all_profiles if p["tenant_id"] == ten["id"] and p["role"] == "student"
-        )
-        total_teachers += teachers
-        total_students += students
-        per_tenant.append(
-            {"id": ten["id"], "name": ten["name"], "teachers": teachers, "students": students}
-        )
+    ]
 
     return {
-        "institutions": len(tenants),
-        "total_teachers": total_teachers,
-        "total_students": total_students,
+        "institutions": overview["institutions"],
+        "total_teachers": overview["teachers"],
+        "total_students": overview["students"],
         "per_institution": per_tenant,
     }
 
 
-@router.get("/platform/overview")
+@router.get("/platform/overview", response_model=PlatformOverviewResponse)
 async def platform_overview(
     profile: CurrentProfile = Depends(get_current_profile),
 ) -> dict:
@@ -1899,167 +2087,10 @@ async def platform_overview(
     platform accuracy, a 14-day activity trend, and a per-institution table
     with each institution's key numbers + health. All real data.
     """
-    from collections import Counter, defaultdict
-    from datetime import date, timedelta
-
     _require_super(profile)
-    data = await _gather(
-        {
-            "tenants": lambda client: _select_all(
-                client,
-                "tenants",
-                "id, name, subdomain, plan_tier, is_active, created_at",
-            ),
-            "profiles": lambda client: _select_all(
-                client, "profiles", "id, tenant_id, role"
-            ),
-            "quiz_sets": lambda client: _select_all(
-                client, "quiz_sets", "id, tenant_id, status"
-            ),
-            "questions": lambda client: _select_all(
-                client, "questions", "id, tenant_id, review_status"
-            ),
-            "variants": lambda client: _select_all(
-                client, "quiz_variants", "id, tenant_id, total_marks"
-            ),
-            "attempts": lambda client: _select_all(
-                client,
-                "quiz_attempts",
-                "id, tenant_id, status, total_score, variant_id, submitted_at",
-            ),
-            "documents": lambda client: _select_all(
-                client, "documents", "id, tenant_id"
-            ),
-        }
+    return await asyncio.to_thread(
+        lambda: _rpc_json(get_service_client(), "platform_overview_metrics")
     )
-    tenants = data["tenants"]
-    profiles = data["profiles"]
-    quiz_sets = data["quiz_sets"]
-    questions = data["questions"]
-    variants = data["variants"]
-    var_marks = {v["id"]: v.get("total_marks") for v in variants}
-    attempts = data["attempts"]
-    documents = data["documents"]
-
-    # ---- Per-tenant aggregation -------------------------------------------
-    def blank() -> dict:
-        return {
-            "teachers": 0,
-            "students": 0,
-            "admins": 0,
-            "quiz_sets": 0,
-            "published": 0,
-            "attempts": 0,
-            "score_sum": 0.0,
-            "maximum_sum": 0.0,
-        }
-
-    agg: dict = defaultdict(blank)
-    for p in profiles:
-        a = agg[p["tenant_id"]]
-        if p["role"] == "teacher":
-            a["teachers"] += 1
-        elif p["role"] == "student":
-            a["students"] += 1
-        elif p["role"] == "institution_admin":
-            a["admins"] += 1
-    for q in quiz_sets:
-        a = agg[q["tenant_id"]]
-        a["quiz_sets"] += 1
-        if q["status"] == "published":
-            a["published"] += 1
-
-    platform_score = 0.0
-    platform_maximum = 0.0
-    for at in attempts:
-        a = agg[at["tenant_id"]]
-        if at["status"] != "graded":
-            continue
-        a["attempts"] += 1
-        m = var_marks.get(at["variant_id"])
-        if m:
-            maximum = float(m)
-            score = max(0.0, min(maximum, float(at.get("total_score") or 0)))
-            a["score_sum"] += score
-            a["maximum_sum"] += maximum
-            platform_score += score
-            platform_maximum += maximum
-
-    institutions = []
-    for t in tenants:
-        a = agg.get(t["id"], blank())
-        acc = (
-            round(a["score_sum"] / a["maximum_sum"] * 100)
-            if a["maximum_sum"]
-            else 0
-        )
-        institutions.append(
-            {
-                "id": t["id"],
-                "name": t["name"],
-                "subdomain": t.get("subdomain"),
-                "created_at": t.get("created_at"),
-                "plan_tier": t.get("plan_tier"),
-                "is_active": t.get("is_active", True),
-                "teachers": a["teachers"],
-                "students": a["students"],
-                "admins": a["admins"],
-                "quiz_sets": a["quiz_sets"],
-                "published": a["published"],
-                "attempts": a["attempts"],
-                "accuracy": acc,
-            }
-        )
-    institutions.sort(key=lambda x: -(x["students"] + x["teachers"]))
-
-    # ---- Question approval rate (the ≥70% quality KPI) --------------------
-    q_status = Counter(q.get("review_status") for q in questions)
-    decided = (
-        q_status.get("approved", 0)
-        + q_status.get("rejected", 0)
-        + q_status.get("needs_edit", 0)
-    )
-    approval_rate = round(q_status.get("approved", 0) / decided * 100) if decided else 0
-
-    # ---- 14-day platform activity (graded attempts across all tenants) ----
-    today = date.today()
-    window = [(today - timedelta(days=i)) for i in range(13, -1, -1)]
-    day_counts = {d.isoformat(): 0 for d in window}
-    for at in attempts:
-        if at["status"] != "graded":
-            continue
-        sa = at.get("submitted_at")
-        if sa and sa[:10] in day_counts:
-            day_counts[sa[:10]] += 1
-    activity = [{"date": d.isoformat()[5:], "attempts": day_counts[d.isoformat()]} for d in window]
-
-    roles = Counter(p["role"] for p in profiles)
-    return {
-        "institutions": len(tenants),
-        "active_institutions": sum(1 for t in tenants if t.get("is_active", True)),
-        "teachers": roles.get("teacher", 0),
-        "students": roles.get("student", 0),
-        "admins": roles.get("institution_admin", 0),
-        "quiz_sets": len(quiz_sets),
-        "published_quizzes": sum(1 for q in quiz_sets if q["status"] == "published"),
-        "questions": len(questions),
-        "documents": len(documents),
-        "attempts": sum(1 for a in attempts if a["status"] == "graded"),
-        "accuracy": (
-            round(platform_score / platform_maximum * 100)
-            if platform_maximum
-            else 0
-        ),
-        "approval_rate": approval_rate,
-        "pipeline": {
-            "pending_review": q_status.get("pending_review", 0),
-            "approved": q_status.get("approved", 0),
-            "rejected": q_status.get("rejected", 0),
-            "needs_edit": q_status.get("needs_edit", 0),
-        },
-        "activity": activity,
-        "institutions_table": institutions,
-    }
 
 
 # ── Super-admin: onboard a new institution (tenant) ──────────────────────────
@@ -2073,7 +2104,13 @@ class TenantCreate(BaseModel):
     admin_password: str | None = None
 
 
-@router.post("/platform/tenants")
+class TenantUpdate(BaseModel):
+    name: str | None = None
+    plan_tier: Literal["free", "starter", "growth", "enterprise"] | None = None
+    is_active: bool | None = None
+
+
+@router.post("/platform/tenants", response_model=CreatedResult)
 def onboard_institution(
     body: TenantCreate, profile: CurrentProfile = Depends(get_current_profile)
 ) -> dict:
@@ -2180,85 +2217,69 @@ def onboard_institution(
     return {"created": True}
 
 
+@router.patch("/platform/tenants/{tenant_id}", response_model=TenantDetails)
+def update_institution(
+    tenant_id: str,
+    body: TenantUpdate,
+    profile: CurrentProfile = Depends(get_current_profile),
+) -> dict:
+    """Update safe tenant lifecycle fields; permanent deletion is intentionally absent."""
+    _require_super(profile)
+    changes = body.model_dump(exclude_none=True)
+    if "name" in changes:
+        changes["name"] = changes["name"].strip()
+        if not changes["name"]:
+            raise HTTPException(status_code=400, detail="Institution name is required.")
+    if not changes:
+        raise HTTPException(status_code=400, detail="Choose at least one field to update.")
+
+    service = get_service_client()
+    existing = (
+        service.table("tenants")
+        .select("id")
+        .eq("id", tenant_id)
+        .maybe_single()
+        .execute()
+    )
+    if existing is None or not existing.data:
+        raise HTTPException(status_code=404, detail="Institution not found.")
+    try:
+        updated = (
+            service.table("tenants")
+            .update(changes)
+            .eq("id", tenant_id)
+            .execute()
+            .data
+            or []
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise public_error(
+            400,
+            "We couldn't update this institution. Please try again.",
+            operation="update institution",
+            exception=exc,
+        ) from exc
+    if not updated:
+        raise HTTPException(status_code=404, detail="Institution not found.")
+    row = updated[0]
+    return {
+        "id": str(row["id"]),
+        "name": row["name"],
+        "subdomain": row["subdomain"],
+        "plan_tier": row["plan_tier"],
+        "is_active": row["is_active"],
+        "created_at": row.get("created_at"),
+    }
+
+
 # ── Super-admin: global question bank (cross-tenant, grouped by course) ───────
-@router.get("/platform/question-bank")
+@router.get("/platform/question-bank", response_model=QuestionBankResponse)
 def platform_question_bank(
     profile: CurrentProfile = Depends(get_current_profile),
 ) -> dict:
     """Every question on the platform, grouped by course. Real counts only."""
-    from collections import Counter, defaultdict
-
     _require_super(profile)
-    service = get_service_client()
-
-    questions = _select_all(
-        service, "questions", "id, chapter_id, difficulty, type"
-    )
-    chapters = {
-        c["id"]: c
-        for c in _select_all(service, "chapters", "id, subject_id")
-    }
-    subjects = {
-        s["id"]: s
-        for s in (
-            _select_all(service, "subjects", "id, course_id")
-        )
-    }
-    courses = {
-        c["id"]: c
-        for c in (
-            _select_all(service, "courses", "id, name, tenant_id")
-        )
-    }
-    tenants = {
-        t["id"]: t["name"]
-        for t in _select_all(service, "tenants", "id, name")
-    }
-
-    agg: dict = defaultdict(
-        lambda: {
-            "questions": 0,
-            "subjects": set(),
-            "chapters": set(),
-            "difficulty": Counter(),
-            "types": Counter(),
-        }
-    )
-    uncategorised = 0
-    for q in questions:
-        ch = chapters.get(q.get("chapter_id"))
-        sub = subjects.get(ch["subject_id"]) if ch else None
-        cid = sub.get("course_id") if sub else None
-        if not cid:
-            uncategorised += 1
-            continue
-        a = agg[cid]
-        a["questions"] += 1
-        a["subjects"].add(ch["subject_id"])
-        a["chapters"].add(ch["id"])
-        a["difficulty"][q.get("difficulty")] += 1
-        a["types"][q.get("type")] += 1
-
-    out = []
-    for cid, a in agg.items():
-        co = courses.get(cid)
-        out.append(
-            {
-                "course": co["name"] if co else "Course",
-                "tenant": tenants.get(co["tenant_id"]) if co else None,
-                "questions": a["questions"],
-                "subjects": len(a["subjects"]),
-                "chapters": len(a["chapters"]),
-                "difficulty": dict(a["difficulty"]),
-                "types": dict(a["types"]),
-            }
-        )
-    out.sort(key=lambda x: -x["questions"])
-    return {
-        "total": len(questions),
-        "courses": out,
-        "uncategorised": uncategorised,
-    }
+    return _rpc_json(get_service_client(), "platform_question_bank_metrics")
 
 
 # ── Super-admin: Question Quality (AI quality intelligence) ──────────────────
@@ -2492,277 +2513,26 @@ def _build_findings(
 
 
 # ── Super-admin: AI generation monitoring ────────────────────────────────────
-@router.get("/platform/ai-monitoring")
+@router.get("/platform/ai-monitoring", response_model=AiMonitoringResponse)
 def platform_ai_monitoring(
     profile: CurrentProfile = Depends(get_current_profile),
 ) -> dict:
     """AI generation health across the platform: volume, quality by type, pipeline."""
-    from collections import Counter, defaultdict
-    from datetime import date, datetime, timedelta
+    from datetime import datetime, timezone
 
     _require_super(profile)
-    service = get_service_client()
-
-    rows = _select_all(
-        service,
-        "questions",
-        "id, type, difficulty, review_status, source, created_at",
+    payload = _rpc_json(get_service_client(), "platform_ai_monitoring_metrics")
+    payload["findings"] = _build_findings(
+        total_generated=payload["total_generated"],
+        status=payload["pipeline"],
+        approval_rate=payload["approval_rate"],
+        types_out=payload["by_type"],
+        signals=payload["signals"],
+        trend=payload["trend"],
+        failures_14d=payload["failures_14d"],
     )
-    ai = [q for q in rows if q.get("source") == "ai_generated"]
-    status = Counter(q.get("review_status") for q in ai)
-    decided = (
-        status.get("approved", 0)
-        + status.get("rejected", 0)
-        + status.get("needs_edit", 0)
-    )
-    approval_rate = round(status.get("approved", 0) / decided * 100) if decided else 0
-
-    by_type: dict = defaultdict(lambda: {"total": 0, "approved": 0})
-    for q in ai:
-        bt = by_type[q.get("type")]
-        bt["total"] += 1
-        if q.get("review_status") == "approved":
-            bt["approved"] += 1
-    types_out = sorted(
-        [
-            {
-                "type": k,
-                "total": v["total"],
-                "approved": v["approved"],
-                "approval": round(v["approved"] / v["total"] * 100) if v["total"] else 0,
-            }
-            for k, v in by_type.items()
-        ],
-        key=lambda x: -x["total"],
-    )
-
-    today = date.today()
-    window = [(today - timedelta(days=i)) for i in range(13, -1, -1)]
-    dc = {d.isoformat(): 0 for d in window}
-    for q in ai:
-        ca = q.get("created_at")
-        if ca and ca[:10] in dc:
-            dc[ca[:10]] += 1
-    volume = [{"date": d.isoformat()[5:], "generated": dc[d.isoformat()]} for d in window]
-
-    # ---- Behavioral quality signals from the events ledger ----------------
-    # These are the TRUE "is the AI good enough?" numbers — especially
-    # kept-as-is (approved without any edit), which cannot be derived from the
-    # questions table. Empty until teachers act after instrumentation started.
-    from app.services.events import (
-        GENERATION_FAILED,
-        QUESTION_APPROVED,
-        QUESTION_EDITED,
-        QUESTION_GENERATED,
-        QUESTION_REGENERATED,
-        QUESTION_REJECTED,
-        QUIZ_PUBLISHED,
-    )
-
-    monitored_events = [
-        QUESTION_GENERATED,
-        QUESTION_EDITED,
-        QUESTION_APPROVED,
-        QUESTION_REJECTED,
-        QUESTION_REGENERATED,
-        QUIZ_PUBLISHED,
-        GENERATION_FAILED,
-    ]
-    evs = _select_all(
-        service,
-        "events",
-        "id, event_type, subject_id, metadata, created_at",
-        configure=lambda query: query.in_("event_type", monitored_events),
-    )
-    published_n = len(
-        _select_all(
-            service,
-            "quiz_sets",
-            "id",
-            configure=lambda query: query.eq("status", "published"),
-        )
-    )
-    gen_type: dict = {}
-    edited_ids: set = set()
-    latest_decision: dict[str, tuple[str, str]] = {}
-    regenerated = 0
-    failed_dates: list = []
-    edited_fields: Counter = Counter()
-    first_ev = None
-    for e in evs:
-        et, sid = e["event_type"], e.get("subject_id")
-        md = e.get("metadata") or {}
-        ca = e.get("created_at")
-        if ca and (first_ev is None or ca < first_ev):
-            first_ev = ca
-        if et == QUESTION_GENERATED and sid:
-            gen_type[sid] = md.get("type")
-        elif et == QUESTION_EDITED:
-            if sid:
-                edited_ids.add(sid)
-            for f in md.get("edited_fields") or []:
-                edited_fields[f] += 1
-        elif et in (QUESTION_APPROVED, QUESTION_REJECTED) and sid:
-            previous = latest_decision.get(sid)
-            timestamp = ca or ""
-            if previous is None or timestamp >= previous[0]:
-                latest_decision[sid] = (timestamp, et)
-        elif et == QUESTION_REGENERATED:
-            regenerated += 1
-        elif et == GENERATION_FAILED and ca:
-            failed_dates.append(ca)
-
-    approved_ids = {
-        sid for sid, (_, event_type) in latest_decision.items()
-        if event_type == QUESTION_APPROVED
-    }
-    rejected_ids = {
-        sid for sid, (_, event_type) in latest_decision.items()
-        if event_type == QUESTION_REJECTED
-    }
-    approved_at = {
-        sid: timestamp for sid, (timestamp, event_type) in latest_decision.items()
-        if event_type == QUESTION_APPROVED and timestamp
-    }
-    approved_n, rejected_n = len(approved_ids), len(rejected_ids)
-    reviewed_n = approved_n + rejected_n
-    kept_as_is = len(approved_ids - edited_ids)
-    decided_ids = approved_ids | rejected_ids
-    pending_n = sum(1 for s in gen_type if s not in decided_ids)
-
-    sig_type: dict = defaultdict(lambda: {"generated": 0, "approved": 0, "kept": 0})
-    for sid, ty in gen_type.items():
-        bucket = sig_type[ty or "unknown"]
-        bucket["generated"] += 1
-        if sid in approved_ids:
-            bucket["approved"] += 1
-            if sid not in edited_ids:
-                bucket["kept"] += 1
-    sig_by_type = sorted(
-        [
-            {
-                "type": k,
-                "generated": v["generated"],
-                "approved": v["approved"],
-                "kept_as_is": v["kept"],
-                "kept_rate": round(v["kept"] / v["approved"] * 100) if v["approved"] else 0,
-            }
-            for k, v in sig_type.items()
-        ],
-        key=lambda x: -x["generated"],
-    )
-
-    signals = {
-        "measured_from": first_ev[:10] if first_ev else None,
-        "generated": len(gen_type),
-        "reviewed": reviewed_n,
-        "approved": approved_n,
-        "rejected": rejected_n,
-        "kept_as_is": kept_as_is,
-        "approved_after_edit": approved_n - kept_as_is,
-        "regenerated": regenerated,
-        "pending": pending_n,
-        "approval_rate": round(approved_n / reviewed_n * 100) if reviewed_n else 0,
-        "kept_as_is_rate": round(kept_as_is / approved_n * 100) if approved_n else 0,
-        "by_type": sig_by_type,
-        "most_edited_fields": [
-            {"field": f, "count": c} for f, c in edited_fields.most_common(6)
-        ],
-    }
-
-    # ---- Trend: last 7 days vs the 7 days before (from approval events) -----
-    iso7 = (today - timedelta(days=7)).isoformat()
-    iso14 = (today - timedelta(days=14)).isoformat()
-    last7 = {"approved": 0, "kept": 0}
-    prev7 = {"approved": 0, "kept": 0}
-    for sid, ca in approved_at.items():
-        day = ca[:10]
-        kept = 1 if sid not in edited_ids else 0
-        if day >= iso7:
-            last7["approved"] += 1
-            last7["kept"] += kept
-        elif day >= iso14:
-            prev7["approved"] += 1
-            prev7["kept"] += kept
-    keep_last = round(last7["kept"] / last7["approved"] * 100) if last7["approved"] else 0
-    keep_prev = round(prev7["kept"] / prev7["approved"] * 100) if prev7["approved"] else 0
-    trend = {
-        "keep_rate_last7": keep_last,
-        "keep_rate_prev7": keep_prev,
-        "keep_rate_delta": keep_last - keep_prev,
-        "approved_last7": last7["approved"],
-        "approved_prev7": prev7["approved"],
-        "has_trend": (last7["approved"] + prev7["approved"]) > 0,
-    }
-
-    # ---- AI generation failures (last 14 days) ------------------------------
-    failures_14d = sum(1 for d in failed_dates if d[:10] >= iso14)
-
-    # ---- Quality by difficulty (from the questions table) -------------------
-    diff_q: dict = defaultdict(lambda: {"total": 0, "approved": 0})
-    for q in ai:
-        b = diff_q[q.get("difficulty") or "unspecified"]
-        b["total"] += 1
-        if q.get("review_status") == "approved":
-            b["approved"] += 1
-    difficulty_quality = sorted(
-        [
-            {
-                "difficulty": k,
-                "total": v["total"],
-                "approved": v["approved"],
-                "approval": round(v["approved"] / v["total"] * 100) if v["total"] else 0,
-            }
-            for k, v in diff_q.items()
-        ],
-        key=lambda x: -x["total"],
-    )
-
-    # ---- Quality funnel (question lifecycle, questions table + events) ------
-    reviewed_qt = (
-        status.get("approved", 0)
-        + status.get("rejected", 0)
-        + status.get("needs_edit", 0)
-    )
-    funnel = [
-        {"stage": "Generated", "count": len(ai)},
-        {"stage": "Reviewed", "count": reviewed_qt},
-        {"stage": "Approved", "count": status.get("approved", 0)},
-        {"stage": "Kept as-is", "count": kept_as_is},
-    ]
-
-    # ---- Findings & recommendations (the decision layer — no AI) ------------
-    findings = _build_findings(
-        total_generated=len(ai),
-        status=status,
-        approval_rate=approval_rate,
-        types_out=types_out,
-        signals=signals,
-        trend=trend,
-        failures_14d=failures_14d,
-    )
-
-    return {
-        "updated_at": datetime.now().isoformat(timespec="seconds"),
-        "total_generated": len(ai),
-        "approval_rate": approval_rate,
-        "published_quizzes": published_n,
-        "failures_14d": failures_14d,
-        "pipeline": {
-            "pending_review": status.get("pending_review", 0),
-            "approved": status.get("approved", 0),
-            "rejected": status.get("rejected", 0),
-            "needs_edit": status.get("needs_edit", 0),
-        },
-        "by_type": types_out,
-        "by_difficulty": dict(Counter(q.get("difficulty") for q in ai)),
-        "difficulty_quality": difficulty_quality,
-        "volume": volume,
-        "trend": trend,
-        "funnel": funnel,
-        "findings": findings,
-        "signals": signals,
-    }
+    payload["updated_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    return payload
 
 
 # ── Institution admin: quiz performance ─────────────────────────────────────

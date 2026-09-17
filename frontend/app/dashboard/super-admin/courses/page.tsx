@@ -39,7 +39,7 @@ export default function CoursesPage() {
       ) : data.courses.length === 0 ? (
         <EmptyState
           title="No course questions yet"
-          message="Generated and approved course questions will appear here."
+          message="Generated course questions will appear here with their review status."
         />
       ) : (
         <>
@@ -107,6 +107,20 @@ export default function CoursesPage() {
                   <p className="mt-3 text-xs capitalize text-muted-foreground">
                     {mixLabel(course.types)}
                   </p>
+                  <div className="mt-3 flex flex-wrap gap-1.5 text-[11px] font-medium">
+                    <span className="rounded-full bg-emerald-50 px-2 py-1 text-emerald-700">
+                      {course.review_status.approved} approved
+                    </span>
+                    <span className="rounded-full bg-amber-50 px-2 py-1 text-amber-700">
+                      {course.review_status.pending_review} pending
+                    </span>
+                    <span className="rounded-full bg-orange-50 px-2 py-1 text-orange-700">
+                      {course.review_status.needs_edit} needs edit
+                    </span>
+                    <span className="rounded-full bg-rose-50 px-2 py-1 text-rose-700">
+                      {course.review_status.rejected} rejected
+                    </span>
+                  </div>
                 </article>
               ))}
             </CardContent>
