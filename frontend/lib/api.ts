@@ -1163,6 +1163,13 @@ export type AdminUser = {
   subject_count: number;
 };
 
+export type DirectoryPage = {
+  items: AdminUser[];
+  page: number;
+  page_size: number;
+  total: number;
+};
+
 export type TeacherCreateInput = {
   full_name: string;
   email: string;
@@ -1212,18 +1219,11 @@ export type PlatformStats = {
   per_institution: { id: string; name: string; teachers: number; students: number }[];
 };
 
-export async function listUsers(): Promise<AdminUser[]> {
-  const pageSize = 100;
-  const users: AdminUser[] = [];
-  for (let page = 1; ; page += 1) {
-    const batch = await jsonRequest<AdminUser[]>(
-      `/api/v1/users?page=${page}&page_size=${pageSize}`,
-      "GET",
-    );
-    users.push(...batch);
-    if (batch.length < pageSize) return users;
-  }
-}
+export const listUsers = (page = 1, query = "") =>
+  jsonRequest<DirectoryPage>(
+    `/api/v1/users?page=${page}&page_size=12&q=${encodeURIComponent(query)}`,
+    "GET",
+  );
 export const createTeacher = (input: TeacherCreateInput) =>
   jsonRequest<{ id: string }>("/api/v1/users", "POST", input);
 export const updateTeacher = (id: string, input: TeacherUpdateInput) =>
@@ -1244,6 +1244,16 @@ export const listTeacherCourses = (teacherId: string) =>
   jsonRequest<TeacherCourse[]>(`/api/v1/teachers/${teacherId}/courses`, "GET");
 export const listCourseStudents = (courseId: string) =>
   jsonRequest<CourseRoster>(`/api/v1/courses/${courseId}/students`, "GET");
+
+export type CourseImpact = {
+  subjects: number;
+  students: number;
+  teacher_assignments: number;
+  quiz_sets: number;
+  documents: number;
+};
+export const getCourseImpact = (courseId: string) =>
+  jsonRequest<CourseImpact>(`/api/v1/admin/courses/${courseId}/impact`, "GET");
 export const getAdminStats = () =>
   jsonRequest<AdminStats>("/api/v1/admin/stats", "GET");
 
@@ -1262,7 +1272,7 @@ export type InstitutionOverview = {
   attempts: number;
   graded_attempts: number;
   accuracy: number;
-  pipeline: { pending_review: number; approved: number; rejected: number };
+  pipeline: { pending_review: number; approved: number; rejected: number; needs_edit: number };
   activity: { date: string; attempts: number }[];
   top_courses: { name: string; students: number }[];
   recent_quiz_sets: { title: string; status: string; created_at: string | null }[];
@@ -1297,7 +1307,7 @@ export type InstitutionAnalytics = {
     has_trend: boolean;
   };
   activity: { date: string; attempts: number }[];
-  pipeline: { pending_review: number; approved: number; rejected: number };
+  pipeline: { pending_review: number; approved: number; rejected: number; needs_edit: number };
   course_perf: {
     course_id: string;
     name: string;

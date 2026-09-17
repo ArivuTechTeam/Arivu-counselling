@@ -110,8 +110,9 @@ class _Query:
         self.select_str: str | None = None
         self.range_bounds: tuple[int, int] | None = None
 
-    def select(self, columns: str):
+    def select(self, columns: str, **kwargs):
         self.select_str = columns
+        self.with_count = kwargs.get("count") == "exact"
         return self
 
     def eq(self, column: str, value: object):
@@ -139,6 +140,7 @@ class _Query:
         if self.ordering:
             column, desc = self.ordering
             rows.sort(key=lambda row: row.get(column) or "", reverse=desc)
+        total = len(rows)
         if self.range_bounds:
             start, end = self.range_bounds
             rows = rows[start : end + 1]
@@ -148,7 +150,7 @@ class _Query:
                 for row in rows:
                     _resolve_embeds(self.service, self.table, row, embeds)
         self.service.executed.append((self.table, list(self.filters)))
-        return SimpleNamespace(data=rows)
+        return SimpleNamespace(data=rows, count=total if getattr(self, "with_count", False) else None)
 
 
 class _Service:
@@ -338,7 +340,7 @@ class AdminQuizPerformanceTests(unittest.TestCase):
         analytics = asyncio.run(institution_analytics(self.profile))
         quizzes = asyncio.run(admin_quiz_sets(self.profile))
 
-        self.assertEqual(stats["teachers"], len(teachers))
+        self.assertEqual(stats["teachers"], len(teachers.items))
         self.assertEqual(stats["teachers"], overview["teachers"])
         self.assertEqual(stats["teachers"], analytics.summary.teachers)
         self.assertEqual(stats["students"], overview["students"])

@@ -7,10 +7,12 @@ import { Dialog } from "@/components/ui/dialog";
 import { AlertTriangle, BookOpen, Inbox, Trash, X } from "@/components/ui/icons";
 import {
   Course,
+  CourseImpact,
   createCourse,
   createSubject,
   deleteCourse,
   deleteSubject,
+  getCourseImpact,
 } from "@/lib/api";
 import { useCourses } from "@/lib/staff-queries";
 
@@ -213,7 +215,7 @@ function SubjectCard({
   );
 }
 
-type DeleteTarget = { kind: "course" | "subject"; id: string; name: string };
+type DeleteTarget = { kind: "course" | "subject"; id: string; name: string; impact?: CourseImpact };
 
 function DeleteModal({
   target,
@@ -236,9 +238,10 @@ function DeleteModal({
           Delete {target.kind} &ldquo;{target.name}&rdquo;?
         </h3>
         <p className="text-sm text-muted-foreground">
-          {target.kind === "course" ? "This removes the course and its subjects. " : ""}
+          {target.kind === "course" ? "This removes the course, its subjects, student enrolments, and teacher assignments. " : ""}
           <span className="font-bold text-destructive">This cannot be undone.</span>
         </p>
+        {target.impact && <div className="grid w-full grid-cols-2 gap-2 rounded-xl bg-destructive/5 p-3 text-left text-xs"><span>{target.impact.subjects} subjects</span><span>{target.impact.students} students</span><span>{target.impact.teacher_assignments} teacher assignments</span><span>{target.impact.quiz_sets} quiz sets</span><span>{target.impact.documents} documents</span></div>}
         <div className="mt-3 flex gap-2">
           <button className={ghostBtn} onClick={onCancel} disabled={busy}>
             Cancel
@@ -315,6 +318,19 @@ export function CourseManager() {
       await run(() => deleteCourse(t.id));
     } else {
       await run(() => deleteSubject(t.id));
+    }
+  }
+
+  async function requestCourseDelete(course: Course) {
+    setBusy(true);
+    setActionError(null);
+    try {
+      const impact = await getCourseImpact(course.id);
+      setDel({ kind: "course", id: course.id, name: course.name, impact });
+    } catch (caught) {
+      setActionError(caught instanceof Error ? caught.message : "Could not check course usage.");
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -481,7 +497,7 @@ export function CourseManager() {
               key={c.id}
               course={c}
               onOpen={() => setOpenCourseId(c.id)}
-              onDelete={() => setDel({ kind: "course", id: c.id, name: c.name })}
+              onDelete={() => void requestCourseDelete(c)}
             />
           ))}
         </div>
@@ -514,7 +530,7 @@ export function CourseManager() {
             />
           </label>
           <p className="mt-2 text-xs text-muted-foreground">
-            Students and teachers pick a course when they sign up.
+            Students are enrolled in courses; teachers are assigned to subjects by an institution administrator.
           </p>
         </Modal>
       )}

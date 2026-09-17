@@ -1,9 +1,10 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import Link from "next/link";
 
 import { Button } from "@/components/ui/button";
+import { Dialog } from "@/components/ui/dialog";
 import {
   Card,
   CardContent,
@@ -62,10 +63,17 @@ function initials(text: string): string {
   );
 }
 
+function validTemporaryPassword(password: string): boolean {
+  return password.length >= 12 && /[A-Z]/.test(password) && /[a-z]/.test(password) && /\d/.test(password);
+}
+
 export default function UsersPage() {
-  const teachersQuery = useInstitutionUsers();
+  const [query, setQuery] = useState("");
+  const [page, setPage] = useState(1);
+  const teachersQuery = useInstitutionUsers(page, query);
   const coursesQuery = useCourses();
-  const teachers = teachersQuery.data ?? null;
+  const directory = teachersQuery.data ?? null;
+  const teachers = directory?.items ?? null;
   const courses = coursesQuery.data ?? [];
   const [form, setForm] = useState({
     full_name: "",
@@ -84,8 +92,6 @@ export default function UsersPage() {
   const [loadingSubjects, setLoadingSubjects] = useState(false);
   const [savingSubjects, setSavingSubjects] = useState(false);
   const [assignmentError, setAssignmentError] = useState<string | null>(null);
-  const [query, setQuery] = useState("");
-  const [page, setPage] = useState(1);
   const [expandedTeacherId, setExpandedTeacherId] = useState<string | null>(null);
   const [expandedCourseId, setExpandedCourseId] = useState<string | null>(null);
   const [teacherCourses, setTeacherCourses] = useState<Record<string, TeacherCourse[]>>({});
@@ -110,25 +116,14 @@ export default function UsersPage() {
     }, 4000);
   }
 
-  const filteredUsers = useMemo(() => {
-    if (!teachers) return [];
-    const normalizedQuery = query.trim().toLowerCase();
-    if (!normalizedQuery) return teachers;
-    return teachers.filter((user) =>
-      [user.full_name, user.email, ...user.courses]
-        .some((value) => value?.toLowerCase().includes(normalizedQuery) ?? false),
-    );
-  }, [query, teachers]);
-  const totalPages = Math.max(1, Math.ceil(filteredUsers.length / TEACHERS_PER_PAGE));
+  const total = directory?.total ?? 0;
+  const totalPages = Math.max(1, Math.ceil(total / TEACHERS_PER_PAGE));
   const currentPage = Math.min(page, totalPages);
-  const pageUsers = filteredUsers.slice(
-    (currentPage - 1) * TEACHERS_PER_PAGE,
-    currentPage * TEACHERS_PER_PAGE,
-  );
-  const firstResult = filteredUsers.length
+  const pageUsers = teachers ?? [];
+  const firstResult = total
     ? (currentPage - 1) * TEACHERS_PER_PAGE + 1
     : 0;
-  const lastResult = Math.min(currentPage * TEACHERS_PER_PAGE, filteredUsers.length);
+  const lastResult = Math.min(currentPage * TEACHERS_PER_PAGE, total);
 
   async function add() {
     setBusy(true);
@@ -370,7 +365,7 @@ export default function UsersPage() {
         <CardHeader>
           <CardTitle>Add teacher</CardTitle>
           <CardDescription>
-            Create a teacher account with a temporary password. Students register themselves.
+            Create a teacher account with a temporary password and assign teaching subjects.
           </CardDescription>
         </CardHeader>
         <CardContent className="grid grid-cols-1 gap-3 sm:grid-cols-2">
@@ -447,7 +442,8 @@ export default function UsersPage() {
               Generate
             </Button>
           </div>
-          <Button disabled={busy || !form.full_name.trim() || !form.email.trim() || !form.password || !form.course_id || form.subject_ids.length === 0} onClick={add}>
+          <p className="text-xs text-muted-foreground sm:col-span-2">Use at least 12 characters with uppercase, lowercase, and a number.</p>
+          <Button disabled={busy || !form.full_name.trim() || !form.email.trim() || !validTemporaryPassword(form.password) || !form.course_id || form.subject_ids.length === 0} onClick={add}>
             {busy ? "Adding…" : "Add teacher"}
           </Button>
           {loadError && (
@@ -462,7 +458,7 @@ export default function UsersPage() {
         <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
           <div>
             <h2 id="teacher-list-title" className="text-xl font-bold text-foreground">
-              Teaching staff{teachers ? ` (${teachers.length})` : ""}
+              Teaching staff{directory ? ` (${directory.total})` : ""}
             </h2>
             <p className="text-sm text-muted-foreground">
               Select a teacher to view courses, then select a course to view enrolled students.
@@ -472,8 +468,8 @@ export default function UsersPage() {
             type="search"
             value={query}
             onChange={(event) => { setQuery(event.target.value); setPage(1); }}
-            placeholder="Search teachers or courses"
-            aria-label="Search teachers or assigned courses"
+            placeholder="Search teacher names"
+            aria-label="Search teacher names"
             className="sm:max-w-sm"
           />
         </div>
@@ -481,13 +477,11 @@ export default function UsersPage() {
         {teachers === null ? (
           <Card><CardContent className="pt-6"><SkeletonList rows={4} /></CardContent></Card>
         ) : teachers.length === 0 ? (
-          <Card><CardContent className="pt-6"><EmptyState icon={<Users />} title="No teachers yet" message="Add the first teacher using the form above." /></CardContent></Card>
-        ) : filteredUsers.length === 0 ? (
-          <Card><CardContent className="pt-6"><EmptyState icon={<Users />} title="No matching teachers" message="Try a different teacher name, email, or course." /></CardContent></Card>
+          <Card><CardContent className="pt-6"><EmptyState icon={<Users />} title={query ? "No matching teachers" : "No teachers yet"} message={query ? "Try a different teacher name." : "Add the first teacher using the form above."} /></CardContent></Card>
         ) : (
           <>
             <p className="text-xs text-muted-foreground" aria-live="polite">
-              Showing {firstResult}–{lastResult} of {filteredUsers.length}
+              Showing {firstResult}–{lastResult} of {total}
             </p>
             <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
               {pageUsers.map((teacher) => {
@@ -597,7 +591,7 @@ export default function UsersPage() {
                 );
               })}
             </div>
-            {filteredUsers.length > TEACHERS_PER_PAGE && (
+            {total > TEACHERS_PER_PAGE && (
               <div className="flex items-center justify-between border-t pt-4">
                 <Button variant="outline" size="sm" disabled={currentPage === 1} onClick={() => setPage((value) => Math.max(1, value - 1))}>Previous</Button>
                 <span className="text-sm text-muted-foreground">Page {currentPage} of {totalPages}</span>
@@ -609,20 +603,13 @@ export default function UsersPage() {
       </section>
 
       {manageTeacher && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
-          onClick={(e) => {
-            if (e.target === e.currentTarget && !savingSubjects) {
-              setManageTeacher(null);
-            }
-          }}
+        <Dialog
+          onClose={() => !savingSubjects && setManageTeacher(null)}
+          ariaLabelledBy="teacher-edit-title"
+          closeOnBackdrop={!savingSubjects}
+          contentClassName="animate-rise flex max-h-[90vh] w-full max-w-lg flex-col rounded-2xl border border-border bg-card shadow-2xl"
         >
-          <div
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="teacher-edit-title"
-            className="animate-rise flex max-h-[90vh] w-full max-w-lg flex-col rounded-2xl border border-border bg-card shadow-2xl"
-          >
+          <div>
             <div className="flex items-start justify-between gap-3 border-b p-5">
               <div>
                 <h3 id="teacher-edit-title" className="text-base font-bold text-foreground">
@@ -729,15 +716,17 @@ export default function UsersPage() {
               </Button>
             </div>
           </div>
-        </div>
+        </Dialog>
       )}
 
       {confirmDel && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
-          onClick={(e) => e.target === e.currentTarget && !busy && setConfirmDel(null)}
+        <Dialog
+          onClose={() => !busy && setConfirmDel(null)}
+          ariaLabel="Remove teacher"
+          closeOnBackdrop={!busy}
+          contentClassName="animate-rise w-full max-w-sm rounded-2xl border border-border bg-card p-6 shadow-2xl"
         >
-          <div className="animate-rise w-full max-w-sm rounded-2xl border border-border bg-card p-6 shadow-2xl">
+          <div>
             <div className="mb-3 flex items-start justify-between gap-3">
               <h3 className="text-base font-bold text-foreground">Remove teacher</h3>
               <button
@@ -773,15 +762,17 @@ export default function UsersPage() {
               </button>
             </div>
           </div>
-        </div>
+        </Dialog>
       )}
 
       {credentialResetTeacher && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
-          onClick={(event) => event.target === event.currentTarget && !resettingCredential && setCredentialResetTeacher(null)}
+        <Dialog
+          onClose={() => !resettingCredential && setCredentialResetTeacher(null)}
+          ariaLabelledBy="reset-login-title"
+          closeOnBackdrop={!resettingCredential}
+          contentClassName="animate-rise w-full max-w-md rounded-2xl border border-border bg-card p-6 shadow-2xl"
         >
-          <div role="dialog" aria-modal="true" aria-labelledby="reset-login-title" className="animate-rise w-full max-w-md rounded-2xl border border-border bg-card p-6 shadow-2xl">
+          <div>
             <div className="flex items-start justify-between gap-3">
               <div>
                 <h3 id="reset-login-title" className="text-base font-bold text-foreground">Generate a new login?</h3>
@@ -798,7 +789,7 @@ export default function UsersPage() {
               </Button>
             </div>
           </div>
-        </div>
+        </Dialog>
       )}
     </div>
   );

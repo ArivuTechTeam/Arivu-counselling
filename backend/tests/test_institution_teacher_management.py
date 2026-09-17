@@ -18,6 +18,7 @@ from app.api.admin import (
     _tenant_course_exists,
     _validated_subject_ids,
     delete_user,
+    get_course_impact,
     list_course_students,
     list_teacher_courses,
     list_users,
@@ -41,8 +42,15 @@ class _Query:
         self.in_filters: list[tuple[str, set[object]]] = []
         self.single = False
         self.updates: dict | None = None
+        self.deleting = False
+        self.inserts: list[dict] | None = None
 
-    def select(self, _columns: str):
+    def select(self, _columns: str, **kwargs):
+        self.with_count = kwargs.get("count") == "exact"
+        return self
+
+    def ilike(self, column: str, value: str):
+        self.ilike_filter = (column, value.strip("%").lower())
         return self
 
     def eq(self, column: str, value: object):
@@ -69,19 +77,40 @@ class _Query:
         self.updates = values
         return self
 
+    def delete(self):
+        self.deleting = True
+        return self
+
+    def insert(self, values):
+        self.inserts = values if isinstance(values, list) else [values]
+        return self
+
     def execute(self):
         rows = self.rows
         for column, value in self.filters:
             rows = [row for row in rows if row.get(column) == value]
         for column, values in self.in_filters:
             rows = [row for row in rows if row.get(column) in values]
+        if hasattr(self, "ilike_filter"):
+            column, value = self.ilike_filter
+            rows = [row for row in rows if value in str(row.get(column) or "").lower()]
+        total = len(rows)
         if self.updates is not None:
             for row in rows:
                 row.update(self.updates)
+        if self.deleting:
+            deleted_ids = {id(row) for row in rows}
+            self.rows[:] = [row for row in self.rows if id(row) not in deleted_ids]
+        if self.inserts is not None:
+            self.rows.extend(dict(row) for row in self.inserts)
+            rows = self.inserts
         result = [dict(row) for row in rows]
         if hasattr(self, "start"):
             result = result[self.start : self.end + 1]
-        return SimpleNamespace(data=(result[0] if result else None) if self.single else result)
+        return SimpleNamespace(
+            data=(result[0] if result else None) if self.single else result,
+            count=total if getattr(self, "with_count", False) else None,
+        )
 
 
 class _AuthAdmin:
@@ -105,6 +134,9 @@ class _AuthAdmin:
         if "password" in attributes:
             user.password = attributes["password"]
         return SimpleNamespace(user=user)
+
+    def delete_user(self, user_id: str):
+        self.users[:] = [user for user in self.users if user.id != user_id]
 
 
 class _Rpc:
@@ -143,6 +175,9 @@ class _Service:
                 {"tenant_id": "tenant-a", "profile_id": "teacher-enrolled", "course_id": "course-a"},
                 {"tenant_id": "tenant-b", "profile_id": "student-b", "course_id": "course-b"},
             ],
+            "chapters": [],
+            "documents": [],
+            "quiz_sets": [],
         }
         users = [
             SimpleNamespace(
@@ -159,6 +194,8 @@ class _Service:
         return _Query(self.tables[name])
 
     def rpc(self, name: str, params: dict) -> _Rpc:
+        if name == "anonymize_account_data":
+            return _Rpc([])
         if name != "replace_teacher_subjects":
             raise AssertionError(f"Unexpected RPC: {name}")
         return _Rpc(params["p_subject_ids"])
@@ -179,21 +216,38 @@ class InstitutionTeacherManagementTests(unittest.TestCase):
         self.service_patch.stop()
 
     def test_teacher_list_excludes_students_and_other_tenants(self) -> None:
-        teachers = list_users(profile=self.profile)
+        teachers = list_users(profile=self.profile).items
 
-        self.assertEqual({teacher["id"] for teacher in teachers}, {"teacher-a", "teacher-enrolled"})
-        assigned = next(teacher for teacher in teachers if teacher["id"] == "teacher-a")
-        self.assertEqual(assigned["courses"], ["First Year"])
-        self.assertEqual(assigned["subject_count"], 1)
-        self.assertEqual(teachers[0]["id"], "teacher-enrolled")
+        self.assertEqual({teacher.id for teacher in teachers}, {"teacher-a", "teacher-enrolled"})
+        assigned = next(teacher for teacher in teachers if teacher.id == "teacher-a")
+        self.assertEqual(assigned.courses, ["First Year"])
+        self.assertEqual(assigned.subject_count, 1)
+        self.assertEqual(teachers[0].id, "teacher-enrolled")
+
+    def test_teacher_creation_requires_the_temporary_password_policy(self) -> None:
+        with self.assertRaises(ValidationError):
+            TeacherCreate(
+                full_name="Ada",
+                email="ada@example.com",
+                password="weak",
+                course_id="course-a",
+                subject_ids=["subject-a"],
+            )
+
+    def test_course_delete_impact_counts_only_tenant_students(self) -> None:
+        impact = get_course_impact("course-a", self.profile)
+
+        self.assertEqual(impact.subjects, 1)
+        self.assertEqual(impact.students, 1)
+        self.assertEqual(impact.teacher_assignments, 1)
 
     def test_teacher_directory_is_bounded_and_pageable(self) -> None:
-        first_page = list_users(page=1, page_size=1, profile=self.profile)
-        second_page = list_users(page=2, page_size=1, profile=self.profile)
+        first_page = list_users(page=1, page_size=1, profile=self.profile).items
+        second_page = list_users(page=2, page_size=1, profile=self.profile).items
 
         self.assertEqual(len(first_page), 1)
         self.assertEqual(len(second_page), 1)
-        self.assertNotEqual(first_page[0]["id"], second_page[0]["id"])
+        self.assertNotEqual(first_page[0].id, second_page[0].id)
 
         with self.assertRaises(HTTPException) as error:
             list_users(page=1, page_size=101, profile=self.profile)
