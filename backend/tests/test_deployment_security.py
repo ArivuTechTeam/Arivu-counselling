@@ -8,6 +8,7 @@ from uuid import uuid4
 from fastapi.testclient import TestClient
 
 from app.lib.config import Settings
+from app.api import admin, institution_admin, student, super_admin
 from app.main import app, settings
 
 
@@ -93,6 +94,13 @@ class StartupConfigurationTests(unittest.TestCase):
 class ResponseSecurityTests(unittest.TestCase):
     client = TestClient(app, raise_server_exceptions=False)
 
+    def test_every_admin_handler_is_in_exactly_one_role_inventory(self) -> None:
+        handler_paths = {route.path for route in admin.router.routes}
+        institution_paths = institution_admin._PATHS
+        platform_paths = super_admin._PATHS
+        self.assertFalse(institution_paths & platform_paths)
+        self.assertEqual(handler_paths, institution_paths | platform_paths)
+
     def test_institution_admin_password_reset_route_is_registered(self) -> None:
         response = self.client.post(
             "/api/v1/platform/admins/00000000-0000-0000-0000-000000000000/temporary-password",
@@ -100,6 +108,24 @@ class ResponseSecurityTests(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 401)
         self.assertEqual(response.json()["detail"], "Not authenticated")
+
+    def test_student_attempt_routes_declare_response_contracts(self) -> None:
+        protected_paths = {
+            "/api/v1/quizzes",
+            "/api/v1/attempts",
+            "/api/v1/attempts/{attempt_id}",
+            "/api/v1/attempts/{attempt_id}/autosave",
+            "/api/v1/attempts/{attempt_id}/submit",
+        }
+        routes = {
+            route.path: route
+            for route in student.router.routes
+            if getattr(route, "path", None) in protected_paths
+        }
+        self.assertEqual(set(routes), protected_paths)
+        for path, route in routes.items():
+            with self.subTest(path=path):
+                self.assertIsNotNone(getattr(route, "response_model", None))
 
     def test_debug_routes_are_disabled_by_default(self) -> None:
         self.assertFalse(settings.debug)

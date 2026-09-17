@@ -17,9 +17,10 @@ services:
       SUPABASE_ANON_KEY: ${SUPABASE_ANON_KEY}
       SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY}
       SUPABASE_JWT_SECRET: ${SUPABASE_JWT_SECRET}
-      FRONTEND_ORIGIN: http://localhost:3001
+      FRONTEND_ORIGIN: ${FRONTEND_ORIGIN:-http://localhost:3001}
       DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY}
       GEMINI_API_KEY: ${GEMINI_API_KEY}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3.5-flash}
       # Large documents consume one profile call, one call per chunk, and one
       # or two consolidation attempts. Pass these explicitly so editing .env
       # actually changes the recreated backend container.
@@ -36,7 +37,7 @@ services:
       - ./backend:/app
       - ./migrations:/migrations:ro
     command: >-
-      sh -c "pip install -q -r requirements.txt &&
+      sh -c "pip install -q --require-hashes -r requirements.lock &&
       exec uvicorn app.main:app --host 0.0.0.0 --port 8000 --no-access-log"
     networks:
       - quiz-generator-net

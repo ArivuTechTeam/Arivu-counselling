@@ -34,6 +34,7 @@ router = APIRouter(prefix="/api/v1", tags=["admin"])
 AUTH_USERS_PAGE_SIZE = 1000
 POSTGREST_PAGE_SIZE = 1000
 ADMIN_DIRECTORY_PAGE_SIZE = 100
+ADMIN_QUIZ_SET_PAGE_SIZE_MAX = 100
 
 
 class StrictApiResponse(BaseModel):
@@ -2713,6 +2714,8 @@ class AdminQuizSet(BaseModel):
 async def admin_quiz_sets(
     profile: CurrentProfile = Depends(get_current_profile),
     teacher_id: str | None = None,
+    page: int = 1,
+    page_size: int = 50,
 ) -> list[AdminQuizSet]:
     """
     Every quiz set in the institution, enriched with course/subject/teacher and a
@@ -2723,7 +2726,16 @@ async def admin_quiz_sets(
     every join server-side in one request.
     """
     _require_admin(profile)
+    if page < 1 or page_size < 1 or page_size > ADMIN_QUIZ_SET_PAGE_SIZE_MAX:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "page must be positive and page_size must be between 1 and "
+                f"{ADMIN_QUIZ_SET_PAGE_SIZE_MAX}."
+            ),
+        )
     t = profile.tenant_id
+    start = (page - 1) * page_size
 
     def _fetch(client):
         q = (
@@ -2740,7 +2752,13 @@ async def admin_quiz_sets(
         )
         if teacher_id:
             q = q.eq("created_by", teacher_id)
-        return q.order("created_at", desc=True).execute().data or []
+        return (
+            q.order("created_at", desc=True)
+            .range(start, start + page_size - 1)
+            .execute()
+            .data
+            or []
+        )
 
     sets = await asyncio.to_thread(lambda: _fetch(get_service_client()))
 

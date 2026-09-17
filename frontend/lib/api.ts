@@ -579,8 +579,24 @@ async function jsonRequest<T>(
   return res.json();
 }
 
+async function listBoundedPages<T>(
+  path: string,
+  extraParams?: URLSearchParams,
+): Promise<T[]> {
+  const pageSize = 100;
+  const items: T[] = [];
+  for (let page = 1; ; page += 1) {
+    const params = new URLSearchParams(extraParams);
+    params.set("page", String(page));
+    params.set("page_size", String(pageSize));
+    const batch = await jsonRequest<T[]>(`${path}?${params.toString()}`, "GET");
+    items.push(...batch);
+    if (batch.length < pageSize) return items;
+  }
+}
+
 export const listQuizSets = () =>
-  jsonRequest<QuizSetSummary[]>("/api/v1/quiz-sets", "GET");
+  listBoundedPages<QuizSetSummary>("/api/v1/quiz-sets");
 
 export const getQuizSet = (id: string) =>
   jsonRequest<QuizSetDetail>(`/api/v1/quiz-sets/${id}`, "GET");
@@ -1648,11 +1664,11 @@ export type AdminQuizSet = {
     needs_edit: number;
   };
 };
-export const getAdminQuizSets = (teacherId?: string) =>
-  jsonRequest<AdminQuizSet[]>(
-    `/api/v1/admin/quiz-sets${teacherId ? `?teacher_id=${encodeURIComponent(teacherId)}` : ""}`,
-    "GET",
-  );
+export const getAdminQuizSets = (teacherId?: string) => {
+  const params = new URLSearchParams();
+  if (teacherId) params.set("teacher_id", teacherId);
+  return listBoundedPages<AdminQuizSet>("/api/v1/admin/quiz-sets", params);
+};
 
 export type TeacherAnalyticsSummary = {
   total_teachers: number;

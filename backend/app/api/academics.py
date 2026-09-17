@@ -2,8 +2,9 @@
 Academic hierarchy API (courses / subjects).
 
   GET    /api/v1/public/courses?tenant_id=...  — UNauthenticated; signup dropdown.
-  GET    /api/v1/courses                        — staff; teacher sees only their
-                                                  mapped course(s).
+  GET    /api/v1/courses                        — authenticated staff; teachers
+                                                  see only mapped courses, while
+                                                  admins see tenant courses.
   POST   /api/v1/courses                        — admin; create a course.
   POST   /api/v1/subjects                       — admin; create a subject.
   DELETE /api/v1/courses/{id}                    — admin; delete a course.

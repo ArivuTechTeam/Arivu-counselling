@@ -42,6 +42,7 @@ from app.services.topic_capacity import selectable_topic_choices
 router = APIRouter(prefix="/api/v1/quiz-sets", tags=["quiz"])
 
 CORE_TYPES = {"mcq_single", "mcq_multi", "true_false", "numerical", "fill_blank"}
+QUIZ_SET_PAGE_SIZE_MAX = 100
 
 
 class GenerateRequest(BaseModel):
@@ -600,21 +601,34 @@ def _teacher_quiz_set(service, quiz_set_id: str, profile: CurrentProfile) -> dic
 @router.get("")
 def list_quiz_sets(
     profile: CurrentProfile = Depends(get_current_profile),
+    page: int = 1,
+    page_size: int = 50,
 ) -> list[dict]:
-    """List the tenant's quiz sets, newest first."""
+    """List one bounded page of the teacher's quiz sets, newest first."""
     _require_teacher(profile)
+    if page < 1 or page_size < 1 or page_size > QUIZ_SET_PAGE_SIZE_MAX:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "page must be positive and page_size must be between 1 and "
+                f"{QUIZ_SET_PAGE_SIZE_MAX}."
+            ),
+        )
     service = get_service_client()
-    rows = select_all(
-        service,
-        "quiz_sets",
-        "id, title, status, created_at, published_at",
-        configure=lambda query: query.eq("tenant_id", profile.tenant_id).eq(
-            "created_by", profile.user_id
-        ),
-        order_column="created_at",
-        order_desc=True,
+    start = (page - 1) * page_size
+    rows = (
+        service.table("quiz_sets")
+        .select("id, title, status, created_at, published_at")
+        .eq("tenant_id", profile.tenant_id)
+        .eq("created_by", profile.user_id)
+        .neq("status", "archived")
+        .order("created_at", desc=True)
+        .range(start, start + page_size - 1)
+        .execute()
+        .data
+        or []
     )
-    return [row for row in rows if row.get("status") != "archived"]
+    return rows
 
 
 @router.get("/{quiz_set_id}")

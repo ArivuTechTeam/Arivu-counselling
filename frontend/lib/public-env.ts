@@ -46,5 +46,4 @@ export const PUBLIC_ENV = Object.freeze({
     "NEXT_PUBLIC_API_BASE_URL",
     process.env.NEXT_PUBLIC_API_BASE_URL,
   ),
-  devAccountEmailsJson: process.env.NEXT_PUBLIC_DEV_ACCOUNT_EMAILS_JSON?.trim() || "[]",
 });

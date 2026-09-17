@@ -25,6 +25,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.api import (
     academics,
+    admin,
     auth_account,
     challenge,
     documents,
@@ -50,6 +51,22 @@ from app.lib.request_trace import request_id_for_header
 from app.lib.supabase import SupabaseUnavailableError
 
 logger = logging.getLogger(__name__)
+
+
+def _assert_admin_route_inventory_complete() -> None:
+    """Fail startup if an admin handler is omitted from the public routers."""
+    handler_paths = {route.path for route in admin.router.routes}
+    mounted_paths = institution_admin._PATHS | super_admin._PATHS
+    if handler_paths != mounted_paths:
+        unmounted = sorted(handler_paths - mounted_paths)
+        unknown = sorted(mounted_paths - handler_paths)
+        raise RuntimeError(
+            "Admin route inventory mismatch: "
+            f"unmounted handlers={unmounted}; unknown inventory paths={unknown}."
+        )
+
+
+_assert_admin_route_inventory_complete()
 
 
 def _safe_route_label(request: Request) -> str:

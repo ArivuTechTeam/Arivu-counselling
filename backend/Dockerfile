@@ -3,9 +3,10 @@ FROM python:3.12-slim
 WORKDIR /app
 
 # Install dependencies first, in their own layer, so `pip install` is only
-# re-run when requirements.txt actually changes (not on every code edit).
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# re-run when dependency inputs actually change (not on every code edit).
+# requirements.lock pins and hashes the full Python 3.12/Linux dependency tree.
+COPY requirements.txt requirements.lock ./
+RUN pip install --no-cache-dir --require-hashes -r requirements.lock
 
 COPY . .
 

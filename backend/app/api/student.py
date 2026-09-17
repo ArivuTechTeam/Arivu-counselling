@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from app.lib.auth import CurrentProfile, get_current_profile
 from app.lib.api_errors import public_error
@@ -36,6 +36,75 @@ from app.services.grading import grade_answer
 from app.services.selector import enrolled_subject_ids
 
 router = APIRouter(prefix="/api/v1", tags=["student"])
+
+
+class StudentResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class StudentVariantOut(StudentResponse):
+    id: str
+    variant_type: str
+    total_marks: float | None = None
+    time_limit_minutes: float | None = None
+    question_count: int
+    attempted: bool
+    attempt_count: int
+    attempt_limit: int
+    attempts_remaining: int
+    best_pct: int | None = None
+
+
+class StudentQuizOut(StudentResponse):
+    id: str
+    title: str
+    published_at: datetime | None = None
+    subject_id: str | None = None
+    chapter_id: str | None = None
+    subject_name: str | None = None
+    chapter_name: str | None = None
+    variants: list[StudentVariantOut]
+
+
+class TakingQuestionOut(StudentResponse):
+    id: str
+    type: str
+    question_text: str
+    options: Any = None
+    marks: float | None = None
+    suggested_seconds: int | None = None
+
+
+class AttemptInProgressOut(StudentResponse):
+    attempt_id: str
+    status: Literal["in_progress"]
+    questions: list[TakingQuestionOut]
+    autosave_state: dict[str, Any]
+    time_limit_minutes: float | None = None
+    started_at: datetime | None = None
+    deadline_at: datetime | None = None
+    remaining_seconds: int | None = None
+
+
+class ResultQuestionOut(TakingQuestionOut):
+    correct_answer: Any
+    explanation: str | None = None
+    student_answer: Any = None
+    is_correct: bool | None = None
+    marks_awarded: float | None = None
+
+
+class AttemptResultOut(StudentResponse):
+    attempt_id: str
+    status: str
+    quiz_title: str
+    total_score: float
+    max_score: float
+    results: list[ResultQuestionOut]
+
+
+class AutosaveOut(StudentResponse):
+    saved: bool
 
 
 def _require_student(profile: CurrentProfile) -> None:
@@ -162,7 +231,7 @@ def _quiz_title_for_variant(
     return "Quiz"
 
 
-@router.get("/quizzes")
+@router.get("/quizzes", response_model=list[StudentQuizOut])
 def list_quizzes(profile: CurrentProfile = Depends(get_current_profile)) -> list[dict]:
     _require_student(profile)
     service = get_service_client()
@@ -304,7 +373,11 @@ def list_quizzes(profile: CurrentProfile = Depends(get_current_profile)) -> list
                 best_pct = max(0, min(100, round(top / marks * 100)))
             annotated.append(
                 {
-                    **v,
+                    "id": v["id"],
+                    "variant_type": v["variant_type"],
+                    "total_marks": v.get("total_marks"),
+                    "time_limit_minutes": v.get("time_limit_minutes"),
+                    "question_count": v["question_count"],
                     "attempted": len(graded) > 0,
                     "attempt_count": len(all_attempts),
                     "attempt_limit": attempt_limit,
@@ -316,7 +389,11 @@ def list_quizzes(profile: CurrentProfile = Depends(get_current_profile)) -> list
             )
         result.append(
             {
-                **s,
+                "id": s["id"],
+                "title": s["title"],
+                "published_at": s.get("published_at"),
+                "subject_id": s.get("subject_id"),
+                "chapter_id": s.get("chapter_id"),
                 "subject_name": subj_name.get(s.get("subject_id")),
                 "chapter_name": chap_name.get(s.get("chapter_id")),
                 "variants": annotated,
@@ -329,7 +406,7 @@ class StartAttemptRequest(BaseModel):
     variant_id: str
 
 
-@router.post("/attempts")
+@router.post("/attempts", response_model=AttemptInProgressOut)
 def start_attempt(
     body: StartAttemptRequest,
     profile: CurrentProfile = Depends(get_current_profile),
@@ -461,7 +538,10 @@ def _load_attempt(service, attempt_id: str, profile: CurrentProfile) -> dict:
     return attempt.data
 
 
-@router.get("/attempts/{attempt_id}")
+@router.get(
+    "/attempts/{attempt_id}",
+    response_model=AttemptInProgressOut | AttemptResultOut,
+)
 def get_attempt(
     attempt_id: str,
     profile: CurrentProfile = Depends(get_current_profile),
@@ -551,7 +631,7 @@ class AutosaveRequest(BaseModel):
     answers: dict[str, Any]
 
 
-@router.patch("/attempts/{attempt_id}/autosave")
+@router.patch("/attempts/{attempt_id}/autosave", response_model=AutosaveOut)
 def autosave_attempt(
     attempt_id: str,
     body: AutosaveRequest,
@@ -594,7 +674,7 @@ def autosave_attempt(
     return {"saved": True}
 
 
-@router.post("/attempts/{attempt_id}/submit")
+@router.post("/attempts/{attempt_id}/submit", response_model=AttemptResultOut)
 def submit_attempt(
     attempt_id: str,
     body: SubmitRequest,

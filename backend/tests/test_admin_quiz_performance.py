@@ -244,6 +244,21 @@ class AdminQuizPerformanceTests(unittest.TestCase):
         self.assertEqual(quiz.review_status.approved, 1)
         self.assertEqual(quiz.last_attempted_at.isoformat(), "2026-09-08T13:00:00+00:00")
 
+    def test_quiz_summary_returns_only_the_requested_page(self) -> None:
+        self.service.tables["quiz_sets"].append(
+            {
+                "id": "set-a-older", "tenant_id": "tenant-a", "title": "Geometry",
+                "status": "draft", "subject_id": "subject-a", "created_by": "teacher-a",
+                "created_at": "2026-09-07T10:00:00Z", "published_at": None,
+            }
+        )
+
+        first = asyncio.run(admin_quiz_sets(self.profile, page=1, page_size=1))
+        second = asyncio.run(admin_quiz_sets(self.profile, page=2, page_size=1))
+
+        self.assertEqual([row.id for row in first], ["set-a"])
+        self.assertEqual([row.id for row in second], ["set-a-older"])
+
     def test_detail_returns_breakdowns_students_and_weak_questions(self) -> None:
         detail = asyncio.run(admin_quiz_set_detail("set-a", self.profile))
 

@@ -18,6 +18,7 @@ class _Query:
         self.filters: list[tuple[str, object]] = []
         self.payload: dict | None = None
         self.single = False
+        self.range_bounds: tuple[int, int] | None = None
 
     def select(self, *_args):
         return self
@@ -30,6 +31,14 @@ class _Query:
         self.filters.append((key, value))
         return self
 
+    def neq(self, key: str, value: object):
+        self.filters.append((f"!{key}", value))
+        return self
+
+    def range(self, start: int, end: int):
+        self.range_bounds = (start, end)
+        return self
+
     def order(self, *_args, **_kwargs):
         return self
 
@@ -39,7 +48,17 @@ class _Query:
 
     def execute(self):
         rows = self.db.setdefault(self.table, [])
-        matches = [row for row in rows if all(row.get(k) == v for k, v in self.filters)]
+        matches = [
+            row
+            for row in rows
+            if all(
+                row.get(k[1:]) != v if k.startswith("!") else row.get(k) == v
+                for k, v in self.filters
+            )
+        ]
+        if self.range_bounds:
+            start, end = self.range_bounds
+            matches = matches[start : end + 1]
         if self.payload is not None:
             for row in matches:
                 row.update(self.payload)
@@ -62,6 +81,26 @@ def _teacher(tenant: str = "t1") -> CurrentProfile:
 
 
 class TeacherContentArchiveTests(unittest.TestCase):
+    def test_quiz_list_returns_only_the_requested_page(self) -> None:
+        service = _Service({"quiz_sets": [
+            {
+                "id": "set1", "tenant_id": "t1", "created_by": "teacher-1",
+                "title": "First", "status": "draft", "created_at": "2026-09-12T00:00:00Z",
+                "published_at": None,
+            },
+            {
+                "id": "set2", "tenant_id": "t1", "created_by": "teacher-1",
+                "title": "Second", "status": "draft", "created_at": "2026-09-11T00:00:00Z",
+                "published_at": None,
+            },
+        ]})
+        with patch("app.api.quiz.get_service_client", return_value=service):
+            first = list_quiz_sets(_teacher(), page=1, page_size=1)
+            second = list_quiz_sets(_teacher(), page=2, page_size=1)
+
+        self.assertEqual([row["id"] for row in first], ["set1"])
+        self.assertEqual([row["id"] for row in second], ["set2"])
+
     def test_document_archive_is_owner_scoped_and_hidden_from_list(self) -> None:
         service = _Service({"documents": [{
             "id": "d1", "tenant_id": "t1", "uploaded_by": "teacher-1",

@@ -5,7 +5,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from app.api.practice import _load_questions
-from app.api.student import _ordered_approved_questions, list_quizzes
+from app.api.student import StudentQuizOut, _ordered_approved_questions, list_quizzes
 from app.lib.auth import CurrentProfile
 
 
@@ -160,6 +160,8 @@ class StudentQuizQueryEfficiencyTests(unittest.TestCase):
         self.assertEqual(quizzes[0]["variants"][0]["time_limit_minutes"], 2)
         self.assertEqual(quizzes[0]["variants"][0]["attempt_limit"], 4)
         self.assertEqual(quizzes[0]["variants"][0]["attempts_remaining"], 4)
+        StudentQuizOut.model_validate(quizzes[0])
+        self.assertNotIn("quiz_set_id", quizzes[0]["variants"][0])
         self.assertEqual(len(self.service.calls), 7)
         self.assertEqual(
             sum(1 for table, _ in self.service.calls if table == "quiz_variants"), 1

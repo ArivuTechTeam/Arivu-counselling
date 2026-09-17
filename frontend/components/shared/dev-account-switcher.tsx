@@ -4,7 +4,6 @@ import { useCallback, useState } from "react";
 
 import { useEscapeKey } from "@/components/ui/dialog";
 import { createClient } from "@/lib/supabase";
-import { PUBLIC_ENV } from "@/lib/public-env";
 
 /**
  * DEV-ONLY quick account switcher.
@@ -31,7 +30,13 @@ type DevAccount = {
 // NEXT_PUBLIC values are browser-readable by definition. This configuration is
 // deliberately limited to non-secret labels/emails; never add passwords here.
 function readDevAccounts(): DevAccount[] {
-  const raw = PUBLIC_ENV.devAccountEmailsJson;
+  // The production branch is eliminated at build time, so local account
+  // labels/emails never become part of a production browser bundle even if a
+  // deployment environment accidentally defines the development variable.
+  const raw =
+    process.env.NODE_ENV === "production"
+      ? "[]"
+      : process.env.NEXT_PUBLIC_DEV_ACCOUNT_EMAILS_JSON?.trim() || "[]";
   if (!raw) return [];
   try {
     const parsed = JSON.parse(raw);
