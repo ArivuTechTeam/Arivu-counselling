@@ -584,39 +584,31 @@ as $$
 declare
   selected_tenant uuid;
   requested_course uuid;
-  trusted_provisioning boolean;
   google_oauth_signup boolean;
 begin
-  trusted_provisioning := coalesce(
+  if coalesce(
     new.raw_app_meta_data->>'provisioned_by_backend', 'false'
-  ) = 'true';
+  ) = 'true' then
+    return new;
+  end if;
+
   requested_course := nullif(new.raw_user_meta_data->>'course_id', '')::uuid;
   google_oauth_signup :=
     coalesce(new.raw_app_meta_data->>'provider', '') = 'google'
     or (coalesce(new.raw_app_meta_data->'providers', '[]'::jsonb) ? 'google');
 
-  if trusted_provisioning then
-    selected_tenant := (new.raw_user_meta_data->>'tenant_id')::uuid;
-    if not exists (
-      select 1 from public.tenants
-      where id = selected_tenant and is_active = true
-    ) then
-      raise exception 'A valid active institution is required';
+  if requested_course is null then
+    if google_oauth_signup then
+      return new;
     end if;
-  else
-    if requested_course is null then
-      if google_oauth_signup then
-        return new;
-      end if;
-      raise exception 'A valid course is required for public signup';
-    end if;
-    select c.tenant_id into selected_tenant
-    from public.courses c
-    join public.tenants t on t.id = c.tenant_id and t.is_active = true
-    where c.id = requested_course;
-    if selected_tenant is null then
-      raise exception 'A valid course is required for public signup';
-    end if;
+    raise exception 'A valid course is required for public signup';
+  end if;
+  select c.tenant_id into selected_tenant
+  from public.courses c
+  join public.tenants t on t.id = c.tenant_id and t.is_active = true
+  where c.id = requested_course;
+  if selected_tenant is null then
+    raise exception 'A valid course is required for public signup';
   end if;
 
   insert into public.profiles (id, tenant_id, role, full_name)
@@ -627,17 +619,9 @@ begin
     new.raw_user_meta_data->>'full_name'
   );
 
-  if requested_course is not null then
-    if not exists (
-      select 1 from public.courses
-      where id = requested_course and tenant_id = selected_tenant
-    ) then
-      raise exception 'Course does not belong to the selected institution';
-    end if;
-    insert into public.enrollments (tenant_id, profile_id, course_id)
-    values (selected_tenant, new.id, requested_course)
-    on conflict (profile_id, course_id) do nothing;
-  end if;
+  insert into public.enrollments (tenant_id, profile_id, course_id)
+  values (selected_tenant, new.id, requested_course)
+  on conflict (profile_id, course_id) do nothing;
 
   return new;
 end;
