@@ -653,6 +653,10 @@ def create_user(
         "tenant_id": profile.tenant_id,
         "role": "teacher",
         "full_name": body.full_name.strip(),
+        # Supabase Auth inserts auth.users before it applies app_metadata.
+        # The signup trigger uses this non-authorizing routing hint to leave
+        # backend-provisioned profiles to the code below.
+        "_backend_provisioning_intent": True,
         # Admin set a temp password → prompt them to change it on first login.
         "must_change_password": True,
         "course_id": provisioning_course_id,
@@ -1290,6 +1294,7 @@ def create_admin(
                     "tenant_id": body.tenant_id,
                     "role": "institution_admin",
                     "full_name": body.full_name.strip(),
+                    "_backend_provisioning_intent": True,
                     "must_change_password": True,
                 },
             }
@@ -2270,6 +2275,7 @@ def onboard_institution(
                         "tenant_id": tenant_id,
                         "role": "institution_admin",
                         "full_name": (body.admin_full_name or "").strip(),
+                        "_backend_provisioning_intent": True,
                         "must_change_password": True,
                     },
                 }

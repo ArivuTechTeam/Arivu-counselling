@@ -174,12 +174,13 @@ class _ProvisionAuthAdmin:
     def __init__(self, service: "_ProvisionService") -> None:
         self.service = service
 
-    def create_user(self, _payload: dict):
+    def create_user(self, payload: dict):
+        self.service.created_auth_payloads.append(payload)
         user_id = f"auth-{self.service.next_id}"
         self.service.next_id += 1
         self.service.auth_users.add(user_id)
-        # Migration 39 bypasses the public-signup trigger for trusted backend
-        # provisioning. The API writes the authoritative profile afterward.
+        # Migration 40 bypasses the public-signup trigger at Auth insert time.
+        # The API writes the authoritative profile afterward.
         return SimpleNamespace(user=SimpleNamespace(id=user_id))
 
     def delete_user(self, user_id: str):
@@ -193,6 +194,7 @@ class _ProvisionService:
     def __init__(self) -> None:
         self.next_id = 1
         self.auth_users: set[str] = set()
+        self.created_auth_payloads: list[dict] = []
         self.tables = {
             "tenants": [{"id": "tenant-a", "name": "Existing", "subdomain": "existing", "is_active": True}],
             "profiles": [],
@@ -432,6 +434,11 @@ class SuperAdminRegressionTests(unittest.TestCase):
             self.assertEqual(profile["tenant_id"], "tenant-a")
             self.assertEqual(profile["role"], "institution_admin")
             self.assertTrue(profile["must_change_password"])
+            payload = service.created_auth_payloads[-1]
+            self.assertTrue(
+                payload["user_metadata"]["_backend_provisioning_intent"]
+            )
+            self.assertTrue(payload["app_metadata"]["provisioned_by_backend"])
 
             remove_admin(created_id, SUPER)
 
@@ -464,6 +471,9 @@ class SuperAdminRegressionTests(unittest.TestCase):
         self.assertEqual(profile["tenant_id"], created_tenant["id"])
         self.assertEqual(profile["role"], "institution_admin")
         self.assertTrue(profile["must_change_password"])
+        payload = service.created_auth_payloads[-1]
+        self.assertTrue(payload["user_metadata"]["_backend_provisioning_intent"])
+        self.assertTrue(payload["app_metadata"]["provisioned_by_backend"])
 
 
 if __name__ == "__main__":

@@ -78,18 +78,31 @@ class ExamDeadlineTests(unittest.TestCase):
 
 
 class MigrationSecurityTests(unittest.TestCase):
-    def test_backend_provisioning_bypasses_public_signup_trigger(self) -> None:
+    def test_backend_provisioning_bypasses_trigger_at_auth_insert_time(self) -> None:
         root = Path(__file__).resolve().parents[2]
         sql = (
-            root / "migrations/migration-39-decouple-backend-auth-provisioning.sql"
+            root / "migrations/migration-40-fix-admin-auth-insert-order.sql"
         ).read_text().lower()
 
-        marker = "new.raw_app_meta_data->>'provisioned_by_backend'"
-        self.assertIn(marker, sql)
-        self.assertLess(sql.index(marker), sql.index("insert into public.profiles"))
-        self.assertIn(") = 'true' then\n    return new;", sql)
+        insert_marker = (
+            "new.raw_user_meta_data->>'_backend_provisioning_intent'"
+        )
+        durable_marker = "new.raw_app_meta_data->>'provisioned_by_backend'"
+        self.assertIn(insert_marker, sql)
+        self.assertIn(durable_marker, sql)
+        self.assertLess(
+            sql.index(insert_marker), sql.index("insert into public.profiles")
+        )
+        self.assertIn("then\n    return new;", sql)
         self.assertIn("'student'::public.user_role", sql)
         self.assertIn("insert into public.enrollments", sql)
+
+        backend = (root / "backend/app/api/admin.py").read_text()
+        self.assertEqual(backend.count('"_backend_provisioning_intent": True'), 3)
+        self.assertEqual(
+            backend.count('"app_metadata": {"provisioned_by_backend": True}'),
+            3,
+        )
 
     def test_auth_trigger_repair_restores_safe_execution_context(self) -> None:
         root = Path(__file__).resolve().parents[2]
