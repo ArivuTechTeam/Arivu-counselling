@@ -359,6 +359,7 @@ create table quiz_attempts (
   student_id uuid not null references profiles(id),
   status attempt_status not null default 'in_progress',
   autosave_state jsonb,                     -- last known client state, for recovery
+  question_snapshot jsonb not null default '[]'::jsonb,
   started_at timestamptz not null default now(),
   submitted_at timestamptz,
   total_score numeric
@@ -374,7 +375,8 @@ create or replace function public.create_limited_quiz_attempt(
   p_variant_id uuid,
   p_student_id uuid,
   p_started_at timestamptz,
-  p_max_attempts integer
+  p_max_attempts integer,
+  p_question_snapshot jsonb
 )
 returns uuid
 language plpgsql
@@ -386,6 +388,10 @@ declare
 begin
   if p_max_attempts < 1 then
     raise exception 'quiz_attempt_limit_invalid' using errcode = '22023';
+  end if;
+  if jsonb_typeof(p_question_snapshot) <> 'array'
+     or jsonb_array_length(p_question_snapshot) < 1 then
+    raise exception 'quiz_attempt_snapshot_invalid' using errcode = '22023';
   end if;
   perform pg_catalog.pg_advisory_xact_lock(
     pg_catalog.hashtextextended(
@@ -403,18 +409,19 @@ begin
     raise exception 'quiz_attempt_limit_reached' using errcode = '23514';
   end if;
   insert into public.quiz_attempts (
-    tenant_id, variant_id, student_id, status, started_at
+    tenant_id, variant_id, student_id, status, started_at, question_snapshot
   ) values (
-    p_tenant_id, p_variant_id, p_student_id, 'in_progress', p_started_at
+    p_tenant_id, p_variant_id, p_student_id, 'in_progress', p_started_at,
+    p_question_snapshot
   ) returning id into created_id;
   return created_id;
 end;
 $$;
 revoke all on function public.create_limited_quiz_attempt(
-  uuid, uuid, uuid, timestamptz, integer
+  uuid, uuid, uuid, timestamptz, integer, jsonb
 ) from public, anon, authenticated;
 grant execute on function public.create_limited_quiz_attempt(
-  uuid, uuid, uuid, timestamptz, integer
+  uuid, uuid, uuid, timestamptz, integer, jsonb
 ) to service_role;
 
 create table attempt_answers (

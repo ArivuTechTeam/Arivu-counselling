@@ -25,6 +25,7 @@ from app.lib.auth import CurrentProfile, get_current_profile
 from app.lib.api_errors import public_error
 from app.lib.config import get_settings
 from app.lib.supabase import get_service_client
+from app.lib.supabase_queries import select_all, select_all_in
 from app.services.attempt_timing import (
     deadline_state,
     effective_time_limit_minutes,
@@ -126,7 +127,10 @@ def _load_session(service, session_id: str, profile: CurrentProfile) -> dict:
 def _load_session_questions(
     service, session: dict, tenant_id: str
 ) -> list[dict]:
-    """Use a challenge's immutable snapshot; legacy sessions use live rows."""
+    """Use the session's immutable paper; retain fallbacks for legacy rows."""
+    snapshot = session.get("question_snapshot")
+    if isinstance(snapshot, list) and snapshot:
+        return snapshot
     challenge_id = session.get("challenge_id")
     if challenge_id:
         challenge = (
@@ -269,6 +273,12 @@ def start_practice(
             detail="No questions available yet for this selection — ask your "
             "teacher to publish some, or try another subject.",
         )
+    questions = _load_questions(service, ids, profile.tenant_id)
+    if len(questions) != len(ids):
+        raise HTTPException(
+            status_code=409,
+            detail="Some selected questions are no longer available. Please try again.",
+        )
     row = (
         service.table("practice_sessions")
         .insert(
@@ -280,15 +290,14 @@ def start_practice(
                 "chapter_id": body.chapter_id,
                 "config": {"count": len(ids), "difficulty": body.difficulty},
                 "question_ids": ids,
+                "question_snapshot": questions,
                 "status": "in_progress",
             }
         )
         .execute()
         .data[0]
     )
-    # Prime the first render with the questions selected above. This replaces
-    # the immediate GET that otherwise reloads the new session and its questions.
-    questions = _load_questions(service, ids, profile.tenant_id)
+    # Prime the first render with the immutable questions saved above.
     return {
         "session_id": row["id"],
         "attempt_id": row["id"],
@@ -544,27 +553,26 @@ def list_bookmarks(
     """The student's bookmarked questions, with answers/explanations to revise."""
     _require_student(profile)
     service = get_service_client()
-    marks = (
-        service.table("bookmarks")
-        .select("question_id, created_at")
-        .eq("student_id", profile.user_id)
-        .eq("tenant_id", profile.tenant_id)
-        .order("created_at", desc=True)
-        .execute()
-        .data
-        or []
+    marks = select_all(
+        service,
+        "bookmarks",
+        "question_id, created_at",
+        configure=lambda query: query.eq("student_id", profile.user_id).eq(
+            "tenant_id", profile.tenant_id
+        ),
+        order_column="created_at",
+        order_desc=True,
     )
     ids = [m["question_id"] for m in marks]
     if not ids:
         return []
-    qrows = (
-        service.table("questions")
-        .select("id, type, question_text, options, correct_answer, explanation, difficulty")
-        .in_("id", ids)
-        .eq("tenant_id", profile.tenant_id)
-        .execute()
-        .data
-        or []
+    qrows = select_all_in(
+        service,
+        "questions",
+        "id, type, question_text, options, correct_answer, explanation, difficulty",
+        in_column="id",
+        values=ids,
+        configure=lambda query: query.eq("tenant_id", profile.tenant_id),
     )
     by_id = {q["id"]: q for q in qrows}
     return [by_id[i] for i in ids if i in by_id]  # newest-first order preserved
@@ -647,15 +655,13 @@ def _daily_activity_date(session: dict) -> str:
 
 
 def _daily_sessions(service, profile: CurrentProfile) -> list[dict]:
-    return (
-        service.table("practice_sessions")
-        .select("id, status, started_at, submitted_at, activity_date, config")
-        .eq("tenant_id", profile.tenant_id)
+    return select_all(
+        service,
+        "practice_sessions",
+        "id, status, started_at, submitted_at, activity_date, config",
+        configure=lambda query: query.eq("tenant_id", profile.tenant_id)
         .eq("student_id", profile.user_id)
-        .eq("mode", "daily")
-        .execute()
-        .data
-        or []
+        .eq("mode", "daily"),
     )
 
 
@@ -789,6 +795,7 @@ def start_daily(profile: CurrentProfile = Depends(get_current_profile)) -> dict:
                         "duration_minutes": duration_minutes,
                     },
                     "question_ids": ids,
+                    "question_snapshot": questions,
                     "status": "in_progress",
                     "started_at": started_at,
                 }
@@ -894,6 +901,7 @@ def start_exam(profile: CurrentProfile = Depends(get_current_profile)) -> dict:
                         "duration_minutes": int(cfg["duration_minutes"]),
                     },
                     "question_ids": ids,
+                    "question_snapshot": questions,
                     "status": "in_progress",
                     "started_at": started_at,
                 }
@@ -931,14 +939,13 @@ def leaderboard(
     my_course_ids = list(
         {
             e["course_id"]
-            for e in (
-                service.table("enrollments")
-                .select("course_id")
-                .eq("profile_id", profile.user_id)
-                .eq("tenant_id", t)
-                .execute()
-                .data
-                or []
+            for e in select_all(
+                service,
+                "enrollments",
+                "course_id",
+                configure=lambda query: query.eq("profile_id", profile.user_id).eq(
+                    "tenant_id", t
+                ),
             )
         }
     )
@@ -952,15 +959,14 @@ def leaderboard(
     }
     if not my_course_ids:
         return empty
-    courses = (
-        service.table("courses")
-        .select("id, name")
-        .in_("id", my_course_ids)
-        .eq("tenant_id", t)
-        .order("name")
-        .execute()
-        .data
-        or []
+    courses = select_all_in(
+        service,
+        "courses",
+        "id, name",
+        in_column="id",
+        values=my_course_ids,
+        configure=lambda query: query.eq("tenant_id", t),
+        order_column="name",
     )
     if not courses:
         return empty
@@ -976,14 +982,13 @@ def leaderboard(
     course_students = list(
         {
             e["profile_id"]
-            for e in (
-                service.table("enrollments")
-                .select("profile_id")
-                .eq("course_id", selected)
-                .eq("tenant_id", t)
-                .execute()
-                .data
-                or []
+            for e in select_all(
+                service,
+                "enrollments",
+                "profile_id",
+                configure=lambda query: query.eq("course_id", selected).eq(
+                    "tenant_id", t
+                ),
             )
         }
     )
@@ -995,50 +1000,45 @@ def leaderboard(
     # including work completed for a different course.
     course_subjects = {
         row["id"]
-        for row in (
-            service.table("subjects")
-            .select("id")
-            .eq("course_id", selected)
-            .eq("tenant_id", t)
-            .execute()
-            .data
-            or []
+        for row in select_all(
+            service,
+            "subjects",
+            "id",
+            configure=lambda query: query.eq("course_id", selected).eq(
+                "tenant_id", t
+            ),
         )
     }
-    attempts = (
-        service.table("quiz_attempts")
-        .select("id, student_id, total_score, variant_id")
-        .eq("tenant_id", t)
-        .eq("status", "graded")
-        .in_("student_id", course_students)
-        .execute()
-        .data
-        or []
+    attempts = select_all_in(
+        service,
+        "quiz_attempts",
+        "id, student_id, total_score, variant_id",
+        in_column="student_id",
+        values=course_students,
+        configure=lambda query: query.eq("tenant_id", t).eq("status", "graded"),
     )
     variant_ids = list({a["variant_id"] for a in attempts if a.get("variant_id")})
     variants: dict = {}
     if variant_ids:
-        for v in (
-            service.table("quiz_variants")
-            .select("id, total_marks, quiz_set_id")
-            .in_("id", variant_ids)
-            .eq("tenant_id", t)
-            .execute()
-            .data
-            or []
+        for v in select_all_in(
+            service,
+            "quiz_variants",
+            "id, total_marks, quiz_set_id",
+            in_column="id",
+            values=variant_ids,
+            configure=lambda query: query.eq("tenant_id", t),
         ):
             variants[v["id"]] = v
     set_ids = list({v["quiz_set_id"] for v in variants.values()})
     set_subject: dict[str, str | None] = {}
     if set_ids:
-        for quiz_set in (
-            service.table("quiz_sets")
-            .select("id, subject_id")
-            .in_("id", set_ids)
-            .eq("tenant_id", t)
-            .execute()
-            .data
-            or []
+        for quiz_set in select_all_in(
+            service,
+            "quiz_sets",
+            "id, subject_id",
+            in_column="id",
+            values=set_ids,
+            configure=lambda query: query.eq("tenant_id", t),
         ):
             set_subject[quiz_set["id"]] = quiz_set.get("subject_id")
     attempts = [
@@ -1050,15 +1050,13 @@ def leaderboard(
         )
     ]
 
-    sessions = (
-        service.table("practice_sessions")
-        .select("id, student_id, total_score, max_score, subject_id, chapter_id")
-        .eq("tenant_id", t)
-        .eq("status", "graded")
-        .in_("student_id", course_students)
-        .execute()
-        .data
-        or []
+    sessions = select_all_in(
+        service,
+        "practice_sessions",
+        "id, student_id, total_score, max_score, subject_id, chapter_id",
+        in_column="student_id",
+        values=course_students,
+        configure=lambda query: query.eq("tenant_id", t).eq("status", "graded"),
     )
 
     # Subject-scoped practice belongs to that subject's course. An unscoped
@@ -1067,24 +1065,22 @@ def leaderboard(
     chapter_ids = list({s["chapter_id"] for s in sessions if s.get("chapter_id")})
     chapter_subject: dict[str, str] = {}
     if chapter_ids:
-        for chapter in (
-            service.table("chapters")
-            .select("id, subject_id")
-            .in_("id", chapter_ids)
-            .eq("tenant_id", t)
-            .execute()
-            .data
-            or []
+        for chapter in select_all_in(
+            service,
+            "chapters",
+            "id, subject_id",
+            in_column="id",
+            values=chapter_ids,
+            configure=lambda query: query.eq("tenant_id", t),
         ):
             chapter_subject[chapter["id"]] = chapter["subject_id"]
-    enrolment_rows = (
-        service.table("enrollments")
-        .select("profile_id, course_id")
-        .in_("profile_id", course_students)
-        .eq("tenant_id", t)
-        .execute()
-        .data
-        or []
+    enrolment_rows = select_all_in(
+        service,
+        "enrollments",
+        "profile_id, course_id",
+        in_column="profile_id",
+        values=course_students,
+        configure=lambda query: query.eq("tenant_id", t),
     )
     student_courses: dict[str, set[str]] = defaultdict(set)
     for enrolment in enrolment_rows:
@@ -1118,28 +1114,26 @@ def leaderboard(
     # not equivalent when an exam applies negative marking or variable marks.
     attempt_owner = {a["id"]: a["student_id"] for a in attempts}
     if attempt_owner:
-        for answer in (
-            service.table("attempt_answers")
-            .select("attempt_id, is_correct")
-            .in_("attempt_id", list(attempt_owner))
-            .eq("tenant_id", t)
-            .execute()
-            .data
-            or []
+        for answer in select_all_in(
+            service,
+            "attempt_answers",
+            "attempt_id, is_correct",
+            in_column="attempt_id",
+            values=list(attempt_owner),
+            configure=lambda query: query.eq("tenant_id", t),
         ):
             d = agg[attempt_owner[answer["attempt_id"]]]
             d["answered"] += 1
             d["correct"] += 1 if answer.get("is_correct") else 0
     session_owner = {s["id"]: s["student_id"] for s in sessions}
     if session_owner:
-        for answer in (
-            service.table("practice_answers")
-            .select("session_id, is_correct")
-            .in_("session_id", list(session_owner))
-            .eq("tenant_id", t)
-            .execute()
-            .data
-            or []
+        for answer in select_all_in(
+            service,
+            "practice_answers",
+            "session_id, is_correct",
+            in_column="session_id",
+            values=list(session_owner),
+            configure=lambda query: query.eq("tenant_id", t),
         ):
             d = agg[session_owner[answer["session_id"]]]
             d["answered"] += 1
@@ -1148,14 +1142,13 @@ def leaderboard(
     # Names — and this also filters to actual students (not staff test accounts).
     names: dict = {}
     if agg:
-        for p in (
-            service.table("profiles")
-            .select("id, full_name, role")
-            .in_("id", list(agg.keys()))
-            .eq("tenant_id", t)
-            .execute()
-            .data
-            or []
+        for p in select_all_in(
+            service,
+            "profiles",
+            "id, full_name, role",
+            in_column="id",
+            values=list(agg.keys()),
+            configure=lambda query: query.eq("tenant_id", t),
         ):
             if p.get("role") == "student":
                 names[p["id"]] = p.get("full_name") or "Student"
