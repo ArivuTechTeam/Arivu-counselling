@@ -1,8 +1,14 @@
 from __future__ import annotations
 
+import asyncio
 import unittest
+from types import SimpleNamespace
 
+from fastapi import HTTPException
+
+from app.lib.api_errors import PublicAPIError
 from app.lib.request_trace import request_id_for_header
+from app.main import safe_http_error
 
 
 class RequestTraceTests(unittest.TestCase):
@@ -30,6 +36,35 @@ class RequestTraceTests(unittest.TestCase):
                 generated = request_id_for_header(unsafe_value)
                 self.assertNotEqual(generated, unsafe_value)
                 self.assertEqual(len(generated), 32)
+
+    def test_safe_5xx_detail_is_returned_with_request_id(self) -> None:
+        request = SimpleNamespace(state=SimpleNamespace(request_id="request-123"))
+        response = asyncio.run(
+            safe_http_error(
+                request,
+                PublicAPIError(
+                    status_code=503,
+                    detail="The account service is temporarily unavailable.",
+                ),
+            )
+        )
+
+        self.assertEqual(response.status_code, 503)
+        self.assertIn(b"account service is temporarily unavailable", response.body)
+        self.assertIn(b"request-123", response.body)
+
+    def test_unmarked_5xx_detail_remains_hidden(self) -> None:
+        request = SimpleNamespace(state=SimpleNamespace(request_id="request-456"))
+        response = asyncio.run(
+            safe_http_error(
+                request,
+                HTTPException(status_code=500, detail="private database detail"),
+            )
+        )
+
+        self.assertEqual(response.status_code, 500)
+        self.assertNotIn(b"private database detail", response.body)
+        self.assertIn(b"Please try again", response.body)
 
 
 if __name__ == "__main__":

@@ -8,6 +8,11 @@ from fastapi import HTTPException
 
 logger = logging.getLogger("app.api")
 
+
+class PublicAPIError(HTTPException):
+    """An HTTP error whose detail is explicitly safe to return to clients."""
+
+
 _AUTH_ERROR_MESSAGES: dict[str, tuple[int, str]] = {
     "email_exists": (
         409,
@@ -48,7 +53,7 @@ def public_error(
         operation,
         type(exception).__name__,
     )
-    return HTTPException(status_code=status_code, detail=detail)
+    return PublicAPIError(status_code=status_code, detail=detail)
 
 
 def auth_provisioning_error(
@@ -73,15 +78,19 @@ def auth_provisioning_error(
     if mapped is not None:
         status_code, detail = mapped
         headers = {"Retry-After": "60"} if status_code == 429 else None
-        return HTTPException(status_code=status_code, detail=detail, headers=headers)
+        return PublicAPIError(
+            status_code=status_code,
+            detail=detail,
+            headers=headers,
+        )
 
     if provider_status is not None and provider_status >= 500:
-        return HTTPException(
+        return PublicAPIError(
             status_code=503,
             detail="The account service could not create the administrator right now. Please try again shortly.",
         )
 
-    return HTTPException(
+    return PublicAPIError(
         status_code=400,
         detail="The administrator account could not be created. Check the email address and generate a new temporary password.",
     )
