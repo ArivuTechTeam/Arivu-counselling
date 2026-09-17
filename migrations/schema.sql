@@ -586,7 +586,12 @@ declare
   requested_course uuid;
   google_oauth_signup boolean;
 begin
+  -- Supabase Auth inserts user_metadata with auth.users, then applies custom
+  -- app_metadata later. This routing hint only skips trigger provisioning;
+  -- the protected backend still creates the authoritative profile.
   if coalesce(
+    new.raw_user_meta_data->>'_backend_provisioning_intent', 'false'
+  ) = 'true' or coalesce(
     new.raw_app_meta_data->>'provisioned_by_backend', 'false'
   ) = 'true' then
     return new;
