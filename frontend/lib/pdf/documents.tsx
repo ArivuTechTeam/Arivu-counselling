@@ -149,15 +149,28 @@ function Footer() {
 export function QuestionPaperDoc({
   title,
   meta,
-  questions,
+  questions = [],
+  sections,
   withAnswers,
 }: {
   title: string;
   meta?: string;
-  questions: Q[];
+  questions?: Q[];
+  sections?: { title: string; questions: Q[] }[];
   withAnswers: boolean;
 }) {
-  const totalMarks = questions.reduce((sum, q) => sum + marksOf(q), 0);
+  const paperSections = sections?.length
+    ? sections
+    : [{ title: "", questions }];
+  const questionCount = paperSections.reduce(
+    (sum, section) => sum + section.questions.length,
+    0,
+  );
+  const totalMarks = paperSections.reduce(
+    (sum, section) =>
+      sum + section.questions.reduce((sectionSum, q) => sectionSum + marksOf(q), 0),
+    0,
+  );
   return (
     <Document title={title}>
       <Page size="A4" style={s.page}>
@@ -165,33 +178,40 @@ export function QuestionPaperDoc({
           <Text style={s.brand}>ARIVUPRO ACADEMY</Text>
           <Text style={s.title}>{title}</Text>
           <Text style={s.meta}>
-            {[meta, `${questions.length} questions`, `${totalMarks} marks`]
+            {[meta, `${questionCount} questions`, `${totalMarks} marks`]
               .filter(Boolean)
               .join("   ·   ")}
             {withAnswers ? "   ·   ANSWER KEY" : ""}
           </Text>
         </View>
-        {questions.map((q, i) => (
-          <View key={i} style={s.qBlock} wrap={false}>
-            <Text style={s.qText}>
-              {i + 1}. {displayText(q.question_text)}  ({marksOf(q)} {marksOf(q) === 1 ? "mark" : "marks"})
-            </Text>
-            {q.options?.map((o, oi) => (
-              <Text key={oi} style={s.option}>
-                {LETTER[oi] ?? oi + 1}. {displayText(o.text)}
-              </Text>
+        {paperSections.map((section, sectionIndex) => (
+          <View key={sectionIndex}>
+            {paperSections.length > 1 && (
+              <Text style={s.sectionTitle}>{section.title}</Text>
+            )}
+            {section.questions.map((q, i) => (
+              <View key={i} style={s.qBlock} wrap={false}>
+                <Text style={s.qText}>
+                  {i + 1}. {displayText(q.question_text)}  ({marksOf(q)} {marksOf(q) === 1 ? "mark" : "marks"})
+                </Text>
+                {q.options?.map((o, oi) => (
+                  <Text key={oi} style={s.option}>
+                    {LETTER[oi] ?? oi + 1}. {displayText(o.text)}
+                  </Text>
+                ))}
+                {q.type === "fill_blank" && !q.options && (
+                  <Text style={s.option}>______________________________</Text>
+                )}
+                {withAnswers && (
+                  <Text style={s.answer}>
+                    Answer: {answerText(q.correct_answer, q.options)}
+                  </Text>
+                )}
+                {withAnswers && q.explanation ? (
+                  <Text style={s.explanation}>Why: {displayText(q.explanation)}</Text>
+                ) : null}
+              </View>
             ))}
-            {q.type === "fill_blank" && !q.options && (
-              <Text style={s.option}>______________________________</Text>
-            )}
-            {withAnswers && (
-              <Text style={s.answer}>
-                Answer: {answerText(q.correct_answer, q.options)}
-              </Text>
-            )}
-            {withAnswers && q.explanation ? (
-              <Text style={s.explanation}>Why: {displayText(q.explanation)}</Text>
-            ) : null}
           </View>
         ))}
         <Footer />

@@ -1142,6 +1142,7 @@ export type SubjectMetrics = {
   quizzes_draft: number;
   questions: number;
   pending_review: number;
+  needs_edit: number;
   attempts: number;
   students: number;
   avg_score_pct: number | null;
@@ -1556,6 +1557,7 @@ export type ReviewPipeline = {
   pending_review: number;
   approved: number;
   rejected: number;
+  needs_edit: number;
 };
 export type ActivityPoint = { date: string; count: number };
 export type ScoreBand = { label: string; count: number };

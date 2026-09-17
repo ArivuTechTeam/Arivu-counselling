@@ -74,6 +74,13 @@ class _Service:
                     "created_by": "other-teacher",
                     "tenant_id": TENANT_ID,
                 },
+                {
+                    "id": "q-needs-edit",
+                    "chapter_id": "ch1",
+                    "review_status": "needs_edit",
+                    "created_by": TEACHER_ID,
+                    "tenant_id": TENANT_ID,
+                },
             ],
             "quiz_sets": [
                 {
@@ -123,8 +130,9 @@ class TeacherSubjectMetricsTests(unittest.TestCase):
         self.assertEqual(len(result), 1)
         metric = result[0]
         self.assertEqual(metric["quizzes_total"], 1)
-        self.assertEqual(metric["questions"], 1)
+        self.assertEqual(metric["questions"], 2)
         self.assertEqual(metric["pending_review"], 1)
+        self.assertEqual(metric["needs_edit"], 1)
         self.assertEqual(metric["attempts"], 2)
         self.assertEqual(metric["students"], 2)
         self.assertEqual(metric["avg_score_pct"], 90.0)

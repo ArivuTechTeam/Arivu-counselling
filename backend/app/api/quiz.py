@@ -20,6 +20,7 @@ from app.lib.api_errors import public_error
 from app.lib.config import get_settings
 from app.lib.storage import download_bytes
 from app.lib.supabase import get_service_client
+from app.lib.supabase_queries import select_all, select_all_in
 from app.services.blueprint import generate_blueprint_quiz
 from app.services.events import QUIZ_PUBLISHED, log_event
 from app.services.extraction import extract_text
@@ -603,15 +604,17 @@ def list_quiz_sets(
     """List the tenant's quiz sets, newest first."""
     _require_teacher(profile)
     service = get_service_client()
-    rows = (
-        service.table("quiz_sets")
-        .select("id, title, status, created_at, published_at")
-        .eq("tenant_id", profile.tenant_id)
-        .eq("created_by", profile.user_id)
-        .order("created_at", desc=True)
-        .execute()
+    rows = select_all(
+        service,
+        "quiz_sets",
+        "id, title, status, created_at, published_at",
+        configure=lambda query: query.eq("tenant_id", profile.tenant_id).eq(
+            "created_by", profile.user_id
+        ),
+        order_column="created_at",
+        order_desc=True,
     )
-    return [row for row in (rows.data or []) if row.get("status") != "archived"]
+    return [row for row in rows if row.get("status") != "archived"]
 
 
 @router.get("/{quiz_set_id}")
@@ -647,47 +650,100 @@ def publish_quiz_set(
     _require_teacher(profile)
     service = get_service_client()
     _teacher_quiz_set(service, quiz_set_id, profile)
-    variants = (
-        service.table("quiz_variants")
-        .select("id")
-        .eq("quiz_set_id", quiz_set_id)
-        .eq("tenant_id", profile.tenant_id)
-        .execute()
-        .data
-        or []
+    variants = select_all(
+        service,
+        "quiz_variants",
+        "id",
+        configure=lambda query: query.eq("quiz_set_id", quiz_set_id).eq(
+            "tenant_id", profile.tenant_id
+        ),
     )
     variant_ids = [row["id"] for row in variants]
-    links = []
-    if variant_ids:
-        links = (
-            service.table("quiz_variant_questions")
-            .select("question_id")
-            .in_("variant_id", variant_ids)
-            .eq("tenant_id", profile.tenant_id)
-            .execute()
-            .data
-            or []
-        )
-    question_ids = [row["question_id"] for row in links]
-    approved = []
-    if question_ids:
-        approved = (
-            service.table("questions")
-            .select("id")
-            .in_("id", question_ids)
-            .eq("tenant_id", profile.tenant_id)
-            .eq("created_by", profile.user_id)
-            .eq("review_status", "approved")
-            .limit(1)
-            .execute()
-            .data
-            or []
-        )
-    if not approved:
+    if not variant_ids:
         raise HTTPException(
             status_code=400,
-            detail="Approve at least one question before publishing.",
+            detail="This quiz does not contain any variants.",
         )
+    links = select_all_in(
+        service,
+        "quiz_variant_questions",
+        "id, variant_id, question_id, marks_override",
+        in_column="variant_id",
+        values=variant_ids,
+        configure=lambda query: query.eq("tenant_id", profile.tenant_id),
+    )
+    question_ids = list({str(row["question_id"]) for row in links})
+    questions = (
+        select_all_in(
+            service,
+            "questions",
+            "id, review_status, marks",
+            in_column="id",
+            values=question_ids,
+            configure=lambda query: query
+            .eq("tenant_id", profile.tenant_id)
+            .eq("created_by", profile.user_id),
+        )
+        if question_ids
+        else []
+    )
+    question_by_id = {str(row["id"]): row for row in questions}
+    if len(question_by_id) != len(question_ids):
+        raise HTTPException(
+            status_code=400,
+            detail="One or more quiz questions are unavailable. Review the quiz before publishing.",
+        )
+    unresolved = [
+        row
+        for row in questions
+        if row.get("review_status") not in {"approved", "rejected"}
+    ]
+    if unresolved:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Review every question before publishing. Approve, reject, edit, "
+                "or regenerate the remaining questions first."
+            ),
+        )
+
+    approved_marks_by_variant: dict[str, float] = {
+        str(variant_id): 0.0 for variant_id in variant_ids
+    }
+    approved_count_by_variant: dict[str, int] = {
+        str(variant_id): 0 for variant_id in variant_ids
+    }
+    for link in links:
+        question = question_by_id[str(link["question_id"])]
+        if question.get("review_status") != "approved":
+            continue
+        variant_id = str(link["variant_id"])
+        approved_marks_by_variant[variant_id] += float(
+            link.get("marks_override") or question.get("marks") or 1
+        )
+        approved_count_by_variant[variant_id] += 1
+
+    if any(count == 0 for count in approved_count_by_variant.values()):
+        raise HTTPException(
+            status_code=400,
+            detail="Every quiz variant must contain at least one approved question.",
+        )
+
+    # Keep the persisted denominator aligned with the exact questions students
+    # can take. If an update fails, the set remains a draft and a retry is safe.
+    for variant_id, total_marks in approved_marks_by_variant.items():
+        updated_variant = (
+            service.table("quiz_variants")
+            .update({"total_marks": total_marks})
+            .eq("id", variant_id)
+            .eq("tenant_id", profile.tenant_id)
+            .execute()
+        )
+        if not updated_variant.data:
+            raise HTTPException(
+                status_code=500,
+                detail="Could not finalize quiz marks. Please try publishing again.",
+            )
     updated = (
         service.table("quiz_sets")
         .update(
@@ -781,6 +837,7 @@ def approve_all_questions(
         service.table("quiz_variant_questions")
         .select("question_id")
         .in_("variant_id", variant_ids)
+        .eq("tenant_id", profile.tenant_id)
         .execute()
         .data
         or []
