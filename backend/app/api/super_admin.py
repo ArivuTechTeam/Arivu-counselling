@@ -12,6 +12,7 @@ _PATHS = {
     "/api/v1/tenants",
     "/api/v1/admins",
     "/api/v1/platform/admins/{user_id}",
+    "/api/v1/platform/admins/{user_id}/temporary-password",
     "/api/v1/platform/stats",
     "/api/v1/platform/overview",
     "/api/v1/platform/tenants",

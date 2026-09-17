@@ -93,6 +93,14 @@ class StartupConfigurationTests(unittest.TestCase):
 class ResponseSecurityTests(unittest.TestCase):
     client = TestClient(app, raise_server_exceptions=False)
 
+    def test_institution_admin_password_reset_route_is_registered(self) -> None:
+        response = self.client.post(
+            "/api/v1/platform/admins/00000000-0000-0000-0000-000000000000/temporary-password",
+            json={"password": "TemporaryPass123"},
+        )
+        self.assertEqual(response.status_code, 401)
+        self.assertEqual(response.json()["detail"], "Not authenticated")
+
     def test_debug_routes_are_disabled_by_default(self) -> None:
         self.assertFalse(settings.debug)
         self.assertIsNone(app.docs_url)
