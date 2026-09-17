@@ -31,26 +31,15 @@ import {
   updateTeacher,
 } from "@/lib/api";
 import { useCourses, useInstitutionUsers } from "@/lib/staff-queries";
+import {
+  generateTemporaryPassword,
+  validTemporaryPassword,
+} from "@/lib/temporary-password";
 
 const TEACHERS_PER_PAGE = 12;
 
 type TemporaryCredential = { email: string; password: string };
 type Notice = { type: "success" | "error"; message: string };
-
-function generateTemporaryPassword(): string {
-  const groups = ["ABCDEFGHJKLMNPQRSTUVWXYZ", "abcdefghijkmnopqrstuvwxyz", "23456789", "!@#$%"];
-  const alphabet = groups.join("");
-  const random = crypto.getRandomValues(new Uint32Array(28));
-  const characters = groups.map((group, index) => group[random[index] % group.length]);
-  for (let index = characters.length; index < 14; index += 1) {
-    characters.push(alphabet[random[index] % alphabet.length]);
-  }
-  for (let index = characters.length - 1; index > 0; index -= 1) {
-    const swapIndex = random[index + 14] % (index + 1);
-    [characters[index], characters[swapIndex]] = [characters[swapIndex], characters[index]];
-  }
-  return characters.join("");
-}
 
 function initials(text: string): string {
   return (
@@ -61,10 +50,6 @@ function initials(text: string): string {
       .join("")
       .toUpperCase() || "?"
   );
-}
-
-function validTemporaryPassword(password: string): boolean {
-  return password.length >= 12 && /[A-Z]/.test(password) && /[a-z]/.test(password) && /\d/.test(password);
 }
 
 export default function UsersPage() {

@@ -18,13 +18,17 @@ import { PageHeader } from "@/components/ui/page-header";
 import { ErrorCard } from "@/components/ui/error-card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { SkeletonList } from "@/components/ui/skeleton";
-import { AlertTriangle, Eye, EyeOff, Pencil, X } from "@/components/ui/icons";
+import { AlertTriangle, Eye, EyeOff, Pencil, Sparkles, X } from "@/components/ui/icons";
 import {
   InstitutionRow,
   onboardInstitution,
   updateInstitution,
 } from "@/lib/api";
 import { STAFF_QUERY_KEYS, usePlatformOverview } from "@/lib/staff-queries";
+import {
+  generateTemporaryPassword,
+  validTemporaryPassword,
+} from "@/lib/temporary-password";
 
 const field =
   "h-10 w-full rounded-md border border-input bg-background px-3 text-sm shadow-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20";
@@ -41,12 +45,23 @@ function OnboardForm({ onDone }: { onDone: () => void | Promise<void> }) {
   const [error, setError] = useState<string | null>(null);
   const [ok, setOk] = useState<string | null>(null);
 
+  function generatePassword() {
+    setAdminPassword(generateTemporaryPassword());
+    setShowPassword(true);
+  }
+
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
     setOk(null);
     if (!name.trim() || !subdomain.trim()) {
       setError("Institution name and subdomain are required.");
+      return;
+    }
+    if (adminPassword && !validTemporaryPassword(adminPassword)) {
+      setError(
+        "Temporary password must have at least 12 characters with uppercase, lowercase, and a number.",
+      );
       return;
     }
     setBusy(true);
@@ -139,27 +154,37 @@ function OnboardForm({ onDone }: { onDone: () => void | Promise<void> }) {
                   placeholder="admin@institution.com"
                 />
               </label>
-              <label className="flex flex-col gap-1.5 text-sm font-medium">
+              <div className="flex flex-col gap-1.5 text-sm font-medium">
                 Temporary password
-                <div className="relative">
-                  <input
-                    className={`${field} pr-10`}
-                    type={showPassword ? "text" : "password"}
-                    value={adminPassword}
-                    onChange={(e) => setAdminPassword(e.target.value)}
-                    placeholder="Share securely"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setShowPassword((v) => !v)}
-                    className="absolute right-2 top-1/2 -translate-y-1/2 rounded-md p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-                    aria-label={showPassword ? "Hide password" : "Show password"}
-                  >
-                    {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
-                  </button>
+                <div className="flex gap-2">
+                  <div className="relative min-w-0 flex-1">
+                    <input
+                      className={`${field} pr-10`}
+                      type={showPassword ? "text" : "password"}
+                      autoComplete="new-password"
+                      value={adminPassword}
+                      onChange={(e) => setAdminPassword(e.target.value)}
+                      placeholder="Share securely"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowPassword((v) => !v)}
+                      className="absolute right-2 top-1/2 -translate-y-1/2 rounded-md p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                      aria-label={showPassword ? "Hide password" : "Show password"}
+                    >
+                      {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                    </button>
+                  </div>
+                  <Button type="button" variant="outline" onClick={generatePassword}>
+                    <Sparkles size={15} className="mr-1.5" />
+                    Generate
+                  </Button>
                 </div>
-              </label>
+              </div>
             </div>
+            <p className="mt-2 text-xs text-muted-foreground">
+              Use at least 12 characters with uppercase, lowercase, and a number.
+            </p>
           </div>
 
           {error && (
