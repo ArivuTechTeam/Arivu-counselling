@@ -78,6 +78,19 @@ class ExamDeadlineTests(unittest.TestCase):
 
 
 class MigrationSecurityTests(unittest.TestCase):
+    def test_backend_provisioning_bypasses_public_signup_trigger(self) -> None:
+        root = Path(__file__).resolve().parents[2]
+        sql = (
+            root / "migrations/migration-39-decouple-backend-auth-provisioning.sql"
+        ).read_text().lower()
+
+        marker = "new.raw_app_meta_data->>'provisioned_by_backend'"
+        self.assertIn(marker, sql)
+        self.assertLess(sql.index(marker), sql.index("insert into public.profiles"))
+        self.assertIn(") = 'true' then\n    return new;", sql)
+        self.assertIn("'student'::public.user_role", sql)
+        self.assertIn("insert into public.enrollments", sql)
+
     def test_auth_trigger_repair_restores_safe_execution_context(self) -> None:
         root = Path(__file__).resolve().parents[2]
         sql = (

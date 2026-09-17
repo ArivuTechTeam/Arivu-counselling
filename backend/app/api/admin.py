@@ -394,21 +394,22 @@ def _select_all(
 def _set_provisioned_profile(
     service, *, user_id: str, tenant_id: str, role: str, full_name: str
 ) -> None:
-    updated = (
+    saved = (
         service.table("profiles")
-        .update(
+        .upsert(
             {
+                "id": user_id,
                 "tenant_id": tenant_id,
                 "role": role,
                 "full_name": full_name.strip(),
                 "must_change_password": True,
-            }
+            },
+            on_conflict="id",
         )
-        .eq("id", user_id)
         .execute()
     )
-    if not updated.data:
-        raise RuntimeError("The authorization profile was not created.")
+    if not saved.data:
+        raise RuntimeError("The authorization profile could not be saved.")
 
 
 def _rollback_provisioned_user(service, user_id: str) -> None:

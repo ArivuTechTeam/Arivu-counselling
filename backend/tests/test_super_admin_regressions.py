@@ -132,6 +132,11 @@ class _ProvisionQuery:
         self.operation, self.values = "insert", values
         return self
 
+    def upsert(self, values: dict, *, on_conflict: str):
+        self.operation, self.values = "upsert", values
+        self.filters = [(on_conflict, values[on_conflict])]
+        return self
+
     def delete(self):
         self.operation = "delete"
         return self
@@ -143,6 +148,14 @@ class _ProvisionQuery:
             row = dict(self.values or {})
             row.setdefault("id", f"{self.table}-{self.service.next_id}")
             self.service.next_id += 1
+            rows.append(row)
+            return SimpleNamespace(data=[dict(row)])
+        if self.operation == "upsert":
+            if matched:
+                for row in matched:
+                    row.update(self.values or {})
+                return SimpleNamespace(data=[dict(row) for row in matched])
+            row = dict(self.values or {})
             rows.append(row)
             return SimpleNamespace(data=[dict(row)])
         if self.operation == "update":
@@ -161,21 +174,12 @@ class _ProvisionAuthAdmin:
     def __init__(self, service: "_ProvisionService") -> None:
         self.service = service
 
-    def create_user(self, payload: dict):
+    def create_user(self, _payload: dict):
         user_id = f"auth-{self.service.next_id}"
         self.service.next_id += 1
-        metadata = payload["user_metadata"]
         self.service.auth_users.add(user_id)
-        # Simulate migration 11's synchronous Auth trigger.
-        self.service.tables["profiles"].append(
-            {
-                "id": user_id,
-                "tenant_id": metadata["tenant_id"],
-                "role": "student",
-                "full_name": metadata.get("full_name"),
-                "must_change_password": False,
-            }
-        )
+        # Migration 39 bypasses the public-signup trigger for trusted backend
+        # provisioning. The API writes the authoritative profile afterward.
         return SimpleNamespace(user=SimpleNamespace(id=user_id))
 
     def delete_user(self, user_id: str):
@@ -254,9 +258,34 @@ class SuperAdminRegressionTests(unittest.TestCase):
         self.assertEqual(rows[-1]["id"], "2003")
         self.assertEqual(len(service.queries), 2)
 
-    def test_provisioned_profile_is_promoted_and_locked_in_one_update(self) -> None:
-        service = _Service(
-            {"profiles": [{"id": "new-admin", "tenant_id": "old", "role": "student"}]}
+    def test_provisioned_profile_is_created_without_signup_trigger(self) -> None:
+        service = _ProvisionService()
+
+        _set_provisioned_profile(
+            service,
+            user_id="new-admin",
+            tenant_id="tenant-a",
+            role="institution_admin",
+            full_name="  Demo Admin  ",
+        )
+
+        self.assertEqual(
+            service.tables["profiles"],
+            [
+                {
+                    "id": "new-admin",
+                    "tenant_id": "tenant-a",
+                    "role": "institution_admin",
+                    "full_name": "Demo Admin",
+                    "must_change_password": True,
+                }
+            ],
+        )
+
+    def test_provisioned_profile_upsert_repairs_existing_profile(self) -> None:
+        service = _ProvisionService()
+        service.tables["profiles"].append(
+            {"id": "new-admin", "tenant_id": "old", "role": "student"}
         )
 
         _set_provisioned_profile(
@@ -267,11 +296,10 @@ class SuperAdminRegressionTests(unittest.TestCase):
             full_name="  Demo Admin  ",
         )
 
-        profile_queries = [query for table, query in service.queries if table == "profiles"]
-        self.assertEqual(len(profile_queries), 1)
         self.assertEqual(
-            profile_queries[0].update_values,
+            service.tables["profiles"][0],
             {
+                "id": "new-admin",
                 "tenant_id": "tenant-a",
                 "role": "institution_admin",
                 "full_name": "Demo Admin",
