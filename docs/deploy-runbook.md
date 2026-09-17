@@ -91,6 +91,7 @@ migration-34-document-upload-limit.sql
 migration-35-universal-question-grounding.sql
 migration-36-super-admin-aggregates.sql
 migration-37-student-attempt-snapshots.sql
+migration-38-repair-auth-profile-trigger.sql
 ```
 
 (Filenames above verified 2026-09-16 against `migrations/` — earlier drafts of this
@@ -105,6 +106,9 @@ Supabase project. Check the target project before skipping any file. Migration
 Migration 13 must be applied before deploying backend code with AI rate limits.
 Migration 37 must be applied before deploying backend code that starts student
 quiz or practice attempts; it stores the immutable question and scoring snapshot.
+Migration 38 must be applied to repair the Supabase Auth profile trigger before
+creating students, teachers, or institution administrators. It restores the
+required owner and execution privilege and pins a safe empty search path.
 Migrations 15–19 must be applied in order before deploying quiz extraction;
 run the duplicate checks documented in migrations 16 and 18 first.
 Migration 22 must be applied to close direct browser access to backend-owned

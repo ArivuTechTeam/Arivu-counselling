@@ -78,6 +78,25 @@ class ExamDeadlineTests(unittest.TestCase):
 
 
 class MigrationSecurityTests(unittest.TestCase):
+    def test_auth_trigger_repair_restores_safe_execution_context(self) -> None:
+        root = Path(__file__).resolve().parents[2]
+        sql = (
+            root / "migrations/migration-38-repair-auth-profile-trigger.sql"
+        ).read_text().lower()
+
+        self.assertIn("security definer", sql)
+        self.assertIn("set search_path = ''", sql)
+        self.assertIn(
+            "alter function public.handle_new_user() owner to postgres",
+            sql,
+        )
+        self.assertIn(
+            "grant execute on function public.handle_new_user() to supabase_auth_admin",
+            sql,
+        )
+        self.assertIn("drop trigger if exists on_auth_user_created on auth.users", sql)
+        self.assertIn("insert into public.profiles", sql)
+
     def test_auth_migration_ignores_requested_role_and_locks_profile_columns(self) -> None:
         root = Path(__file__).resolve().parents[2]
         sql = (root / "migrations/migration-11-auth-hardening.sql").read_text()

@@ -44,6 +44,7 @@ from app.lib.auth import (
     get_current_profile,
     get_current_user,
 )
+from app.lib.api_errors import PublicAPIError
 from app.lib.config import get_settings
 from app.lib.request_trace import request_id_for_header
 from app.lib.supabase import SupabaseUnavailableError
@@ -175,7 +176,7 @@ async def safe_http_error(
 ) -> JSONResponse:
     """Return safe HTTP errors in one consistent, traceable envelope."""
     request_id = getattr(request.state, "request_id", uuid4().hex)
-    if exception.status_code >= 500:
+    if exception.status_code >= 500 and not isinstance(exception, PublicAPIError):
         detail = "The request could not be completed. Please try again."
     elif isinstance(exception.detail, str):
         detail = exception.detail
