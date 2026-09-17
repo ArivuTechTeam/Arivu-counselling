@@ -106,7 +106,8 @@ function ToastCard({
         : Check;
   return (
     <div
-      role="status"
+      role={toast.tone === "error" ? "alert" : "status"}
+      aria-live={toast.tone === "error" ? "assertive" : "polite"}
       className={`animate-toast-in pointer-events-auto flex items-start gap-3 rounded-xl border ${TONE_BORDER[toast.tone]} bg-card px-4 py-3 text-foreground shadow-lg`}
     >
       <span className={`mt-0.5 shrink-0 ${TONE_ICON_COLOR[toast.tone]}`}>

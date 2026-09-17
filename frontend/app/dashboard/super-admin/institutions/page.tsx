@@ -18,6 +18,7 @@ import { PageHeader } from "@/components/ui/page-header";
 import { ErrorCard } from "@/components/ui/error-card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { SkeletonList } from "@/components/ui/skeleton";
+import { useToast } from "@/components/ui/toast";
 import { AlertTriangle, Eye, EyeOff, Pencil, Sparkles, X } from "@/components/ui/icons";
 import {
   InstitutionRow,
@@ -34,6 +35,7 @@ const field =
   "h-10 w-full rounded-md border border-input bg-background px-3 text-sm shadow-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20";
 
 function OnboardForm({ onDone }: { onDone: () => void | Promise<void> }) {
+  const { notify } = useToast();
   const [name, setName] = useState("");
   const [subdomain, setSubdomain] = useState("");
   const [plan, setPlan] = useState("free");
@@ -55,13 +57,16 @@ function OnboardForm({ onDone }: { onDone: () => void | Promise<void> }) {
     setError(null);
     setOk(null);
     if (!name.trim() || !subdomain.trim()) {
-      setError("Institution name and subdomain are required.");
+      const message = "Institution name and subdomain are required.";
+      setError(message);
+      notify(message, "error");
       return;
     }
     if (adminPassword && !validTemporaryPassword(adminPassword)) {
-      setError(
-        "Temporary password must have at least 12 characters with uppercase, lowercase, and a number.",
-      );
+      const message =
+        "Temporary password must have at least 12 characters with uppercase, lowercase, and a number.";
+      setError(message);
+      notify(message, "error");
       return;
     }
     setBusy(true);
@@ -77,6 +82,7 @@ function OnboardForm({ onDone }: { onDone: () => void | Promise<void> }) {
       setOk(
         `Created "${name.trim()}"${adminEmail.trim() ? ` with admin ${adminEmail.trim()}` : ""}.`,
       );
+      notify(`Institution "${name.trim()}" created successfully.`, "success");
       setName("");
       setSubdomain("");
       setAdminName("");
@@ -84,7 +90,9 @@ function OnboardForm({ onDone }: { onDone: () => void | Promise<void> }) {
       setAdminPassword("");
       await onDone();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not onboard institution.");
+      const message = err instanceof Error ? err.message : "Could not onboard institution.";
+      setError(message);
+      notify(message, "error");
     } finally {
       setBusy(false);
     }
@@ -115,9 +123,20 @@ function OnboardForm({ onDone }: { onDone: () => void | Promise<void> }) {
               <input
                 className={field}
                 value={subdomain}
-                onChange={(e) => setSubdomain(e.target.value)}
+                onChange={(e) =>
+                  setSubdomain(
+                    e.target.value
+                      .toLowerCase()
+                      .replace(/\s+/g, "-")
+                      .replace(/[^a-z0-9-]/g, "")
+                      .replace(/-+/g, "-"),
+                  )
+                }
                 placeholder="brightfuture"
               />
+              <span className="text-xs font-normal text-muted-foreground">
+                Spaces are converted to hyphens.
+              </span>
             </label>
             <label className="flex flex-col gap-1.5 text-sm font-medium">
               Plan
