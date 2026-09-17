@@ -24,7 +24,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.lib.auth import CurrentProfile, get_current_profile
-from app.lib.api_errors import public_error
+from app.lib.api_errors import auth_provisioning_error, public_error
 from app.lib.supabase import get_service_client
 from app.services.account_deletion import erase_account_data
 from app.services.teacher_access import replace_teacher_subjects
@@ -1186,7 +1186,7 @@ def get_course_impact(
 class AdminCreate(BaseModel):
     full_name: str
     email: str
-    password: str
+    password: str = Field(min_length=12, max_length=128)
     tenant_id: str
 
 
@@ -1265,6 +1265,7 @@ def create_admin(
 ) -> dict:
     """Super-admin creates an institution admin (aka principal) for a tenant."""
     _require_super(profile)
+    _validate_temporary_password(body.password)
     service = get_service_client()
 
     tenant = (
@@ -1310,11 +1311,9 @@ def create_admin(
                     operation="roll back institution administrator",
                     exception=rollback_exc,
                 ) from exc
-        raise public_error(
-            400,
-            "We couldn't create this institution administrator. Check the details and try again.",
+        raise auth_provisioning_error(
+            exc,
             operation="create institution administrator",
-            exception=exc,
         ) from exc
 
     return {"created": True}
@@ -2191,7 +2190,7 @@ class TenantCreate(BaseModel):
     # Optional first institution admin created alongside the tenant.
     admin_full_name: str | None = None
     admin_email: str | None = None
-    admin_password: str | None = None
+    admin_password: str | None = Field(default=None, min_length=12, max_length=128)
 
 
 class TenantUpdate(BaseModel):
@@ -2222,6 +2221,8 @@ def onboard_institution(
             status_code=400,
             detail="Admin name, email and temporary password are all required together.",
         )
+    if body.admin_password:
+        _validate_temporary_password(body.admin_password)
     if not all(c.isalnum() or c == "-" for c in subdomain):
         raise HTTPException(
             status_code=400,
@@ -2297,11 +2298,9 @@ def onboard_institution(
                     operation="roll back institution onboarding",
                     exception=rollback_error,
                 ) from exc
-            raise public_error(
-                400,
-                "The institution was not created because its administrator account could not be set up.",
+            raise auth_provisioning_error(
+                exc,
                 operation="create first institution administrator",
-                exception=exc,
             ) from exc
 
     return {"created": True}

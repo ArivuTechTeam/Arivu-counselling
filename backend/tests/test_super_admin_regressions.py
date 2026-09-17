@@ -7,6 +7,8 @@ from unittest.mock import patch
 from uuid import uuid4
 
 from fastapi import HTTPException
+from pydantic import ValidationError
+from supabase_auth.errors import AuthApiError
 
 from app.api.admin import (
     AdminCreate,
@@ -22,6 +24,7 @@ from app.api.admin import (
     remove_admin,
     update_institution,
 )
+from app.lib.api_errors import auth_provisioning_error
 from app.lib.auth import CurrentProfile
 
 
@@ -205,6 +208,35 @@ SUPER = CurrentProfile(
 
 
 class SuperAdminRegressionTests(unittest.TestCase):
+    def test_auth_provisioning_errors_are_safe_and_actionable(self) -> None:
+        cases = [
+            ("email_exists", 422, 409, "already exists"),
+            ("user_already_exists", 422, 409, "already exists"),
+            ("weak_password", 422, 400, "Generate a new password"),
+            ("email_address_invalid", 422, 400, "valid administrator email"),
+            ("over_request_rate_limit", 429, 429, "Too many"),
+            ("unexpected_failure", 500, 503, "account service"),
+        ]
+        for code, provider_status, expected_status, expected_detail in cases:
+            with self.subTest(code=code):
+                result = auth_provisioning_error(
+                    AuthApiError("provider detail must stay private", provider_status, code),
+                    operation="test provisioning",
+                )
+                self.assertEqual(result.status_code, expected_status)
+                self.assertIn(expected_detail, result.detail)
+                self.assertNotIn("provider detail", result.detail)
+
+    def test_first_admin_password_uses_temporary_password_policy(self) -> None:
+        with self.assertRaises(ValidationError):
+            TenantCreate(
+                name="Demo College",
+                subdomain="demo-college",
+                admin_full_name="First Admin",
+                admin_email="first@example.com",
+                admin_password="Short1A",
+            )
+
     def test_select_all_crosses_postgrest_page_boundary_and_keeps_filters(self) -> None:
         service = _Service(
             {"events": [{"id": f"{i:04d}", "kind": i % 2} for i in range(2005)]}
