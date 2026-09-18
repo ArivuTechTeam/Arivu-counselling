@@ -104,17 +104,23 @@ def public_courses(tenant_id: UUID) -> list[dict]:
 
     Course names and IDs are intentionally public registration metadata; no
     student, staff, assessment, or analytics data is exposed here.
+
+    Only courses belonging to an active institution are returned. This keeps
+    the public signup choices aligned with the database signup trigger, which
+    rejects courses belonging to inactive institutions.
     """
     service = get_service_client()
-    return (
+    rows = (
         service.table("courses")
-        .select("id, name")
+        .select("id, name, tenants!inner(is_active)")
         .eq("tenant_id", str(tenant_id))
+        .eq("tenants.is_active", True)
         .order("name")
         .execute()
         .data
         or []
     )
+    return [{"id": r["id"], "name": r["name"]} for r in rows]
 
 
 @router.get("/courses")

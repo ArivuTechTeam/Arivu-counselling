@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
+import type { AuthError } from "@supabase/supabase-js";
 
 import { GoogleAuthButton } from "@/components/auth/google-auth-button";
 import { SplitText } from "@/components/shared/split-text";
@@ -52,6 +53,37 @@ const TICKS = [
   "25+ College Tie-ups", "5000+ Daily Learners",
   "1 Lakh+ YouTube Subscribers", "300+ Rank Holders",
 ];
+
+const SIGNUP_ERROR_MESSAGES: Record<string, string> = {
+  email_address_invalid: "Enter a valid email address.",
+  email_address_not_authorized:
+    "This email address cannot receive a confirmation email. Contact your institution.",
+  email_exists: "An account with this email already exists. Sign in instead.",
+  email_provider_disabled:
+    "Student registration is currently unavailable. Contact your institution.",
+  over_email_send_rate_limit:
+    "Too many confirmation emails were requested. Wait a few minutes and try again.",
+  over_request_rate_limit:
+    "Too many signup attempts were made. Wait a few minutes and try again.",
+  signup_disabled:
+    "Student registration is currently unavailable. Contact your institution.",
+  user_already_exists: "An account with this email already exists. Sign in instead.",
+  validation_failed: "Check your account details and try again.",
+  weak_password: "Choose a stronger password and try again.",
+};
+
+function signupErrorMessage(error: AuthError): string {
+  if (error.code && SIGNUP_ERROR_MESSAGES[error.code]) {
+    return SIGNUP_ERROR_MESSAGES[error.code];
+  }
+  if (error.status === 429) {
+    return "Too many signup attempts were made. Wait a few minutes and try again.";
+  }
+  if (error.status && error.status >= 500) {
+    return "The account service is temporarily unavailable. Please try again shortly.";
+  }
+  return "Account creation failed. Check your details and try again.";
+}
 
 export default function SignupPage() {
   const router = useRouter();
@@ -112,7 +144,13 @@ export default function SignupPage() {
     });
     setLoading(false);
     if (error) {
-      setError("Account creation failed. Please check your details and try again.");
+      // Supabase recommends branching on stable Auth error codes. Log only
+      // non-sensitive diagnostics and keep arbitrary provider text out of the UI.
+      console.error("Student signup failed", {
+        code: error.code ?? "unknown",
+        status: error.status ?? "unknown",
+      });
+      setError(signupErrorMessage(error));
       return;
     }
     if (data.session) {
