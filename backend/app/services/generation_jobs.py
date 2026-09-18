@@ -21,8 +21,11 @@ step (QuizGeneratorService) after they pick topics from the blueprint.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 import threading
+import time
 from datetime import datetime, timezone
 
 from app.lib.auth import CurrentProfile
@@ -277,9 +280,125 @@ def create_generation_job(
     return job_id
 
 
+def create_final_generation_job(
+    *,
+    document_id: str,
+    tenant_id: str,
+    created_by: str,
+    request: dict,
+    launch: bool = True,
+) -> tuple[str, bool]:
+    """Queue the final AI call and return ``(job_id, was_created)``.
+
+    The request fingerprint gives a teacher an idempotent Generate button: a
+    double click or browser retry returns the in-flight job instead of creating
+    two copies of the same quiz.
+    """
+    client = get_service_client()
+    canonical = json.dumps(request, sort_keys=True, separators=(",", ":"))
+    request_key = hashlib.sha256(canonical.encode()).hexdigest()
+    active = (
+        client.table("quiz_generation_jobs")
+        .select("id")
+        .eq("tenant_id", tenant_id)
+        .eq("created_by", created_by)
+        .contains("params", {"kind": "final_generation", "request_key": request_key})
+        .in_("status", ["queued", "running"])
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    if active:
+        return str(active[0]["id"]), False
+
+    row = (
+        client.table("quiz_generation_jobs")
+        .insert(
+            {
+                "tenant_id": tenant_id,
+                "created_by": created_by,
+                "document_id": document_id,
+                "subject_id": request["subject_id"],
+                "chapter_name": request["chapter_name"],
+                "params": {"kind": "final_generation", "request_key": request_key, "request": request},
+                "status": "queued",
+                "phase": "queued",
+            }
+        )
+        .execute()
+    )
+    job_id = str(row.data[0]["id"])
+    if launch:
+        launch_job(job_id, tenant_id)
+    return job_id, True
+
+
+def _run_final_generation(job_id: str, tenant_id: str) -> None:
+    """Run the slow final LLM generation outside the request lifecycle."""
+    client = get_service_client()
+    job = (
+        client.table("quiz_generation_jobs").select("*").eq("id", job_id)
+        .eq("tenant_id", tenant_id).maybe_single().execute().data
+    )
+    if not job:
+        return
+    request = (job.get("params") or {}).get("request") or {}
+    started = time.monotonic()
+    try:
+        client.table("quiz_generation_jobs").update(
+            {"status": "running", "phase": "generating", "error_message": None, "updated_at": _now()}
+        ).eq("id", job_id).eq("tenant_id", tenant_id).execute()
+        profile = CurrentProfile(user_id=job["created_by"], tenant_id=tenant_id, role="teacher")
+        source_job_id = request.get("source_job_id")
+        if source_job_id:
+            from app.services.quiz_generator_service import QuizGeneratorService
+            result = QuizGeneratorService().generate_from_job(
+                job_id=source_job_id, subject_id=request["subject_id"],
+                chapter_name=request["chapter_name"], selected_topics=request["selected_topics"],
+                total_questions=request["total_questions"], question_types=request["question_types"],
+                type_counts=request.get("type_counts"), cognitive_level=request["cognitive_level"],
+                difficulty=request["difficulty"], profile=profile,
+            )
+        else:
+            from app.services.blueprint import generate_blueprint_quiz
+            result = generate_blueprint_quiz(
+                document_id=job["document_id"], subject_id=request["subject_id"],
+                chapter_name=request["chapter_name"], selected_topics=request["selected_topics"],
+                total_questions=request["total_questions"], question_types=request["question_types"],
+                type_counts=request.get("type_counts"), cognitive_level=request["cognitive_level"],
+                difficulty=request["difficulty"], profile=profile,
+            )
+        client.table("quiz_generation_jobs").update(
+            {"status": "completed", "phase": "ready_for_review", "quiz_set_id": result.get("quiz_set_id"), "updated_at": _now()}
+        ).eq("id", job_id).eq("tenant_id", tenant_id).execute()
+        logger.info(
+            "Final quiz generation job %s completed in %.1fs (%s questions).",
+            job_id, time.monotonic() - started, request.get("total_questions", 0),
+        )
+    except Exception as exc:  # noqa: BLE001 - persist a safe retryable failure
+        # Do not log provider payloads or stack traces: document text may be
+        # present in an exception. The durable job row retains a short public
+        # error for the teacher instead.
+        logger.warning(
+            "Final quiz generation job %s failed after %.1fs (%s)",
+            job_id, time.monotonic() - started, type(exc).__name__,
+        )
+        client.table("quiz_generation_jobs").update(
+            {"status": "failed", "phase": "failed", "error_message": str(exc)[:500], "updated_at": _now()}
+        ).eq("id", job_id).eq("tenant_id", tenant_id).execute()
+
+
 def _safe_run(job_id: str, tenant_id: str) -> None:
     try:
-        GenerationJobRunner().run(job_id=job_id, tenant_id=tenant_id)
+        job = (
+            get_service_client().table("quiz_generation_jobs").select("params")
+            .eq("id", job_id).eq("tenant_id", tenant_id).maybe_single().execute().data
+        )
+        if ((job or {}).get("params") or {}).get("kind") == "final_generation":
+            _run_final_generation(job_id, tenant_id)
+        else:
+            GenerationJobRunner().run(job_id=job_id, tenant_id=tenant_id)
     except Exception:  # noqa: BLE001 - run() already recorded the failure
         logger.warning("Background generation job %s ended in error.", job_id)
 

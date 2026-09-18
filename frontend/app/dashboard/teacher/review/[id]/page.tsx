@@ -317,7 +317,12 @@ export default function ReviewDetailPage({ params }: { params: { id: string } })
               />
             </div>
 
-            <div className="flex shrink-0 items-center gap-2">
+          <div className="flex shrink-0 items-center gap-2">
+          {detail.status === "published" && (
+            <Link href={`/dashboard/teacher/performance/${params.id}`}>
+              <Button size="sm" variant="outline">View performance</Button>
+            </Link>
+          )}
           <Button
             size="sm"
             variant="outline"

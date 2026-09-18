@@ -273,6 +273,137 @@ async def class_overview(
     }
 
 
+@router.get("/teacher/quiz-sets/{quiz_set_id}/performance")
+async def quiz_set_performance(
+    quiz_set_id: str,
+    profile: CurrentProfile = Depends(get_current_profile),
+) -> dict:
+    """Performance report for one of the current teacher's published quizzes.
+
+    This is deliberately scoped by tenant, creator and the teacher's *current*
+    subject assignment.  A reassigned teacher cannot keep reading a former
+    class's results simply by retaining a quiz-set URL.
+    """
+    if profile.role != "teacher":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Teachers only.")
+    service, tid, uid = get_service_client(), profile.tenant_id, profile.user_id
+
+    quiz = await asyncio.to_thread(
+        lambda: (
+            service.table("quiz_sets").select("id, title, status, subject_id, published_at")
+            .eq("id", quiz_set_id).eq("tenant_id", tid).eq("created_by", uid)
+            .maybe_single().execute().data
+        )
+    )
+    if not quiz:
+        raise HTTPException(status_code=404, detail="Quiz set not found.")
+    if str(quiz.get("subject_id") or "") not in teacher_subject_ids(service, profile):
+        raise HTTPException(status_code=404, detail="Quiz set not found.")
+
+    subject = await asyncio.to_thread(
+        lambda: service.table("subjects").select("course_id").eq("id", quiz["subject_id"])
+        .eq("tenant_id", tid).maybe_single().execute().data
+    )
+    if not subject:
+        raise HTTPException(status_code=404, detail="Quiz subject not found.")
+
+    def fetch_variants():
+        return (
+            service.table("quiz_variants")
+            .select(
+                "id, total_marks, quiz_variant_questions(question_id, questions(id, question_text)), "
+                "quiz_attempts(id, student_id, total_score, submitted_at, status, "
+                "profiles(full_name), attempt_answers(question_id, is_correct))"
+            )
+            .eq("tenant_id", tid).eq("quiz_set_id", quiz_set_id).execute().data or []
+        )
+
+    def fetch_roster():
+        enrollments = select_all(
+            service, "enrollments", "profile_id",
+            configure=lambda q: q.eq("tenant_id", tid).eq("course_id", subject["course_id"]),
+        )
+        ids = sorted({str(row["profile_id"]) for row in enrollments})
+        if not ids:
+            return []
+        return select_all_in(
+            service, "profiles", "id, full_name", in_column="id", values=ids,
+            configure=lambda q: q.eq("tenant_id", tid).eq("role", "student"),
+        )
+
+    variants, roster_rows = await asyncio.gather(
+        asyncio.to_thread(fetch_variants), asyncio.to_thread(fetch_roster)
+    )
+    roster = {str(row["id"]): row.get("full_name") or "Student" for row in roster_rows}
+    marks = {str(row["id"]): float(row.get("total_marks") or 0) for row in variants}
+    question_by_id: dict[str, str] = {}
+    for variant in variants:
+        for vq in variant.get("quiz_variant_questions") or []:
+            question = vq.get("questions") or {}
+            if question.get("id"):
+                question_by_id[str(question["id"])] = question.get("question_text") or "Question"
+
+    attempts_by_student: dict[str, list[dict]] = {}
+    answer_counts: dict[str, dict[str, int]] = {}
+    all_percentages: list[float] = []
+    for variant in variants:
+        maximum = marks.get(str(variant["id"]), 0)
+        for attempt in variant.get("quiz_attempts") or []:
+            student_id = str(attempt.get("student_id") or "")
+            if student_id not in roster or attempt.get("status") != "graded":
+                continue
+            score = max(0.0, min(maximum, float(attempt.get("total_score") or 0)))
+            accuracy = round(score / maximum * 100, 1) if maximum else 0
+            normal = {
+                "attempt_id": str(attempt["id"]), "score": score, "max_score": maximum,
+                "accuracy": accuracy, "submitted_at": attempt.get("submitted_at"),
+            }
+            attempts_by_student.setdefault(student_id, []).append(normal)
+            all_percentages.append(accuracy)
+            for answer in attempt.get("attempt_answers") or []:
+                question_id = str(answer.get("question_id") or "")
+                if not question_id:
+                    continue
+                bucket = answer_counts.setdefault(question_id, {"answered": 0, "correct": 0})
+                bucket["answered"] += 1
+                if answer.get("is_correct") is True:
+                    bucket["correct"] += 1
+
+    students = []
+    for student_id, name in roster.items():
+        attempts = sorted(attempts_by_student.get(student_id, []), key=lambda row: row.get("submitted_at") or "", reverse=True)
+        latest = attempts[0] if attempts else None
+        best = max(attempts, key=lambda row: row["accuracy"]) if attempts else None
+        students.append({
+            "student_id": student_id, "student_name": name, "attempts": len(attempts),
+            "status": "completed" if attempts else "not_started",
+            "latest_score": latest["score"] if latest else None,
+            "latest_max_score": latest["max_score"] if latest else None,
+            "latest_accuracy": latest["accuracy"] if latest else None,
+            "best_accuracy": best["accuracy"] if best else None,
+            "submitted_at": latest["submitted_at"] if latest else None,
+        })
+    students.sort(key=lambda row: (row["status"] == "not_started", row["student_name"].casefold()))
+    bands = [("0–39", 0, 40), ("40–59", 40, 60), ("60–79", 60, 80), ("80–100", 80, 101)]
+    question_performance = [
+        {"question_id": question_id, "question_text": question_by_id.get(question_id, "Question"),
+         "answered": count["answered"], "accuracy": round(count["correct"] / count["answered"] * 100, 1)}
+        for question_id, count in answer_counts.items() if count["answered"]
+    ]
+    question_performance.sort(key=lambda row: (row["accuracy"], -row["answered"]))
+    completed = sum(1 for row in students if row["status"] == "completed")
+    return {
+        "quiz": {**quiz, "eligible_students": len(roster)},
+        "summary": {"eligible_students": len(roster), "completed_students": completed,
+                    "not_started_students": len(roster) - completed, "total_attempts": len(all_percentages),
+                    "average_accuracy": round(sum(all_percentages) / len(all_percentages), 1) if all_percentages else 0,
+                    "highest_accuracy": max(all_percentages, default=0), "lowest_accuracy": min(all_percentages, default=0)},
+        "score_distribution": [{"label": label, "count": sum(1 for p in all_percentages if low <= p < high)} for label, low, high in bands],
+        "students": students,
+        "question_performance": question_performance,
+    }
+
+
 @router.get("/teacher/class-monitor")
 async def class_monitor(
     profile: CurrentProfile = Depends(get_current_profile),
