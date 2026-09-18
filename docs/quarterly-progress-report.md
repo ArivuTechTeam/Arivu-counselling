@@ -46,7 +46,7 @@ All four objectives were met.
 | AI (question generation) | Google Gemini (primary) with a provider-abstraction layer |
 | PDF generation | React-based document rendering |
 | Charts / analytics UI | Recharts |
-| Deployment target | Vercel (frontend + backend) + Supabase |
+| Deployment target | Vercel (frontend) + Railway (backend) + Supabase |
 
 **Architecture highlights:**
 - **Multi-tenant by design:** every record carries a `tenant_id`, and **PostgreSQL Row-Level Security (RLS)** enforces isolation at the database level — one institution physically cannot access another's data, even via a direct API call.

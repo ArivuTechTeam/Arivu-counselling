@@ -88,14 +88,11 @@ class GenerationJobRunner:
     def _client(self):
         return self._service or get_service_client()
 
-    def _load_job(self, job_id: str) -> dict | None:
-        res = (
-            self._client.table("quiz_generation_jobs")
-            .select("*")
-            .eq("id", job_id)
-            .maybe_single()
-            .execute()
-        )
+    def _load_job(self, job_id: str, tenant_id: str | None = None) -> dict | None:
+        query = self._client.table("quiz_generation_jobs").select("*").eq("id", job_id)
+        if tenant_id is not None:
+            query = query.eq("tenant_id", tenant_id)
+        res = query.maybe_single().execute()
         return res.data if res and res.data else None
 
     def _update(self, job_id: str, tenant_id: str, **fields) -> None:
@@ -120,8 +117,8 @@ class GenerationJobRunner:
         )
         return len(rows)
 
-    def run(self, *, job_id: str) -> dict:
-        job = self._load_job(job_id)
+    def run(self, *, job_id: str, tenant_id: str | None = None) -> dict:
+        job = self._load_job(job_id, tenant_id)
         if not job:
             logger.warning("Generation job %s not found; skipping.", job_id)
             return {"status": "missing"}
@@ -276,19 +273,22 @@ def create_generation_job(
     )
     job_id = row.data[0]["id"]
     if launch:
-        launch_job(job_id)
+        launch_job(job_id, tenant_id)
     return job_id
 
 
-def _safe_run(job_id: str) -> None:
+def _safe_run(job_id: str, tenant_id: str) -> None:
     try:
-        GenerationJobRunner().run(job_id=job_id)
+        GenerationJobRunner().run(job_id=job_id, tenant_id=tenant_id)
     except Exception:  # noqa: BLE001 - run() already recorded the failure
         logger.warning("Background generation job %s ended in error.", job_id)
 
 
-def launch_job(job_id: str) -> None:
+def launch_job(job_id: str, tenant_id: str) -> None:
     """Run (or resume/retry) a job on a daemon thread."""
     threading.Thread(
-        target=_safe_run, args=(job_id,), daemon=True, name=f"genjob-{job_id[:8]}"
+        target=_safe_run,
+        args=(job_id, tenant_id),
+        daemon=True,
+        name=f"genjob-{job_id[:8]}",
     ).start()

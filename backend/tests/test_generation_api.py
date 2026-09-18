@@ -291,7 +291,7 @@ class JobRetryTests(unittest.TestCase):
         ) as launch:
             res = _client().post("/api/v1/quiz-sets/generation-jobs/j1/retry")
         self.assertEqual(res.status_code, 200)
-        launch.assert_called_once_with("j1")
+        launch.assert_called_once_with("j1", "t1")
         self.assertEqual(fake.db["quiz_generation_jobs"][0]["status"], "queued")
 
     def test_cannot_retry_completed_job(self) -> None:

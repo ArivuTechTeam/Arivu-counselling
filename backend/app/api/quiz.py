@@ -500,7 +500,7 @@ def retry_generation_job(
     service.table("quiz_generation_jobs").update(
         {"status": "queued", "phase": "queued", "error_message": None}
     ).eq("id", job_id).eq("tenant_id", profile.tenant_id).execute()
-    launch_job(job_id)
+    launch_job(job_id, profile.tenant_id)
     return {"job_id": job_id, "status": "queued"}
 
 

@@ -141,7 +141,7 @@ def generate_quiz(
         raise ValueError("This document has no extractable text (scanned PDF?).")
     material = _select_material(extracted)
 
-    # 3) Build prompts and call the model (DeepSeek, with fallback slot).
+    # 3) Build prompts and call the configured Gemini primary / DeepSeek fallback.
     system = build_system_prompt(question_types, cognitive_level, difficulty)
     user = build_user_prompt(
         material, num_questions, question_types, cognitive_level, difficulty

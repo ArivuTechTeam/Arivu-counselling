@@ -15,6 +15,8 @@ from __future__ import annotations
 import hashlib
 import logging
 import uuid
+from io import BytesIO
+from zipfile import BadZipFile, ZipFile
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from pydantic import BaseModel
@@ -94,6 +96,19 @@ def _ext_of(filename: str) -> str:
     return filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
 
 
+def _has_expected_file_signature(content: bytes, extension: str) -> bool:
+    """Reject renamed files before they are stored or passed to parsers."""
+    if extension == "pdf":
+        return content.startswith(b"%PDF-")
+    if extension == "docx":
+        try:
+            with ZipFile(BytesIO(content)) as archive:
+                return "word/document.xml" in archive.namelist()
+        except BadZipFile:
+            return False
+    return False
+
+
 def _require_teacher(profile: CurrentProfile) -> None:
     # Teacher-only by design — see .claude/CLAUDE.md and the technical document.
     if profile.role != "teacher":
@@ -130,6 +145,11 @@ async def upload_document(
         raise HTTPException(
             status_code=status.HTTP_413_CONTENT_TOO_LARGE,
             detail=f"File too large (max {MAX_MB} MB).",
+        )
+    if not _has_expected_file_signature(content, ext):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="The file contents do not match its PDF or DOCX extension.",
         )
 
     # 1) Store the original file under the tenant's folder for isolation.

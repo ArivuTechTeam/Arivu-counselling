@@ -322,43 +322,43 @@ export default function SignupPage() {
               {notice && <div className="ok-box"><span>✓</span><span>{notice}</span></div>}
 
               <div className="field">
-                <div className="field-label">Full name <span className="req">*</span></div>
+                <label className="field-label" htmlFor="signup-full-name">Full name <span className="req">*</span></label>
                 <div className="field-box">
                   <span className="field-icon"><UserIcon /></span>
-                  <input className="field-input" value={fullName} onChange={(e) => setFullName(e.target.value)} placeholder="Your full name" autoComplete="name" required />
+                  <input id="signup-full-name" className="field-input" value={fullName} onChange={(e) => setFullName(e.target.value)} placeholder="Your full name" autoComplete="name" required />
                 </div>
               </div>
 
               <div className="field">
-                <div className="field-label">Email address <span className="req">*</span></div>
+                <label className="field-label" htmlFor="signup-email">Email address <span className="req">*</span></label>
                 <div className="field-box">
                   <span className="field-icon"><MailIcon /></span>
-                  <input className="field-input" type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@email.com" autoComplete="email" required />
+                  <input id="signup-email" className="field-input" type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@email.com" autoComplete="email" required />
                 </div>
               </div>
 
               <div className="field">
-                <div className="field-label">Password <span className="req">*</span></div>
+                <label className="field-label" htmlFor="signup-password">Password <span className="req">*</span></label>
                 <div className="field-box">
                   <span className="field-icon"><LockIcon /></span>
-                  <input className="field-input" type={showPw ? "text" : "password"} value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Create a password" minLength={6} autoComplete="new-password" required />
+                  <input id="signup-password" className="field-input" type={showPw ? "text" : "password"} value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Create a password" minLength={6} autoComplete="new-password" required />
                   <button type="button" className="pw-eye" onClick={() => setShowPw((s) => !s)}>{showPw ? "Hide" : "Show"}</button>
                 </div>
               </div>
 
               <div className="field">
-                <div className="field-label">Account type</div>
+                <label className="field-label" htmlFor="signup-account-type">Account type</label>
                 <div className="field-box">
                   <span className="field-icon"><UserIcon /></span>
-                  <input className="field-input" value="Student" disabled />
+                  <input id="signup-account-type" className="field-input" value="Student" disabled />
                 </div>
               </div>
 
               <div className="field">
-                <div className="field-label">Course <span className="req">*</span></div>
+                <label className="field-label" htmlFor="signup-course">Course <span className="req">*</span></label>
                 <div className="field-box">
                   <span className="field-icon"><BookIcon /></span>
-                  <select className="field-input" value={courseId} onChange={(e) => setCourseId(e.target.value)}>
+                  <select id="signup-course" className="field-input" value={courseId} onChange={(e) => setCourseId(e.target.value)}>
                     <option value="">Select your course…</option>
                     {courses.map((c) => (
                       <option key={c.id} value={c.id}>{c.name}</option>

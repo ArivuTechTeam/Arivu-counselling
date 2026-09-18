@@ -11,6 +11,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { Dialog } from "@/components/ui/dialog";
 import { AlertTriangle, Check, Sparkles, Zap } from "@/components/ui/icons";
 import { useToast } from "@/components/ui/toast";
 import {
@@ -519,18 +520,14 @@ export function BlueprintGenerator() {
       {/* Informational guidance shown once topics are extracted. Collects no
           data — every input lives on the page below. */}
       {showTopicHelp && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
-          role="dialog"
-          aria-modal="true"
-          onClick={() => setShowTopicHelp(false)}
+        <Dialog
+          onClose={() => setShowTopicHelp(false)}
+          ariaLabelledBy="topic-help-title"
+          overlayClassName="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+          contentClassName="w-full max-w-md rounded-2xl bg-background p-6 shadow-xl"
         >
-          <div
-            className="w-full max-w-md rounded-2xl bg-background p-6 shadow-xl"
-            onClick={(e) => e.stopPropagation()}
-          >
             <div className="mb-1 text-3xl">🎉</div>
-            <h3 className="text-lg font-semibold text-foreground">
+            <h3 id="topic-help-title" className="text-lg font-semibold text-foreground">
               Topics ready!
             </h3>
             <p className="mt-1 text-sm text-muted-foreground">
@@ -557,8 +554,7 @@ export function BlueprintGenerator() {
             >
               Got it
             </Button>
-          </div>
-        </div>
+        </Dialog>
       )}
       <div className="animate-rise">
         <StepBar step={step} />

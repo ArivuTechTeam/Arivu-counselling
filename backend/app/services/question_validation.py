@@ -18,17 +18,17 @@ _CHOICE_TYPES = {"mcq_single", "mcq_multi", "true_false"}
 _DOCUMENT_REFERENCE = re.compile(
     r"(?:"
     r"\baccording\s+to\s+(?:the\s+)?(?:provided\s+|uploaded\s+|given\s+)?"
-    r"(?:handbook|document|material|text|pdf|notes?|passage)\b|"
+    r"(?:handbook|document|material|text|pdf|notes?|passage|file|book|textbook|slides?|chapter|content)\b|"
     r"\bas\s+per\s+(?:the\s+)?(?:provided\s+|uploaded\s+|given\s+)?"
-    r"(?:handbook|document|material|text|pdf|notes?|passage)\b|"
+    r"(?:handbook|document|material|text|pdf|notes?|passage|file|book|textbook|slides?|chapter|content)\b|"
     r"\bas\s+(?:stated|given|mentioned|described|shown|presented|listed|explained)\s+in\s+"
     r"(?:the\s+)?(?:provided\s+|uploaded\s+|given\s+)?"
-    r"(?:handbook|document|material|text|pdf|notes?|passage)\b|"
+    r"(?:handbook|document|material|text|pdf|notes?|passage|file|book|textbook|slides?|chapter|content)\b|"
     r"\b(?:the\s+)?(?:provided\s+|uploaded\s+|given\s+)?"
-    r"(?:handbook|document|source\s+material|provided\s+text|uploaded\s+notes?)\s+"
+    r"(?:handbook|document|file|book|textbook|slides?|chapter|content|source\s+material|provided\s+text|uploaded\s+notes?)\s+"
     r"(?:states?|lists?|says?|shows?|mentions?|describes?|provides?|explains?)\b|"
     r"\b(?:from|based\s+on)\s+(?:the\s+)?(?:provided\s+|uploaded\s+|given\s+)?"
-    r"(?:handbook|document|source\s+material|provided\s+text|uploaded\s+notes?)\b"
+    r"(?:handbook|document|file|book|textbook|slides?|chapter|content|source\s+material|provided\s+text|uploaded\s+notes?)\b"
     r")",
     re.IGNORECASE,
 )

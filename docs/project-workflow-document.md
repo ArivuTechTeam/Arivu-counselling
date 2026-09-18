@@ -241,7 +241,7 @@ Six auto-gradeable question types, all mobile-friendly:
                     │         │          │
                     ▼         ▼          ▼
 ┌───────────────────────┐  ┌─────────────────────────────────────┐
-│  SUPABASE             │  │      BACKEND (Vercel Serverless)    │
+│  SUPABASE             │  │      BACKEND (Railway)              │
 │  Auth + Database +    │  │      Python + FastAPI               │
 │  File Storage         │  │                                     │
 │                       │  │  - AI processing endpoints          │
@@ -255,11 +255,11 @@ Six auto-gradeable question types, all mobile-friendly:
                               ┌──────────────────────────────────┐
                               │       AI LAYER                   │
                               │                                  │
-                              │  Primary: DeepSeek V4            │
-                              │  (cheap, fast, quality)          │
+│  Primary: Google Gemini          │
+│  (provider abstraction)          │
                               │                                  │
-                              │  Fallback: Claude Sonnet 5       │
-                              │  (reliable when DeepSeek fails)  │
+│  Fallback: DeepSeek              │
+│  (when Gemini is unavailable)    │
                               └──────────────────────────────────┘
 ```
 
@@ -271,8 +271,8 @@ Six auto-gradeable question types, all mobile-friendly:
 3. Backend saves file to Supabase Storage
 4. Backend extracts text using pdfplumber (or Tesseract OCR fallback)
 5. Text is chunked into manageable sections
-6. Backend sends chunks + quiz parameters to DeepSeek V4 API
-7. DeepSeek returns structured JSON with questions
+6. Backend sends chunks + quiz parameters to the configured AI provider
+7. The provider returns structured JSON with questions
 8. Backend validates the JSON and stores questions in database
 9. Frontend displays Quiz Set to teacher for review
 ```
@@ -319,11 +319,11 @@ at the database level, not just the application level.
 | **Database** | PostgreSQL (via Supabase) | Industry standard, RLS built-in |
 | **Authentication** | Supabase Auth | Free until 50K users, integrated |
 | **File Storage** | Supabase Storage | Integrated with auth and database |
-| **Primary AI** | DeepSeek V4 | ~50x cheaper than alternatives |
-| **Fallback AI** | Anthropic Claude Sonnet | Reliable when DeepSeek fails |
+| **Primary AI** | Google Gemini | Primary provider for generation and extraction |
+| **Fallback AI** | DeepSeek | Used when Gemini is unavailable |
 | **PDF Processing** | pdfplumber + Tesseract OCR | Standard tools, free |
 | **Frontend Hosting** | Vercel | Optimized for Next.js |
-| **Backend Hosting** | Vercel Serverless Functions | Same platform, simpler ops |
+| **Backend Hosting** | Railway | Runs the FastAPI Docker service |
 | **Version Control** | GitHub | Industry standard |
 | **CI/CD** | GitHub Actions | Automated deployments |
 
@@ -450,7 +450,7 @@ Phase 1 is considered successful when:
 | Risk | Likelihood | Impact | Mitigation |
 |---|:-:|:-:|---|
 | AI generates incorrect questions | High | Medium | Mandatory teacher review before student sees anything |
-| DeepSeek API unreliability from India | Medium | Medium | Claude Sonnet as automatic fallback |
+| Gemini API unreliability | Medium | Medium | DeepSeek automatic fallback |
 | Uploaded PDFs are scanned images | Medium | Low | Tesseract OCR fallback for image-based PDFs |
 | Multi-tenant data leakage bug | Low | High | Postgres Row Level Security enforced at DB level |
 | Vercel serverless cold-start latency | Medium | Low | Migrate to Railway/Fly.io if timing becomes an issue |

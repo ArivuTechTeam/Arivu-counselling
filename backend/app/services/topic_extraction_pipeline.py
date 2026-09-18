@@ -208,6 +208,7 @@ class TopicExtractionPipeline:
         self,
         *,
         document_title: str,
+        tenant_id: str,
         total_chunks: int,
         chunk: dict,
         document_summary: str = "",
@@ -226,6 +227,7 @@ class TopicExtractionPipeline:
                 }
             )
             .eq("id", chunk["id"])
+            .eq("tenant_id", tenant_id)
             .in_("map_status", ["queued", "failed"])
             .execute()
         )
@@ -249,11 +251,11 @@ class TopicExtractionPipeline:
                     "error_message": None,
                     "updated_at": _now(),
                 }
-            ).eq("id", chunk["id"]).execute()
+            ).eq("id", chunk["id"]).eq("tenant_id", tenant_id).execute()
         except Exception as exc:  # noqa: BLE001 - record; retry handled by resume
             client.table("document_chunks").update(
                 {"map_status": "failed", "error_message": str(exc)[:500], "updated_at": _now()}
-            ).eq("id", chunk["id"]).execute()
+            ).eq("id", chunk["id"]).eq("tenant_id", tenant_id).execute()
 
     def run(
         self,
@@ -291,6 +293,7 @@ class TopicExtractionPipeline:
                     pool.map(
                         lambda c: self._map_one(
                             document_title=document_title,
+                            tenant_id=tenant_id,
                             total_chunks=total,
                             chunk=c,
                             document_summary=document_summary,

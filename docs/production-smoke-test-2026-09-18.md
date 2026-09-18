@@ -6,7 +6,8 @@
 - Backend deployment: `4bccae9f-6ccc-4adc-8738-6b3332880a9d`
 - Tested commits: `2890acc9776c4d11a5583133003f615b7998c530`, `1b0a5c7`
 
-Keep this file uncommitted. Add every issue found during smoke-test phases 1–8.
+This is a retained record of the production smoke-test phases 1–8. Do not add
+credentials, tokens, or other secrets to it.
 
 ## Phase 1 — Platform health
 

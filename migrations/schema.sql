@@ -234,7 +234,7 @@ create table questions (
   verification_warnings jsonb not null default '[]'::jsonb check (
     jsonb_typeof(verification_warnings) = 'array'
   ),
-  review_status review_status not null default 'approved',
+  review_status review_status not null default 'pending_review',
   reviewed_by uuid references profiles(id) on delete set null,
   reviewed_at timestamptz,
   embedding vector(1536),                   -- for semantic duplicate detection

@@ -346,7 +346,8 @@ export default function LoginPage() {
           </form>
 
           <p className="mobile-legal">
-            By signing in you agree to our Terms of Service &amp; Privacy Policy
+            By signing in you agree to <Link href="/terms">Terms of Service</Link>
+            {" and "}<Link href="/privacy">Privacy Policy</Link>
           </p>
         </section>
       </main>
@@ -454,13 +455,14 @@ export default function LoginPage() {
               )}
 
               <div className="field">
-                <div className="field-label">
+                <label className="field-label" htmlFor="login-email">
                   Email address <span className="req">*</span>
-                </div>
+                </label>
                 <div className="field-box">
                   <span className="field-icon"><MailIcon /></span>
                   <input
                     className="field-input"
+                    id="login-email"
                     type="email"
                     name="email"
                     inputMode="email"
@@ -474,13 +476,14 @@ export default function LoginPage() {
               </div>
 
               <div className="field">
-                <div className="field-label">
+                <label className="field-label" htmlFor="login-password">
                   Password <span className="req">*</span>
-                </div>
+                </label>
                 <div className="field-box">
                   <span className="field-icon"><LockIcon /></span>
                   <input
                     className="field-input"
+                    id="login-password"
                     type={showPw ? "text" : "password"}
                     name="password"
                     placeholder="Enter your password"
@@ -536,8 +539,8 @@ export default function LoginPage() {
             </form>
 
             <div className="card-foot">
-              By signing in you agree to our Terms of Service &amp; Privacy
-              Policy
+              By signing in you agree to <Link href="/terms">Terms of Service</Link>
+              {" and "}<Link href="/privacy">Privacy Policy</Link>
             </div>
           </div>
         </div>

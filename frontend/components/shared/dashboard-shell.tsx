@@ -7,6 +7,7 @@ import { useEffect, useState } from "react";
 
 import { ChangePasswordModal } from "@/components/shared/change-password-modal";
 import { DevAccountSwitcher } from "@/components/shared/dev-account-switcher";
+import { Dialog, useEscapeKey } from "@/components/ui/dialog";
 import { ThemeToggle } from "@/components/shared/theme-provider";
 import {
   BarChart3,
@@ -301,6 +302,8 @@ export function DashboardShell({
     if (mustChangePassword) setPwOpen(true);
   }, [mustChangePassword]);
 
+  useEscapeKey(menuOpen, () => setMenuOpen(false));
+
   const items = role ? NAV[role] ?? [] : [];
   // Pick the most specific matching nav item (longest href), so a parent like
   // "Overview" isn't highlighted while you're on a child route like "/users".
@@ -572,20 +575,14 @@ export function DashboardShell({
       />
 
       {deleteOpen && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
-          onClick={(event) => {
-            if (event.target === event.currentTarget && !deleting) {
-              setDeleteOpen(false);
-            }
+        <Dialog
+          onClose={() => {
+            if (!deleting) setDeleteOpen(false);
           }}
+          closeOnBackdrop={!deleting}
+          ariaLabelledBy="delete-account-title"
+          contentClassName="w-full max-w-md rounded-2xl border border-border bg-card p-6 shadow-2xl"
         >
-          <div
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="delete-account-title"
-            className="w-full max-w-md rounded-2xl border border-border bg-card p-6 shadow-2xl"
-          >
             <h2 id="delete-account-title" className="text-lg font-bold text-foreground">
               Permanently delete account
             </h2>
@@ -628,8 +625,7 @@ export function DashboardShell({
                 {deleting ? "Deleting…" : "Delete permanently"}
               </button>
             </div>
-          </div>
-        </div>
+        </Dialog>
       )}
     </div>
   );

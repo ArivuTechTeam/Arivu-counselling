@@ -291,7 +291,7 @@ class CreateJobTests(unittest.TestCase):
         self.assertEqual(row["status"], "queued")
         self.assertEqual(row["phase"], "queued")
         self.assertEqual(row["document_id"], "d1")
-        launch.assert_called_once_with(job_id)
+        launch.assert_called_once_with(job_id, "t1")
 
     def test_create_can_skip_launch(self) -> None:
         fake = _Fake()

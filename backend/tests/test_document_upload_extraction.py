@@ -70,7 +70,7 @@ class DocumentUploadExtractionTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_scanned_pdf_is_marked_failed_with_actionable_guidance(self) -> None:
         service = _Service()
-        upload = UploadFile(filename="scan.pdf", file=io.BytesIO(b"pdf bytes"))
+        upload = UploadFile(filename="scan.pdf", file=io.BytesIO(b"%PDF-1.4 test"))
 
         with patch("app.api.documents.upload_bytes"), patch(
             "app.api.documents.get_service_client", return_value=service
@@ -86,7 +86,7 @@ class DocumentUploadExtractionTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_text_pdf_over_threshold_is_completed(self) -> None:
         service = _Service()
-        upload = UploadFile(filename="typed.pdf", file=io.BytesIO(b"pdf bytes"))
+        upload = UploadFile(filename="typed.pdf", file=io.BytesIO(b"%PDF-1.4 test"))
 
         with patch("app.api.documents.upload_bytes"), patch(
             "app.api.documents.get_service_client", return_value=service
