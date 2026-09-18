@@ -93,10 +93,12 @@ migration-36-super-admin-aggregates.sql
 migration-37-student-attempt-snapshots.sql
 migration-38-repair-auth-profile-trigger.sql
 migration-39-decouple-backend-auth-provisioning.sql
+migration-40-fix-admin-auth-insert-order.sql
 ```
 
-(Filenames above verified 2026-09-16 against `migrations/` — earlier drafts of this
-runbook named these `migration-31-chunked-document-generation.sql`,
+(Filenames above verified 2026-09-17 against `migrations/`, including the
+addition of `migration-40-fix-admin-auth-insert-order.sql` — earlier drafts of
+this runbook named migrations 31–34 `migration-31-chunked-document-generation.sql`,
 `migration-32-reset-chunked-generation-schema.sql`,
 `migration-33-document-archive-status.sql`, and
 `migration-34-document-upload-limit-30mb.sql`, which do not exist in the repo.)
@@ -113,6 +115,15 @@ required owner and execution privilege and pins a safe empty search path.
 Migration 39 must be applied before creating teachers or institution
 administrators with the backend. It keeps public student signup in the trigger
 but lets the service-role backend create staff profiles with explicit rollback.
+Migration 40 must be applied after migration 39 and before deploying backend
+code that provisions admin/teacher accounts (2026-09-17): Supabase Auth merges
+`app_metadata` onto `auth.users` after the row is already inserted, so the
+`AFTER INSERT` trigger from migration 39 alone cannot see the
+`provisioned_by_backend` marker at insert time. Migration 40 has the backend
+also send a `_backend_provisioning_intent` hint in `user_metadata`, which is
+visible at insert time and only ever skips creating a public-signup profile —
+it never assigns a role, tenant, or permission; those are still written by the
+service-role backend afterward.
 Migrations 15–19 must be applied in order before deploying quiz extraction;
 run the duplicate checks documented in migrations 16 and 18 first.
 Migration 22 must be applied to close direct browser access to backend-owned
@@ -146,18 +157,31 @@ the platform overview, question bank, and AI-monitoring endpoints call its
 service-role-only aggregate functions.
 
 For a fresh database, `migrations/schema.sql` already includes the final effects
-of migrations 31, 33, 34, and 35. The incremental files remain required for an
-existing database that predates those changes; never infer their live applied
-state solely from the current schema file. Migration 36 is required after the
-baseline schema for both fresh and existing databases.
+of migrations 31, 33, 34, 35, 37, 39, and 40 (verified 2026-09-17 by grepping
+`schema.sql` for each migration's distinguishing columns/functions — e.g.
+`question_snapshot` from migration 37, and the `_backend_provisioning_intent`/
+`provisioned_by_backend` trigger logic from migrations 39–40). The incremental
+files remain required for an existing database that predates those changes;
+never infer their live applied state solely from the current schema file.
+Migration 36 is **not** baked into `schema.sql` (its `platform_*_metrics`
+functions are absent there), so it remains required after the baseline schema
+for both fresh and existing databases. Migration 38's own ownership/search-path
+repair was not independently re-checked against a from-scratch `schema.sql` run
+this pass — apply it too unless you've separately confirmed the trigger
+function's owner and privileges match what it sets.
 
 ---
 
 ## 2. Backend → Railway (confirmed) or Render (also supported)
 
 - **Build:** Docker, via `backend/Dockerfile` (confirmed via `railway status
-  --json` → `"builder": "DOCKERFILE"`). The Dockerfile itself runs `pip
-  install -r requirements.txt` — there is no separate dashboard build command.
+  --json` → `"builder": "DOCKERFILE"`). The Dockerfile runs `pip install
+  --no-cache-dir --require-hashes -r requirements.lock` against a pinned,
+  hashed `backend/requirements.lock` (verified 2026-09-17 against the current
+  `backend/Dockerfile`) — not a bare `requirements.txt` install. Regenerate the
+  lock file with the `uv pip compile` command documented at the top of
+  `backend/requirements.txt` whenever a direct dependency changes; there is no
+  separate dashboard build command.
 - **Root directory:** there is **no** dashboard "root directory" setting for
   this service (confirmed `"rootDirectory": null`). Instead, every deploy
   must scope the build to `backend/` at the CLI level:

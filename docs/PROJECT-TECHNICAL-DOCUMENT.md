@@ -1,14 +1,14 @@
 # ArivuPro Quiz Platform (quiz-generator-v1) — Technical Project Document
 
-> **Purpose of this document.** A single, self-contained technical reference for the ArivuPro Quiz Platform. It is written so that **any technically literate reader — with no prior exposure to this codebase — can understand what the system is, how it is built, how it runs, what it costs, and how to extend it.** Technical statements were originally reviewed against `main` at commit `016830e` (7 September 2026) and partially refreshed against `main` at `59e0b27` (15 September 2026) — see the per-section "Verified 2026-09-15" notes for what was re-checked in this pass; sections without such a note still reflect the 7-September basis and should be re-verified before being relied on. The Railway **production deployment itself** (as opposed to the repository) was last independently verified on 2026-09-04/07 per `docs/deploy-runbook.md` — this document does not re-verify production on its own. Provider pricing and operational settings can change independently and must be rechecked before making financial or deployment decisions.
+> **Purpose of this document.** A single, self-contained technical reference for the ArivuPro Quiz Platform. It is written so that **any technically literate reader — with no prior exposure to this codebase — can understand what the system is, how it is built, how it runs, what it costs, and how to extend it.** Technical statements were originally reviewed against `main` at commit `016830e` (7 September 2026) and partially refreshed against `main` at `59e0b27` (15 September 2026) — see the per-section "Verified 2026-09-15" notes for what was re-checked in that pass. A 17 September 2026 metadata-only pass added the migration-count/gap note below and one Known Gaps entry (§12.7); it did **not** re-verify the body of §§1–11 or §13–15 against `migrations/` through migration-40 or the code changes landed since `59e0b27` (universal question grounding, super-admin aggregates, student-attempt snapshots, auth-provisioning fixes across migrations 38–40, institution-admin credential reset). Sections without a "Verified" note for the date you're reading this should still be re-checked before being relied on. The Railway **production deployment itself** (as opposed to the repository) was last independently verified on 2026-09-04/07 per `docs/deploy-runbook.md` — this document does not re-verify production on its own. Provider pricing and operational settings can change independently and must be rechecked before making financial or deployment decisions.
 
 | | |
 |---|---|
 | **Product** | ArivuPro Quiz Platform — multi-tenant AI quiz generator for coaching institutions |
 | **Repository** | `ArivuTechTeam/quiz-generator` |
-| **Document version** | 1.2 |
-| **Document date** | 7 September 2026; partially refreshed 15 September 2026 |
-| **Basis** | Originally `main` at `016830e` (migrations 11–12); partially refreshed against `main` at `59e0b27` (migrations through 34) — sections not marked "Verified 2026-09-15" were not re-checked in the refresh |
+| **Document version** | 1.3 |
+| **Document date** | 7 September 2026; partially refreshed 15 September 2026; metadata/gaps-only touch-up 17 September 2026 |
+| **Basis** | Originally `main` at `016830e` (migrations 11–12); partially refreshed against `main` at `59e0b27` (migrations through 34) — sections not marked "Verified 2026-09-15" (or later) were not re-checked. `migrations/` now goes through `migration-40-fix-admin-auth-insert-order.sql` (verified 2026-09-17 via `ls migrations/`); the section-by-section content below has not been re-verified against it |
 | **Status of product** | Phase 1 (functional product + multi-tenant foundation) — **live in production pilot** (production status confirmed only as of 2026-09-04/07, not re-verified in this refresh) |
 | **Audience** | Engineering, technical leadership, prospective contributors, stakeholders |
 
@@ -648,6 +648,7 @@ Presented honestly, as a forward-deployed engineer would to a new maintainer:
 4. **Dead/unused code.** A PYQ (past-year-questions) parser and the RLS-respecting anon DB client exist but are unwired; the `questions.embedding` vector column is unused (no dedup yet).
 5. **SMTP not configured.** Email confirmation/reset won't deliver until a provider (e.g. Brevo) is set up.
 6. **Bundle size.** The quiz-attempt/practice/class-monitor routes are heavy (~640 kB first load) because they pull in Recharts + the PDF renderer; lazy-loading these is a quick win.
+7. **Undocumented feature (added 2026-09-17, not yet covered anywhere in this document):** super-admin-only institution-admin credential reset — `POST /api/v1/platform/admins/{user_id}/temporary-password` (`backend/app/api/admin.py`, path-whitelisted for `super_admin` in `backend/app/api/super_admin.py`) lets a super admin set a new temporary password for an `institution_admin` and forces `must_change_password` on next login; the frontend dialog is `frontend/components/admin/temporary-credentials-dialog.tsx`. No migration is required for it. This section flags the gap rather than fully documenting the feature's security model — verify against the code before relying on this description.
 
 ---
 
