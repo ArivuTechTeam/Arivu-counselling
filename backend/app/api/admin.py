@@ -798,7 +798,16 @@ def reset_teacher_temporary_password(
         )
         if not updated_profile.data:
             raise RuntimeError("The teacher profile could not be updated.")
-        service.auth.admin.update_user_by_id(user_id, {"password": body.password})
+        # Keep Auth metadata in sync with the authoritative profile flag.
+        # The dashboard reads this value from Supabase Auth to open the forced
+        # password-change modal immediately after a temporary-password reset.
+        service.auth.admin.update_user_by_id(
+            user_id,
+            {
+                "password": body.password,
+                "user_metadata": {"must_change_password": True},
+            },
+        )
     except Exception:  # noqa: BLE001
         raise HTTPException(
             status_code=400,
@@ -1408,7 +1417,15 @@ def reset_admin_temporary_password(
         )
         if not updated_profile.data:
             raise RuntimeError("The administrator profile could not be updated.")
-        service.auth.admin.update_user_by_id(user_id, {"password": body.password})
+        # See the teacher reset path above: the frontend must receive this
+        # flag from Auth as well as the backend enforcing it from profiles.
+        service.auth.admin.update_user_by_id(
+            user_id,
+            {
+                "password": body.password,
+                "user_metadata": {"must_change_password": True},
+            },
+        )
     except Exception as exc:  # noqa: BLE001
         raise public_error(
             503,

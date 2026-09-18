@@ -513,7 +513,15 @@ class SuperAdminRegressionTests(unittest.TestCase):
         self.assertTrue(stored_profile["must_change_password"])
         self.assertEqual(
             service.updated_auth_payloads,
-            [(created_id, {"password": new_password})],
+            [
+                (
+                    created_id,
+                    {
+                        "password": new_password,
+                        "user_metadata": {"must_change_password": True},
+                    },
+                )
+            ],
         )
 
     def test_institution_admin_cannot_reset_another_admin_password(self) -> None:

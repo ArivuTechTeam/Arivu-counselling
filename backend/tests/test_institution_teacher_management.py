@@ -418,6 +418,7 @@ class InstitutionTeacherManagementTests(unittest.TestCase):
         self.assertFalse(hasattr(result, "email"))
         auth_user = self.service.auth.admin.get_user_by_id("teacher-a").user
         self.assertEqual(auth_user.password, generated)
+        self.assertTrue(auth_user.user_metadata["must_change_password"])
         teacher = next(row for row in self.service.tables["profiles"] if row["id"] == "teacher-a")
         self.assertTrue(teacher["must_change_password"])
 
