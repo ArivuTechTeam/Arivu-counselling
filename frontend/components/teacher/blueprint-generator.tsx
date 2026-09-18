@@ -434,7 +434,7 @@ export function BlueprintGenerator() {
             difficulty,
           });
       setFinalGenerationJobId(res.job_id);
-      window.localStorage.setItem("quiz-final-generation-job", res.job_id);
+      window.sessionStorage.setItem("quiz-final-generation-job", res.job_id);
       notify(
         res.created ? "Quiz generation started — you can stay on this page while it finishes." : "That quiz is already generating — reconnecting to its progress.",
         "success",
@@ -449,7 +449,7 @@ export function BlueprintGenerator() {
   // disconnects. Reconnect to the saved job and send the teacher to review as
   // soon as the backend has persisted the quiz set.
   useEffect(() => {
-    const saved = window.localStorage.getItem("quiz-final-generation-job");
+    const saved = window.sessionStorage.getItem("quiz-final-generation-job");
     if (saved && !finalGenerationJobId) {
       setFinalGenerationJobId(saved);
       setGenerating(true);
@@ -464,11 +464,11 @@ export function BlueprintGenerator() {
         const job = await getGenerationJob(finalGenerationJobId);
         if (cancelled) return;
         if (job.status === "completed" && job.quiz_set_id) {
-          window.localStorage.removeItem("quiz-final-generation-job");
+          window.sessionStorage.removeItem("quiz-final-generation-job");
           notify("✓ Quiz generated — opening your review queue", "success");
           router.push(`/dashboard/teacher/review/${job.quiz_set_id}`);
         } else if (job.status === "failed") {
-          window.localStorage.removeItem("quiz-final-generation-job");
+          window.sessionStorage.removeItem("quiz-final-generation-job");
           setFinalGenerationJobId(null);
           setGenerating(false);
           setGenError(job.error_message || "Quiz generation failed. Please try again.");
