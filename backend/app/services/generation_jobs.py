@@ -377,8 +377,12 @@ def _run_final_generation(job_id: str, tenant_id: str) -> None:
             job_id, time.monotonic() - started, request.get("total_questions", 0),
         )
     except Exception as exc:  # noqa: BLE001 - persist a safe retryable failure
-        logger.exception(
-            "Final quiz generation job %s failed after %.1fs", job_id, time.monotonic() - started
+        # Do not log provider payloads or stack traces: document text may be
+        # present in an exception. The durable job row retains a short public
+        # error for the teacher instead.
+        logger.warning(
+            "Final quiz generation job %s failed after %.1fs (%s)",
+            job_id, time.monotonic() - started, type(exc).__name__,
         )
         client.table("quiz_generation_jobs").update(
             {"status": "failed", "phase": "failed", "error_message": str(exc)[:500], "updated_at": _now()}
