@@ -1630,6 +1630,23 @@ export type ClassMonitor = {
 export const getClassMonitor = () =>
   jsonRequest<ClassMonitor>("/api/v1/teacher/class-monitor", "GET");
 
+export type TeacherQuizPerformance = {
+  quiz: { id: string; title: string; status: string; published_at: string | null; eligible_students: number };
+  summary: {
+    eligible_students: number; completed_students: number; not_started_students: number;
+    total_attempts: number; average_accuracy: number; highest_accuracy: number; lowest_accuracy: number;
+  };
+  score_distribution: { label: string; count: number }[];
+  students: {
+    student_id: string; student_name: string; attempts: number; status: "completed" | "not_started";
+    latest_score: number | null; latest_max_score: number | null; latest_accuracy: number | null;
+    best_accuracy: number | null; submitted_at: string | null;
+  }[];
+  question_performance: { question_id: string; question_text: string; answered: number; accuracy: number }[];
+};
+export const getTeacherQuizPerformance = (quizSetId: string) =>
+  jsonRequest<TeacherQuizPerformance>(`/api/v1/teacher/quiz-sets/${quizSetId}/performance`, "GET");
+
 // Full report for one student (teacher, from Class monitor).
 export type StudentReport = {
   student: { name: string; initials: string };
@@ -1848,6 +1865,14 @@ export const generateFromJob = (
     req,
     90_000,
   );
+
+export type QueuedFinalGeneration = { job_id: string; status: string; created: boolean };
+export const queueBlueprintQuizGeneration = (req: BlueprintGenerateRequest) =>
+  jsonRequest<QueuedFinalGeneration>("/api/v1/quiz-sets/generate-blueprint/async", "POST", req);
+export const queueGenerationFromJob = (
+  jobId: string,
+  req: Omit<BlueprintGenerateRequest, "document_id">,
+) => jsonRequest<QueuedFinalGeneration>(`/api/v1/quiz-sets/generation-jobs/${jobId}/generate-async`, "POST", req);
 
 export type DuplicateCheck = {
   duplicate: boolean;

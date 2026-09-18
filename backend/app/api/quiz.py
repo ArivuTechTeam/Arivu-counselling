@@ -25,7 +25,11 @@ from app.services.blueprint import generate_blueprint_quiz
 from app.services.events import QUIZ_PUBLISHED, log_event
 from app.services.extraction import extract_text
 from app.services.generation import generate_quiz
-from app.services.generation_jobs import create_generation_job, launch_job
+from app.services.generation_jobs import (
+    create_final_generation_job,
+    create_generation_job,
+    launch_job,
+)
 from app.services.document_profile import profile_document, profile_to_summary
 from app.services.llm import LLMError
 from app.services.quiz_generator_service import QuizGeneratorService
@@ -417,16 +421,22 @@ def _fail_if_stuck(service, job: dict, profile: CurrentProfile) -> dict:
     if age_seconds <= get_settings().generation_chunk_stuck_seconds:
         return job
 
-    message = "Analysis stopped before it finished. Retry to continue saved sections."
-    now = datetime.now(timezone.utc).isoformat()
-    (
-        service.table("document_chunks")
-        .update({"map_status": "failed", "error_message": message, "updated_at": now})
-        .eq("document_id", job["document_id"])
-        .eq("tenant_id", profile.tenant_id)
-        .eq("map_status", "running")
-        .execute()
+    is_final_generation = ((job.get("params") or {}).get("kind") == "final_generation")
+    message = (
+        "Quiz generation stopped before it finished. Retry to continue."
+        if is_final_generation
+        else "Analysis stopped before it finished. Retry to continue saved sections."
     )
+    now = datetime.now(timezone.utc).isoformat()
+    if not is_final_generation:
+        (
+            service.table("document_chunks")
+            .update({"map_status": "failed", "error_message": message, "updated_at": now})
+            .eq("document_id", job["document_id"])
+            .eq("tenant_id", profile.tenant_id)
+            .eq("map_status", "running")
+            .execute()
+        )
     (
         service.table("quiz_generation_jobs")
         .update(
@@ -512,6 +522,91 @@ class JobGenerateRequest(BaseModel):
     type_counts: dict[str, int] = Field(default_factory=dict)
     cognitive_level: Literal["theory", "practical", "mixed"] = "mixed"
     difficulty: Literal["easy", "medium", "hard"] = "medium"
+
+
+def _queue_final_generation(
+    *,
+    document_id: str,
+    source_job_id: str | None,
+    req: BlueprintGenerateRequest | JobGenerateRequest,
+    profile: CurrentProfile,
+) -> dict:
+    """Validate and queue the final LLM call rather than holding an HTTP request.
+
+    AI providers may legitimately take several minutes for a 15–50 question
+    exact-mix quiz (including the corrective validation retry).  Returning a
+    durable job immediately avoids browser/proxy timeouts and is safe to retry.
+    """
+    if profile.role != "teacher":
+        raise HTTPException(status_code=403, detail="Only teachers can generate quizzes.")
+    if not req.chapter_name.strip():
+        raise HTTPException(status_code=400, detail="Chapter name is required.")
+    selected, type_counts, total, question_types = _resolve_blueprint_plan(
+        req.selected_topics, req.type_counts
+    )
+    if total < 1 or total > 50 or len(req.selected_topics) > total:
+        raise HTTPException(status_code=400, detail="Choose between 1 and 50 questions and no more topics than questions.")
+    if source_job_id:
+        job = _owned_job(get_service_client(), source_job_id, profile)
+        if job.get("status") != "completed" or not job.get("master_blueprint"):
+            raise HTTPException(status_code=400, detail="This document analysis is not ready yet.")
+
+    request = {
+        "source_job_id": source_job_id,
+        "subject_id": req.subject_id,
+        "chapter_name": req.chapter_name.strip(),
+        "selected_topics": selected,
+        "total_questions": total,
+        "question_types": question_types,
+        "type_counts": type_counts,
+        "cognitive_level": req.cognitive_level,
+        "difficulty": req.difficulty,
+    }
+    job_id, created = create_final_generation_job(
+        document_id=document_id,
+        tenant_id=profile.tenant_id,
+        created_by=profile.user_id,
+        request=request,
+        launch=False,
+    )
+    if created:
+        try:
+            enforce_ai_rate_limit(
+                profile=profile,
+                endpoint=BLUEPRINT_GENERATION,
+                hourly_limit=get_settings().rate_limit_blueprint_per_hour,
+                action_label="blueprint generation",
+            )
+        except Exception:
+            # Do not strand a queued job when the rate limiter denies it.
+            get_service_client().table("quiz_generation_jobs").update(
+                {"status": "failed", "phase": "failed", "error_message": "Generation limit reached. Try again later."}
+            ).eq("id", job_id).eq("tenant_id", profile.tenant_id).execute()
+            raise
+        launch_job(job_id, profile.tenant_id)
+    return {"job_id": job_id, "status": "queued", "created": created}
+
+
+@router.post("/generate-blueprint/async")
+def queue_blueprint_generation(
+    req: BlueprintGenerateRequest,
+    profile: CurrentProfile = Depends(get_current_profile),
+) -> dict:
+    return _queue_final_generation(
+        document_id=req.document_id, source_job_id=None, req=req, profile=profile
+    )
+
+
+@router.post("/generation-jobs/{job_id}/generate-async")
+def queue_generation_from_job(
+    job_id: str,
+    req: JobGenerateRequest,
+    profile: CurrentProfile = Depends(get_current_profile),
+) -> dict:
+    job = _owned_job(get_service_client(), job_id, profile)
+    return _queue_final_generation(
+        document_id=job["document_id"], source_job_id=job_id, req=req, profile=profile
+    )
 
 
 @router.post("/generation-jobs/{job_id}/generate")

@@ -22,12 +22,12 @@ import {
   DocumentOut,
   analyzeDocument,
   checkDocumentDuplicate,
-  generateBlueprintQuiz,
-  generateFromJob,
   getGenerationJob,
   listChapters,
   listDocuments,
   retryGenerationJob,
+  queueBlueprintQuizGeneration,
+  queueGenerationFromJob,
   uploadDocument,
 } from "@/lib/api";
 import { useCourses } from "@/lib/staff-queries";
@@ -160,6 +160,7 @@ export function BlueprintGenerator() {
 
   const [generating, setGenerating] = useState(false);
   const [genError, setGenError] = useState<string | null>(null);
+  const [finalGenerationJobId, setFinalGenerationJobId] = useState<string | null>(null);
   // Large documents are analysed in the background (chunk → MAP → REDUCE) before
   // topics appear. `jobId` (set once analysis is under way) also routes the final
   // generation to the job path; null = small-document single-call flow.
@@ -411,10 +412,11 @@ export function BlueprintGenerator() {
 
     setGenerating(true);
     try {
-      // Large document → generate from the ready analysis job's blueprint;
-      // small document → the existing single-call blueprint path.
+      // Final generation is a durable background job.  AI providers may take
+      // several minutes for an exact 15–50 question mix, so never hold a
+      // browser request open until it finishes.
       const res = jobId
-        ? await generateFromJob(jobId, {
+        ? await queueGenerationFromJob(jobId, {
             subject_id: subjectId,
             chapter_name: chapterName,
             selected_topics: selectedPayload,
@@ -422,7 +424,7 @@ export function BlueprintGenerator() {
             cognitive_level: level,
             difficulty,
           })
-        : await generateBlueprintQuiz({
+        : await queueBlueprintQuizGeneration({
             document_id: documentId,
             subject_id: subjectId,
             chapter_name: chapterName,
@@ -431,14 +433,55 @@ export function BlueprintGenerator() {
             cognitive_level: level,
             difficulty,
           });
-      notify("✓ Quiz generated — opening your review queue", "success");
-      // → page 2/3: review + publish
-      router.push(`/dashboard/teacher/review/${res.quiz_set_id}`);
+      setFinalGenerationJobId(res.job_id);
+      window.localStorage.setItem("quiz-final-generation-job", res.job_id);
+      notify(
+        res.created ? "Quiz generation started — you can stay on this page while it finishes." : "That quiz is already generating — reconnecting to its progress.",
+        "success",
+      );
     } catch (e) {
       setGenError(e instanceof Error ? e.message : "Generation failed");
       setGenerating(false);
     }
   }
+
+  // A final-generation job survives page refreshes and temporary frontend
+  // disconnects. Reconnect to the saved job and send the teacher to review as
+  // soon as the backend has persisted the quiz set.
+  useEffect(() => {
+    const saved = window.localStorage.getItem("quiz-final-generation-job");
+    if (saved && !finalGenerationJobId) {
+      setFinalGenerationJobId(saved);
+      setGenerating(true);
+    }
+  }, [finalGenerationJobId]);
+
+  useEffect(() => {
+    if (!finalGenerationJobId) return;
+    let cancelled = false;
+    const poll = async () => {
+      try {
+        const job = await getGenerationJob(finalGenerationJobId);
+        if (cancelled) return;
+        if (job.status === "completed" && job.quiz_set_id) {
+          window.localStorage.removeItem("quiz-final-generation-job");
+          notify("✓ Quiz generated — opening your review queue", "success");
+          router.push(`/dashboard/teacher/review/${job.quiz_set_id}`);
+        } else if (job.status === "failed") {
+          window.localStorage.removeItem("quiz-final-generation-job");
+          setFinalGenerationJobId(null);
+          setGenerating(false);
+          setGenError(job.error_message || "Quiz generation failed. Please try again.");
+        }
+      } catch (error) {
+        // Keep polling: a brief network failure must not lose a durable job.
+        if (!cancelled) setGenError(error instanceof Error ? error.message : "Unable to check generation progress.");
+      }
+    };
+    void poll();
+    const timer = window.setInterval(() => void poll(), 2000);
+    return () => { cancelled = true; window.clearInterval(timer); };
+  }, [finalGenerationJobId, notify, router]);
 
   // Poll a running ANALYSIS job; when it's ready, show its blueprint topics for
   // the teacher to pick (generation itself is a separate single call afterwards).
@@ -1080,7 +1123,7 @@ export function BlueprintGenerator() {
           >
             {generating ? (
               <span className="flex items-center gap-2">
-                <Spinner /> Generating… (20–40s)
+                <Spinner /> Generating… this can take a few minutes
               </span>
             ) : (
               <span className="flex items-center gap-2">
