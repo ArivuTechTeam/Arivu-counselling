@@ -98,17 +98,25 @@ def _chapter_named(
 
 @router.get("/public/courses")
 def public_courses(tenant_id: str) -> list[dict]:
-    """Unauthenticated list of a tenant's courses — for the signup dropdown."""
+    """Unauthenticated list of a tenant's courses — for the signup dropdown.
+
+    Only courses whose institution is ACTIVE are returned. The signup trigger
+    (handle_new_user) derives the tenant from the course but requires the tenant
+    to be `is_active = true`; without this filter the dropdown could offer a
+    course that then makes every signup fail with a generic error.
+    """
     service = get_service_client()
-    return (
+    rows = (
         service.table("courses")
-        .select("id, name")
+        .select("id, name, tenants!inner(is_active)")
         .eq("tenant_id", tenant_id)
+        .eq("tenants.is_active", True)
         .order("name")
         .execute()
         .data
         or []
     )
+    return [{"id": r["id"], "name": r["name"]} for r in rows]
 
 
 @router.get("/courses")

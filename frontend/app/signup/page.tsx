@@ -112,7 +112,15 @@ export default function SignupPage() {
     });
     setLoading(false);
     if (error) {
-      setError("Account creation failed. Please check your details and try again.");
+      // Surface the real Supabase reason (e.g. "Database error saving new user",
+      // "User already registered", "Signups not allowed") instead of a generic
+      // message — otherwise signup failures are impossible to diagnose.
+      console.error("Signup failed:", error);
+      setError(
+        error.message
+          ? `Account creation failed: ${error.message}`
+          : "Account creation failed. Please check your details and try again.",
+      );
       return;
     }
     if (data.session) {
