@@ -37,9 +37,19 @@ class PricingTests(unittest.TestCase):
 
 
 class LoggingPayloadTests(unittest.TestCase):
+    def test_test_environment_does_not_write_provider_logs(self) -> None:
+        with patch.object(
+            logs, "get_settings", return_value=SimpleNamespace(app_env="test")
+        ), patch.object(logs.threading, "Thread") as thread:
+            logs.log_ai_call(
+                provider="gemini", model="gemini-3.5-flash", request={}, response={},
+                was_fallback=False, started_at=0,
+            )
+        thread.assert_not_called()
+
     def test_gemini_usage_mapping_and_best_effort_row(self) -> None:
         written: list[dict] = []
-        with patch.object(logs, "get_settings", return_value=SimpleNamespace(usd_to_inr_rate=83)), patch.object(logs, "_write", side_effect=written.append), patch.object(
+        with patch.object(logs, "get_settings", return_value=SimpleNamespace(app_env="production", usd_to_inr_rate=83)), patch.object(logs, "_write", side_effect=written.append), patch.object(
             logs.threading, "Thread", side_effect=lambda target, args, daemon: type(
                 "Immediate", (), {"start": lambda self: target(*args)}
             )()
