@@ -18,12 +18,10 @@ from pydantic import BaseModel, Field
 from app.lib.auth import CurrentProfile, get_current_profile
 from app.lib.api_errors import public_error
 from app.lib.config import get_settings
-from app.lib.storage import download_bytes
 from app.lib.supabase import get_service_client
 from app.lib.supabase_queries import select_all, select_all_in
 from app.services.blueprint import generate_blueprint_quiz
 from app.services.events import QUIZ_PUBLISHED, log_event
-from app.services.extraction import extract_text
 from app.services.generation import generate_quiz
 from app.services.generation_jobs import (
     create_final_generation_job,
@@ -320,91 +318,45 @@ def analyze_document(
     req: AnalyzeRequest,
     profile: CurrentProfile = Depends(get_current_profile),
 ) -> dict:
-    """Route a document by size. Small documents return grounded topics directly;
-    large ones start a background analysis job and return its id for polling."""
+    """Start durable, cost-bounded topic analysis and return its polling id.
+
+    The worker performs document reading after the job exists, so a browser
+    refresh cannot orphan a long request. All supported document sizes share
+    the same resumable zero/one-call outline path.
+    """
     if profile.role != "teacher":
         raise HTTPException(status_code=403, detail="Only teachers can analyze documents.")
 
     service = get_service_client()
     doc = _owned_document(service, req.document_id, profile)
 
-    text = extract_text(download_bytes(doc["storage_path"]), doc["file_type"])
-    if not text.strip():
-        raise HTTPException(
-            status_code=400,
-            detail="This document has no extractable text (scanned image PDF?).",
-        )
-
-    # Large document → background analysis job. PDFs may first use a reliable
-    # zero-provider outline; every supported typed format otherwise uses one
-    # bounded Flash-Lite hierarchy call and never silently enters Map-Reduce.
-    if len(text) > get_settings().chunking_trigger_chars:
-        prefer_local_outline = doc["file_type"].lower() == "pdf"
-        # Non-PDF large documents cannot use stable page/index ranges, so retain
-        # the existing immediate reservation for their AI profile call.
-        if not prefer_local_outline:
-            enforce_ai_rate_limit(
-                profile=profile,
-                endpoint=TOPIC_EXTRACTION,
-                hourly_limit=get_settings().rate_limit_topic_extraction_per_hour,
-                action_label="large-document analysis",
-            )
-        job_id = create_generation_job(
-            document_id=req.document_id,
-            tenant_id=profile.tenant_id,
-            created_by=profile.user_id,
-            params={
-                "prefer_local_outline": prefer_local_outline,
-                "profile_rate_limit_reserved": not prefer_local_outline,
-                "single_call_ai_outline": True,
-                "allow_multi_call_fallback": False,
-            },
-        )
-        return {"mode": "job", "document_id": req.document_id, "job_id": job_id, "status": "queued"}
-
-    # Small document → profile first, then use that subject-neutral context for
-    # one focused topic-extraction call.
-    enforce_ai_rate_limit(
-        profile=profile,
-        endpoint=TOPIC_EXTRACTION,
-        hourly_limit=get_settings().rate_limit_topic_extraction_per_hour,
-        action_label="document profiling",
-    )
-    try:
-        with ai_call_context(
-            "document_profile", tenant_id=profile.tenant_id, document_id=req.document_id
-        ):
-            document_profile = profile_document(text)
+    prefer_local_outline = doc["file_type"].lower() == "pdf"
+    # DOCX cannot use the local PDF outline path, so reserve its one provider
+    # call before accepting the job. PDF calls are reserved by the worker only
+    # if deterministic outline extraction is inconclusive.
+    if not prefer_local_outline:
         enforce_ai_rate_limit(
             profile=profile,
             endpoint=TOPIC_EXTRACTION,
             hourly_limit=get_settings().rate_limit_topic_extraction_per_hour,
-            action_label="topic extraction",
+            action_label="document analysis",
         )
-        topic_details = extract_topic_details(
-            text,
-            profile_to_summary(document_profile),
-            tenant_id=profile.tenant_id,
-            document_id=req.document_id,
-        )
-    except LLMError as exc:
-        raise public_error(
-            status.HTTP_502_BAD_GATEWAY,
-            "We couldn't extract topics right now. Please try again.",
-            operation="extract document topics with AI",
-            exception=exc,
-        ) from exc
-    topic_choices = selectable_topic_choices(topic_details)
-    return {
-        "mode": "direct",
-        "document_id": req.document_id,
-        "topics": [topic["name"] for topic in topic_choices],
-        "topic_groups": topic_choices,
-        "topic_question_limits": {
-            topic["name"]: topic["suggested_question_limit"]
-            for topic in topic_choices
+    job_id = create_generation_job(
+        document_id=req.document_id,
+        tenant_id=profile.tenant_id,
+        created_by=profile.user_id,
+        params={
+            "prefer_local_outline": prefer_local_outline,
+            "profile_rate_limit_reserved": not prefer_local_outline,
+            "single_call_ai_outline": True,
+            "allow_multi_call_fallback": False,
         },
-        "source_quality_warnings": document_profile.get("source_quality_warnings") or [],
+    )
+    return {
+        "mode": "job",
+        "document_id": req.document_id,
+        "job_id": job_id,
+        "status": "queued",
     }
 
 

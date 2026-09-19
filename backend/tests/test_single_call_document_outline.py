@@ -80,6 +80,33 @@ def test_builds_exact_local_evidence_from_one_compact_model_response() -> None:
     assert {item["page_start"] for item in first["source_excerpts"]} == {1, 2}
 
 
+def test_saved_response_skips_provider_and_is_processed_locally() -> None:
+    extracted = _document(["Photosynthesis converts light into chemical energy."])
+    saved = {
+        "document_title": "Biology",
+        "groups": [{
+            "group_name": "Plant biology",
+            "topics": [{
+                "topic_name": "Photosynthesis",
+                "covered_concepts": ["Light energy"],
+                "source_ranges": [{"start": 1, "end": 1}],
+                "evidence_locations": [1],
+            }],
+        }],
+    }
+
+    def analyzer(*_args):
+        raise AssertionError("provider must not be called when a checkpoint exists")
+
+    result = build_single_call_ai_outline(
+        extracted,
+        analyzer=analyzer,
+        saved_response=saved,
+    )
+
+    assert result["topics"][0]["topic_name"] == "Photosynthesis"
+
+
 def test_rejects_oversized_document_before_calling_model() -> None:
     extracted = _document(["x" * 2_000 for _ in range(2_000)])
     called = False

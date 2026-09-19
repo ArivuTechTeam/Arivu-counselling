@@ -36,6 +36,29 @@ const fieldClass =
   "h-10 w-full rounded-md border border-input bg-background px-3 text-sm shadow-sm transition-colors focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20";
 
 const ALLOWED_UPLOAD_EXTENSIONS = new Set(["pdf", "docx"]);
+const WORKFLOW_STORAGE_KEY = "quiz-generation-workflow-v1";
+
+type SavedGenerationWorkflow = {
+  version: 1;
+  documentId: string;
+  uploadedName: string | null;
+  subjectId: string;
+  chapterName: string;
+  addingNewChapter: boolean;
+  jobId: string | null;
+  analysis: { status: string; phase: string; done: number; total: number } | null;
+  topics: string[];
+  topicPageRanges: Record<string, { start: number; end: number }[]>;
+  topicSubtopics: Record<string, string[]>;
+  topicGroups: Record<string, string>;
+  topicQuestionLimits: Record<string, number>;
+  sourceQualityWarnings: string[];
+  analysisMode: string | null;
+  topicCounts: Record<string, Record<string, number>>;
+  level: string;
+  difficulty: string;
+  desiredTotal: number;
+};
 
 const QUESTION_TYPES = [
   { value: "mcq_single", label: "Single choice" },
@@ -173,6 +196,83 @@ export function BlueprintGenerator() {
   const [analysis, setAnalysis] = useState<
     { status: string; phase: string; done: number; total: number } | null
   >(null);
+  const [workflowHydrated, setWorkflowHydrated] = useState(false);
+
+  // Keep the faculty's document-analysis and quiz setup in this browser tab so
+  // a refresh reconnects to the durable backend job instead of clearing the UI.
+  // Raw document text and file bytes are deliberately never stored here.
+  useEffect(() => {
+    try {
+      const raw = window.sessionStorage.getItem(WORKFLOW_STORAGE_KEY);
+      if (raw) {
+        const saved = JSON.parse(raw) as Partial<SavedGenerationWorkflow>;
+        if (saved.version === 1) {
+          setDocumentId(saved.documentId || "");
+          setUploadedName(saved.uploadedName || null);
+          setSubjectId(saved.subjectId || "");
+          setChapterName(saved.chapterName || "");
+          setAddingNewChapter(Boolean(saved.addingNewChapter));
+          setJobId(saved.jobId || null);
+          setAnalysis(saved.analysis || null);
+          setTopics(saved.topics || []);
+          setTopicPageRanges(saved.topicPageRanges || {});
+          setTopicSubtopics(saved.topicSubtopics || {});
+          setTopicGroups(saved.topicGroups || {});
+          setTopicQuestionLimits(saved.topicQuestionLimits || {});
+          setSourceQualityWarnings(saved.sourceQualityWarnings || []);
+          setAnalysisMode(saved.analysisMode || null);
+          setTopicCounts(saved.topicCounts || {});
+          setLevel(saved.level || "mixed");
+          setDifficulty(saved.difficulty || "medium");
+          setDesiredTotal(saved.desiredTotal || 10);
+        }
+      }
+    } catch {
+      window.sessionStorage.removeItem(WORKFLOW_STORAGE_KEY);
+    } finally {
+      setWorkflowHydrated(true);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!workflowHydrated) return;
+    if (!documentId && !jobId && topics.length === 0) {
+      window.sessionStorage.removeItem(WORKFLOW_STORAGE_KEY);
+      return;
+    }
+    const saved: SavedGenerationWorkflow = {
+      version: 1,
+      documentId,
+      uploadedName,
+      subjectId,
+      chapterName,
+      addingNewChapter,
+      jobId,
+      analysis,
+      topics,
+      topicPageRanges,
+      topicSubtopics,
+      topicGroups,
+      topicQuestionLimits,
+      sourceQualityWarnings,
+      analysisMode,
+      topicCounts,
+      level,
+      difficulty,
+      desiredTotal,
+    };
+    try {
+      window.sessionStorage.setItem(WORKFLOW_STORAGE_KEY, JSON.stringify(saved));
+    } catch {
+      // Storage can be unavailable in locked-down browsers. The durable backend
+      // job still runs; only automatic form restoration is unavailable.
+    }
+  }, [
+    workflowHydrated, documentId, uploadedName, subjectId, chapterName,
+    addingNewChapter, jobId, analysis, topics, topicPageRanges, topicSubtopics,
+    topicGroups, topicQuestionLimits, sourceQualityWarnings, analysisMode,
+    topicCounts, level, difficulty, desiredTotal,
+  ]);
 
   useEffect(() => {
     listDocuments()
@@ -182,8 +282,6 @@ export function BlueprintGenerator() {
 
   // Load the selected subject's chapters for the dropdown.
   useEffect(() => {
-    setChapterName("");
-    setAddingNewChapter(false);
     if (!subjectId) {
       setChapters([]);
       return;
@@ -516,6 +614,7 @@ export function BlueprintGenerator() {
         if (cancelled) return;
         if (job.status === "completed" && job.quiz_set_id) {
           window.sessionStorage.removeItem("quiz-final-generation-job");
+          window.sessionStorage.removeItem(WORKFLOW_STORAGE_KEY);
           notify("✓ Quiz generated — opening your review queue", "success");
           router.push(`/dashboard/teacher/review/${job.quiz_set_id}`);
         } else if (job.status === "failed") {
@@ -668,7 +767,7 @@ export function BlueprintGenerator() {
         <CardHeader>
           <CardTitle>Generate a quiz</CardTitle>
           <CardDescription>
-            Upload a document, set the subject &amp; chapter, then extract its
+            Upload a document, set the subject &amp; chapter, then analyze its
             topics to mark the important ones.
           </CardDescription>
         </CardHeader>
@@ -696,7 +795,7 @@ export function BlueprintGenerator() {
               </span>
               <span className="flex items-center gap-1.5 text-sm font-medium text-foreground">
                 {uploading ? (
-                  "Uploading & extracting text…"
+                  "Uploading document…"
                 ) : uploadedName ? (
                   <>
                     <Check size={15} className="text-emerald-600" />
@@ -755,7 +854,11 @@ export function BlueprintGenerator() {
               <select
                 className={fieldClass}
                 value={subjectId}
-                onChange={(e) => setSubjectId(e.target.value)}
+                onChange={(e) => {
+                  setSubjectId(e.target.value);
+                  setChapterName("");
+                  setAddingNewChapter(false);
+                }}
               >
                 <option value="">Select a subject…</option>
                 {courses.map((c) => (
@@ -813,11 +916,11 @@ export function BlueprintGenerator() {
             <Button onClick={handleExtract} disabled={!canExtract}>
               {extracting ? (
                 <span className="flex items-center gap-2">
-                  <Spinner /> Reading document…
+                  <Spinner /> Analyzing topics…
                 </span>
               ) : (
                 <span className="flex items-center gap-2">
-                  <Sparkles size={16} /> Extract topics
+                  <Sparkles size={16} /> Analyze topics
                 </span>
               )}
             </Button>
@@ -843,7 +946,11 @@ export function BlueprintGenerator() {
               <div className="flex items-center gap-2 text-sm font-medium text-primary">
                 {analyzing && <Spinner />}
                 {analyzing
-                  ? analysis.phase === "reducing"
+                  ? analysis.phase === "single_call_analysis"
+                    ? "Analyzing document topics…"
+                    : analysis.phase === "single_call_processing"
+                      ? "Preparing your topic list…"
+                      : analysis.phase === "reducing"
                     ? "Consolidating the extracted topics…"
                     : "Analysing a large document — reading it section by section…"
                   : analysis.status === "partial"
@@ -863,11 +970,14 @@ export function BlueprintGenerator() {
                 />
               </div>
               <p className="text-xs text-muted-foreground">
-                {analysis.phase === "reducing"
+                {analysis.phase === "single_call_analysis" ||
+                analysis.phase === "single_call_processing"
+                  ? "Progress is saved. You can refresh or leave this page and return"
+                  : analysis.phase === "reducing"
                   ? `All ${analysis.total} sections are saved. Building the final topic list`
                   : analysis.total > 0
                     ? `Read ${analysis.done} of ${analysis.total} sections`
-                  : "Splitting the document into sections…"}{" "}
+                    : "Preparing the document for analysis…"}{" "}
                 · very large documents can take several minutes. Topics appear here
                 automatically when it&apos;s ready.
               </p>

@@ -300,15 +300,31 @@ def build_single_call_ai_outline(
     *,
     document_title: str = "",
     analyzer: Callable[[str, int, str, str], dict] | None = None,
+    saved_response: dict | None = None,
+    response_checkpoint: Callable[[dict], None] | None = None,
 ) -> dict:
-    """Return a source-grounded hierarchy using exactly one provider request."""
+    """Return a source-grounded hierarchy using at most one provider request.
+
+    The raw structured response can be checkpointed before local validation and
+    evidence assembly. A retry can then reuse that response if a later local or
+    database step failed, avoiding a second paid provider call.
+    """
     locations, marker = _source_locations(extracted)
     if not locations:
         raise ValueError("This document has no usable text locations.")
     labelled = _analysis_document(locations, marker)
-    raw = (analyzer or _analyse_once)(
-        labelled, len(locations), document_title, marker
-    )
+    if saved_response is not None:
+        if not isinstance(saved_response, dict):
+            raise ValueError("The saved topic-analysis response is invalid.")
+        raw = saved_response
+    else:
+        raw = (analyzer or _analyse_once)(
+            labelled, len(locations), document_title, marker
+        )
+        if not isinstance(raw, dict):
+            raise ValueError("The topic-analysis provider returned an invalid response.")
+        if response_checkpoint is not None:
+            response_checkpoint(raw)
     has_pages = marker == "PDF PAGE"
     topics: list[dict] = []
     seen: set[str] = set()

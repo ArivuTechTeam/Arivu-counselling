@@ -186,28 +186,58 @@ class GenerationJobRunner:
             # when a deterministic PDF outline was unavailable. DOCX locations
             # are stable text sections instead of page numbers.
             if isinstance(loaded, ExtractedText) and params.get("single_call_ai_outline"):
-                if not params.get("profile_rate_limit_reserved"):
-                    enforce_ai_rate_limit(
-                        profile=actor_profile,
-                        endpoint=TOPIC_EXTRACTION,
-                        hourly_limit=get_settings().rate_limit_topic_extraction_per_hour,
-                        action_label="one-call document analysis",
-                    )
-                self._update(job_id, tenant_id, phase="single_call_analysis")
-                with ai_call_context(
-                    "single_call_topic_analysis",
-                    tenant_id=tenant_id,
-                    document_id=document_id,
-                    job_id=job_id,
-                ):
+                saved_response = params.get("single_call_response_checkpoint")
+                if isinstance(saved_response, dict):
+                    self._update(job_id, tenant_id, phase="single_call_processing")
                     blueprint = self._single_call_analyzer(
-                        loaded, document_title=title
+                        loaded,
+                        document_title=title,
+                        saved_response=saved_response,
                     )
+                else:
+                    if not params.get("profile_rate_limit_reserved"):
+                        enforce_ai_rate_limit(
+                            profile=actor_profile,
+                            endpoint=TOPIC_EXTRACTION,
+                            hourly_limit=get_settings().rate_limit_topic_extraction_per_hour,
+                            action_label="one-call document analysis",
+                        )
+                    self._update(job_id, tenant_id, phase="single_call_analysis")
+
+                    def save_response(raw_response: dict) -> None:
+                        nonlocal params
+                        params = {
+                            **params,
+                            "single_call_response_checkpoint": raw_response,
+                            "single_call_response_received_at": _now(),
+                        }
+                        self._update(
+                            job_id,
+                            tenant_id,
+                            params=params,
+                            phase="single_call_processing",
+                        )
+
+                    with ai_call_context(
+                        "single_call_topic_analysis",
+                        tenant_id=tenant_id,
+                        document_id=document_id,
+                        job_id=job_id,
+                    ):
+                        blueprint = self._single_call_analyzer(
+                            loaded,
+                            document_title=title,
+                            response_checkpoint=save_response,
+                        )
                 self._update(
                     job_id,
                     tenant_id,
                     master_blueprint=blueprint,
-                    params={**params, "analysis_mode": "single_call_ai_outline"},
+                    params={
+                        **params,
+                        "analysis_mode": "single_call_ai_outline",
+                        "single_call_checkpoint_status": "processed",
+                    },
                     total_chunks=0,
                     done_chunks=0,
                     phase="ready",
