@@ -24,6 +24,7 @@ const SET_TONE: Record<string, string> = {
 
 export function QuizSetList() {
   const { data: sets = null, error, mutate } = useTeacherQuizSets();
+  const reviewSets = sets?.filter((set) => set.status !== "published" && set.status !== "archived") ?? [];
 
   return (
     <Card className="overflow-hidden rounded-2xl border-primary/10 shadow-sm">
@@ -31,16 +32,16 @@ export function QuizSetList() {
         <CardTitle className="text-2xl tracking-tight">Your quizzes</CardTitle>
         <CardDescription>Review and publish generated quizzes.</CardDescription>
       </CardHeader>
-      <CardContent className={sets && sets.length > 0 ? "p-0" : "p-5 sm:p-6"}>
+      <CardContent className={sets && reviewSets.length > 0 ? "p-0" : "p-5 sm:p-6"}>
         {error ? (
           <ErrorCard message={error.message} onRetry={() => void mutate()} />
         ) : sets === null ? (
           <SkeletonList />
-        ) : sets.length === 0 ? (
+        ) : reviewSets.length === 0 ? (
           <EmptyState
             icon={<Inbox />}
-            title="No quizzes yet"
-            message="Generate your first quiz to get started."
+            title="Nothing waiting for review"
+            message="Draft quizzes needing review will appear here. Published quizzes are in Monitoring."
             action={
               <Link
                 href="/dashboard/teacher/generate"
@@ -52,7 +53,7 @@ export function QuizSetList() {
           />
         ) : (
           <div className="divide-y divide-border">
-            {sets.map((s) => (
+            {reviewSets.map((s) => (
               <Link
                 key={s.id}
                 href={`/dashboard/teacher/review/${s.id}`}

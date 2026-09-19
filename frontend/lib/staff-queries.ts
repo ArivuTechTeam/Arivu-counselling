@@ -8,6 +8,7 @@ import {
   getClassMonitor,
   getInstitutionAnalytics,
   getPlatformOverview,
+  getPublishedQuizMonitor,
   getQuestionBank,
   getTeacherAnalytics,
   getTeacherClassOverview,
@@ -29,6 +30,7 @@ export const STAFF_QUERY_KEYS = {
   courses: "staff:courses",
   teacherOverview: "staff:teacher:class-overview",
   teacherMonitor: "staff:teacher:class-monitor",
+  teacherPublishedQuizzes: "staff:teacher:published-quizzes",
   teacherSubjectMetrics: "staff:teacher:subject-metrics",
   teacherQuizSets: "staff:teacher:quiz-sets",
   teacherDocumentLog: "staff:teacher:document-log",
@@ -65,6 +67,10 @@ export function useTeacherOverview() {
 
 export function useTeacherMonitor() {
   return useSWR(STAFF_QUERY_KEYS.teacherMonitor, getClassMonitor);
+}
+
+export function useTeacherPublishedQuizzes() {
+  return useSWR(STAFF_QUERY_KEYS.teacherPublishedQuizzes, getPublishedQuizMonitor);
 }
 
 export function useTeacherSubjectMetrics() {

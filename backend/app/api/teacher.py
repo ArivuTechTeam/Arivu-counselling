@@ -404,6 +404,104 @@ async def quiz_set_performance(
     }
 
 
+@router.get("/teacher/published-quizzes")
+async def published_quiz_monitor(
+    profile: CurrentProfile = Depends(get_current_profile),
+) -> dict:
+    """Compact performance metrics for every published quiz owned by a teacher."""
+    if profile.role != "teacher":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Teachers only.")
+    service, tid, uid = get_service_client(), profile.tenant_id, profile.user_id
+    subject_ids = sorted(teacher_subject_ids(service, profile))
+    if not subject_ids:
+        return {"quizzes": []}
+
+    sets = await asyncio.to_thread(
+        select_all_in,
+        service,
+        "quiz_sets",
+        "id, title, subject_id, published_at",
+        in_column="subject_id",
+        values=subject_ids,
+        configure=lambda q: q.eq("tenant_id", tid).eq("created_by", uid).eq("status", "published"),
+    )
+    if not sets:
+        return {"quizzes": []}
+    set_ids = [str(row["id"]) for row in sets]
+
+    subjects, variants = await asyncio.gather(
+        asyncio.to_thread(
+            select_all_in, service, "subjects", "id, name, course_id",
+            in_column="id", values=subject_ids,
+            configure=lambda q: q.eq("tenant_id", tid),
+        ),
+        asyncio.to_thread(
+            select_all_in, service, "quiz_variants", "id, quiz_set_id, total_marks",
+            in_column="quiz_set_id", values=set_ids,
+            configure=lambda q: q.eq("tenant_id", tid),
+        ),
+    )
+    subject_by_id = {str(row["id"]): row for row in subjects}
+    course_ids = sorted({str(row["course_id"]) for row in subjects if row.get("course_id")})
+    enrollments = []
+    if course_ids:
+        enrollments = await asyncio.to_thread(
+            select_all_in, service, "enrollments", "course_id, profile_id",
+            in_column="course_id", values=course_ids,
+            configure=lambda q: q.eq("tenant_id", tid),
+        )
+    students_by_course: dict[str, set[str]] = {}
+    for enrollment in enrollments:
+        students_by_course.setdefault(str(enrollment["course_id"]), set()).add(str(enrollment["profile_id"]))
+
+    variant_to_set = {str(row["id"]): str(row["quiz_set_id"]) for row in variants}
+    marks_by_variant = {str(row["id"]): float(row.get("total_marks") or 0) for row in variants}
+    attempts = []
+    if variant_to_set:
+        attempts = await asyncio.to_thread(
+            select_all_in, service, "quiz_attempts", "variant_id, student_id, total_score, submitted_at",
+            in_column="variant_id", values=sorted(variant_to_set),
+            configure=lambda q: q.eq("tenant_id", tid).eq("status", "graded"),
+        )
+    attempts_by_set: dict[str, list[dict]] = {}
+    for attempt in attempts:
+        set_id = variant_to_set.get(str(attempt.get("variant_id")))
+        if set_id:
+            attempts_by_set.setdefault(set_id, []).append(attempt)
+
+    quizzes = []
+    for quiz in sets:
+        set_id, subject_id = str(quiz["id"]), str(quiz["subject_id"])
+        subject = subject_by_id.get(subject_id) or {}
+        eligible = students_by_course.get(str(subject.get("course_id") or ""), set())
+        scores: list[float] = []
+        completed: set[str] = set()
+        latest: str | None = None
+        for attempt in attempts_by_set.get(set_id, []):
+            student_id = str(attempt.get("student_id") or "")
+            if student_id not in eligible:
+                continue
+            maximum = marks_by_variant.get(str(attempt["variant_id"]), 0)
+            if maximum <= 0:
+                continue
+            score = max(0.0, min(maximum, float(attempt.get("total_score") or 0)))
+            scores.append(round(score / maximum * 100, 1))
+            completed.add(student_id)
+            submitted = attempt.get("submitted_at")
+            if submitted and (latest is None or str(submitted) > latest):
+                latest = str(submitted)
+        quizzes.append({
+            "id": set_id, "title": quiz.get("title") or "Quiz", "subject": subject.get("name") or "Subject",
+            "published_at": quiz.get("published_at"), "eligible_students": len(eligible),
+            "completed_students": len(completed), "not_started_students": max(0, len(eligible) - len(completed)),
+            "total_attempts": len(scores), "average_accuracy": round(sum(scores) / len(scores), 1) if scores else 0,
+            "highest_accuracy": max(scores, default=0), "lowest_accuracy": min(scores, default=0),
+            "last_activity": latest,
+        })
+    quizzes.sort(key=lambda row: row.get("published_at") or "", reverse=True)
+    return {"quizzes": quizzes}
+
+
 @router.get("/teacher/class-monitor")
 async def class_monitor(
     profile: CurrentProfile = Depends(get_current_profile),

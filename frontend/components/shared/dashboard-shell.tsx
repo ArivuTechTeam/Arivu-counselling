@@ -90,6 +90,12 @@ const NAV: Record<string, NavItem[]> = {
       section: "Monitoring",
       icon: BarChart3,
     },
+    {
+      label: "Published quizzes",
+      href: "/dashboard/teacher/published-quizzes",
+      section: "Monitoring",
+      icon: FileText,
+    },
   ],
   institution_admin: [
     {

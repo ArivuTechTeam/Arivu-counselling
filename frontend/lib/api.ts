@@ -1647,6 +1647,17 @@ export type TeacherQuizPerformance = {
 export const getTeacherQuizPerformance = (quizSetId: string) =>
   jsonRequest<TeacherQuizPerformance>(`/api/v1/teacher/quiz-sets/${quizSetId}/performance`, "GET");
 
+export type PublishedQuizMonitor = {
+  quizzes: {
+    id: string; title: string; subject: string; published_at: string | null;
+    eligible_students: number; completed_students: number; not_started_students: number;
+    total_attempts: number; average_accuracy: number; highest_accuracy: number;
+    lowest_accuracy: number; last_activity: string | null;
+  }[];
+};
+export const getPublishedQuizMonitor = () =>
+  jsonRequest<PublishedQuizMonitor>("/api/v1/teacher/published-quizzes", "GET");
+
 // Full report for one student (teacher, from Class monitor).
 export type StudentReport = {
   student: { name: string; initials: string };

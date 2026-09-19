@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import Link from "next/link";
 
 import {
   Card,
@@ -188,6 +189,15 @@ export default function ClassMonitorPage() {
               </table>
             </div>
           )}
+        </CardContent>
+      </Card>
+      <Card className="animate-rise border-primary/15 bg-primary/[0.025]">
+        <CardContent className="flex flex-wrap items-center justify-between gap-3 p-5">
+          <div>
+            <p className="font-semibold">Published quiz performance</p>
+            <p className="mt-1 text-sm text-muted-foreground">View attendance, scores, and question accuracy for each published quiz.</p>
+          </div>
+          <Link href="/dashboard/teacher/published-quizzes" className="rounded-lg bg-primary px-3 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90">Open published quizzes →</Link>
         </CardContent>
       </Card>
         </>
