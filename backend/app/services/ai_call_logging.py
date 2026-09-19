@@ -110,11 +110,18 @@ def _write(row: dict[str, Any]) -> None:
         logger.warning("Unable to persist AI API call log: %s", type(exc).__name__)
 
 
+def _logging_enabled() -> bool:
+    """Never let test traffic reach an external observability table."""
+    return getattr(get_settings(), "app_env", "production") != "test"
+
+
 def log_ai_call(
     *, provider: str, model: str, request: dict, response: dict | None,
     was_fallback: bool, started_at: float, error_message: str | None = None,
 ) -> None:
     """Queue a best-effort raw-provider log without delaying the actual request."""
+    if not _logging_enabled():
+        return
     input_tokens, output_tokens, cached_tokens, thinking_tokens = _usage(provider, response)
     cost_usd, cost_inr = calculate_costs(
         model=model,
