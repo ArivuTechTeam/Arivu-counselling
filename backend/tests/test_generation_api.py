@@ -133,7 +133,7 @@ class AnalyzeTests(unittest.TestCase):
         self.assertEqual(body["topics"], ["Alpha", "Beta"])
         self.assertEqual(body["topic_question_limits"], {"Alpha": 1, "Beta": 3})
 
-    def test_small_document_promotes_assessable_children_from_broad_parent(self) -> None:
+    def test_small_document_returns_major_topic_with_child_preview(self) -> None:
         with patch(f"{MOD}.get_settings", return_value=SETTINGS), patch(
             f"{MOD}.get_service_client", return_value=_Fake(dict(DOC_DB))
         ), patch(f"{MOD}.download_bytes", return_value=b""), patch(
@@ -156,7 +156,11 @@ class AnalyzeTests(unittest.TestCase):
             )
 
         self.assertEqual(res.status_code, 200)
-        self.assertEqual(res.json()["topics"], ["Ohm's Law", "Coulomb's Law"])
+        self.assertEqual(res.json()["topics"], ["Electromagnetism"])
+        self.assertEqual(
+            res.json()["topic_groups"][0]["subtopics"],
+            ["Ohm's Law", "Coulomb's Law"],
+        )
 
     def test_large_document_creates_job(self) -> None:
         big = "x" * 200_000  # > default 100k trigger

@@ -391,6 +391,7 @@ def analyze_document(
         "mode": "direct",
         "document_id": req.document_id,
         "topics": [topic["name"] for topic in topic_choices],
+        "topic_groups": topic_choices,
         "topic_question_limits": {
             topic["name"]: topic["suggested_question_limit"]
             for topic in topic_choices
@@ -480,8 +481,8 @@ def get_generation_job(
     topics = [
         {
             "name": topic["name"],
-            "subtopics": [],
-            "page_ranges": [],
+            "subtopics": topic.get("subtopics") or [],
+            "page_ranges": topic.get("page_ranges") or [],
             "suggested_question_limit": topic["suggested_question_limit"],
         }
         for topic in topic_choices

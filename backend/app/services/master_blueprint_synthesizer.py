@@ -78,10 +78,28 @@ def _supported_group_name(candidate: str, sources: list[dict]) -> str:
     """Reject a reduce-stage label that broadens beyond every mapped topic."""
     candidate_tokens = _name_tokens(candidate)
     if candidate_tokens:
+        supported_tokens: set[str] = set()
         for source in sources:
             source_tokens = _name_tokens(str(source.get("topic_name") or ""))
+            supported_tokens.update(source_tokens)
+            for subtopic in source.get("subtopics") or []:
+                supported_tokens.update(_name_tokens(str(subtopic)))
+            for definition in source.get("key_definitions") or []:
+                if isinstance(definition, dict):
+                    supported_tokens.update(
+                        _name_tokens(str(definition.get("term") or ""))
+                    )
+            for formula in source.get("formulas") or []:
+                if isinstance(formula, dict):
+                    supported_tokens.update(
+                        _name_tokens(str(formula.get("name") or ""))
+                    )
             if len(candidate_tokens & source_tokens) / len(candidate_tokens) >= 0.67:
                 return candidate
+        # A parent label may be supported collectively by the mapped hierarchy
+        # even when no single micro-topic contains every word in that label.
+        if len(candidate_tokens & supported_tokens) / len(candidate_tokens) >= 0.67:
+            return candidate
     return str(sources[0].get("topic_name") or "Untitled topic").strip()
 
 

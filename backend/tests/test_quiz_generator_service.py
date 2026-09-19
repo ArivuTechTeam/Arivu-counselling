@@ -7,6 +7,7 @@ from unittest.mock import patch
 from app.services.quiz_generator_service import (
     QuizGeneratorService,
     render_blueprint_material,
+    render_blueprint_material_with_evidence,
 )
 
 GEN_MODULE = "app.services.quiz_generator_service"
@@ -22,6 +23,11 @@ BLUEPRINT = {
             "key_facts_and_figures": ["strings are immutable"],
             "formulas": [],
             "worked_examples": [{"description": "index", "full_example_text": "s[0] == 'H'"}],
+            "source_excerpts": [{
+                "text": "A string is an immutable sequence of characters.",
+                "page_start": 4,
+                "page_end": 4,
+            }],
         }
     ],
 }
@@ -45,10 +51,20 @@ class RenderTests(unittest.TestCase):
             "topic_name": "Electromagnetism",
             "subtopics": ["Ohm's Law", "Coulomb's Law"],
             "formulas": [{"name": "Ohm's Law", "formula": "V = IR"}],
+            "source_excerpts": [{"text": "Ohm's law is written as V = IR."}],
         }]}
         text = render_blueprint_material(blueprint, {"ohm's law"})
         self.assertIn("## Electromagnetism", text)
         self.assertIn("V = IR", text)
+
+    def test_assigns_stable_ids_to_verified_source_excerpts(self) -> None:
+        material, catalog = render_blueprint_material_with_evidence(BLUEPRINT)
+        self.assertIn('Source excerpt [E0001]', material)
+        self.assertEqual(
+            catalog["E0001"]["text"],
+            "A string is an immutable sequence of characters.",
+        )
+        self.assertEqual(catalog["E0001"]["page_start"], 4)
 
 
 # --- fake supabase supporting the job load + link update --------------------
@@ -134,6 +150,9 @@ class GenerateFromJobTests(unittest.TestCase):
         material = gen.call_args.kwargs["material"]
         self.assertIn("What Is a String?", material)
         self.assertEqual(gen.call_args.kwargs["source_document_id"], "d1")
+        self.assertEqual(
+            gen.call_args.kwargs["evidence_catalog"]["E0001"]["page_start"], 4
+        )
         # quiz_set linked back onto the job
         self.assertEqual(fake.db["quiz_generation_jobs"][0]["quiz_set_id"], "qs1")
         self.assertEqual(
@@ -218,6 +237,7 @@ class GenerateFromJobTests(unittest.TestCase):
                 {"name": "Ohm's Law", "formula": "V = IR"},
                 {"name": "Coulomb's Law", "formula": "F = k(q1q2)/r²"},
             ],
+            "source_excerpts": [{"text": "Ohm's law is written as V = IR."}],
         }]}
         fake = _Fake(); _seed_job(fake, blueprint=blueprint)
         svc = QuizGeneratorService(service=fake)

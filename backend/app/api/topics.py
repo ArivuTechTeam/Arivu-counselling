@@ -73,6 +73,7 @@ def extract_document_topics(
     return {
         "document_id": document_id,
         "topics": [topic["name"] for topic in topic_choices],
+        "topic_groups": topic_choices,
         "topic_question_limits": {
             topic["name"]: topic["suggested_question_limit"]
             for topic in topic_choices

@@ -68,6 +68,7 @@ class BPQuestion(BaseModel):
     explanation: str | None = None
     difficulty: str = "medium"
     marks: float = 1
+    source_evidence_id: str | None = None
     source_excerpt: str = ""
     source_page_start: int | None = None
     source_page_end: int | None = None
@@ -79,6 +80,19 @@ class BPQuestion(BaseModel):
 
 class BPQuiz(BaseModel):
     questions: list[BPQuestion]
+
+
+def _bind_verified_evidence(
+    questions: list[BPQuestion], evidence_catalog: dict[str, dict]
+) -> None:
+    """Replace model-supplied evidence with canonical, pre-verified values."""
+    for question in questions:
+        evidence = evidence_catalog.get(question.source_evidence_id or "")
+        if not evidence:
+            raise LLMError("Model returned an invalid source evidence ID.")
+        question.source_excerpt = str(evidence["text"])
+        question.source_page_start = evidence.get("page_start")
+        question.source_page_end = evidence.get("page_end")
 
 
 def build_blueprint(
@@ -151,6 +165,7 @@ def _validated_generated_quiz(
     expected_counts: dict[str, int],
     expected_topic_counts: dict[str, dict[str, int]] | None = None,
     requested_difficulty: str | None = None,
+    allowed_evidence_ids: set[str] | None = None,
 ) -> BPQuiz:
     """Validate shape and the teacher's exact requested type distribution."""
     try:
@@ -161,6 +176,13 @@ def _validated_generated_quiz(
         raise LLMError("Model returned no questions.")
     for question in quiz.questions:
         try:
+            if allowed_evidence_ids is not None and (
+                not question.source_evidence_id
+                or question.source_evidence_id not in allowed_evidence_ids
+            ):
+                raise ValueError(
+                    "every question must use a valid source_evidence_id from the material"
+                )
             question.check_shape()
             validate_question_presentation(
                 question_type=question.type,
@@ -220,6 +242,7 @@ def _generate_with_exact_mix(
     requested_difficulty: str | None = None,
     tenant_id: str | None = None,
     document_id: str | None = None,
+    allowed_evidence_ids: set[str] | None = None,
 ) -> tuple[BPQuiz, str]:
     """Generate once, then make one explicit correction attempt for a bad mix."""
     with ai_call_context(
@@ -229,7 +252,11 @@ def _generate_with_exact_mix(
     try:
         return (
             _validated_generated_quiz(
-                data, expected_counts, expected_topic_counts, requested_difficulty
+                data,
+                expected_counts,
+                expected_topic_counts,
+                requested_difficulty,
+                allowed_evidence_ids,
             ),
             provider,
         )
@@ -251,7 +278,9 @@ def _generate_with_exact_mix(
             f"exactly this type distribution: {expected_text}. No question stem may "
             "reveal its answer-bearing formula/rule, and no question or explanation "
             "may refer to a handbook, document, PDF, source material, notes, passage, "
-            "page, or uploaded file. Obey every original grounding and difficulty rule."
+            "page, or uploaded file. Every question must use one valid evidence ID "
+            "copied exactly from the supplied material. Obey every original grounding "
+            "and difficulty rule."
         )
         with ai_call_context(
             "blueprint_generation", tenant_id=tenant_id, document_id=document_id
@@ -265,6 +294,7 @@ def _generate_with_exact_mix(
                 expected_counts,
                 expected_topic_counts,
                 requested_difficulty,
+                allowed_evidence_ids,
             ),
             corrected_provider,
         )
@@ -360,6 +390,7 @@ def generate_and_persist_from_material(
     type_counts: dict[str, int] | None = None,
     selected_only_material: bool = False,
     source_document_id: str | None = None,
+    evidence_catalog: dict[str, dict] | None = None,
 ) -> dict:
     """Write + persist a blueprint-driven quiz from a block of `material`.
 
@@ -385,6 +416,7 @@ def generate_and_persist_from_material(
         cognitive_level,
         difficulty,
         selected_only_material=selected_only,
+        evidence_ids_required=bool(evidence_catalog),
     )
     user = build_blueprint_user_prompt(
         material,
@@ -418,8 +450,16 @@ def generate_and_persist_from_material(
                 f"AI generated {len(questions)} questions instead of the requested "
                 f"{total_questions}."
             )
+        allowed_evidence_ids = set(evidence_catalog or {}) or None
         for q in questions:
             try:
+                if allowed_evidence_ids is not None and (
+                    not q.source_evidence_id
+                    or q.source_evidence_id not in allowed_evidence_ids
+                ):
+                    raise ValueError(
+                        "every question must use a valid source_evidence_id from the material"
+                    )
                 q.check_shape()
                 validate_question_presentation(
                     question_type=q.type,
@@ -436,7 +476,8 @@ def generate_and_persist_from_material(
                     "stem may reveal its answer-bearing formula/rule, and no question "
                     "or explanation may refer to a handbook, document, PDF, source "
                     "material, notes, passage, page, or uploaded file. Preserve the "
-                    f"requested {difficulty} difficulty and all JSON/type rules."
+                    "requested difficulty and all JSON/type rules. Every question must "
+                    "use one valid evidence ID copied exactly from the supplied material."
                 )
                 with ai_call_context(
                     "blueprint_generation", tenant_id=tid, document_id=source_document_id
@@ -451,6 +492,15 @@ def generate_and_persist_from_material(
                             "AI generated the wrong number of questions after correction."
                         )
                     for corrected_question in corrected_quiz.questions:
+                        if allowed_evidence_ids is not None and (
+                            not corrected_question.source_evidence_id
+                            or corrected_question.source_evidence_id
+                            not in allowed_evidence_ids
+                        ):
+                            raise ValueError(
+                                "every question must use a valid source_evidence_id "
+                                "from the material"
+                            )
                         corrected_question.check_shape()
                         validate_question_presentation(
                             question_type=corrected_question.type,
@@ -481,8 +531,14 @@ def generate_and_persist_from_material(
             difficulty,
             tenant_id=tid,
             document_id=source_document_id,
+            allowed_evidence_ids=set(evidence_catalog or {}) or None,
         )
         questions = quiz.questions
+
+    # For large-document generation, never trust model-copied evidence text or
+    # pages. Resolve the selected ID to the already verified canonical excerpt.
+    if evidence_catalog:
+        _bind_verified_evidence(questions, evidence_catalog)
 
     with ai_call_context(
         "question_verification", tenant_id=tid, document_id=source_document_id

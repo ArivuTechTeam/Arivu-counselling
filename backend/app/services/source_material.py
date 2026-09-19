@@ -12,7 +12,9 @@ _BLUEPRINT_RANGE = re.compile(
     r"^Approximate source pages:\s*(.+)$", re.MULTILINE | re.IGNORECASE
 )
 _RANGE = re.compile(r"(\d+)\s*-\s*(\d+)")
-_EXPLICIT_EXCERPT = re.compile(r'^- Source excerpt:\s*"(.+)"$', re.MULTILINE)
+_EXPLICIT_EXCERPT = re.compile(
+    r'^- Source excerpt(?:\s+\[E\d+\])?:\s*"(.+)"$', re.MULTILINE
+)
 _SUPERSCRIPT_TRANSLATION = str.maketrans("⁰¹²³⁴⁵⁶⁷⁸⁹", "0123456789")
 _SUBSCRIPT_TRANSLATION = str.maketrans("₀₁₂₃₄₅₆₇₈₉", "0123456789")
 _FORMULA_OPERATORS = re.compile(r"[=<>≤≥+−*/×÷^√∑∫²³₀-₉]")

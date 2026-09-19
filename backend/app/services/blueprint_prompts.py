@@ -26,6 +26,7 @@ def build_blueprint_system_prompt(
     difficulty: str,
     *,
     selected_only_material: bool = False,
+    evidence_ids_required: bool = False,
 ) -> str:
     specs = "\n".join(f"- {TYPE_SPECS[t]}" for t in question_types)
     level = LEVEL_GUIDANCE.get(cognitive_level, LEVEL_GUIDANCE["mixed"])
@@ -40,6 +41,25 @@ def build_blueprint_system_prompt(
         else "- Cover the WHOLE document. The priority topics get MORE questions (as "
         "specified), but the 'general' questions must cover the REST of the "
         "material broadly. Do NOT restrict the quiz to only the priority topics.\n\n"
+    )
+    evidence_rule = (
+        "10. VERIFIED EVIDENCE IDS: every source excerpt in the supplied material "
+        "has an ID such as [E0001]. For every question, copy one valid ID exactly "
+        "into 'source_evidence_id'. Also copy that ID's excerpt exactly into "
+        "'source_excerpt'. Never invent an ID and never combine excerpts. The "
+        "backend resolves the ID to canonical text and page provenance. Set "
+        "grounding_confidence from 0 to 1.\n"
+        if evidence_ids_required
+        else
+        "10. For every question, copy the smallest complete supporting evidence "
+        "EXACTLY from the supplied material into 'source_excerpt'. It may be prose, "
+        "a short equation, chemical formula, code line, date, quotation, or table "
+        "value; a complete short equation is valid evidence. For a derived exercise, "
+        "cite its source formula/rule. Do not paraphrase it. Preserve symbols, "
+        "superscripts, subscripts, signs, units, names, dates, and code exactly; "
+        "never replace a Greek symbol such as θ with a Latin letter. "
+        "Use the nearest explicit page/range label for source_page_start/end; use "
+        "null/null when no page label exists. Set grounding_confidence from 0 to 1.\n"
     )
     return (
         "You are an expert exam-question author for an exam-prep platform. You "
@@ -66,7 +86,8 @@ def build_blueprint_system_prompt(
         "markdown fences, no prose outside the JSON.\n"
         '3. Each question object has: "topic", "type", "question_text", '
         '"options" (or null), "correct_answer", "explanation", "difficulty", '
-        '"marks" (number, default 1), "source_excerpt", "source_page_start", '
+        '"marks" (number, default 1), "source_evidence_id" (string or null), '
+        '"source_excerpt", "source_page_start", '
         '"source_page_end", and "grounding_confidence".\n'
         "4. QUESTION TYPES — use ONLY these, each in EXACTLY this JSON shape:\n"
         f"{specs}\n"
@@ -81,15 +102,7 @@ def build_blueprint_system_prompt(
         "9. Give a short, correct 'explanation' for each question.\n"
         f"{STUDENT_FACING_RULES}"
         f"DIFFICULTY STANDARD: {difficulty_guidance}\n"
-        "10. For every question, copy the smallest complete supporting evidence "
-        "EXACTLY from the supplied material into 'source_excerpt'. It may be prose, "
-        "a short equation, chemical formula, code line, date, quotation, or table "
-        "value; a complete short equation is valid evidence. For a derived exercise, "
-        "cite its source formula/rule. Do not paraphrase it. Preserve symbols, "
-        "superscripts, subscripts, signs, units, names, dates, and code exactly; "
-        "never replace a Greek symbol such as θ with a Latin letter. "
-        "Use the nearest explicit page/range label for source_page_start/end; use "
-        "null/null when no page label exists. Set grounding_confidence from 0 to 1.\n"
+        f"{evidence_rule}"
         "Return the JSON object now — JSON only."
     )
 

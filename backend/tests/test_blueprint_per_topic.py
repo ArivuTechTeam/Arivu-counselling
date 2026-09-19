@@ -7,7 +7,9 @@ from fastapi import HTTPException
 
 from app.api.quiz import BlueprintTopicIn, _resolve_blueprint_plan
 from app.services.blueprint import (
+    BPQuestion,
     SelectedTopic,
+    _bind_verified_evidence,
     _generate_with_exact_mix,
     _validated_generated_quiz,
     build_blueprint,
@@ -175,6 +177,63 @@ class GeneratedPerTopicValidationTests(unittest.TestCase):
                         {"mcq_single": 1},
                         {"Alpha": {"mcq_single": 1}},
                     )
+
+    def test_rejects_missing_or_unknown_verified_evidence_id(self) -> None:
+        for evidence_id in (None, "E9999"):
+            question = self._question("Alpha", "mcq_single")
+            question["source_evidence_id"] = evidence_id
+            with self.subTest(evidence_id=evidence_id):
+                with self.assertRaisesRegex(LLMError, "valid source_evidence_id"):
+                    _validated_generated_quiz(
+                        {"questions": [question]},
+                        {"mcq_single": 1},
+                        {"Alpha": {"mcq_single": 1}},
+                        allowed_evidence_ids={"E0001"},
+                    )
+
+    def test_verified_evidence_binding_overwrites_model_copy_and_pages(self) -> None:
+        question = BPQuestion(**{
+            **self._question("Alpha", "mcq_single"),
+            "source_evidence_id": "E0001",
+            "source_excerpt": "paraphrased by model",
+            "source_page_start": 999,
+            "source_page_end": 999,
+        })
+        _bind_verified_evidence([question], {
+            "E0001": {
+                "text": "Canonical sentence copied from the source.",
+                "page_start": 12,
+                "page_end": 13,
+            }
+        })
+        self.assertEqual(
+            question.source_excerpt, "Canonical sentence copied from the source."
+        )
+        self.assertEqual((question.source_page_start, question.source_page_end), (12, 13))
+
+    def test_missing_evidence_id_uses_the_single_correction_attempt(self) -> None:
+        missing = self._question("Alpha", "mcq_single")
+        corrected = {
+            **self._question("Alpha", "mcq_single"),
+            "source_evidence_id": "E0001",
+        }
+        with patch(
+            "app.services.blueprint.complete_json_with_fallback",
+            side_effect=[
+                ({"questions": [missing]}, "gemini"),
+                ({"questions": [corrected]}, "gemini"),
+            ],
+        ) as complete:
+            result, _provider = _generate_with_exact_mix(
+                "system",
+                "user",
+                {"mcq_single": 1},
+                {"Alpha": {"mcq_single": 1}},
+                allowed_evidence_ids={"E0001"},
+            )
+
+        self.assertEqual(result.questions[0].source_evidence_id, "E0001")
+        self.assertEqual(complete.call_count, 2)
 
     def test_topic_mismatch_uses_the_single_correction_attempt(self) -> None:
         swapped = {

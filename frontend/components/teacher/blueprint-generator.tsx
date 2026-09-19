@@ -138,6 +138,9 @@ export function BlueprintGenerator() {
   const [topicPageRanges, setTopicPageRanges] = useState<
     Record<string, { start: number; end: number }[]>
   >({});
+  const [topicSubtopics, setTopicSubtopics] = useState<Record<string, string[]>>({});
+  const [expandedTopics, setExpandedTopics] = useState<Record<string, boolean>>({});
+  const [topicSearch, setTopicSearch] = useState("");
   const [topicQuestionLimits, setTopicQuestionLimits] = useState<
     Record<string, number>
   >({});
@@ -224,6 +227,9 @@ export function BlueprintGenerator() {
       setAnalysis(null);
       setTopics([]);
       setTopicPageRanges({});
+      setTopicSubtopics({});
+      setExpandedTopics({});
+      setTopicSearch("");
       setTopicQuestionLimits({});
       setTopicCounts({});
       setDuplicateWarning(null);
@@ -250,6 +256,9 @@ export function BlueprintGenerator() {
     setError(null);
     setTopics([]);
     setTopicPageRanges({});
+    setTopicSubtopics({});
+    setExpandedTopics({});
+    setTopicSearch("");
     setTopicQuestionLimits({});
     setSourceQualityWarnings([]);
     setTopicCounts({});
@@ -289,6 +298,16 @@ export function BlueprintGenerator() {
         return;
       }
       setTopics(res.topics);
+      setTopicSubtopics(
+        Object.fromEntries(
+          (res.topic_groups || []).map((topic) => [topic.name, topic.subtopics || []]),
+        ),
+      );
+      setTopicPageRanges(
+        Object.fromEntries(
+          (res.topic_groups || []).map((topic) => [topic.name, topic.page_ranges || []]),
+        ),
+      );
       setTopicQuestionLimits(res.topic_question_limits || {});
       setSourceQualityWarnings(res.source_quality_warnings || []);
       if (res.topics.length > 0) setShowTopicHelp(true);
@@ -364,6 +383,11 @@ export function BlueprintGenerator() {
   }
   function removeTopic(name: string) {
     setTopics((prev) => prev.filter((t) => t !== name));
+    setTopicSubtopics((prev) => {
+      const next = { ...prev };
+      delete next[name];
+      return next;
+    });
     setTopicCounts((prev) => {
       const next = { ...prev };
       delete next[name];
@@ -378,6 +402,16 @@ export function BlueprintGenerator() {
     0,
   );
   const selectedCount = selectedTopicNames.length;
+  const normalizedTopicSearch = topicSearch.trim().toLocaleLowerCase();
+  const visibleTopics = normalizedTopicSearch
+    ? topics.filter(
+        (name) =>
+          name.toLocaleLowerCase().includes(normalizedTopicSearch) ||
+          (topicSubtopics[name] || []).some((subtopic) =>
+            subtopic.toLocaleLowerCase().includes(normalizedTopicSearch),
+          ),
+      )
+    : topics;
   const step = topics.length > 0 ? 2 : 1;
 
   async function handleGenerate() {
@@ -494,6 +528,9 @@ export function BlueprintGenerator() {
         if (s.status === "completed" && s.topics.length > 0) {
           window.clearInterval(timer);
           setTopics(s.topics.map((t) => t.name));
+          setTopicSubtopics(
+            Object.fromEntries(s.topics.map((t) => [t.name, t.subtopics || []])),
+          );
           setShowTopicHelp(true);
           setTopicPageRanges(
             Object.fromEntries(s.topics.map((t) => [t.name, t.page_ranges || []])),
@@ -510,6 +547,7 @@ export function BlueprintGenerator() {
         if (s.status === "partial") {
           window.clearInterval(timer);
           setTopics([]);
+          setTopicSubtopics({});
           setTopicQuestionLimits({});
           setAnalysis({
             status: "partial",
@@ -953,9 +991,32 @@ export function BlueprintGenerator() {
                 </p>
               </div>
             )}
-            {topics.map((name, i) => {
+            <div className="mb-2 flex flex-col gap-1.5">
+              <label htmlFor="topic-search" className="text-xs font-medium text-muted-foreground">
+                Find a topic or covered concept
+              </label>
+              <input
+                id="topic-search"
+                type="search"
+                className={fieldClass}
+                placeholder="Search major topics and concepts"
+                value={topicSearch}
+                onChange={(event) => setTopicSearch(event.target.value)}
+              />
+              <p className="text-xs text-muted-foreground">
+                {topics.length} major topic{topics.length === 1 ? "" : "s"}. Expand one to preview the concepts it covers.
+              </p>
+            </div>
+            {visibleTopics.map((name, i) => {
               const selected = name in topicCounts;
               const counts = topicCounts[name] || {};
+              const subtopics = topicSubtopics[name] || [];
+              const expanded = expandedTopics[name] || Boolean(
+                normalizedTopicSearch &&
+                  subtopics.some((subtopic) =>
+                    subtopic.toLocaleLowerCase().includes(normalizedTopicSearch),
+                  ),
+              );
               const topicTotal = Object.values(counts).reduce(
                 (a, b) => a + (b || 0),
                 0,
@@ -1018,6 +1079,36 @@ export function BlueprintGenerator() {
                       </button>
                     </div>
                   </div>
+
+                  {subtopics.length > 0 && (
+                    <div className="border-t border-dashed border-input pt-2">
+                      <button
+                        type="button"
+                        className="text-xs font-medium text-primary hover:underline"
+                        aria-expanded={expanded}
+                        onClick={() =>
+                          setExpandedTopics((prev) => ({
+                            ...prev,
+                            [name]: !prev[name],
+                          }))
+                        }
+                      >
+                        {expanded ? "Hide" : "View"} {subtopics.length} covered concept{subtopics.length === 1 ? "" : "s"}
+                      </button>
+                      {expanded && (
+                        <div className="mt-2 flex flex-wrap gap-1.5">
+                          {subtopics.map((subtopic) => (
+                            <span
+                              key={subtopic}
+                              className="rounded-full border border-primary/15 bg-primary/5 px-2 py-1 text-[11px] text-muted-foreground"
+                            >
+                              {subtopic}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
 
                   {/* Per-topic blueprint: how many of each format from THIS topic. */}
                   {selected && (
@@ -1084,6 +1175,11 @@ export function BlueprintGenerator() {
                 </div>
               );
             })}
+            {visibleTopics.length === 0 && (
+              <p className="rounded-lg border border-dashed border-input px-3 py-6 text-center text-sm text-muted-foreground">
+                No topic or covered concept matches “{topicSearch.trim()}”.
+              </p>
+            )}
 
             {/* A custom topic has no consolidated source block in large-document
                 mode, so only the direct/small-document flow can safely add one. */}
