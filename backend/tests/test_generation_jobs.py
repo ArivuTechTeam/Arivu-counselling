@@ -375,6 +375,45 @@ class RunTests(unittest.TestCase):
         limit.assert_called_once()
         self.assertEqual(fake.db["quiz_generation_jobs"][0]["status"], "completed")
 
+    def test_non_paginated_document_uses_same_single_call_path(self) -> None:
+        fake = _Fake(); _seed_job(fake)
+        fake.db["quiz_generation_jobs"][0]["params"] = {
+            "prefer_local_outline": False,
+            "profile_rate_limit_reserved": True,
+            "single_call_ai_outline": True,
+            "allow_multi_call_fallback": False,
+        }
+        blueprint = {
+            "analysis_mode": "single_call_ai_outline",
+            "source_topic_count": 1,
+            "topics": [{"topic_name": "Employment law"}],
+        }
+        analyzer = _StubSingleCallAnalyzer(blueprint)
+        chunker = _StubChunker(fake, 3)
+        mapper = _StubMapper({"total": 3, "succeeded": 3, "failed": 0})
+        reducer = _StubReducer(blueprint=BP)
+        profiler = _StubProfiler()
+        runner = GenerationJobRunner(
+            service=fake,
+            chunker=chunker,
+            mapper=mapper,
+            reducer=reducer,
+            text_loader=lambda *_a: ExtractedText("A long DOCX document"),
+            profiler=profiler,
+            single_call_analyzer=analyzer,
+        )
+
+        with patch(f"{MODULE}.enforce_ai_rate_limit") as limit:
+            result = runner.run(job_id="j1")
+
+        self.assertEqual(result["analysis_mode"], "single_call_ai_outline")
+        self.assertEqual(analyzer.calls, 1)
+        self.assertEqual(chunker.calls, 0)
+        self.assertEqual(mapper.calls, 0)
+        self.assertEqual(reducer.calls, 0)
+        self.assertEqual(profiler.calls, 0)
+        limit.assert_not_called()
+
     def test_one_call_failure_never_enters_costly_map_reduce(self) -> None:
         fake = _Fake(); _seed_job(fake)
         fake.db["quiz_generation_jobs"][0]["params"] = {

@@ -139,6 +139,7 @@ export function BlueprintGenerator() {
     Record<string, { start: number; end: number }[]>
   >({});
   const [topicSubtopics, setTopicSubtopics] = useState<Record<string, string[]>>({});
+  const [topicGroups, setTopicGroups] = useState<Record<string, string>>({});
   const [expandedTopics, setExpandedTopics] = useState<Record<string, boolean>>({});
   const [topicSearch, setTopicSearch] = useState("");
   const [topicQuestionLimits, setTopicQuestionLimits] = useState<
@@ -229,6 +230,7 @@ export function BlueprintGenerator() {
       setTopics([]);
       setTopicPageRanges({});
       setTopicSubtopics({});
+      setTopicGroups({});
       setExpandedTopics({});
       setTopicSearch("");
       setTopicQuestionLimits({});
@@ -259,6 +261,7 @@ export function BlueprintGenerator() {
     setTopics([]);
     setTopicPageRanges({});
     setTopicSubtopics({});
+    setTopicGroups({});
     setExpandedTopics({});
     setTopicSearch("");
     setTopicQuestionLimits({});
@@ -304,6 +307,11 @@ export function BlueprintGenerator() {
       setTopicSubtopics(
         Object.fromEntries(
           (res.topic_groups || []).map((topic) => [topic.name, topic.subtopics || []]),
+        ),
+      );
+      setTopicGroups(
+        Object.fromEntries(
+          (res.topic_groups || []).map((topic) => [topic.name, topic.group_name || ""]),
         ),
       );
       setTopicPageRanges(
@@ -391,6 +399,11 @@ export function BlueprintGenerator() {
       delete next[name];
       return next;
     });
+    setTopicGroups((prev) => {
+      const next = { ...prev };
+      delete next[name];
+      return next;
+    });
     setTopicCounts((prev) => {
       const next = { ...prev };
       delete next[name];
@@ -410,6 +423,7 @@ export function BlueprintGenerator() {
     ? topics.filter(
         (name) =>
           name.toLocaleLowerCase().includes(normalizedTopicSearch) ||
+          (topicGroups[name] || "").toLocaleLowerCase().includes(normalizedTopicSearch) ||
           (topicSubtopics[name] || []).some((subtopic) =>
             subtopic.toLocaleLowerCase().includes(normalizedTopicSearch),
           ),
@@ -534,6 +548,9 @@ export function BlueprintGenerator() {
           setTopicSubtopics(
             Object.fromEntries(s.topics.map((t) => [t.name, t.subtopics || []])),
           );
+          setTopicGroups(
+            Object.fromEntries(s.topics.map((t) => [t.name, t.group_name || ""])),
+          );
           setShowTopicHelp(true);
           setTopicPageRanges(
             Object.fromEntries(s.topics.map((t) => [t.name, t.page_ranges || []])),
@@ -552,6 +569,7 @@ export function BlueprintGenerator() {
           window.clearInterval(timer);
           setTopics([]);
           setTopicSubtopics({});
+          setTopicGroups({});
           setTopicQuestionLimits({});
           setAnalysis({
             status: "partial",
@@ -710,6 +728,8 @@ export function BlueprintGenerator() {
                     setAnalysis(null);
                     setTopics([]);
                     setTopicPageRanges({});
+                    setTopicSubtopics({});
+                    setTopicGroups({});
                     setTopicQuestionLimits({});
                     setTopicCounts({});
                     setDuplicateWarning(null);
@@ -1042,6 +1062,7 @@ export function BlueprintGenerator() {
                 0,
               );
               const suggestedLimit = topicQuestionLimits[name];
+              const groupName = topicGroups[name] || "";
               return (
                 <div
                   key={name}
@@ -1052,6 +1073,11 @@ export function BlueprintGenerator() {
                       : "border-input hover:border-primary/40 hover:bg-accent"
                   }`}
                 >
+                  {groupName && (
+                    <p className="text-[11px] font-semibold uppercase tracking-wide text-primary/75">
+                      {groupName}
+                    </p>
+                  )}
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <button
                       type="button"

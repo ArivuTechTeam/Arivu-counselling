@@ -203,6 +203,34 @@ class AnalyzeTests(unittest.TestCase):
         self.assertEqual(res.status_code, 429)
         create.assert_not_called()
 
+    def test_large_non_pdf_creates_the_same_bounded_single_call_job(self) -> None:
+        big = "x" * 200_000
+        docx_db = {"documents": [{**DOC_DB["documents"][0], "file_type": "docx"}]}
+        with patch(f"{MOD}.get_settings", return_value=SETTINGS), patch(
+            f"{MOD}.get_service_client", return_value=_Fake(docx_db)
+        ), patch(f"{MOD}.download_bytes", return_value=b""), patch(
+            f"{MOD}.extract_text", return_value=big
+        ), patch(f"{MOD}.enforce_ai_rate_limit") as limit, patch(
+            f"{MOD}.create_generation_job", return_value="job-docx"
+        ) as create:
+            res = _client().post(
+                "/api/v1/quiz-sets/analyze", json={"document_id": "d1"}
+            )
+
+        self.assertEqual(res.status_code, 200)
+        create.assert_called_once_with(
+            document_id="d1",
+            tenant_id="t1",
+            created_by="u1",
+            params={
+                "prefer_local_outline": False,
+                "profile_rate_limit_reserved": True,
+                "single_call_ai_outline": True,
+                "allow_multi_call_fallback": False,
+            },
+        )
+        limit.assert_called_once()
+
     def test_repeated_large_analyze_requests_stop_at_configured_limit(self) -> None:
         settings = SimpleNamespace(**{**SETTINGS.__dict__, "rate_limit_topic_extraction_per_hour": 2})
         docx_db = {"documents": [{**DOC_DB["documents"][0], "file_type": "docx"}]}
@@ -249,7 +277,11 @@ JOB_ROW = {
     "status": "completed", "phase": "ready", "total_chunks": 3, "done_chunks": 3,
     "error_message": None, "quiz_set_id": None,
     "master_blueprint": {"topics": [
-        {"topic_name": "Strings", "subtopics": ["indexing"]},
+        {
+            "topic_name": "Strings",
+            "parent_group": "Programming fundamentals",
+            "subtopics": ["indexing"],
+        },
         {"topic_name": ""},  # dropped
     ]},
 }
@@ -265,6 +297,7 @@ class JobStatusTests(unittest.TestCase):
         self.assertEqual(body["status"], "completed")
         self.assertEqual(body["done_chunks"], 3)
         self.assertEqual([t["name"] for t in body["topics"]], ["Strings"])
+        self.assertEqual(body["topics"][0]["group_name"], "Programming fundamentals")
 
     def test_stale_running_job_becomes_retryable_failure(self) -> None:
         stale = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()

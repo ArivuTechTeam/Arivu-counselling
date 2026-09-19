@@ -70,6 +70,7 @@ def test_focused_topic_remains_a_single_choice() -> None:
     }
     assert selectable_topic_choices([topic]) == [{
         "name": "Photosynthesis",
+        "group_name": "",
         "subtopics": ["Chlorophyll"],
         "page_ranges": [],
         "suggested_question_limit": 1,
@@ -95,3 +96,11 @@ def test_page_ranges_are_available_to_the_topic_picker() -> None:
         "source_page_ranges": [{"start": 120, "end": 145}],
     }])
     assert choices[0]["page_ranges"] == [{"start": 120, "end": 145}]
+
+
+def test_parent_group_is_available_to_the_topic_picker() -> None:
+    choices = selectable_topic_choices([{
+        "topic_name": "Transmission Control Protocol",
+        "parent_group": "Transport layer",
+    }])
+    assert choices[0]["group_name"] == "Transport layer"

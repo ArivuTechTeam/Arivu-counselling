@@ -1816,6 +1816,7 @@ export type ExtractedTopics = {
 
 export type ExtractedTopicGroup = {
   name: string;
+  group_name?: string;
   subtopics: string[];
   page_ranges: { start: number; end: number }[];
   suggested_question_limit: number;

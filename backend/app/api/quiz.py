@@ -335,9 +335,9 @@ def analyze_document(
             detail="This document has no extractable text (scanned image PDF?).",
         )
 
-    # Large document → background analysis job. Typed PDFs first attempt a
-    # zero-provider local outline. If that is inconclusive, typed PDFs use one
-    # bounded Flash-Lite call; they never silently enter costly Map-Reduce.
+    # Large document → background analysis job. PDFs may first use a reliable
+    # zero-provider outline; every supported typed format otherwise uses one
+    # bounded Flash-Lite hierarchy call and never silently enters Map-Reduce.
     if len(text) > get_settings().chunking_trigger_chars:
         prefer_local_outline = doc["file_type"].lower() == "pdf"
         # Non-PDF large documents cannot use stable page/index ranges, so retain
@@ -356,8 +356,8 @@ def analyze_document(
             params={
                 "prefer_local_outline": prefer_local_outline,
                 "profile_rate_limit_reserved": not prefer_local_outline,
-                "single_call_ai_outline": prefer_local_outline,
-                "allow_multi_call_fallback": not prefer_local_outline,
+                "single_call_ai_outline": True,
+                "allow_multi_call_fallback": False,
             },
         )
         return {"mode": "job", "document_id": req.document_id, "job_id": job_id, "status": "queued"}
@@ -489,6 +489,7 @@ def get_generation_job(
     topics = [
         {
             "name": topic["name"],
+            "group_name": topic.get("group_name") or "",
             "subtopics": topic.get("subtopics") or [],
             "page_ranges": topic.get("page_ranges") or [],
             "suggested_question_limit": topic["suggested_question_limit"],

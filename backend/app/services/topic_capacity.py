@@ -105,6 +105,7 @@ def selectable_topic_choices(topics: list[dict]) -> list[dict]:
         ]
         item = {
             "name": parent,
+            "group_name": " ".join(str(topic.get("parent_group") or "").split()),
             "subtopics": list(children.values()),
             "page_ranges": ranges,
             "suggested_question_limit": suggested_question_limit(topic),

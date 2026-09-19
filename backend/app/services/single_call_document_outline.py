@@ -1,8 +1,9 @@
-"""One-call, cost-bounded topic analysis for large typed PDFs.
+"""Universal, one-call, cost-bounded analysis for large typed documents.
 
-The provider sees the page-labelled text once and returns only a compact topic
-hierarchy and page references. Exact source evidence is then copied locally
-from those pages, so no model output tokens are wasted repeating the document.
+Every source location is represented in one compact provider request. A table
+of contents or heading is useful when present but is never required. The model
+returns navigation groups containing independently selectable topics; exact
+evidence is then retrieved locally from the mapped source locations.
 """
 
 from __future__ import annotations
@@ -15,118 +16,185 @@ from app.services.extraction import ExtractedText
 from app.services.llm.structured import gemini_json
 
 
-# Stay comfortably below the free-tier 250k-token/minute ceiling and keep paid
-# input cost predictable. Large books are represented by a structure-preserving
-# sample from every page rather than blindly sending every paragraph.
 MAX_INPUT_CHARS = 600_000
-PAGE_SAMPLE_CHARS = 1_600
-PAGE_SAMPLE_TAIL_CHARS = 400
-MAX_TOPICS = 24
-MAX_SUBTOPICS = 12
+MAX_TOPICS = 30
+MAX_GROUPS = 12
+MAX_CONCEPTS = 10
 MAX_RANGES = 4
-MAX_EVIDENCE_PAGES = 6
+MAX_EVIDENCE_LOCATIONS = 6
 MAX_EXCERPTS_PER_TOPIC = 8
-EXCERPT_CHARS = 1_200
+MAX_UNIT_SAMPLE_CHARS = 1_600
+MIN_UNIT_SAMPLE_CHARS = 350
+CONTENTS_SAMPLE_CHARS = 10_000
+SECTION_CHARS = 6_000
+EXCERPT_CHARS = 1_000
 _SPACE = re.compile(r"\s+")
+_WORD = re.compile(r"[A-Za-z0-9][A-Za-z0-9+./-]{2,}")
+_STOP_WORDS = {
+    "and", "are", "for", "from", "into", "layer", "the", "this", "that",
+    "with", "using", "overview", "introduction", "principles",
+}
 
 OUTLINE_SCHEMA = {
     "type": "object",
     "properties": {
         "document_title": {"type": "string"},
-        "topics": {
+        "groups": {
             "type": "array",
             "items": {
                 "type": "object",
                 "properties": {
-                    "topic_name": {"type": "string"},
-                    "subtopics": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                    },
-                    "page_ranges": {
+                    "group_name": {"type": "string"},
+                    "topics": {
                         "type": "array",
                         "items": {
                             "type": "object",
                             "properties": {
-                                "start": {"type": "integer"},
-                                "end": {"type": "integer"},
+                                "topic_name": {"type": "string"},
+                                "covered_concepts": {
+                                    "type": "array",
+                                    "items": {"type": "string"},
+                                },
+                                "source_ranges": {
+                                    "type": "array",
+                                    "items": {
+                                        "type": "object",
+                                        "properties": {
+                                            "start": {"type": "integer"},
+                                            "end": {"type": "integer"},
+                                        },
+                                        "required": ["start", "end"],
+                                    },
+                                },
+                                "evidence_locations": {
+                                    "type": "array",
+                                    "items": {"type": "integer"},
+                                },
                             },
-                            "required": ["start", "end"],
+                            "required": [
+                                "topic_name", "covered_concepts", "source_ranges",
+                                "evidence_locations",
+                            ],
                         },
                     },
-                    "evidence_pages": {
-                        "type": "array",
-                        "items": {"type": "integer"},
-                    },
                 },
-                "required": [
-                    "topic_name",
-                    "subtopics",
-                    "page_ranges",
-                    "evidence_pages",
-                ],
+                "required": ["group_name", "topics"],
             },
         },
     },
-    "required": ["document_title", "topics"],
+    "required": ["document_title", "groups"],
 }
 
 
-def _page_texts(extracted: ExtractedText) -> dict[int, str]:
-    return {
-        span.page_number: extracted.text[span.char_start : span.char_end].strip()
-        for span in extracted.page_spans
-    }
+def _chunk_text(text: str, target_chars: int = SECTION_CHARS) -> dict[int, str]:
+    """Split non-paginated formats into stable paragraph-aware source sections."""
+    paragraphs = [part.strip() for part in re.split(r"\n\s*\n", text) if part.strip()]
+    if len(paragraphs) <= 1:
+        paragraphs = [part.strip() for part in text.splitlines() if part.strip()]
+    units = [
+        paragraph[offset : offset + target_chars]
+        for paragraph in paragraphs
+        for offset in range(0, len(paragraph), target_chars)
+    ]
+    sections: dict[int, str] = {}
+    current = ""
+    for paragraph in units:
+        candidate = f"{current}\n{paragraph}".strip()
+        if current and len(candidate) > target_chars:
+            sections[len(sections) + 1] = current
+            current = paragraph
+        else:
+            current = candidate
+    if current:
+        sections[len(sections) + 1] = current
+    if not sections and text.strip():
+        sections[1] = text.strip()
+    return sections
 
 
-def _labelled_document(pages: dict[int, str]) -> str:
-    return "\n\n".join(
-        f"=== PDF PAGE {number} ===\n{text}" for number, text in pages.items()
+def _source_locations(extracted: ExtractedText) -> tuple[dict[int, str], str]:
+    if extracted.page_spans:
+        return (
+            {
+                span.page_number: extracted.text[span.char_start : span.char_end].strip()
+                for span in extracted.page_spans
+            },
+            "PDF PAGE",
+        )
+    return _chunk_text(extracted.text), "SOURCE SECTION"
+
+
+def _sample_text(text: str, budget: int) -> str:
+    text = text.strip()
+    if len(text) <= budget:
+        return text
+    tail = min(300, max(80, budget // 4))
+    return (
+        text[: budget - tail]
+        + "\n[... middle omitted for topic discovery ...]\n"
+        + text[-tail:]
     )
 
 
-def _analysis_document(pages: dict[int, str]) -> str:
-    """Keep every page represented while bounding provider input tokens.
+def _analysis_document(locations: dict[int, str], marker: str) -> str:
+    """Represent every location inside a fixed input budget."""
+    contents = {
+        number
+        for number, text in list(locations.items())[:20]
+        if "contents" in text[:500].casefold()
+    }
+    contents_budget = sum(
+        min(len(locations[number]), CONTENTS_SAMPLE_CHARS) for number in contents
+    )
+    ordinary_count = max(1, len(locations) - len(contents))
+    marker_budget = len(locations) * 40
+    ordinary_budget = max(
+        MIN_UNIT_SAMPLE_CHARS,
+        min(
+            MAX_UNIT_SAMPLE_CHARS,
+            (MAX_INPUT_CHARS - contents_budget - marker_budget) // ordinary_count,
+        ),
+    )
+    blocks = []
+    for number, text in locations.items():
+        budget = CONTENTS_SAMPLE_CHARS if number in contents else ordinary_budget
+        blocks.append(f"=== {marker} {number} ===\n{_sample_text(text, budget)}")
+    rendered = "\n\n".join(blocks)
+    if len(rendered) > MAX_INPUT_CHARS:
+        raise ValueError(
+            "This document has too many source locations for the one-call safety limit."
+        )
+    return rendered
 
-    Front matter contents pages are retained in full because they carry the
-    hierarchy. Other long pages contribute their beginning and ending, which
-    captures chapter/section headings and page transitions without paying to
-    send every explanatory paragraph during topic discovery.
-    """
-    sampled: dict[int, str] = {}
-    for number, text in pages.items():
-        compact = text.strip()
-        is_contents = number <= 20 and "contents" in compact[:500].casefold()
-        if not is_contents and len(compact) > PAGE_SAMPLE_CHARS:
-            head_chars = PAGE_SAMPLE_CHARS - PAGE_SAMPLE_TAIL_CHARS
-            compact = (
-                compact[:head_chars]
-                + "\n[... middle of page omitted for topic discovery ...]\n"
-                + compact[-PAGE_SAMPLE_TAIL_CHARS:]
-            )
-        sampled[number] = compact
-    return _labelled_document(sampled)
 
-
-def _analyse_once(document: str, page_count: int, document_title: str) -> dict:
+def _analyse_once(
+    document: str, location_count: int, document_title: str, marker: str
+) -> dict:
     settings = get_settings()
     system_prompt = (
-        "You organize teaching material into a concise, faculty-friendly syllabus. "
-        "Use only the supplied page samples. Return major teachable topics, not isolated "
-        "terms, commands, examples, or glossary entries. Merge related concepts under "
-        "one major topic. Preserve the order of the source. Page numbers must refer to "
-        "the explicit PDF PAGE markers. Some page middles are intentionally omitted; "
-        "infer no facts from an omission marker. Return 12-24 major topics when the material "
-        "supports them, with at most 12 concise subtopics each. Choose up to 6 evidence "
-        "pages per topic that contain the strongest explanatory material. Do not copy "
-        "source passages into the response."
+        "Organize the supplied teaching material into a universal two-level hierarchy. "
+        "Groups are navigation labels only. Topics inside each group are the items a "
+        "faculty member can select for quiz generation. Determine the number of groups "
+        "and topics from the actual material: a short focused document may have only one "
+        "or two topics, while a broad textbook should have many. Do not enforce a minimum. "
+        "A selectable topic must be a coherent teachable unit that can support distinct "
+        "questions. Do not use an entire broad layer or chapter as one topic when the "
+        "material clearly contains independently teachable units, and do not promote "
+        "isolated terms, commands, examples, or glossary entries into topics. A contents "
+        "page and headings are optional hints, never the sole authority. Use only the "
+        "supplied material. Preserve source order where meaningful. Every source range "
+        f"and evidence location must refer to an explicit {marker} marker. Some location "
+        "middles are omitted only for topic discovery. Do not copy passages into the "
+        "response. Return no more than 30 selectable topics overall."
     )
     user_prompt = (
         f"Document name: {document_title or 'Untitled document'}\n"
-        f"Total PDF pages: {page_count}\n\n"
-        "Build the topic hierarchy and map every topic to its inclusive page ranges. "
-        "Do not invent topics or page numbers.\n\n"
-        f"{document}"
+        f"Source marker: {marker}\n"
+        f"Total source locations: {location_count}\n\n"
+        f"{document}\n\n"
+        "Based on the preceding material, return the groups, independently selectable "
+        "topics, covered concepts, inclusive source ranges, and strongest evidence "
+        "locations. Do not invent content or location numbers."
     )
     return gemini_json(
         system_prompt,
@@ -136,13 +204,11 @@ def _analyse_once(document: str, page_count: int, document_title: str) -> dict:
         temperature=None,
         max_output_tokens=6_000,
         thinking_level="minimal",
-        # A missing Flash-Lite model must fail visibly, not retry the more
-        # expensive full Flash model and break the one-call cost guarantee.
         allow_model_fallback=False,
     )
 
 
-def _bounded_ranges(raw: object, page_count: int) -> list[dict[str, int]]:
+def _bounded_ranges(raw: object, location_count: int) -> list[dict[str, int]]:
     ranges: list[dict[str, int]] = []
     for item in raw if isinstance(raw, list) else []:
         if not isinstance(item, dict):
@@ -151,43 +217,79 @@ def _bounded_ranges(raw: object, page_count: int) -> list[dict[str, int]]:
             start, end = int(item.get("start")), int(item.get("end"))
         except (TypeError, ValueError):
             continue
-        start, end = max(1, start), min(page_count, end)
-        if start <= end:
-            ranges.append({"start": start, "end": end})
+        start, end = max(1, start), min(location_count, end)
+        value = {"start": start, "end": end}
+        if start <= end and value not in ranges:
+            ranges.append(value)
         if len(ranges) >= MAX_RANGES:
             break
     return ranges
 
 
-def _inside_ranges(page: int, ranges: list[dict[str, int]]) -> bool:
-    return any(item["start"] <= page <= item["end"] for item in ranges)
+def _inside_ranges(location: int, ranges: list[dict[str, int]]) -> bool:
+    return any(item["start"] <= location <= item["end"] for item in ranges)
+
+
+def _query_terms(name: str, concepts: list[str]) -> set[str]:
+    return {
+        token.casefold()
+        for token in _WORD.findall(" ".join([name, *concepts]))
+        if token.casefold() not in _STOP_WORDS
+    }
+
+
+def _ranked_passages(text: str, terms: set[str]) -> list[str]:
+    compact = _SPACE.sub(" ", text).strip()
+    passages = [
+        compact[offset : offset + EXCERPT_CHARS].strip()
+        for offset in range(0, len(compact), EXCERPT_CHARS)
+        if compact[offset : offset + EXCERPT_CHARS].strip()
+    ]
+    return sorted(
+        passages,
+        key=lambda passage: sum(passage.casefold().count(term) for term in terms),
+        reverse=True,
+    )
 
 
 def _evidence_excerpts(
-    pages: dict[int, str], ranges: list[dict[str, int]], raw_pages: object
+    locations: dict[int, str],
+    ranges: list[dict[str, int]],
+    raw_locations: object,
+    *,
+    name: str,
+    concepts: list[str],
+    has_pages: bool,
 ) -> list[dict]:
-    evidence_pages: list[int] = []
-    for value in raw_pages if isinstance(raw_pages, list) else []:
+    evidence_locations: list[int] = []
+    for value in raw_locations if isinstance(raw_locations, list) else []:
         try:
-            page = int(value)
+            location = int(value)
         except (TypeError, ValueError):
             continue
-        if page in pages and _inside_ranges(page, ranges) and page not in evidence_pages:
-            evidence_pages.append(page)
-        if len(evidence_pages) >= MAX_EVIDENCE_PAGES:
+        if (
+            location in locations
+            and _inside_ranges(location, ranges)
+            and location not in evidence_locations
+        ):
+            evidence_locations.append(location)
+        if len(evidence_locations) >= MAX_EVIDENCE_LOCATIONS:
             break
-    if not evidence_pages:
-        evidence_pages = [item["start"] for item in ranges[:MAX_EVIDENCE_PAGES]]
+    if not evidence_locations:
+        evidence_locations = [item["start"] for item in ranges]
 
+    terms = _query_terms(name, concepts)
     excerpts: list[dict] = []
-    for page in evidence_pages:
-        text = _SPACE.sub(" ", pages.get(page, "")).strip()
-        for offset in range(0, min(len(text), EXCERPT_CHARS * 2), EXCERPT_CHARS):
-            excerpt = text[offset : offset + EXCERPT_CHARS].strip()
-            if len(excerpt) >= 80:
-                excerpts.append(
-                    {"text": excerpt, "page_start": page, "page_end": page}
+    for location in evidence_locations:
+        for passage in _ranked_passages(locations.get(location, ""), terms)[:2]:
+            excerpt = {"text": passage}
+            if has_pages:
+                excerpt.update({"page_start": location, "page_end": location})
+            else:
+                excerpt.update(
+                    {"source_section_start": location, "source_section_end": location}
                 )
+            excerpts.append(excerpt)
             if len(excerpts) >= MAX_EXCERPTS_PER_TOPIC:
                 return excerpts
     return excerpts
@@ -197,56 +299,72 @@ def build_single_call_ai_outline(
     extracted: ExtractedText,
     *,
     document_title: str = "",
-    analyzer: Callable[[str, int, str], dict] | None = None,
+    analyzer: Callable[[str, int, str, str], dict] | None = None,
 ) -> dict:
-    """Return a validated page-grounded blueprint using exactly one AI request."""
-    pages = _page_texts(extracted)
-    if not pages:
-        raise ValueError("One-call analysis requires a PDF with page information.")
-    labelled = _analysis_document(pages)
-    if len(labelled) > MAX_INPUT_CHARS:
-        raise ValueError(
-            "This PDF exceeds the one-call cost limit. Split it into smaller volumes."
-        )
-
-    raw = (analyzer or _analyse_once)(labelled, len(pages), document_title)
+    """Return a source-grounded hierarchy using exactly one provider request."""
+    locations, marker = _source_locations(extracted)
+    if not locations:
+        raise ValueError("This document has no usable text locations.")
+    labelled = _analysis_document(locations, marker)
+    raw = (analyzer or _analyse_once)(
+        labelled, len(locations), document_title, marker
+    )
+    has_pages = marker == "PDF PAGE"
     topics: list[dict] = []
     seen: set[str] = set()
-    for item in raw.get("topics", []) if isinstance(raw, dict) else []:
-        if not isinstance(item, dict):
+    raw_groups = raw.get("groups", []) if isinstance(raw, dict) else []
+    for group in raw_groups[:MAX_GROUPS] if isinstance(raw_groups, list) else []:
+        if not isinstance(group, dict):
             continue
-        name = _SPACE.sub(" ", str(item.get("topic_name") or "")).strip()
-        key = name.casefold()
-        ranges = _bounded_ranges(item.get("page_ranges"), len(pages))
-        if not name or key in seen or not ranges:
-            continue
-        subtopics = []
-        for value in item.get("subtopics", []) if isinstance(item.get("subtopics"), list) else []:
-            subtopic = _SPACE.sub(" ", str(value)).strip()
-            if subtopic and subtopic.casefold() != key and subtopic not in subtopics:
-                subtopics.append(subtopic)
-            if len(subtopics) >= MAX_SUBTOPICS:
+        group_name = _SPACE.sub(" ", str(group.get("group_name") or "")).strip()
+        raw_topics = group.get("topics")
+        for item in raw_topics if isinstance(raw_topics, list) else []:
+            if not isinstance(item, dict):
+                continue
+            name = _SPACE.sub(" ", str(item.get("topic_name") or "")).strip()
+            key = name.casefold()
+            ranges = _bounded_ranges(item.get("source_ranges"), len(locations))
+            if not name or key in seen or not ranges:
+                continue
+            concepts: list[str] = []
+            raw_concepts = item.get("covered_concepts")
+            for value in raw_concepts if isinstance(raw_concepts, list) else []:
+                concept = _SPACE.sub(" ", str(value)).strip()
+                if concept and concept.casefold() != key and concept not in concepts:
+                    concepts.append(concept)
+                if len(concepts) >= MAX_CONCEPTS:
+                    break
+            excerpts = _evidence_excerpts(
+                locations,
+                ranges,
+                item.get("evidence_locations"),
+                name=name,
+                concepts=concepts,
+                has_pages=has_pages,
+            )
+            if not excerpts:
+                continue
+            topics.append(
+                {
+                    "topic_name": name,
+                    "parent_group": group_name or "Other topics",
+                    "subtopics": concepts,
+                    "key_definitions": [],
+                    "key_facts_and_figures": [],
+                    "formulas": [],
+                    "worked_examples": [],
+                    "source_page_ranges": ranges if has_pages else [],
+                    "source_section_ranges": [] if has_pages else ranges,
+                    "source_excerpts": excerpts,
+                }
+            )
+            seen.add(key)
+            if len(topics) >= MAX_TOPICS:
                 break
-        excerpts = _evidence_excerpts(pages, ranges, item.get("evidence_pages"))
-        if not excerpts:
-            continue
-        topics.append(
-            {
-                "topic_name": name,
-                "subtopics": subtopics,
-                "key_definitions": [],
-                "key_facts_and_figures": [],
-                "formulas": [],
-                "worked_examples": [],
-                "source_page_ranges": ranges,
-                "source_excerpts": excerpts,
-            }
-        )
-        seen.add(key)
         if len(topics) >= MAX_TOPICS:
             break
 
-    if len(topics) < 3:
+    if not topics:
         raise ValueError("The one-call analysis did not return a usable topic outline.")
     return {
         "document_title": str(raw.get("document_title") or document_title).strip(),
@@ -258,6 +376,7 @@ def build_single_call_ai_outline(
             "model": get_settings().gemini_blueprint_model,
             "input_characters": len(labelled),
             "source_characters": len(extracted.text),
-            "page_count": len(pages),
+            "source_location_count": len(locations),
+            "source_marker": marker,
         },
     }
