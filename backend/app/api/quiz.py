@@ -336,7 +336,8 @@ def analyze_document(
         )
 
     # Large document → background analysis job. Typed PDFs first attempt a
-    # zero-provider local outline; uncertain structures fall back to Map-Reduce.
+    # zero-provider local outline. If that is inconclusive, typed PDFs use one
+    # bounded Flash-Lite call; they never silently enter costly Map-Reduce.
     if len(text) > get_settings().chunking_trigger_chars:
         prefer_local_outline = doc["file_type"].lower() == "pdf"
         # Non-PDF large documents cannot use stable page/index ranges, so retain
@@ -355,6 +356,8 @@ def analyze_document(
             params={
                 "prefer_local_outline": prefer_local_outline,
                 "profile_rate_limit_reserved": not prefer_local_outline,
+                "single_call_ai_outline": prefer_local_outline,
+                "allow_multi_call_fallback": not prefer_local_outline,
             },
         )
         return {"mode": "job", "document_id": req.document_id, "job_id": job_id, "status": "queued"}

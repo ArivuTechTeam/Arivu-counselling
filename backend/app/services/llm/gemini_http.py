@@ -16,16 +16,24 @@ _gemini_unavailable_models: set[tuple[str, str]] = set()
 
 
 def post_gemini(
-    *, settings, model: str, payload: dict, headers: dict, timeout: float
+    *,
+    settings,
+    model: str,
+    payload: dict,
+    headers: dict,
+    timeout: float,
+    allow_model_fallback: bool = True,
 ) -> httpx.Response:
     """POST to Gemini, retrying a model-specific 404 on the configured fallback.
 
     Authentication, quota, validation, and network failures are deliberately not
     retried here; those continue through the normal provider fallback path.
     """
-    candidates = list(
-        dict.fromkeys([model, getattr(settings, "gemini_fallback_model", model)])
-    )
+    candidates = [model]
+    if allow_model_fallback:
+        candidates = list(
+            dict.fromkeys([model, getattr(settings, "gemini_fallback_model", model)])
+        )
     with _gemini_model_lock:
         available_candidates = [
             candidate

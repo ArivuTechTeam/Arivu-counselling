@@ -182,6 +182,8 @@ class AnalyzeTests(unittest.TestCase):
             params={
                 "prefer_local_outline": True,
                 "profile_rate_limit_reserved": False,
+                "single_call_ai_outline": True,
+                "allow_multi_call_fallback": False,
             },
         )
         limit.assert_not_called()

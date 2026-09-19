@@ -130,6 +130,19 @@ class _StubProfiler:
         return self.profile
 
 
+class _StubSingleCallAnalyzer:
+    def __init__(self, blueprint=None, error=None):
+        self.blueprint = blueprint
+        self.error = error
+        self.calls = 0
+
+    def __call__(self, extracted, *, document_title=""):
+        self.calls += 1
+        if self.error:
+            raise self.error
+        return self.blueprint
+
+
 def _seed_job(fake, *, job_id="j1", tenant_id="t1", document_id="d1", chapter="Ch"):
     fake.db.setdefault("quiz_generation_jobs", []).append(
         {
@@ -319,6 +332,82 @@ class RunTests(unittest.TestCase):
         job = fake.db["quiz_generation_jobs"][0]
         self.assertEqual(job["status"], "completed")
         self.assertEqual(job["master_blueprint"]["topics"][0]["topic_name"], "Networks")
+
+    def test_inconclusive_local_outline_uses_exactly_one_ai_analysis(self) -> None:
+        fake = _Fake(); _seed_job(fake)
+        fake.db["quiz_generation_jobs"][0]["params"] = {
+            "prefer_local_outline": True,
+            "profile_rate_limit_reserved": False,
+            "single_call_ai_outline": True,
+            "allow_multi_call_fallback": False,
+        }
+        blueprint = {
+            "analysis_mode": "single_call_ai_outline",
+            "source_topic_count": 3,
+            "topics": [{"topic_name": "Networks"}],
+        }
+        analyzer = _StubSingleCallAnalyzer(blueprint)
+        chunker = _StubChunker(fake, 3)
+        mapper = _StubMapper({"total": 3, "succeeded": 3, "failed": 0})
+        reducer = _StubReducer(blueprint=BP)
+        profiler = _StubProfiler()
+        extracted = ExtractedText("typed pdf text", (PageSpan(1, 0, 14),))
+        runner = GenerationJobRunner(
+            service=fake,
+            chunker=chunker,
+            mapper=mapper,
+            reducer=reducer,
+            text_loader=lambda *_a: extracted,
+            profiler=profiler,
+            single_call_analyzer=analyzer,
+        )
+        with patch(f"{MODULE}.build_local_pdf_outline", return_value=None), patch(
+            f"{MODULE}.enforce_ai_rate_limit"
+        ) as limit:
+            result = runner.run(job_id="j1")
+
+        self.assertEqual(result["analysis_mode"], "single_call_ai_outline")
+        self.assertEqual(analyzer.calls, 1)
+        self.assertEqual(chunker.calls, 0)
+        self.assertEqual(mapper.calls, 0)
+        self.assertEqual(reducer.calls, 0)
+        self.assertEqual(profiler.calls, 0)
+        limit.assert_called_once()
+        self.assertEqual(fake.db["quiz_generation_jobs"][0]["status"], "completed")
+
+    def test_one_call_failure_never_enters_costly_map_reduce(self) -> None:
+        fake = _Fake(); _seed_job(fake)
+        fake.db["quiz_generation_jobs"][0]["params"] = {
+            "prefer_local_outline": True,
+            "profile_rate_limit_reserved": False,
+            "single_call_ai_outline": True,
+            "allow_multi_call_fallback": False,
+        }
+        analyzer = _StubSingleCallAnalyzer(error=RuntimeError("provider failed"))
+        chunker = _StubChunker(fake, 3)
+        mapper = _StubMapper({"total": 3, "succeeded": 3, "failed": 0})
+        reducer = _StubReducer(blueprint=BP)
+        extracted = ExtractedText("typed pdf text", (PageSpan(1, 0, 14),))
+        runner = GenerationJobRunner(
+            service=fake,
+            chunker=chunker,
+            mapper=mapper,
+            reducer=reducer,
+            text_loader=lambda *_a: extracted,
+            profiler=_StubProfiler(),
+            single_call_analyzer=analyzer,
+        )
+        with patch(f"{MODULE}.build_local_pdf_outline", return_value=None), patch(
+            f"{MODULE}.enforce_ai_rate_limit"
+        ):
+            with self.assertRaisesRegex(RuntimeError, "provider failed"):
+                runner.run(job_id="j1")
+
+        self.assertEqual(analyzer.calls, 1)
+        self.assertEqual(chunker.calls, 0)
+        self.assertEqual(mapper.calls, 0)
+        self.assertEqual(reducer.calls, 0)
+        self.assertEqual(fake.db["quiz_generation_jobs"][0]["status"], "failed")
 
 
 class CreateJobTests(unittest.TestCase):

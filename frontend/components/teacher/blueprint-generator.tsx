@@ -1003,6 +1003,14 @@ export function BlueprintGenerator() {
                 </p>
               </div>
             )}
+            {analysisMode === "single_call_ai_outline" && (
+              <div className="mb-2 rounded-lg border border-sky-200 bg-sky-50 px-3 py-2 text-xs text-sky-900">
+                <p className="font-semibold">Cost-optimized document analysis</p>
+                <p className="mt-1 text-sky-800">
+                  One AI call organized the document into major topics. Quiz generation will use exact text from the mapped source pages you select.
+                </p>
+              </div>
+            )}
             <div className="mb-2 flex flex-col gap-1.5">
               <label htmlFor="topic-search" className="text-xs font-medium text-muted-foreground">
                 Find a topic or covered concept
