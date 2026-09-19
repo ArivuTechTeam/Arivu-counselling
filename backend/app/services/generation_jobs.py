@@ -36,6 +36,7 @@ from app.services.chunking_service import ChunkingService
 from app.services.document_profile import profile_document, profile_to_summary
 from app.services.extraction import ExtractedText, extract_text_with_pages
 from app.services.master_blueprint_synthesizer import MasterBlueprintSynthesizer
+from app.services.local_document_outline import build_local_pdf_outline
 from app.services.topic_extraction_pipeline import TopicExtractionPipeline
 from app.services.rate_limit import TOPIC_EXTRACTION, enforce_ai_rate_limit
 from app.services.ai_call_logging import ai_call_context
@@ -147,6 +148,37 @@ class GenerationJobRunner:
             actor_profile = CurrentProfile(
                 user_id=job["created_by"], tenant_id=tenant_id, role="teacher"
             )
+
+            # Typed PDFs with a reliable index can be analysed deterministically.
+            # This path makes zero provider calls and stores exact page-grounded
+            # evidence. Uncertain documents simply continue to Map-Reduce below.
+            params = job.get("params") or {}
+            if isinstance(loaded, ExtractedText) and params.get("prefer_local_outline"):
+                local_blueprint = build_local_pdf_outline(loaded)
+                if local_blueprint:
+                    self._update(
+                        job_id,
+                        tenant_id,
+                        master_blueprint={
+                            "document_title": title,
+                            **local_blueprint,
+                        },
+                        params={
+                            **params,
+                            "analysis_mode": "local_typed_pdf_outline",
+                        },
+                        total_chunks=0,
+                        done_chunks=0,
+                        phase="ready",
+                        status="completed",
+                    )
+                    return {
+                        "status": "completed",
+                        "analysis_mode": "local_typed_pdf_outline",
+                        "total": 0,
+                        "succeeded": 0,
+                        "failed": 0,
+                    }
 
             # 1b) PROFILE — understand the document once (subject + summary), so
             #     MAP/REDUCE can judge what is core vs. noise. Reused on resume.

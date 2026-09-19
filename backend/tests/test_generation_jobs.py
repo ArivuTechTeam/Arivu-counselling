@@ -8,6 +8,7 @@ from app.services.generation_jobs import (
     GenerationJobRunner,
     create_generation_job,
 )
+from app.services.extraction import ExtractedText, PageSpan
 
 MODULE = "app.services.generation_jobs"
 
@@ -275,6 +276,49 @@ class RunTests(unittest.TestCase):
             self._runner(fake).run(job_id="j1")
         limit.assert_called_once()
         self.assertEqual(limit.call_args.kwargs["endpoint"], "topic_extraction")
+
+    def test_confident_local_outline_skips_every_ai_analysis_stage(self) -> None:
+        fake = _Fake(); _seed_job(fake)
+        fake.db["quiz_generation_jobs"][0]["params"] = {
+            "prefer_local_outline": True,
+            "profile_rate_limit_reserved": False,
+        }
+        local_blueprint = {
+            "analysis_mode": "local_typed_pdf_outline",
+            "source_topic_count": 1,
+            "topics": [{"topic_name": "Networks"}],
+            "local_outline": {"provider_calls": 0},
+        }
+        chunker = _StubChunker(fake, 3)
+        mapper = _StubMapper({"total": 3, "succeeded": 3, "failed": 0})
+        reducer = _StubReducer(blueprint=BP)
+        profiler = _StubProfiler()
+        extracted = ExtractedText(
+            "typed pdf text",
+            (PageSpan(1, 0, len("typed pdf text")),),
+        )
+        runner = GenerationJobRunner(
+            service=fake,
+            chunker=chunker,
+            mapper=mapper,
+            reducer=reducer,
+            text_loader=lambda *_a: extracted,
+            profiler=profiler,
+        )
+        with patch(f"{MODULE}.build_local_pdf_outline", return_value=local_blueprint), patch(
+            f"{MODULE}.enforce_ai_rate_limit"
+        ) as limit:
+            result = runner.run(job_id="j1")
+
+        self.assertEqual(result["analysis_mode"], "local_typed_pdf_outline")
+        self.assertEqual(chunker.calls, 0)
+        self.assertEqual(mapper.calls, 0)
+        self.assertEqual(reducer.calls, 0)
+        self.assertEqual(profiler.calls, 0)
+        limit.assert_not_called()
+        job = fake.db["quiz_generation_jobs"][0]
+        self.assertEqual(job["status"], "completed")
+        self.assertEqual(job["master_blueprint"]["topics"][0]["topic_name"], "Networks")
 
 
 class CreateJobTests(unittest.TestCase):

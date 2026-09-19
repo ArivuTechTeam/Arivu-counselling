@@ -179,14 +179,18 @@ class AnalyzeTests(unittest.TestCase):
         self.assertEqual(body["job_id"], "job-1")
         create.assert_called_once_with(
             document_id="d1", tenant_id="t1", created_by="u1",
-            params={"profile_rate_limit_reserved": True},
+            params={
+                "prefer_local_outline": True,
+                "profile_rate_limit_reserved": False,
+            },
         )
-        limit.assert_called_once()
+        limit.assert_not_called()
 
-    def test_large_document_rate_limit_blocks_before_job_creation(self) -> None:
+    def test_large_non_pdf_rate_limit_blocks_before_job_creation(self) -> None:
         big = "x" * 200_000
+        docx_db = {"documents": [{**DOC_DB["documents"][0], "file_type": "docx"}]}
         with patch(f"{MOD}.get_settings", return_value=SETTINGS), patch(
-            f"{MOD}.get_service_client", return_value=_Fake(dict(DOC_DB))
+            f"{MOD}.get_service_client", return_value=_Fake(docx_db)
         ), patch(f"{MOD}.download_bytes", return_value=b""), patch(
             f"{MOD}.extract_text", return_value=big
         ), patch(
@@ -199,7 +203,8 @@ class AnalyzeTests(unittest.TestCase):
 
     def test_repeated_large_analyze_requests_stop_at_configured_limit(self) -> None:
         settings = SimpleNamespace(**{**SETTINGS.__dict__, "rate_limit_topic_extraction_per_hour": 2})
-        service = _RateLimitedFake(dict(DOC_DB))
+        docx_db = {"documents": [{**DOC_DB["documents"][0], "file_type": "docx"}]}
+        service = _RateLimitedFake(docx_db)
         big = "x" * 200_000
         with patch(f"{MOD}.get_settings", return_value=settings), patch(
             f"{MOD}.get_service_client", return_value=service

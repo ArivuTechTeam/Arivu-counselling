@@ -20,7 +20,7 @@ def suggested_question_limit(topic: dict) -> int:
         return max(1, min(20, structured_capacity))
 
     fallback = len(topic.get("source_excerpts") or []) + len(topic.get("subtopics") or [])
-    return max(1, min(6, fallback or 1))
+    return max(1, min(20, fallback or 1))
 
 
 _GENERIC_CHILD_NAMES = {

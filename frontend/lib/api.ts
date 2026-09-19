@@ -1904,6 +1904,7 @@ export type GenerationJobStatus = {
   // The Master Blueprint's consolidated topics (present once the job is ready).
   topics: ExtractedTopicGroup[];
   quiz_set_id: string | null;
+  analysis_mode?: "local_typed_pdf_outline" | null;
   source_quality_warnings: string[];
 };
 

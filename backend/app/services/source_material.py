@@ -70,13 +70,18 @@ def is_symbolic_evidence(value: str) -> bool:
     compact = normalise_symbolic_evidence(value)
     if len(compact) < 3 or not re.search(r"[a-z0-9]", compact):
         return False
-    if _FORMULA_OPERATORS.search(value):
-        return True
-    return bool(
+    code_signal = bool(
         re.search(r"\b(def|return|select|from|where|class|function)\b", value, re.I)
         or "=>" in value
         or "->" in value
     )
+    # A slash, minus, or number inside a full prose paragraph must not turn the
+    # entire paragraph into a formula. Symbolic evidence is intentionally compact.
+    if len(value) > 240 and not code_signal:
+        return False
+    if _FORMULA_OPERATORS.search(value):
+        return True
+    return code_signal
 
 
 def is_meaningful_evidence(value: str) -> bool:

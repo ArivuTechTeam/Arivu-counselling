@@ -145,6 +145,7 @@ export function BlueprintGenerator() {
     Record<string, number>
   >({});
   const [sourceQualityWarnings, setSourceQualityWarnings] = useState<string[]>([]);
+  const [analysisMode, setAnalysisMode] = useState<string | null>(null);
   // Per-topic blueprint: for each SELECTED topic, how many of each format. A
   // topic key present here = selected; {} = selected but nothing set yet.
   const [topicCounts, setTopicCounts] = useState<
@@ -231,6 +232,7 @@ export function BlueprintGenerator() {
       setExpandedTopics({});
       setTopicSearch("");
       setTopicQuestionLimits({});
+      setAnalysisMode(null);
       setTopicCounts({});
       setDuplicateWarning(null);
       setDocumentId(res.document.id);
@@ -261,6 +263,7 @@ export function BlueprintGenerator() {
     setTopicSearch("");
     setTopicQuestionLimits({});
     setSourceQualityWarnings([]);
+    setAnalysisMode(null);
     setTopicCounts({});
     setShowTopicHelp(false);
     setJobId(null);
@@ -541,6 +544,7 @@ export function BlueprintGenerator() {
             ),
           );
           setSourceQualityWarnings(s.source_quality_warnings || []);
+          setAnalysisMode(s.analysis_mode || null);
           setAnalysis(null); // ready → reveal topic picker
           return;
         }
@@ -988,6 +992,14 @@ export function BlueprintGenerator() {
                 </ul>
                 <p className="mt-1 text-amber-800">
                   The app does not silently rewrite source claims. Review generated evidence before publishing.
+                </p>
+              </div>
+            )}
+            {analysisMode === "local_typed_pdf_outline" && (
+              <div className="mb-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-900">
+                <p className="font-semibold">Local typed-PDF extraction</p>
+                <p className="mt-1 text-emerald-800">
+                  Topics and page ranges were read from the document index without AI analysis calls.
                 </p>
               </div>
             )}

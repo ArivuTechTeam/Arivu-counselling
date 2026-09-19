@@ -335,22 +335,27 @@ def analyze_document(
             detail="This document has no extractable text (scanned image PDF?).",
         )
 
-    # Large document → background Map-Reduce analysis job.
+    # Large document → background analysis job. Typed PDFs first attempt a
+    # zero-provider local outline; uncertain structures fall back to Map-Reduce.
     if len(text) > get_settings().chunking_trigger_chars:
-        # Reserve the profile call before returning a job id. This makes repeated
-        # Analyze clicks fail immediately with 429, while the remaining MAP and
-        # REDUCE calls consume the same atomic limit inside the worker.
-        enforce_ai_rate_limit(
-            profile=profile,
-            endpoint=TOPIC_EXTRACTION,
-            hourly_limit=get_settings().rate_limit_topic_extraction_per_hour,
-            action_label="large-document analysis",
-        )
+        prefer_local_outline = doc["file_type"].lower() == "pdf"
+        # Non-PDF large documents cannot use stable page/index ranges, so retain
+        # the existing immediate reservation for their AI profile call.
+        if not prefer_local_outline:
+            enforce_ai_rate_limit(
+                profile=profile,
+                endpoint=TOPIC_EXTRACTION,
+                hourly_limit=get_settings().rate_limit_topic_extraction_per_hour,
+                action_label="large-document analysis",
+            )
         job_id = create_generation_job(
             document_id=req.document_id,
             tenant_id=profile.tenant_id,
             created_by=profile.user_id,
-            params={"profile_rate_limit_reserved": True},
+            params={
+                "prefer_local_outline": prefer_local_outline,
+                "profile_rate_limit_reserved": not prefer_local_outline,
+            },
         )
         return {"mode": "job", "document_id": req.document_id, "job_id": job_id, "status": "queued"}
 
@@ -496,6 +501,8 @@ def get_generation_job(
         "error_message": job.get("error_message"),
         "topics": topics,
         "quiz_set_id": job.get("quiz_set_id"),
+        "analysis_mode": blueprint.get("analysis_mode")
+        or (job.get("params") or {}).get("analysis_mode"),
         "source_quality_warnings": document_profile.get("source_quality_warnings") or [],
     }
 

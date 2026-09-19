@@ -4,6 +4,7 @@ from app.services.source_material import (
     evidence_page_ranges,
     explicit_source_excerpts,
     is_meaningful_evidence,
+    is_symbolic_evidence,
     render_extracted_material,
 )
 
@@ -38,3 +39,12 @@ def test_incomplete_symbolic_prefix_does_not_verify_a_longer_formula() -> None:
 def test_explicit_source_excerpt_accepts_verified_evidence_id() -> None:
     material = '- Source excerpt [E0007]: "A verified source sentence."'
     assert explicit_source_excerpts(material) == ["A verified source sentence."]
+
+
+def test_long_prose_with_a_slash_is_not_misclassified_as_a_formula() -> None:
+    prose = (
+        "The sender and/or receiver can coordinate communication across the network. "
+        * 8
+    )
+    assert not is_symbolic_evidence(prose)
+    assert evidence_occurs_in_material(prose, f"Introduction\n{prose}\nConclusion")
