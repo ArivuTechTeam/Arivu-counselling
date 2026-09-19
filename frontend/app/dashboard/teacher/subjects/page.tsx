@@ -32,6 +32,7 @@ import {
 import { useTeacherSubjectMetrics } from "@/lib/staff-queries";
 
 type SubjectRow = { id: string; name: string; course: string };
+const ACTIVE_SUBJECT_STORAGE_KEY = "teacher-subjects-active";
 
 type IconComponent = (p: { size?: number; className?: string }) => React.JSX.Element;
 
@@ -181,6 +182,40 @@ function SubjectCard({
 export default function TeacherSubjectsPage() {
   const { data: metrics = null, error, mutate } = useTeacherSubjectMetrics();
   const [active, setActive] = useState<SubjectRow | null>(null);
+  const [activeHydrated, setActiveHydrated] = useState(false);
+
+  useEffect(() => {
+    try {
+      const raw = window.sessionStorage.getItem(ACTIVE_SUBJECT_STORAGE_KEY);
+      if (raw) {
+        const saved = JSON.parse(raw) as Partial<SubjectRow>;
+        if (saved.id && saved.name) {
+          setActive({ id: saved.id, name: saved.name, course: saved.course || "Subject" });
+        }
+      }
+    } catch {
+      try {
+        window.sessionStorage.removeItem(ACTIVE_SUBJECT_STORAGE_KEY);
+      } catch {
+        // Navigation still works if session storage is unavailable.
+      }
+    } finally {
+      setActiveHydrated(true);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!activeHydrated) return;
+    try {
+      if (active) {
+        window.sessionStorage.setItem(ACTIVE_SUBJECT_STORAGE_KEY, JSON.stringify(active));
+      } else {
+        window.sessionStorage.removeItem(ACTIVE_SUBJECT_STORAGE_KEY);
+      }
+    } catch {
+      // Navigation still works if session storage is unavailable.
+    }
+  }, [active, activeHydrated]);
 
   // Rolled-up KPIs for the top strip.
   const totals = useMemo(() => {
@@ -307,6 +342,7 @@ function ChapterManager({
 }) {
   const [chapters, setChapters] = useState<Chapter[] | null>(null);
   const [name, setName] = useState("");
+  const [nameHydrated, setNameHydrated] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -317,6 +353,27 @@ function ChapterManager({
       .catch((e) => setError(e.message));
   }
   useEffect(load, [subject.id]);
+  useEffect(() => {
+    try {
+      setName(
+        window.sessionStorage.getItem(`teacher-chapter-draft:${subject.id}`) || "",
+      );
+    } catch {
+      // Start with an empty draft if session storage is unavailable.
+    } finally {
+      setNameHydrated(true);
+    }
+  }, [subject.id]);
+  useEffect(() => {
+    if (!nameHydrated) return;
+    const key = `teacher-chapter-draft:${subject.id}`;
+    try {
+      if (name) window.sessionStorage.setItem(key, name);
+      else window.sessionStorage.removeItem(key);
+    } catch {
+      // The chapter can still be submitted without draft persistence.
+    }
+  }, [name, nameHydrated, subject.id]);
 
   async function add(e: React.FormEvent) {
     e.preventDefault();

@@ -26,6 +26,7 @@ const fieldClass =
   "h-10 w-full rounded-md border border-input bg-background px-3 text-sm shadow-sm transition-colors focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20";
 
 const NEW_CHAPTER = "__new__";
+const EXTRACT_FORM_STORAGE_KEY = "teacher-quiz-extract-form-v1";
 const MAX_EXTRACTION_BYTES = 20 * 1024 * 1024;
 const EXTRACTION_EXTENSIONS = new Set(["pdf", "docx", "png", "jpg", "jpeg"]);
 const EXTRACTION_MIME_TYPES = new Set([
@@ -80,6 +81,8 @@ export function QuizExtractor() {
   const [chapters, setChapters] = useState<Chapter[]>([]);
   const [chapterSel, setChapterSel] = useState(""); // "" | chapterId | NEW_CHAPTER
   const [newChapterName, setNewChapterName] = useState("");
+  const [rememberedFileName, setRememberedFileName] = useState<string | null>(null);
+  const [formHydrated, setFormHydrated] = useState(false);
 
   const [file, setFile] = useState<File | null>(null);
   const [busy, setBusy] = useState(false);
@@ -90,10 +93,58 @@ export function QuizExtractor() {
   // offer a one-click retry instead of a dead-end error.
   const [canRetry, setCanRetry] = useState(false);
 
-  // When the subject changes, reload its chapters and reset the chapter choice.
   useEffect(() => {
-    setChapterSel("");
-    setNewChapterName("");
+    try {
+      const raw = window.sessionStorage.getItem(EXTRACT_FORM_STORAGE_KEY);
+      if (raw) {
+        const saved = JSON.parse(raw) as {
+          subjectId?: string;
+          chapterSel?: string;
+          newChapterName?: string;
+          fileName?: string | null;
+        };
+        setSubjectId(saved.subjectId || "");
+        setChapterSel(saved.chapterSel || "");
+        setNewChapterName(saved.newChapterName || "");
+        setRememberedFileName(saved.fileName || null);
+      }
+    } catch {
+      try {
+        window.sessionStorage.removeItem(EXTRACT_FORM_STORAGE_KEY);
+      } catch {
+        // Extraction still works without refresh restoration.
+      }
+    } finally {
+      setFormHydrated(true);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!formHydrated) return;
+    try {
+      window.sessionStorage.setItem(
+        EXTRACT_FORM_STORAGE_KEY,
+        JSON.stringify({
+          subjectId,
+          chapterSel,
+          newChapterName,
+          fileName: file?.name || rememberedFileName,
+        }),
+      );
+    } catch {
+      // Extraction remains available when browser storage is disabled.
+    }
+  }, [
+    formHydrated,
+    subjectId,
+    chapterSel,
+    newChapterName,
+    file,
+    rememberedFileName,
+  ]);
+
+  // Reload chapters for both a freshly chosen and a refresh-restored subject.
+  useEffect(() => {
     if (!subjectId) {
       setChapters([]);
       return;
@@ -121,6 +172,7 @@ export function QuizExtractor() {
         chapterId = chapter.id;
       }
       const res = await extractQuiz(file, subjectId, chapterId, force);
+      window.sessionStorage.removeItem(EXTRACT_FORM_STORAGE_KEY);
       notify("✓ Quiz extracted — opening your review queue", "success");
       // Hand off to the existing review screen to check/edit/publish.
       router.push(`/dashboard/teacher/review/${res.quiz_set_id}`);
@@ -156,7 +208,11 @@ export function QuizExtractor() {
           <select
             className={fieldClass}
             value={subjectId}
-            onChange={(e) => setSubjectId(e.target.value)}
+            onChange={(e) => {
+              setSubjectId(e.target.value);
+              setChapterSel("");
+              setNewChapterName("");
+            }}
             disabled={busy}
           >
             <option value="">Select a subject…</option>
@@ -220,7 +276,11 @@ export function QuizExtractor() {
           >
             <FileText size={24} className="text-muted-foreground" />
             <span className="text-sm font-medium text-foreground">
-              {file ? file.name : "Click to choose a file"}
+              {file
+                ? file.name
+                : rememberedFileName
+                  ? `Select ${rememberedFileName} again`
+                  : "Click to choose a file"}
             </span>
             <span className="text-xs text-muted-foreground">
               PDF, DOCX, or image (PNG/JPG) · up to 20 MB
@@ -238,10 +298,12 @@ export function QuizExtractor() {
                   : null;
                 if (validationError) {
                   setFile(null);
+                  setRememberedFileName(null);
                   setError(validationError);
                   e.currentTarget.value = "";
                 } else {
                   setFile(selected);
+                  setRememberedFileName(selected?.name || null);
                   setError(null);
                 }
                 setDupMessage(null);
@@ -249,6 +311,13 @@ export function QuizExtractor() {
               }}
             />
           </label>
+          {!file && rememberedFileName && (
+            <p className="text-xs text-amber-700">
+              Your subject and chapter were restored. Browsers do not allow a
+              file to be reattached automatically after refresh, so choose the
+              same file once more.
+            </p>
+          )}
         </div>
 
         {displayError && <InlineError message={displayError} />}

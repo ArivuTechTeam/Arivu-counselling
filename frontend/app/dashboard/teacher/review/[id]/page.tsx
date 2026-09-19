@@ -76,6 +76,25 @@ export default function ReviewDetailPage({ params }: { params: { id: string } })
   // One-shot spark burst on the big "win" actions (publish / approve-all).
   const [celebrate, setCelebrate] = useState(false);
 
+  useEffect(() => {
+    try {
+      const saved = window.sessionStorage.getItem(
+        `teacher-review-filter:${params.id}`,
+      );
+      if (
+        saved === "all" ||
+        saved === "pending_review" ||
+        saved === "approved" ||
+        saved === "rejected" ||
+        saved === "needs_edit"
+      ) {
+        setReviewFilter(saved);
+      }
+    } catch {
+      // Filtering remains usable without session storage.
+    }
+  }, [params.id]);
+
   function celebrateBurst() {
     setCelebrate(true);
     window.setTimeout(() => setCelebrate(false), 900);
@@ -237,6 +256,11 @@ export default function ReviewDetailPage({ params }: { params: { id: string } })
 
   function chooseFilter(filter: ReviewFilter) {
     setReviewFilter(filter);
+    try {
+      window.sessionStorage.setItem(`teacher-review-filter:${params.id}`, filter);
+    } catch {
+      // Filtering remains usable without session storage.
+    }
     const first = all.find(
       (question) => filter === "all" || question.review_status === filter,
     );

@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import useSWR from "swr";
 
 import { ErrorCard } from "@/components/ui/error-card";
@@ -13,6 +13,9 @@ import {
   getApiLog,
   listApiLogs,
 } from "@/lib/api";
+
+const INR_RATE_STORAGE_KEY = "super-admin-api-logs-inr-rate";
+const DEFAULT_INR_PER_USD = "83";
 
 const money = (value: number | null, currency: "USD" | "INR") =>
   value === null ? "—" : new Intl.NumberFormat("en-IN", {
@@ -134,7 +137,26 @@ export default function ApiLogsPage() {
   const [grouped, setGrouped] = useState(true);
   const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [inrPerUsdInput, setInrPerUsdInput] = useState("83");
+  const [inrPerUsdInput, setInrPerUsdInput] = useState(DEFAULT_INR_PER_USD);
+  const [inrRateHydrated, setInrRateHydrated] = useState(false);
+  useEffect(() => {
+    try {
+      const saved = window.sessionStorage.getItem(INR_RATE_STORAGE_KEY);
+      if (saved) setInrPerUsdInput(saved);
+    } catch {
+      // The live calculation still works when browser storage is unavailable.
+    } finally {
+      setInrRateHydrated(true);
+    }
+  }, []);
+  useEffect(() => {
+    if (!inrRateHydrated) return;
+    try {
+      window.sessionStorage.setItem(INR_RATE_STORAGE_KEY, inrPerUsdInput);
+    } catch {
+      // The live calculation still works when browser storage is unavailable.
+    }
+  }, [inrPerUsdInput, inrRateHydrated]);
   const { data, error, isLoading } = useSWR(["api-logs", filters], () => listApiLogs(filters));
   const groups = useMemo(() => {
     const rows = new Map<string, ApiCallLog[]>();
@@ -160,7 +182,7 @@ export default function ApiLogsPage() {
   const totalUsd = items.reduce((sum, item) => sum + (item.cost_usd ?? 0), 0);
   const parsedInrPerUsd = Number(inrPerUsdInput);
   const hasValidInrRate = Number.isFinite(parsedInrPerUsd) && parsedInrPerUsd > 0;
-  const inrPerUsd = hasValidInrRate ? parsedInrPerUsd : 83;
+  const inrPerUsd = hasValidInrRate ? parsedInrPerUsd : Number(DEFAULT_INR_PER_USD);
   const inrFromUsd = (usd: number | null) => usd === null ? null : usd * inrPerUsd;
   const totalInr = totalUsd * inrPerUsd;
   return <div className="space-y-6">

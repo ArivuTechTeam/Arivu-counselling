@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 
 import {
@@ -23,6 +23,7 @@ const STATUS: Record<string, { label: string; tone: string; color: string }> = {
   at_risk: { label: "At risk", tone: "bg-rose-100 text-rose-700", color: "#ff6b7a" },
   not_started: { label: "Not started", tone: "bg-muted text-muted-foreground", color: "#cbd5e1" },
 };
+const CLASS_MONITOR_TAB_KEY = "teacher-class-monitor-tab";
 
 function fmtDate(iso: string | null) {
   if (!iso) return "—";
@@ -49,6 +50,26 @@ function Stat({ value, label, color }: { value: number | string; label: string; 
 export default function ClassMonitorPage() {
   const { data = null, error, mutate } = useTeacherMonitor();
   const [tab, setTab] = useState<"all" | "at_risk" | "not_started">("all");
+
+  useEffect(() => {
+    try {
+      const saved = window.sessionStorage.getItem(CLASS_MONITOR_TAB_KEY);
+      if (saved === "all" || saved === "at_risk" || saved === "not_started") {
+        setTab(saved);
+      }
+    } catch {
+      // The default tab remains available when session storage is disabled.
+    }
+  }, []);
+
+  function chooseTab(next: typeof tab) {
+    setTab(next);
+    try {
+      window.sessionStorage.setItem(CLASS_MONITOR_TAB_KEY, next);
+    } catch {
+      // A disabled session store should not stop roster filtering.
+    }
+  }
 
   const rows: ClassMonitorStudent[] = useMemo(() => {
     const all = data?.students ?? [];
@@ -108,7 +129,7 @@ export default function ClassMonitorPage() {
             {tabs.map((t) => (
               <button
                 key={t.key}
-                onClick={() => setTab(t.key)}
+                onClick={() => chooseTab(t.key)}
                 className={`rounded-full border px-3 py-1.5 text-xs font-medium transition-colors ${
                   tab === t.key
                     ? "border-primary bg-primary/10 text-primary"

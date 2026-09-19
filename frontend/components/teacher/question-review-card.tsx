@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -17,6 +17,7 @@ import {
 } from "@/lib/api";
 
 const CHOICE_TYPES = ["mcq_single", "mcq_multi", "true_false"];
+const editDraftKey = (questionId: string) => `teacher-question-edit:${questionId}`;
 
 // Shared textarea styling so edit fields match the read-view inputs, with a
 // proper brand focus ring.
@@ -116,6 +117,25 @@ export function QuestionReviewCard({
   const [celebrate, setCelebrate] = useState(false);
   const [flash, setFlash] = useState<null | "approve" | "reject">(null);
 
+  useEffect(() => {
+    try {
+      if (window.sessionStorage.getItem(editDraftKey(question.id))) {
+        setEditing(true);
+      }
+    } catch {
+      // Editing still works without refresh restoration.
+    }
+  }, [question.id]);
+
+  function closeEditor() {
+    try {
+      window.sessionStorage.removeItem(editDraftKey(question.id));
+    } catch {
+      // Nothing else is required when storage is unavailable.
+    }
+    setEditing(false);
+  }
+
   async function run(label: string, fn: () => Promise<ReviewQuestion>) {
     setError(null);
     setBusy(label);
@@ -193,10 +213,10 @@ export function QuestionReviewCard({
       {editing ? (
         <EditForm
           question={question}
-          onCancel={() => setEditing(false)}
+          onCancel={closeEditor}
           onSaved={(q) => {
             onChange(q);
-            setEditing(false);
+            closeEditor();
           }}
         />
       ) : (
@@ -397,8 +417,75 @@ function EditForm({
       ? ((answer as Record<string, unknown>).answers as string[]).join(", ")
       : "",
   );
+  const [draftHydrated, setDraftHydrated] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    try {
+      const raw = window.sessionStorage.getItem(editDraftKey(question.id));
+      if (raw) {
+        const saved = JSON.parse(raw) as {
+          text?: string;
+          explanation?: string;
+          options?: ReviewQuestion["options"];
+          single?: string;
+          multi?: string[];
+          numValue?: string;
+          numTol?: string;
+          fill?: string;
+        };
+        if (typeof saved.text === "string") setText(saved.text);
+        if (typeof saved.explanation === "string") setExplanation(saved.explanation);
+        if (Array.isArray(saved.options)) setOptions(saved.options);
+        if (typeof saved.single === "string") setSingle(saved.single);
+        if (Array.isArray(saved.multi)) setMulti(saved.multi.map(String));
+        if (typeof saved.numValue === "string") setNumValue(saved.numValue);
+        if (typeof saved.numTol === "string") setNumTol(saved.numTol);
+        if (typeof saved.fill === "string") setFill(saved.fill);
+      }
+    } catch {
+      try {
+        window.sessionStorage.removeItem(editDraftKey(question.id));
+      } catch {
+        // Editing still works without refresh restoration.
+      }
+    } finally {
+      setDraftHydrated(true);
+    }
+  }, [question.id]);
+
+  useEffect(() => {
+    if (!draftHydrated) return;
+    try {
+      window.sessionStorage.setItem(
+        editDraftKey(question.id),
+        JSON.stringify({
+          text,
+          explanation,
+          options,
+          single,
+          multi,
+          numValue,
+          numTol,
+          fill,
+        }),
+      );
+    } catch {
+      // Saving to the API remains available without browser draft storage.
+    }
+  }, [
+    draftHydrated,
+    question.id,
+    text,
+    explanation,
+    options,
+    single,
+    multi,
+    numValue,
+    numTol,
+    fill,
+  ]);
 
   function setOptionText(id: string, t: string) {
     setOptions((prev) => prev.map((o) => (o.id === id ? { ...o, text: t } : o)));
