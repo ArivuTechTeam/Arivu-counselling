@@ -19,6 +19,17 @@ const money = (value: number | null, currency: "USD" | "INR") =>
     style: "currency", currency, maximumFractionDigits: currency === "USD" ? 5 : 2,
   }).format(value);
 const number = (value: number | null) => value?.toLocaleString() ?? "—";
+const compactNumber = (value: number) => new Intl.NumberFormat("en-IN", {
+  notation: "compact",
+  maximumFractionDigits: 1,
+}).format(value);
+const localDateTime = (value: string) => new Intl.DateTimeFormat("en-IN", {
+  day: "numeric",
+  month: "short",
+  hour: "2-digit",
+  minute: "2-digit",
+  timeZoneName: "short",
+}).format(new Date(value));
 const callStage = (callType: string) => ({
   document_profile: "Extraction — document profiling",
   topic_extraction: "Extraction — topic identification",
@@ -87,18 +98,21 @@ function CallRows({
   inrPerUsd: number;
   onView: (id: string) => void;
 }) {
-  return <table className="w-full min-w-[850px] text-left text-sm">
+  return <table className="w-full min-w-[1100px] text-left text-sm">
     <thead className="bg-muted/50 text-xs uppercase tracking-wide text-muted-foreground">
-      <tr>{["Time", "Type", "Provider / model", "Tokens (in / out / cache / think)", "USD", "INR", "Status", ""].map(x => <th key={x} className="px-4 py-3 font-medium">{x}</th>)}</tr>
+      <tr>{["Time (IST)", "Stage", "Model", "Routing", "In", "Out", "Thinking", "Cached", "Cost", "Result", ""].map(x => <th key={x} className="px-4 py-3 font-medium">{x}</th>)}</tr>
     </thead>
     <tbody>{calls.map(item => <tr key={item.id} className="border-t hover:bg-background/60">
-      <td className="px-4 py-3 whitespace-nowrap">{new Date(item.created_at).toLocaleString()}</td>
-      <td className="px-4 py-3">{callStage(item.call_type)}{item.was_fallback && <span className="mt-1 block text-xs text-amber-700">Provider fallback used</span>}</td>
-      <td className="px-4 py-3">{item.provider}<br/><span className="text-xs text-muted-foreground">{item.model}</span></td>
-      <td className="px-4 py-3">{number(item.input_tokens)} / {number(item.output_tokens)} / {number(item.cached_tokens)} / {number(item.thinking_tokens)}</td>
-      <td className="px-4 py-3">{money(item.cost_usd, "USD")}</td>
-      <td className="px-4 py-3">{money(item.cost_usd === null ? null : item.cost_usd * inrPerUsd, "INR")}</td>
-      <td className="px-4 py-3"><span className={`rounded-full px-2 py-1 text-xs ${item.status === "success" ? "bg-emerald-100 text-emerald-700" : "bg-rose-100 text-rose-700"}`}>{item.status}</span></td>
+      <td className="px-4 py-3 whitespace-nowrap text-xs">{localDateTime(item.created_at)}</td>
+      <td className="px-4 py-3"><span className="inline-flex rounded-full bg-emerald-100 px-2.5 py-1 text-xs font-medium text-emerald-800">{callStage(item.call_type)}</span></td>
+      <td className="px-4 py-3"><span className="font-medium">{item.model}</span><span className="mt-0.5 block text-xs text-muted-foreground">{item.provider}</span></td>
+      <td className="px-4 py-3"><span className={`rounded-full px-2 py-1 text-xs ${item.was_fallback ? "bg-amber-100 text-amber-800" : "bg-slate-100 text-slate-700"}`}>{item.was_fallback ? "Fallback" : "Primary"}</span></td>
+      <td className="px-4 py-3 tabular-nums">{number(item.input_tokens)}</td>
+      <td className="px-4 py-3 tabular-nums">{number(item.output_tokens)}</td>
+      <td className="px-4 py-3 tabular-nums">{number(item.thinking_tokens)}</td>
+      <td className="px-4 py-3 tabular-nums">{number(item.cached_tokens)}</td>
+      <td className="px-4 py-3 whitespace-nowrap tabular-nums"><span>{money(item.cost_usd, "USD")}</span><span className="mt-0.5 block text-xs text-emerald-700">{money(item.cost_usd === null ? null : item.cost_usd * inrPerUsd, "INR")}</span></td>
+      <td className="px-4 py-3"><span className={`rounded-full px-2 py-1 text-xs ${item.status === "success" ? "bg-emerald-100 text-emerald-700" : "bg-rose-100 text-rose-700"}`}>{item.status === "success" ? "OK" : "Error"}</span></td>
       <td className="px-4 py-3"><button onClick={() => onView(item.id)} className="text-primary hover:underline">View</button></td>
     </tr>)}</tbody>
   </table>;
@@ -118,6 +132,7 @@ export default function ApiLogsPage() {
   const [filters, setFilters] = useState<ApiLogFilters>({ page: 1, page_size: 50 });
   const [draft, setDraft] = useState<ApiLogFilters>({});
   const [grouped, setGrouped] = useState(true);
+  const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [inrPerUsdInput, setInrPerUsdInput] = useState("83");
   const { data, error, isLoading } = useSWR(["api-logs", filters], () => listApiLogs(filters));
@@ -174,18 +189,26 @@ export default function ApiLogsPage() {
       const stageTotals = new Map<string, number>();
       for (const call of calls) {
         const stage = callStage(call.call_type);
-        stageTotals.set(stage, (stageTotals.get(stage) ?? 0) + (call.cost_usd ?? 0));
+        stageTotals.set(stage, (stageTotals.get(stage) ?? 0) + 1);
       }
       const linkedPaper = Boolean(calls[0].document_id);
-      return <section key={id} className={`overflow-hidden rounded-2xl border shadow-sm ${index % 2 === 0 ? "border-emerald-200 bg-emerald-50/60" : "border-sky-200 bg-sky-50/60"}`}>
-        <header className="flex flex-col gap-3 border-b border-inherit px-5 py-4">
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <div><p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">{linkedPaper ? "Paper calls" : "Unlinked provider calls"}</p><h2 className="mt-1 text-lg font-semibold">{calls[0].document_name ?? "No linked paper"}</h2><p className="mt-1 text-sm text-muted-foreground">Every row in this shaded block belongs to {linkedPaper ? "this paper" : "the same unlinked call group"}.</p></div>
-          <div className="flex flex-wrap gap-2 text-sm"><span className="rounded-full border bg-background/70 px-3 py-1">{calls.length} call{calls.length === 1 ? "" : "s"}</span><span className="rounded-full border bg-background/70 px-3 py-1">{money(callUsd, "USD")}</span><span className="rounded-full border bg-background/70 px-3 py-1">{money(inrFromUsd(callUsd), "INR")}</span></div>
+      const inputTokens = calls.reduce((sum, call) => sum + (call.input_tokens ?? 0), 0);
+      const outputTokens = calls.reduce((sum, call) => sum + (call.output_tokens ?? 0), 0);
+      const thinkingTokens = calls.reduce((sum, call) => sum + (call.thinking_tokens ?? 0), 0);
+      const cachedTokens = calls.reduce((sum, call) => sum + (call.cached_tokens ?? 0), 0);
+      const startedAt = calls.reduce((first, call) => call.created_at < first ? call.created_at : first, calls[0].created_at);
+      const isCollapsed = collapsedGroups[id] === true;
+      const groupTitle = calls[0].document_name ?? "No linked paper";
+      return <section key={id} className={`overflow-hidden rounded-2xl border shadow-sm ${index % 2 === 0 ? "border-emerald-200" : "border-sky-200"}`}>
+        <button type="button" onClick={() => setCollapsedGroups(current => ({ ...current, [id]: !isCollapsed }))} aria-expanded={!isCollapsed} className={`flex w-full flex-col gap-4 px-5 py-4 text-left transition-colors ${index % 2 === 0 ? "bg-emerald-100/75 hover:bg-emerald-100" : "bg-sky-100/75 hover:bg-sky-100"}`}>
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+            <div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><h2 className="truncate text-lg font-semibold">{groupTitle}</h2><span className="rounded-full bg-emerald-700/10 px-2 py-0.5 text-xs font-semibold text-emerald-800">{linkedPaper ? "Paper workflow" : "Needs attribution"}</span></div><p className="mt-1 text-sm text-muted-foreground">{linkedPaper ? `Started ${localDateTime(startedAt)}` : "Older provider call not reliably linked to a paper."}</p>{linkedPaper && <p className="mt-1 text-xs text-muted-foreground">Paper ID {calls[0].document_id}</p>}</div>
+            <div className="flex flex-wrap gap-x-4 gap-y-1 text-sm text-foreground"><span><strong>{calls.length} call{calls.length === 1 ? "" : "s"}</strong> · {stageTotals.size} stage{stageTotals.size === 1 ? "" : "s"}</span><span>Tokens <strong>{compactNumber(inputTokens)} in</strong> · {compactNumber(outputTokens)} out · {compactNumber(thinkingTokens)} thinking · {compactNumber(cachedTokens)} cached</span></div>
+            <div className="flex items-center gap-3 self-start lg:text-right"><div><p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Workflow total</p><p className="font-semibold text-emerald-800">{money(callUsd, "USD")} <span className="text-sm font-medium">/ {money(inrFromUsd(callUsd), "INR")}</span></p></div><span className="text-xl leading-none text-muted-foreground" aria-hidden="true">{isCollapsed ? "⌄" : "⌃"}</span></div>
           </div>
-          <div className="flex flex-wrap gap-2">{Array.from(stageTotals.entries()).map(([stage, usd]) => <span key={stage} className="rounded-md border border-background/80 bg-background/50 px-2.5 py-1 text-xs text-foreground"><span className="font-medium">{stage}</span><span className="ml-2 text-muted-foreground">{money(inrFromUsd(usd), "INR")}</span></span>)}</div>
-        </header>
-        <div className="overflow-x-auto"><CallRows calls={calls} inrPerUsd={inrPerUsd} onView={setSelectedId} /></div>
+          <div className="flex flex-wrap gap-2">{Array.from(stageTotals.entries()).map(([stage, count]) => <span key={stage} className="rounded-full border border-emerald-200 bg-background/60 px-2.5 py-1 text-xs font-medium text-emerald-800">{stage} <span className="text-emerald-700/75">×{count}</span></span>)}</div>
+        </button>
+        {!isCollapsed && <><div className="border-y bg-background/70 px-5 py-2 text-xs text-muted-foreground">Individual provider calls included in this workflow total.</div><div className="overflow-x-auto bg-card"><CallRows calls={calls} inrPerUsd={inrPerUsd} onView={setSelectedId} /></div></>}
       </section>;
     })}<Pagination data={data} filters={filters} setFilters={setFilters} /></div>}
     {items.length === 0 && <div className="rounded-2xl border bg-card p-10 text-center text-sm text-muted-foreground">No API calls match these filters yet.</div>}
