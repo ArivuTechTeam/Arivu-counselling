@@ -31,6 +31,7 @@ from app.services.generation_jobs import (
     launch_job,
 )
 from app.services.document_profile import profile_document, profile_to_summary
+from app.services.ai_call_logging import ai_call_context
 from app.services.llm import LLMError
 from app.services.quiz_generator_service import QuizGeneratorService
 from app.services.rate_limit import (
@@ -362,7 +363,10 @@ def analyze_document(
         action_label="document profiling",
     )
     try:
-        document_profile = profile_document(text)
+        with ai_call_context(
+            "document_profile", tenant_id=profile.tenant_id, document_id=req.document_id
+        ):
+            document_profile = profile_document(text)
         enforce_ai_rate_limit(
             profile=profile,
             endpoint=TOPIC_EXTRACTION,
@@ -370,7 +374,10 @@ def analyze_document(
             action_label="topic extraction",
         )
         topic_details = extract_topic_details(
-            text, profile_to_summary(document_profile)
+            text,
+            profile_to_summary(document_profile),
+            tenant_id=profile.tenant_id,
+            document_id=req.document_id,
         )
     except LLMError as exc:
         raise public_error(

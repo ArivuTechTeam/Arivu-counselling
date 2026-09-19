@@ -19,6 +19,19 @@ const money = (value: number | null, currency: "USD" | "INR") =>
     style: "currency", currency, maximumFractionDigits: currency === "USD" ? 5 : 2,
   }).format(value);
 const number = (value: number | null) => value?.toLocaleString() ?? "—";
+const callStage = (callType: string) => ({
+  document_profile: "Extraction — document profiling",
+  topic_extraction: "Extraction — topic identification",
+  topic_extraction_map: "Extraction — topic mapping",
+  topic_extraction_reduce: "Extraction — topic consolidation",
+  quiz_extraction: "Extraction — quiz questions",
+  quiz_generation: "Quiz generation",
+  blueprint_generation: "Quiz generation",
+  question_verification: "Question verification",
+  question_regeneration: "Question regeneration",
+  question_explain: "Student explanation",
+  unclassified: "Needs attribution (older call)",
+}[callType] ?? callType.replaceAll("_", " "));
 
 function JsonTree({ value, depth = 0 }: { value: unknown; depth?: number }) {
   if (value === null) return <span className="text-rose-600">null</span>;
@@ -80,7 +93,7 @@ function CallRows({
     </thead>
     <tbody>{calls.map(item => <tr key={item.id} className="border-t hover:bg-background/60">
       <td className="px-4 py-3 whitespace-nowrap">{new Date(item.created_at).toLocaleString()}</td>
-      <td className="px-4 py-3">{item.call_type}</td>
+      <td className="px-4 py-3">{callStage(item.call_type)}{item.was_fallback && <span className="mt-1 block text-xs text-amber-700">Provider fallback used</span>}</td>
       <td className="px-4 py-3">{item.provider}<br/><span className="text-xs text-muted-foreground">{item.model}</span></td>
       <td className="px-4 py-3">{number(item.input_tokens)} / {number(item.output_tokens)} / {number(item.cached_tokens)} / {number(item.thinking_tokens)}</td>
       <td className="px-4 py-3">{money(item.cost_usd, "USD")}</td>
@@ -158,11 +171,19 @@ export default function ApiLogsPage() {
     </div>
     {!grouped ? <div className="overflow-hidden rounded-2xl border bg-card shadow-sm"><CallRows calls={items} inrPerUsd={inrPerUsd} onView={setSelectedId} /><Pagination data={data} filters={filters} setFilters={setFilters} /></div> : <div className="space-y-4">{groups.map(([id, calls], index) => {
       const callUsd = calls.reduce((sum, call) => sum + (call.cost_usd ?? 0), 0);
+      const stageTotals = new Map<string, number>();
+      for (const call of calls) {
+        const stage = callStage(call.call_type);
+        stageTotals.set(stage, (stageTotals.get(stage) ?? 0) + (call.cost_usd ?? 0));
+      }
       const linkedPaper = Boolean(calls[0].document_id);
       return <section key={id} className={`overflow-hidden rounded-2xl border shadow-sm ${index % 2 === 0 ? "border-emerald-200 bg-emerald-50/60" : "border-sky-200 bg-sky-50/60"}`}>
-        <header className="flex flex-col gap-3 border-b border-inherit px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
+        <header className="flex flex-col gap-3 border-b border-inherit px-5 py-4">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div><p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">{linkedPaper ? "Paper calls" : "Unlinked provider calls"}</p><h2 className="mt-1 text-lg font-semibold">{calls[0].document_name ?? "No linked paper"}</h2><p className="mt-1 text-sm text-muted-foreground">Every row in this shaded block belongs to {linkedPaper ? "this paper" : "the same unlinked call group"}.</p></div>
           <div className="flex flex-wrap gap-2 text-sm"><span className="rounded-full border bg-background/70 px-3 py-1">{calls.length} call{calls.length === 1 ? "" : "s"}</span><span className="rounded-full border bg-background/70 px-3 py-1">{money(callUsd, "USD")}</span><span className="rounded-full border bg-background/70 px-3 py-1">{money(inrFromUsd(callUsd), "INR")}</span></div>
+          </div>
+          <div className="flex flex-wrap gap-2">{Array.from(stageTotals.entries()).map(([stage, usd]) => <span key={stage} className="rounded-md border border-background/80 bg-background/50 px-2.5 py-1 text-xs text-foreground"><span className="font-medium">{stage}</span><span className="ml-2 text-muted-foreground">{money(inrFromUsd(usd), "INR")}</span></span>)}</div>
         </header>
         <div className="overflow-x-auto"><CallRows calls={calls} inrPerUsd={inrPerUsd} onView={setSelectedId} /></div>
       </section>;
