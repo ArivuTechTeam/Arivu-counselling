@@ -29,7 +29,7 @@ export default function TeacherQuizPerformancePage({ params }: { params: { id: s
     <div className="mx-auto flex max-w-6xl flex-col gap-6">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <Link href={`/dashboard/teacher/review/${params.id}`} className="text-sm text-muted-foreground hover:text-primary">← Review queue</Link>
+          <Link href="/dashboard/teacher/published-quizzes" className="text-sm text-muted-foreground hover:text-primary">← Published quizzes</Link>
           <h1 className="mt-2 text-2xl font-semibold tracking-tight">{report.quiz.title} performance</h1>
           <p className="mt-1 text-sm text-muted-foreground">Results from students enrolled in this quiz&apos;s course.</p>
         </div>
