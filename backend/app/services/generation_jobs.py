@@ -38,6 +38,7 @@ from app.services.extraction import ExtractedText, extract_text_with_pages
 from app.services.master_blueprint_synthesizer import MasterBlueprintSynthesizer
 from app.services.topic_extraction_pipeline import TopicExtractionPipeline
 from app.services.rate_limit import TOPIC_EXTRACTION, enforce_ai_rate_limit
+from app.services.ai_call_logging import ai_call_context
 
 logger = logging.getLogger(__name__)
 
@@ -159,7 +160,13 @@ class GenerationJobRunner:
                         hourly_limit=get_settings().rate_limit_topic_extraction_per_hour,
                         action_label="large-document analysis",
                     )
-                document_profile = self._profiler(text)
+                with ai_call_context(
+                    "document_profile",
+                    tenant_id=tenant_id,
+                    document_id=document_id,
+                    job_id=job_id,
+                ):
+                    document_profile = self._profiler(text)
                 self._update(
                     job_id,
                     tenant_id,

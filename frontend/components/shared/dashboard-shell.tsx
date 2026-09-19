@@ -160,6 +160,12 @@ const NAV: Record<string, NavItem[]> = {
       section: "Monitoring",
       icon: Sparkles,
     },
+    {
+      label: "AI API logs",
+      href: "/dashboard/super-admin/api-logs",
+      section: "Monitoring",
+      icon: BarChart3,
+    },
   ],
   student: [
     { label: "Dashboard", href: "/dashboard/student", section: "Overview", icon: LayoutDashboard },

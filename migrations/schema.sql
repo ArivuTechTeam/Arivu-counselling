@@ -323,6 +323,36 @@ create index idx_genjobs_tenant on quiz_generation_jobs(tenant_id);
 create index idx_genjobs_document on quiz_generation_jobs(document_id);
 create index idx_genjobs_status on quiz_generation_jobs(status);
 
+-- Raw provider requests/responses are written only by the trusted backend and
+-- read through super-admin API routes; they are intentionally never exposed to
+-- browser roles through the Data API.
+create table api_call_logs (
+  id uuid primary key default gen_random_uuid(),
+  tenant_id uuid references tenants(id) on delete set null,
+  document_id uuid references documents(id) on delete set null,
+  job_id uuid references quiz_generation_jobs(id) on delete set null,
+  call_type text not null,
+  provider text not null check (provider in ('gemini', 'deepseek')),
+  model text not null,
+  was_fallback boolean not null default false,
+  input_tokens integer,
+  output_tokens integer,
+  cached_tokens integer,
+  thinking_tokens integer,
+  cost_usd numeric(18, 8),
+  cost_inr numeric(18, 8),
+  raw_request jsonb not null,
+  raw_response jsonb,
+  latency_ms integer not null,
+  status text not null check (status in ('success', 'error')),
+  error_message text,
+  created_at timestamptz not null default now()
+);
+create index idx_api_call_logs_document on api_call_logs(document_id);
+create index idx_api_call_logs_tenant_created on api_call_logs(tenant_id, created_at desc);
+create index idx_api_call_logs_created on api_call_logs(created_at desc);
+create index idx_api_call_logs_call_type on api_call_logs(call_type);
+
 create table quiz_variants (
   id uuid primary key default gen_random_uuid(),
   tenant_id uuid not null references tenants(id),
@@ -892,6 +922,7 @@ alter table documents enable row level security;
 alter table ai_extraction_jobs enable row level security;
 alter table document_chunks enable row level security;
 alter table quiz_generation_jobs enable row level security;
+alter table api_call_logs enable row level security;
 alter table questions enable row level security;
 alter table quiz_sets enable row level security;
 alter table quiz_variants enable row level security;
@@ -907,6 +938,8 @@ revoke all on table ai_rate_limits from public, anon, authenticated;
 grant select, insert, update, delete on table ai_rate_limits to service_role;
 grant select, insert, update, delete on table document_chunks to service_role;
 grant select, insert, update, delete on table quiz_generation_jobs to service_role;
+revoke all on table api_call_logs from public, anon, authenticated;
+grant select, insert, update, delete on table api_call_logs to service_role;
 
 -- ---------- tenants ----------
 create policy "tenant self or super admin - select" on tenants

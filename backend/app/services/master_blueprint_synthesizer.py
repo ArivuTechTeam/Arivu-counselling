@@ -26,6 +26,7 @@ from app.lib.config import get_settings
 from app.lib.supabase import get_service_client
 from app.services.llm.base import LLMError
 from app.services.llm.structured import complete_json_large
+from app.services.ai_call_logging import ai_call_context
 from app.services.map_reduce_prompts import REDUCE_SYSTEM, build_reduce_user_prompt
 from app.services.rate_limit import TOPIC_EXTRACTION, enforce_ai_rate_limit
 from app.services.source_material import evidence_occurs_in_material
@@ -336,6 +337,8 @@ class MasterBlueprintSynthesizer:
     def _reduce(
         self,
         *,
+        document_id: str,
+        tenant_id: str,
         document_title: str,
         topics: list[dict],
         document_summary: str = "",
@@ -358,7 +361,10 @@ class MasterBlueprintSynthesizer:
                         hourly_limit=get_settings().rate_limit_topic_extraction_per_hour,
                         action_label="large-document analysis",
                     )
-                data, _provider = complete_json_large(REDUCE_SYSTEM, user)
+                with ai_call_context(
+                    "topic_extraction_reduce", tenant_id=tenant_id, document_id=document_id
+                ):
+                    data, _provider = complete_json_large(REDUCE_SYSTEM, user)
                 return apply_merge_plan(topics, data)
             except (LLMError, ValidationError) as exc:
                 last_error = exc
@@ -392,6 +398,8 @@ class MasterBlueprintSynthesizer:
                 "No mapped topics available to synthesize a blueprint."
             )
         merged = self._reduce(
+            document_id=document_id,
+            tenant_id=tenant_id,
             document_title=document_title,
             topics=raw_topics,
             document_summary=document_summary,

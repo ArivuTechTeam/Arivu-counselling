@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from app.lib.supabase import get_service_client
 from app.services.llm.structured import complete_json_with_fallback
+from app.services.ai_call_logging import ai_call_context
 
 _SYSTEM = (
     "You are a patient tutor for exam-prep students. Given ONE quiz question, its "
@@ -86,7 +87,10 @@ def explain_question(question_id: str, tenant_id: str) -> dict:
     q = qrow[0]
 
     # 3) Generate once with Gemini primary and DeepSeek fallback.
-    data, provider = complete_json_with_fallback(_SYSTEM, _build_prompt(q))
+    with ai_call_context(
+        "question_explain", tenant_id=tenant_id, document_id=None
+    ):
+        data, provider = complete_json_with_fallback(_SYSTEM, _build_prompt(q))
     explanation = (data.get("explanation") or "").strip()
     simplified = (data.get("simplified") or "").strip()
     hints = [h.strip() for h in (data.get("hints") or []) if isinstance(h, str) and h.strip()]

@@ -24,6 +24,7 @@ from app.lib.config import get_settings
 from app.lib.supabase import get_service_client
 from app.services.llm.base import LLMError
 from app.services.llm.structured import complete_json_large
+from app.services.ai_call_logging import ai_call_context
 from app.services.map_reduce_prompts import MAP_SYSTEM, build_map_user_prompt
 from app.services.rate_limit import TOPIC_EXTRACTION, enforce_ai_rate_limit
 from app.services.source_material import (
@@ -208,6 +209,7 @@ class TopicExtractionPipeline:
         self,
         *,
         document_title: str,
+        document_id: str,
         tenant_id: str,
         total_chunks: int,
         chunk: dict,
@@ -234,16 +236,19 @@ class TopicExtractionPipeline:
         if not claimed.data:  # already claimed/finished by someone else
             return
         try:
-            topics = self._extract(
-                document_title=document_title,
-                chunk_number=chunk["chunk_index"],
-                total_chunks=total_chunks,
-                content=chunk["content"],
-                document_summary=document_summary,
-                page_start=chunk.get("page_start"),
-                page_end=chunk.get("page_end"),
-                profile=profile,
-            )
+            with ai_call_context(
+                "topic_extraction_map", tenant_id=tenant_id, document_id=document_id
+            ):
+                topics = self._extract(
+                    document_title=document_title,
+                    chunk_number=chunk["chunk_index"],
+                    total_chunks=total_chunks,
+                    content=chunk["content"],
+                    document_summary=document_summary,
+                    page_start=chunk.get("page_start"),
+                    page_end=chunk.get("page_end"),
+                    profile=profile,
+                )
             client.table("document_chunks").update(
                 {
                     "map_status": "succeeded",
@@ -293,6 +298,7 @@ class TopicExtractionPipeline:
                     pool.map(
                         lambda c: self._map_one(
                             document_title=document_title,
+                            document_id=document_id,
                             tenant_id=tenant_id,
                             total_chunks=total,
                             chunk=c,
