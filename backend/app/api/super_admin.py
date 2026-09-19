@@ -7,6 +7,7 @@ application registers them only through this role-specific router.
 from fastapi import APIRouter
 
 from app.api.admin import router as handler_router
+from app.api.api_logs import router as api_logs_router
 
 _PATHS = {
     "/api/v1/tenants",
@@ -26,3 +27,7 @@ router.routes.extend(route for route in handler_router.routes if route.path in _
 
 if {route.path for route in router.routes} != _PATHS:
     raise RuntimeError("Super-admin route inventory is incomplete.")
+
+# API-call observability is intentionally isolated from legacy admin.py while
+# remaining mounted only under this role-specific router.
+router.include_router(api_logs_router)

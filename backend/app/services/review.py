@@ -15,6 +15,7 @@ from app.lib.supabase import get_service_client
 from app.services.extraction import extract_text_with_pages
 from app.services.generation import GeneratedQuiz
 from app.services.llm import LLMError, complete_with_fallback
+from app.services.ai_call_logging import ai_call_context
 from app.services.quiz_generator_service import render_blueprint_material
 from app.services.quiz_prompts import build_regen_system_prompt, build_regen_user_prompt
 from app.services.question_verification import verify_generated_questions
@@ -212,7 +213,8 @@ def regenerate_question(question_id: str, tenant_id: str) -> dict:
         existing["type"], existing.get("difficulty") or "medium"
     )
     user = build_regen_user_prompt(existing, source_material)
-    raw, _provider = complete_with_fallback(system, user)
+    with ai_call_context("question_regeneration", tenant_id=tenant_id):
+        raw, _provider = complete_with_fallback(system, user)
 
     quiz = GeneratedQuiz.model_validate_json(raw)
     if not quiz.questions:
@@ -238,7 +240,8 @@ def regenerate_question(question_id: str, tenant_id: str) -> dict:
             "explanation may mention a handbook, document, PDF, source material, "
             "notes, passage, page, or uploaded file."
         )
-        corrected_raw, _provider = complete_with_fallback(corrective_system, user)
+        with ai_call_context("question_regeneration", tenant_id=tenant_id):
+            corrected_raw, _provider = complete_with_fallback(corrective_system, user)
         corrected_quiz = GeneratedQuiz.model_validate_json(corrected_raw)
         if not corrected_quiz.questions:
             raise LLMError("Regeneration correction returned no question.")
@@ -257,7 +260,8 @@ def regenerate_question(question_id: str, tenant_id: str) -> dict:
             )
         except ValueError as exc:
             raise LLMError(f"Regeneration produced an unsuitable question: {exc}") from exc
-    verified = verify_generated_questions([new_q], source_material)[0]
+    with ai_call_context("question_verification", tenant_id=tenant_id):
+        verified = verify_generated_questions([new_q], source_material)[0]
 
     # Replace content, keep the same row + type, reset review state.
     updated = (

@@ -22,6 +22,7 @@ from app.lib.storage import download_bytes
 from app.lib.supabase import get_service_client
 from app.services.extraction import ExtractedText, extract_text_with_pages
 from app.services.llm import LLMError, complete_with_fallback
+from app.services.ai_call_logging import ai_call_context
 from app.services.quiz_prompts import build_system_prompt, build_user_prompt
 from app.services.question_validation import (
     validate_question_answer_shape,
@@ -146,7 +147,10 @@ def generate_quiz(
     user = build_user_prompt(
         material, num_questions, question_types, cognitive_level, difficulty
     )
-    raw, provider = complete_with_fallback(system, user)
+    with ai_call_context(
+        "quiz_generation", tenant_id=profile.tenant_id, document_id=document_id
+    ):
+        raw, provider = complete_with_fallback(system, user)
 
     # 4) Validate the model's JSON and student-facing wording. If the provider
     # violates a presentation rule, give it one explicit rewrite opportunity;
@@ -164,9 +168,12 @@ def generate_quiz(
             "notes, passage, page, or uploaded file. Preserve the requested "
             f"{difficulty} difficulty and all original JSON/type rules."
         )
-        corrected_raw, corrected_provider = complete_with_fallback(
-            corrective_system, user
-        )
+        with ai_call_context(
+            "quiz_generation", tenant_id=profile.tenant_id, document_id=document_id
+        ):
+            corrected_raw, corrected_provider = complete_with_fallback(
+                corrective_system, user
+            )
         try:
             questions = _parse_and_validate_generated_quiz(
                 corrected_raw, num_questions, difficulty
@@ -174,7 +181,10 @@ def generate_quiz(
         except LLMError:
             raise first_error
         provider = corrected_provider
-    verification = verify_generated_questions(questions, material)
+    with ai_call_context(
+        "question_verification", tenant_id=profile.tenant_id, document_id=document_id
+    ):
+        verification = verify_generated_questions(questions, material)
 
     # 5) Store: quiz_set -> variant -> questions (all pending review).
     quiz_set = (

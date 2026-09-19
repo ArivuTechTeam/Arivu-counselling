@@ -1521,6 +1521,57 @@ export type AiMonitoring = {
 export const getAiMonitoring = () =>
   jsonRequest<AiMonitoring>("/api/v1/platform/ai-monitoring", "GET");
 
+// --- Super-admin: raw AI API observability ---
+export type ApiCallLog = {
+  id: string;
+  tenant_id: string | null;
+  document_id: string | null;
+  document_name: string | null;
+  job_id: string | null;
+  call_type: string;
+  provider: "gemini" | "deepseek";
+  model: string;
+  was_fallback: boolean;
+  input_tokens: number | null;
+  output_tokens: number | null;
+  cached_tokens: number | null;
+  thinking_tokens: number | null;
+  cost_usd: number | null;
+  cost_inr: number | null;
+  latency_ms: number;
+  status: "success" | "error";
+  error_message: string | null;
+  created_at: string;
+  raw_request?: unknown;
+  raw_response?: unknown;
+};
+export type ApiCallLogPage = { items: ApiCallLog[]; page: number; page_size: number; total: number };
+export type ApiCallLogDocument = {
+  document_id: string;
+  document_name: string | null;
+  summary: {
+    input_tokens: number; output_tokens: number; cached_tokens: number;
+    thinking_tokens: number; cost_usd: number; cost_inr: number;
+    call_count: number; call_types: string[];
+  };
+  items: ApiCallLog[];
+};
+export type ApiLogFilters = {
+  page?: number; page_size?: number; tenant_id?: string; document_id?: string;
+  call_type?: string; provider?: string; status?: string; date_from?: string; date_to?: string;
+};
+export function listApiLogs(filters: ApiLogFilters = {}) {
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(filters)) {
+    if (value !== undefined && value !== "") params.set(key, String(value));
+  }
+  return jsonRequest<ApiCallLogPage>(`/api/v1/platform/api-logs?${params}`, "GET");
+}
+export const getApiLog = (id: string) =>
+  jsonRequest<ApiCallLog>(`/api/v1/platform/api-logs/${id}`, "GET");
+export const getApiLogsByDocument = (documentId: string) =>
+  jsonRequest<ApiCallLogDocument>(`/api/v1/platform/api-logs/by-document/${documentId}`, "GET");
+
 // --- Super-admin: institution admins ---
 export type TenantOption = { id: string; name: string };
 export type InstitutionAdmin = {

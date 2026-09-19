@@ -149,6 +149,8 @@ class Settings:
             "DEEPSEEK_BASE_URL", "https://api.deepseek.com"
         )
         self.deepseek_model: str = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
+        # Display-only cost conversion for super-admin AI API observability.
+        self.usd_to_inr_rate: float = _positive_float("USD_TO_INR_RATE", 83.0)
         # DeepSeek defaults non-thinking responses to 8K output tokens, but its
         # current API accepts a much larger explicit limit. The REDUCE response
         # contains retained source material, so reserve Gemini-equivalent room.

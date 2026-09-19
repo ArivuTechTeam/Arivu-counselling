@@ -29,6 +29,7 @@ from app.services.events import QUESTION_GENERATED, log_events, make_event
 from app.services.extraction import extract_text_with_pages
 from app.services.llm.base import LLMError
 from app.services.llm.structured import complete_json_with_fallback
+from app.services.ai_call_logging import ai_call_context
 from app.services.question_validation import (
     validate_question_answer_shape,
     validate_question_presentation,
@@ -217,9 +218,14 @@ def _generate_with_exact_mix(
     expected_counts: dict[str, int],
     expected_topic_counts: dict[str, dict[str, int]] | None = None,
     requested_difficulty: str | None = None,
+    tenant_id: str | None = None,
+    document_id: str | None = None,
 ) -> tuple[BPQuiz, str]:
     """Generate once, then make one explicit correction attempt for a bad mix."""
-    data, provider = complete_json_with_fallback(system, user)
+    with ai_call_context(
+        "blueprint_generation", tenant_id=tenant_id, document_id=document_id
+    ):
+        data, provider = complete_json_with_fallback(system, user)
     try:
         return (
             _validated_generated_quiz(
@@ -247,9 +253,12 @@ def _generate_with_exact_mix(
             "may refer to a handbook, document, PDF, source material, notes, passage, "
             "page, or uploaded file. Obey every original grounding and difficulty rule."
         )
-        corrected, corrected_provider = complete_json_with_fallback(
-            corrective_system, user
-        )
+        with ai_call_context(
+            "blueprint_generation", tenant_id=tenant_id, document_id=document_id
+        ):
+            corrected, corrected_provider = complete_json_with_fallback(
+                corrective_system, user
+            )
         return (
             _validated_generated_quiz(
                 corrected,
@@ -395,7 +404,10 @@ def generate_and_persist_from_material(
         # The legacy caller specifies only a total and allowed types. Preserve that
         # path by validating total count, while exact per-type enforcement is used
         # by the teacher blueprint UI.
-        data, provider = complete_json_with_fallback(system, user)
+        with ai_call_context(
+            "blueprint_generation", tenant_id=tid, document_id=source_document_id
+        ):
+            data, provider = complete_json_with_fallback(system, user)
         try:
             quiz = BPQuiz.model_validate(data)
         except ValidationError as exc:
@@ -426,9 +438,12 @@ def generate_and_persist_from_material(
                     "material, notes, passage, page, or uploaded file. Preserve the "
                     f"requested {difficulty} difficulty and all JSON/type rules."
                 )
-                corrected, corrected_provider = complete_json_with_fallback(
-                    corrective_system, user
-                )
+                with ai_call_context(
+                    "blueprint_generation", tenant_id=tid, document_id=source_document_id
+                ):
+                    corrected, corrected_provider = complete_json_with_fallback(
+                        corrective_system, user
+                    )
                 try:
                     corrected_quiz = BPQuiz.model_validate(corrected)
                     if len(corrected_quiz.questions) != total_questions:
@@ -464,10 +479,15 @@ def generate_and_persist_from_material(
             expected_counts,
             expected_topic_counts,
             difficulty,
+            tenant_id=tid,
+            document_id=source_document_id,
         )
         questions = quiz.questions
 
-    verification = verify_generated_questions(questions, material)
+    with ai_call_context(
+        "question_verification", tenant_id=tid, document_id=source_document_id
+    ):
+        verification = verify_generated_questions(questions, material)
 
     # 4) Persist chapter + selected topics (exam-setter data; powers analytics).
     chapter_id = _get_or_create(

@@ -12,6 +12,7 @@ from app.lib.config import get_settings
 from app.services.llm.base import LLMError, LLMProvider
 from app.services.llm.deepseek import DeepSeekProvider
 from app.services.llm.gemini import GeminiProvider
+from app.services.ai_call_logging import ai_provider_attempt
 
 __all__ = ["LLMError", "LLMProvider", "complete_with_fallback", "get_providers"]
 
@@ -37,9 +38,10 @@ def complete_with_fallback(system_prompt: str, user_prompt: str) -> tuple[str, s
     that succeeds. Raise LLMError with all the failures if none do.
     """
     failures: list[str] = []
-    for provider in get_providers():
+    for index, provider in enumerate(get_providers()):
         try:
-            return provider.complete(system_prompt, user_prompt), provider.name
+            with ai_provider_attempt(was_fallback=index > 0):
+                return provider.complete(system_prompt, user_prompt), provider.name
         except LLMError as exc:
             failures.append(f"{provider.name}: {exc}")
     raise LLMError("All LLM providers failed → " + " | ".join(failures))

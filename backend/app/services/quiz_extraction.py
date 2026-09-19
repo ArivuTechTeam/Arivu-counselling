@@ -36,6 +36,7 @@ from app.services.extraction_prompts import (
     build_extraction_user_text,
 )
 from app.services.generation import GeneratedQuestion
+from app.services.ai_call_logging import ai_call_context
 from app.services.llm import LLMError
 from app.services.llm.structured import (
     complete_json_with_fallback,
@@ -80,13 +81,19 @@ def _prefix_pyq(explanation: str | None, is_pyq: bool, year: str | None) -> str 
     return f"{tag} {explanation}".strip() if explanation else tag
 
 
-def _vision_extract(mime_type: str, content: bytes) -> tuple[dict, str]:
+def _vision_extract(
+    mime_type: str, content: bytes, *, tenant_id: str | None = None,
+    document_id: str | None = None, job_id: str | None = None,
+) -> tuple[dict, str]:
     """Read a scanned page/image with Gemini vision (the only path that can)."""
-    raw = gemini_json_multimodal(
-        EXTRACTION_SYSTEM,
-        EXTRACTION_USER_FILE,
-        files=[(mime_type, content)],
-    )
+    with ai_call_context(
+        "quiz_extraction", tenant_id=tenant_id, document_id=document_id, job_id=job_id
+    ):
+        raw = gemini_json_multimodal(
+            EXTRACTION_SYSTEM,
+            EXTRACTION_USER_FILE,
+            files=[(mime_type, content)],
+        )
     return raw, "gemini-vision"
 
 
@@ -130,22 +137,31 @@ def _merge_questions(results: list[dict]) -> list[dict]:
     return merged
 
 
-def _extract_text_chunk(chunk: str) -> tuple[dict, str]:
+def _extract_text_chunk(
+    chunk: str, *, tenant_id: str | None = None, document_id: str | None = None,
+    job_id: str | None = None,
+) -> tuple[dict, str]:
     """Extract one text chunk, retrying once on a transient model error so a
     single blip doesn't fail the whole (multi-chunk) document."""
     last_error: LLMError | None = None
     for _ in range(2):
         try:
-            return complete_json_with_fallback(
-                EXTRACTION_SYSTEM, build_extraction_user_text(chunk)
-            )
+            with ai_call_context(
+                "quiz_extraction", tenant_id=tenant_id, document_id=document_id, job_id=job_id
+            ):
+                return complete_json_with_fallback(
+                    EXTRACTION_SYSTEM, build_extraction_user_text(chunk)
+                )
         except LLMError as exc:
             last_error = exc
     assert last_error is not None
     raise last_error
 
 
-def _text_extract(text: str) -> tuple[dict, str]:
+def _text_extract(
+    text: str, *, tenant_id: str | None = None, document_id: str | None = None,
+    job_id: str | None = None,
+) -> tuple[dict, str]:
     """Parse already-extracted document text with the cheap text LLM (Gemini +
     DeepSeek fallback) — no vision, far fewer tokens, and it has a real fallback.
 
@@ -160,16 +176,26 @@ def _text_extract(text: str) -> tuple[dict, str]:
     settings = get_settings()
     chunk_chars = settings.extraction_text_chunk_chars
     if len(text) <= chunk_chars:
-        return complete_json_with_fallback(
-            EXTRACTION_SYSTEM, build_extraction_user_text(text)
-        )
+        with ai_call_context(
+            "quiz_extraction", tenant_id=tenant_id, document_id=document_id, job_id=job_id
+        ):
+            return complete_json_with_fallback(
+                EXTRACTION_SYSTEM, build_extraction_user_text(text)
+            )
 
     chunks = _chunk_text(text, chunk_chars)
     workers = max(1, min(settings.extraction_chunk_concurrency, len(chunks)))
     with ThreadPoolExecutor(max_workers=workers) as pool:
         # map preserves input order; any chunk that still fails after its retry
         # raises here, which cleanly aborts the whole job (no partial quiz).
-        pairs = list(pool.map(_extract_text_chunk, chunks))
+        pairs = list(
+            pool.map(
+                lambda chunk: _extract_text_chunk(
+                    chunk, tenant_id=tenant_id, document_id=document_id, job_id=job_id
+                ),
+                chunks,
+            )
+        )
 
     merged = _merge_questions([raw for raw, _ in pairs])
     provider = pairs[0][1] if pairs else "text"
@@ -177,7 +203,8 @@ def _text_extract(text: str) -> tuple[dict, str]:
 
 
 def _extract_document_content(
-    *, content: bytes, ext: str
+    *, content: bytes, ext: str, tenant_id: str | None = None,
+    document_id: str | None = None, job_id: str | None = None,
 ) -> tuple[dict, str]:
     """Route by document nature, then extract model JSON + the provider used.
 
@@ -190,11 +217,15 @@ def _extract_document_content(
 
     # Images: vision is the only option.
     if ext in _IMAGE_MIME:
-        return _vision_extract(_IMAGE_MIME[ext], content)
+        return _vision_extract(
+            _IMAGE_MIME[ext], content, tenant_id=tenant_id, document_id=document_id, job_id=job_id
+        )
 
     # DOCX: always has a text layer.
     if ext == "docx":
-        return _text_extract(extract_text(content, "docx"))
+        return _text_extract(
+            extract_text(content, "docx"), tenant_id=tenant_id, document_id=document_id, job_id=job_id
+        )
 
     # PDF: prefer the text path when it's a typed document; fall back to vision
     # when there's little/no extractable text (a scanned image PDF) or the text
@@ -205,8 +236,10 @@ def _extract_document_content(
         except Exception:  # noqa: BLE001 - unreadable text layer -> treat as scanned
             text = ""
         if len(text.strip()) >= MIN_READABLE_PDF_TEXT_CHARS:
-            return _text_extract(text)
-        return _vision_extract("application/pdf", content)
+            return _text_extract(text, tenant_id=tenant_id, document_id=document_id, job_id=job_id)
+        return _vision_extract(
+            "application/pdf", content, tenant_id=tenant_id, document_id=document_id, job_id=job_id
+        )
 
     raise ValueError(f"Unsupported file type for extraction: {ext or 'unknown'}")
 
@@ -291,7 +324,13 @@ def extract_quiz(
     try:
         # 3) Read PDF/images with Gemini vision; DOCX text has provider fallback.
         content = download_bytes(doc_row["storage_path"])
-        raw, provider = _extract_document_content(content=content, ext=ext)
+        raw, provider = _extract_document_content(
+            content=content,
+            ext=ext,
+            tenant_id=profile.tenant_id,
+            document_id=document_id,
+            job_id=job_id,
+        )
 
         # 4) Validate per-question; skip malformed ones (teacher reviews the rest).
         questions: list[ExtractedQuestion] = []
