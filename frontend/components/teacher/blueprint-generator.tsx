@@ -36,6 +36,29 @@ const fieldClass =
   "h-10 w-full rounded-md border border-input bg-background px-3 text-sm shadow-sm transition-colors focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20";
 
 const ALLOWED_UPLOAD_EXTENSIONS = new Set(["pdf", "docx"]);
+const WORKFLOW_STORAGE_KEY = "quiz-generation-workflow-v1";
+
+type SavedGenerationWorkflow = {
+  version: 1;
+  documentId: string;
+  uploadedName: string | null;
+  subjectId: string;
+  chapterName: string;
+  addingNewChapter: boolean;
+  jobId: string | null;
+  analysis: { status: string; phase: string; done: number; total: number } | null;
+  topics: string[];
+  topicPageRanges: Record<string, { start: number; end: number }[]>;
+  topicSubtopics: Record<string, string[]>;
+  topicGroups: Record<string, string>;
+  topicQuestionLimits: Record<string, number>;
+  sourceQualityWarnings: string[];
+  analysisMode: string | null;
+  topicCounts: Record<string, Record<string, number>>;
+  level: string;
+  difficulty: string;
+  desiredTotal: number;
+};
 
 const QUESTION_TYPES = [
   { value: "mcq_single", label: "Single choice" },
@@ -138,10 +161,15 @@ export function BlueprintGenerator() {
   const [topicPageRanges, setTopicPageRanges] = useState<
     Record<string, { start: number; end: number }[]>
   >({});
+  const [topicSubtopics, setTopicSubtopics] = useState<Record<string, string[]>>({});
+  const [topicGroups, setTopicGroups] = useState<Record<string, string>>({});
+  const [expandedTopics, setExpandedTopics] = useState<Record<string, boolean>>({});
+  const [topicSearch, setTopicSearch] = useState("");
   const [topicQuestionLimits, setTopicQuestionLimits] = useState<
     Record<string, number>
   >({});
   const [sourceQualityWarnings, setSourceQualityWarnings] = useState<string[]>([]);
+  const [analysisMode, setAnalysisMode] = useState<string | null>(null);
   // Per-topic blueprint: for each SELECTED topic, how many of each format. A
   // topic key present here = selected; {} = selected but nothing set yet.
   const [topicCounts, setTopicCounts] = useState<
@@ -168,6 +196,83 @@ export function BlueprintGenerator() {
   const [analysis, setAnalysis] = useState<
     { status: string; phase: string; done: number; total: number } | null
   >(null);
+  const [workflowHydrated, setWorkflowHydrated] = useState(false);
+
+  // Keep the faculty's document-analysis and quiz setup in this browser tab so
+  // a refresh reconnects to the durable backend job instead of clearing the UI.
+  // Raw document text and file bytes are deliberately never stored here.
+  useEffect(() => {
+    try {
+      const raw = window.sessionStorage.getItem(WORKFLOW_STORAGE_KEY);
+      if (raw) {
+        const saved = JSON.parse(raw) as Partial<SavedGenerationWorkflow>;
+        if (saved.version === 1) {
+          setDocumentId(saved.documentId || "");
+          setUploadedName(saved.uploadedName || null);
+          setSubjectId(saved.subjectId || "");
+          setChapterName(saved.chapterName || "");
+          setAddingNewChapter(Boolean(saved.addingNewChapter));
+          setJobId(saved.jobId || null);
+          setAnalysis(saved.analysis || null);
+          setTopics(saved.topics || []);
+          setTopicPageRanges(saved.topicPageRanges || {});
+          setTopicSubtopics(saved.topicSubtopics || {});
+          setTopicGroups(saved.topicGroups || {});
+          setTopicQuestionLimits(saved.topicQuestionLimits || {});
+          setSourceQualityWarnings(saved.sourceQualityWarnings || []);
+          setAnalysisMode(saved.analysisMode || null);
+          setTopicCounts(saved.topicCounts || {});
+          setLevel(saved.level || "mixed");
+          setDifficulty(saved.difficulty || "medium");
+          setDesiredTotal(saved.desiredTotal || 10);
+        }
+      }
+    } catch {
+      window.sessionStorage.removeItem(WORKFLOW_STORAGE_KEY);
+    } finally {
+      setWorkflowHydrated(true);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!workflowHydrated) return;
+    if (!documentId && !jobId && topics.length === 0) {
+      window.sessionStorage.removeItem(WORKFLOW_STORAGE_KEY);
+      return;
+    }
+    const saved: SavedGenerationWorkflow = {
+      version: 1,
+      documentId,
+      uploadedName,
+      subjectId,
+      chapterName,
+      addingNewChapter,
+      jobId,
+      analysis,
+      topics,
+      topicPageRanges,
+      topicSubtopics,
+      topicGroups,
+      topicQuestionLimits,
+      sourceQualityWarnings,
+      analysisMode,
+      topicCounts,
+      level,
+      difficulty,
+      desiredTotal,
+    };
+    try {
+      window.sessionStorage.setItem(WORKFLOW_STORAGE_KEY, JSON.stringify(saved));
+    } catch {
+      // Storage can be unavailable in locked-down browsers. The durable backend
+      // job still runs; only automatic form restoration is unavailable.
+    }
+  }, [
+    workflowHydrated, documentId, uploadedName, subjectId, chapterName,
+    addingNewChapter, jobId, analysis, topics, topicPageRanges, topicSubtopics,
+    topicGroups, topicQuestionLimits, sourceQualityWarnings, analysisMode,
+    topicCounts, level, difficulty, desiredTotal,
+  ]);
 
   useEffect(() => {
     listDocuments()
@@ -177,8 +282,6 @@ export function BlueprintGenerator() {
 
   // Load the selected subject's chapters for the dropdown.
   useEffect(() => {
-    setChapterName("");
-    setAddingNewChapter(false);
     if (!subjectId) {
       setChapters([]);
       return;
@@ -224,7 +327,12 @@ export function BlueprintGenerator() {
       setAnalysis(null);
       setTopics([]);
       setTopicPageRanges({});
+      setTopicSubtopics({});
+      setTopicGroups({});
+      setExpandedTopics({});
+      setTopicSearch("");
       setTopicQuestionLimits({});
+      setAnalysisMode(null);
       setTopicCounts({});
       setDuplicateWarning(null);
       setDocumentId(res.document.id);
@@ -250,8 +358,13 @@ export function BlueprintGenerator() {
     setError(null);
     setTopics([]);
     setTopicPageRanges({});
+    setTopicSubtopics({});
+    setTopicGroups({});
+    setExpandedTopics({});
+    setTopicSearch("");
     setTopicQuestionLimits({});
     setSourceQualityWarnings([]);
+    setAnalysisMode(null);
     setTopicCounts({});
     setShowTopicHelp(false);
     setJobId(null);
@@ -289,6 +402,21 @@ export function BlueprintGenerator() {
         return;
       }
       setTopics(res.topics);
+      setTopicSubtopics(
+        Object.fromEntries(
+          (res.topic_groups || []).map((topic) => [topic.name, topic.subtopics || []]),
+        ),
+      );
+      setTopicGroups(
+        Object.fromEntries(
+          (res.topic_groups || []).map((topic) => [topic.name, topic.group_name || ""]),
+        ),
+      );
+      setTopicPageRanges(
+        Object.fromEntries(
+          (res.topic_groups || []).map((topic) => [topic.name, topic.page_ranges || []]),
+        ),
+      );
       setTopicQuestionLimits(res.topic_question_limits || {});
       setSourceQualityWarnings(res.source_quality_warnings || []);
       if (res.topics.length > 0) setShowTopicHelp(true);
@@ -364,6 +492,16 @@ export function BlueprintGenerator() {
   }
   function removeTopic(name: string) {
     setTopics((prev) => prev.filter((t) => t !== name));
+    setTopicSubtopics((prev) => {
+      const next = { ...prev };
+      delete next[name];
+      return next;
+    });
+    setTopicGroups((prev) => {
+      const next = { ...prev };
+      delete next[name];
+      return next;
+    });
     setTopicCounts((prev) => {
       const next = { ...prev };
       delete next[name];
@@ -378,6 +516,17 @@ export function BlueprintGenerator() {
     0,
   );
   const selectedCount = selectedTopicNames.length;
+  const normalizedTopicSearch = topicSearch.trim().toLocaleLowerCase();
+  const visibleTopics = normalizedTopicSearch
+    ? topics.filter(
+        (name) =>
+          name.toLocaleLowerCase().includes(normalizedTopicSearch) ||
+          (topicGroups[name] || "").toLocaleLowerCase().includes(normalizedTopicSearch) ||
+          (topicSubtopics[name] || []).some((subtopic) =>
+            subtopic.toLocaleLowerCase().includes(normalizedTopicSearch),
+          ),
+      )
+    : topics;
   const step = topics.length > 0 ? 2 : 1;
 
   async function handleGenerate() {
@@ -465,6 +614,7 @@ export function BlueprintGenerator() {
         if (cancelled) return;
         if (job.status === "completed" && job.quiz_set_id) {
           window.sessionStorage.removeItem("quiz-final-generation-job");
+          window.sessionStorage.removeItem(WORKFLOW_STORAGE_KEY);
           notify("✓ Quiz generated — opening your review queue", "success");
           router.push(`/dashboard/teacher/review/${job.quiz_set_id}`);
         } else if (job.status === "failed") {
@@ -494,6 +644,12 @@ export function BlueprintGenerator() {
         if (s.status === "completed" && s.topics.length > 0) {
           window.clearInterval(timer);
           setTopics(s.topics.map((t) => t.name));
+          setTopicSubtopics(
+            Object.fromEntries(s.topics.map((t) => [t.name, t.subtopics || []])),
+          );
+          setTopicGroups(
+            Object.fromEntries(s.topics.map((t) => [t.name, t.group_name || ""])),
+          );
           setShowTopicHelp(true);
           setTopicPageRanges(
             Object.fromEntries(s.topics.map((t) => [t.name, t.page_ranges || []])),
@@ -504,12 +660,15 @@ export function BlueprintGenerator() {
             ),
           );
           setSourceQualityWarnings(s.source_quality_warnings || []);
+          setAnalysisMode(s.analysis_mode || null);
           setAnalysis(null); // ready → reveal topic picker
           return;
         }
         if (s.status === "partial") {
           window.clearInterval(timer);
           setTopics([]);
+          setTopicSubtopics({});
+          setTopicGroups({});
           setTopicQuestionLimits({});
           setAnalysis({
             status: "partial",
@@ -608,7 +767,7 @@ export function BlueprintGenerator() {
         <CardHeader>
           <CardTitle>Generate a quiz</CardTitle>
           <CardDescription>
-            Upload a document, set the subject &amp; chapter, then extract its
+            Upload a document, set the subject &amp; chapter, then analyze its
             topics to mark the important ones.
           </CardDescription>
         </CardHeader>
@@ -636,7 +795,7 @@ export function BlueprintGenerator() {
               </span>
               <span className="flex items-center gap-1.5 text-sm font-medium text-foreground">
                 {uploading ? (
-                  "Uploading & extracting text…"
+                  "Uploading document…"
                 ) : uploadedName ? (
                   <>
                     <Check size={15} className="text-emerald-600" />
@@ -668,6 +827,8 @@ export function BlueprintGenerator() {
                     setAnalysis(null);
                     setTopics([]);
                     setTopicPageRanges({});
+                    setTopicSubtopics({});
+                    setTopicGroups({});
                     setTopicQuestionLimits({});
                     setTopicCounts({});
                     setDuplicateWarning(null);
@@ -693,7 +854,11 @@ export function BlueprintGenerator() {
               <select
                 className={fieldClass}
                 value={subjectId}
-                onChange={(e) => setSubjectId(e.target.value)}
+                onChange={(e) => {
+                  setSubjectId(e.target.value);
+                  setChapterName("");
+                  setAddingNewChapter(false);
+                }}
               >
                 <option value="">Select a subject…</option>
                 {courses.map((c) => (
@@ -751,11 +916,11 @@ export function BlueprintGenerator() {
             <Button onClick={handleExtract} disabled={!canExtract}>
               {extracting ? (
                 <span className="flex items-center gap-2">
-                  <Spinner /> Reading document…
+                  <Spinner /> Analyzing topics…
                 </span>
               ) : (
                 <span className="flex items-center gap-2">
-                  <Sparkles size={16} /> Extract topics
+                  <Sparkles size={16} /> Analyze topics
                 </span>
               )}
             </Button>
@@ -781,7 +946,11 @@ export function BlueprintGenerator() {
               <div className="flex items-center gap-2 text-sm font-medium text-primary">
                 {analyzing && <Spinner />}
                 {analyzing
-                  ? analysis.phase === "reducing"
+                  ? analysis.phase === "single_call_analysis"
+                    ? "Analyzing document topics…"
+                    : analysis.phase === "single_call_processing"
+                      ? "Preparing your topic list…"
+                      : analysis.phase === "reducing"
                     ? "Consolidating the extracted topics…"
                     : "Analysing a large document — reading it section by section…"
                   : analysis.status === "partial"
@@ -801,11 +970,14 @@ export function BlueprintGenerator() {
                 />
               </div>
               <p className="text-xs text-muted-foreground">
-                {analysis.phase === "reducing"
+                {analysis.phase === "single_call_analysis" ||
+                analysis.phase === "single_call_processing"
+                  ? "Progress is saved. You can refresh or leave this page and return"
+                  : analysis.phase === "reducing"
                   ? `All ${analysis.total} sections are saved. Building the final topic list`
                   : analysis.total > 0
                     ? `Read ${analysis.done} of ${analysis.total} sections`
-                  : "Splitting the document into sections…"}{" "}
+                    : "Preparing the document for analysis…"}{" "}
                 · very large documents can take several minutes. Topics appear here
                 automatically when it&apos;s ready.
               </p>
@@ -953,14 +1125,54 @@ export function BlueprintGenerator() {
                 </p>
               </div>
             )}
-            {topics.map((name, i) => {
+            {analysisMode === "local_typed_pdf_outline" && (
+              <div className="mb-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-900">
+                <p className="font-semibold">Local typed-PDF extraction</p>
+                <p className="mt-1 text-emerald-800">
+                  Topics and page ranges were read from the document index without AI analysis calls.
+                </p>
+              </div>
+            )}
+            {analysisMode === "single_call_ai_outline" && (
+              <div className="mb-2 rounded-lg border border-sky-200 bg-sky-50 px-3 py-2 text-xs text-sky-900">
+                <p className="font-semibold">Cost-optimized document analysis</p>
+                <p className="mt-1 text-sky-800">
+                  One AI call organized the document into major topics. Quiz generation will use exact text from the mapped source pages you select.
+                </p>
+              </div>
+            )}
+            <div className="mb-2 flex flex-col gap-1.5">
+              <label htmlFor="topic-search" className="text-xs font-medium text-muted-foreground">
+                Find a topic or covered concept
+              </label>
+              <input
+                id="topic-search"
+                type="search"
+                className={fieldClass}
+                placeholder="Search major topics and concepts"
+                value={topicSearch}
+                onChange={(event) => setTopicSearch(event.target.value)}
+              />
+              <p className="text-xs text-muted-foreground">
+                {topics.length} major topic{topics.length === 1 ? "" : "s"}. Expand one to preview the concepts it covers.
+              </p>
+            </div>
+            {visibleTopics.map((name, i) => {
               const selected = name in topicCounts;
               const counts = topicCounts[name] || {};
+              const subtopics = topicSubtopics[name] || [];
+              const expanded = expandedTopics[name] || Boolean(
+                normalizedTopicSearch &&
+                  subtopics.some((subtopic) =>
+                    subtopic.toLocaleLowerCase().includes(normalizedTopicSearch),
+                  ),
+              );
               const topicTotal = Object.values(counts).reduce(
                 (a, b) => a + (b || 0),
                 0,
               );
               const suggestedLimit = topicQuestionLimits[name];
+              const groupName = topicGroups[name] || "";
               return (
                 <div
                   key={name}
@@ -971,6 +1183,11 @@ export function BlueprintGenerator() {
                       : "border-input hover:border-primary/40 hover:bg-accent"
                   }`}
                 >
+                  {groupName && (
+                    <p className="text-[11px] font-semibold uppercase tracking-wide text-primary/75">
+                      {groupName}
+                    </p>
+                  )}
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <button
                       type="button"
@@ -1018,6 +1235,36 @@ export function BlueprintGenerator() {
                       </button>
                     </div>
                   </div>
+
+                  {subtopics.length > 0 && (
+                    <div className="border-t border-dashed border-input pt-2">
+                      <button
+                        type="button"
+                        className="text-xs font-medium text-primary hover:underline"
+                        aria-expanded={expanded}
+                        onClick={() =>
+                          setExpandedTopics((prev) => ({
+                            ...prev,
+                            [name]: !prev[name],
+                          }))
+                        }
+                      >
+                        {expanded ? "Hide" : "View"} {subtopics.length} covered concept{subtopics.length === 1 ? "" : "s"}
+                      </button>
+                      {expanded && (
+                        <div className="mt-2 flex flex-wrap gap-1.5">
+                          {subtopics.map((subtopic) => (
+                            <span
+                              key={subtopic}
+                              className="rounded-full border border-primary/15 bg-primary/5 px-2 py-1 text-[11px] text-muted-foreground"
+                            >
+                              {subtopic}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
 
                   {/* Per-topic blueprint: how many of each format from THIS topic. */}
                   {selected && (
@@ -1084,6 +1331,11 @@ export function BlueprintGenerator() {
                 </div>
               );
             })}
+            {visibleTopics.length === 0 && (
+              <p className="rounded-lg border border-dashed border-input px-3 py-6 text-center text-sm text-muted-foreground">
+                No topic or covered concept matches “{topicSearch.trim()}”.
+              </p>
+            )}
 
             {/* A custom topic has no consolidated source block in large-document
                 mode, so only the direct/small-document flow can safely add one. */}

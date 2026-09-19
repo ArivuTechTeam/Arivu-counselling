@@ -1811,6 +1811,15 @@ export type ExtractedTopics = {
   document_id: string;
   topics: string[];
   topic_question_limits: Record<string, number>;
+  topic_groups?: ExtractedTopicGroup[];
+};
+
+export type ExtractedTopicGroup = {
+  name: string;
+  group_name?: string;
+  subtopics: string[];
+  page_ranges: { start: number; end: number }[];
+  suggested_question_limit: number;
 };
 
 /** Extract the teachable topics from an uploaded document (Gemini). ~5-15s. */
@@ -1872,6 +1881,7 @@ export type AnalyzeResponse =
       document_id: string;
       topics: string[];
       topic_question_limits: Record<string, number>;
+      topic_groups?: ExtractedTopicGroup[];
       source_quality_warnings: string[];
     }
   | { mode: "job"; document_id: string; job_id: string; status: string };
@@ -1893,13 +1903,9 @@ export type GenerationJobStatus = {
   done_chunks: number;
   error_message: string | null;
   // The Master Blueprint's consolidated topics (present once the job is ready).
-  topics: {
-    name: string;
-    subtopics: string[];
-    page_ranges: { start: number; end: number }[];
-    suggested_question_limit: number;
-  }[];
+  topics: ExtractedTopicGroup[];
   quiz_set_id: string | null;
+  analysis_mode?: "local_typed_pdf_outline" | "single_call_ai_outline" | null;
   source_quality_warnings: string[];
 };
 

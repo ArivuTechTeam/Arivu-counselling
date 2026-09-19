@@ -179,8 +179,8 @@ class PromptTests(unittest.TestCase):
             self.assertIn(token, MAP_SYSTEM)
         # ...and to return no topics for a non-teachable section.
         self.assertIn('{"topics": []}', MAP_SYSTEM)
-        self.assertIn("own top-level topic_name", MAP_SYSTEM)
-        self.assertIn("Do not hide named", MAP_SYSTEM)
+        self.assertIn("faculty-facing units", MAP_SYSTEM)
+        self.assertIn("Do not create a separate top-level topic", MAP_SYSTEM)
 
     def test_user_prompt_injects_context(self) -> None:
         p = build_map_user_prompt(

@@ -20,7 +20,7 @@ def suggested_question_limit(topic: dict) -> int:
         return max(1, min(20, structured_capacity))
 
     fallback = len(topic.get("source_excerpts") or []) + len(topic.get("subtopics") or [])
-    return max(1, min(6, fallback or 1))
+    return max(1, min(20, fallback or 1))
 
 
 _GENERIC_CHILD_NAMES = {
@@ -71,63 +71,61 @@ def topic_choice_names(topic: dict) -> set[str]:
 
 
 def selectable_topic_choices(topics: list[dict]) -> list[dict]:
-    """Expose independently assessable concepts instead of broad containers.
+    """Expose a manageable list of major topics with child-concept previews.
 
-    The extraction blueprint intentionally retains hierarchy and evidence under a
-    broad parent. Teachers, however, need to select the leaves they want tested.
-    When a parent contains two or more named children, promote those children to
-    selectable choices. A focused topic remains unchanged.
+    The complete hierarchy remains in the Master Blueprint.  Selection happens at
+    the parent level so a long textbook does not turn hundreds of definitions,
+    commands, formulas, and other micro-concepts into separate UI rows.
     """
     choices: dict[str, dict] = {}
-
-    def add(name: str, capacity_source: dict) -> None:
-        key = name.casefold()
-        limit = suggested_question_limit(capacity_source)
-        existing = choices.get(key)
-        if existing:
-            existing["suggested_question_limit"] = max(
-                existing["suggested_question_limit"], limit
-            )
-            return
-        choices[key] = {"name": name, "suggested_question_limit": limit}
 
     for topic in topics or []:
         parent = " ".join(str(topic.get("topic_name") or "").split())
         if not parent:
             continue
 
-        children: dict[str, dict] = {}
+        children: dict[str, str] = {}
+        for field in ("source_topic_names", "subtopics"):
+            for value in topic.get(field) or []:
+                name = _usable_child_name(value, parent)
+                if name:
+                    children.setdefault(name.casefold(), name)
 
-        def child(name: str) -> dict:
-            return children.setdefault(name.casefold(), {"name": name})
-
-        for value in topic.get("source_topic_names") or []:
-            name = " ".join(str(value or "").split()).strip(" -–—:;")
-            if len(name) >= 3 and name.casefold() not in _GENERIC_CHILD_NAMES:
-                child(name).setdefault("subtopics", []).append(name)
-
-        for value in topic.get("subtopics") or []:
-            name = _usable_child_name(value, parent)
-            if name:
-                child(name).setdefault("subtopics", []).append(name)
-
+        # Formula names are useful concept previews, but definition terms are
+        # intentionally not promoted: long reference books can contain hundreds.
         for formula in topic.get("formulas") or []:
             name = _usable_child_name(formula.get("name"), parent)
             if name:
-                child(name).setdefault("formulas", []).append(formula)
+                children.setdefault(name.casefold(), name)
 
-        # Definition terms are useful fallbacks for non-quantitative subjects
-        # when the model supplied no explicit subtopic/formula hierarchy.
-        if not children:
-            for definition in topic.get("key_definitions") or []:
-                name = _usable_child_name(definition.get("term"), parent)
-                if name:
-                    child(name).setdefault("key_definitions", []).append(definition)
+        ranges = [
+            {"start": item.get("start"), "end": item.get("end")}
+            for item in (topic.get("source_page_ranges") or [])
+            if isinstance(item, dict) and item.get("start") and item.get("end")
+        ]
+        item = {
+            "name": parent,
+            "group_name": " ".join(str(topic.get("parent_group") or "").split()),
+            "subtopics": list(children.values()),
+            "page_ranges": ranges,
+            "suggested_question_limit": suggested_question_limit(topic),
+        }
+        existing = choices.get(parent.casefold())
+        if not existing:
+            choices[parent.casefold()] = item
+            continue
 
-        if len(children) >= 2:
-            for item in children.values():
-                add(item.pop("name"), item)
-        else:
-            add(parent, topic)
+        existing["suggested_question_limit"] = max(
+            existing["suggested_question_limit"], item["suggested_question_limit"]
+        )
+        known_children = {name.casefold() for name in existing["subtopics"]}
+        existing["subtopics"].extend(
+            name for name in item["subtopics"] if name.casefold() not in known_children
+        )
+        known_ranges = {(r["start"], r["end"]) for r in existing["page_ranges"]}
+        existing["page_ranges"].extend(
+            r for r in item["page_ranges"]
+            if (r["start"], r["end"]) not in known_ranges
+        )
 
     return list(choices.values())

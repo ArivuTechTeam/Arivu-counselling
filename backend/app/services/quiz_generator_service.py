@@ -22,12 +22,17 @@ from app.services.teacher_access import teacher_has_subject
 from app.services.topic_capacity import topic_choice_names
 
 
-def render_blueprint_material(
+def render_blueprint_material_with_evidence(
     blueprint: dict, selected_topic_names: set[str] | None = None
-) -> str:
-    """Render a Master Blueprint's topics into a compact study-material text block
-    for the question writer. Verbatim content is preserved; the structure just
-    makes topic boundaries explicit so questions can be tagged to a topic."""
+) -> tuple[str, dict[str, dict]]:
+    """Render selected topics and assign stable IDs to verified excerpts.
+
+    Source excerpts in a completed Master Blueprint have already been checked
+    against the original document chunks.  The writer references these IDs; the
+    backend later resolves them back to the canonical text and page provenance.
+    """
+    evidence_catalog: dict[str, dict] = {}
+    evidence_id_by_text: dict[str, str] = {}
     lines: list[str] = []
     for topic in blueprint.get("topics", []) or []:
         name = str(topic.get("topic_name", "")).strip()
@@ -66,11 +71,35 @@ def render_blueprint_material(
             if body:
                 lines.append(f"- Worked example: {body}")
         for excerpt in topic.get("source_excerpts") or []:
-            body = str(excerpt.get("text") or "").strip()
-            if body:
-                lines.append(f'- Source excerpt: "{" ".join(body.split())}"')
+            body = " ".join(str(excerpt.get("text") or "").split())
+            if not body:
+                continue
+            key = body.casefold()
+            evidence_id = evidence_id_by_text.get(key)
+            if not evidence_id:
+                evidence_id = f"E{len(evidence_catalog) + 1:04d}"
+                evidence_id_by_text[key] = evidence_id
+                evidence_catalog[evidence_id] = {
+                    "text": body,
+                    "page_start": excerpt.get("page_start"),
+                    "page_end": excerpt.get("page_end"),
+                    "topic": name,
+                }
+            lines.append(f'- Source excerpt [{evidence_id}]: "{body}"')
         lines.append("")
-    return "\n".join(lines).strip()
+    return "\n".join(lines).strip(), evidence_catalog
+
+
+def render_blueprint_material(
+    blueprint: dict, selected_topic_names: set[str] | None = None
+) -> str:
+    """Render a Master Blueprint's topics into a compact study-material text block
+    for the question writer. Verbatim content is preserved; the structure just
+    makes topic boundaries explicit so questions can be tagged to a topic."""
+    material, _catalog = render_blueprint_material_with_evidence(
+        blueprint, selected_topic_names
+    )
+    return material
 
 
 class QuizGeneratorService:
@@ -136,9 +165,16 @@ class QuizGeneratorService:
         if missing_names:
             raise ValueError("One or more selected topics are not in the completed analysis.")
 
-        material = render_blueprint_material(job["master_blueprint"], requested_names)
+        material, evidence_catalog = render_blueprint_material_with_evidence(
+            job["master_blueprint"], requested_names
+        )
         if not material:
             raise ValueError("The analysis produced no usable content to generate from.")
+        if not evidence_catalog:
+            raise ValueError(
+                "The selected topics have no verified source excerpts. Re-analyze "
+                "the document or choose a topic with source evidence."
+            )
         if len(material) > get_settings().generation_max_text_chars:
             raise ValueError(
                 "The selected topics contain too much source material for one safe "
@@ -160,6 +196,7 @@ class QuizGeneratorService:
             type_counts=type_counts,
             selected_only_material=True,
             source_document_id=job["document_id"],
+            evidence_catalog=evidence_catalog,
         )
 
         # Link the created quiz set back to the job (best-effort; non-fatal).

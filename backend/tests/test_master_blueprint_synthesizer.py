@@ -305,6 +305,23 @@ class SynthesizeTests(unittest.TestCase):
             ["Estates-General", "Reign of Terror", "Directory"],
         )
 
+    def test_reduce_accepts_parent_name_grounded_in_child_hierarchy(self) -> None:
+        sources = [
+            _topic("TCP services", subtopics=["Transport layer services"]),
+            _topic("Connection release", subtopics=["Transport connections"]),
+        ]
+        plan = {
+            "topic_groups": [{
+                "topic_name": "Transport services",
+                "source_topic_ids": ["T0001", "T0002"],
+            }],
+            "discarded_source_topic_ids": [],
+        }
+
+        merged = apply_merge_plan(sources, plan)
+
+        self.assertEqual(merged[0]["topic_name"], "Transport services")
+
     def test_reduce_ai_call_consumes_the_shared_rate_limit(self) -> None:
         fake = _Fake()
         fake.seed("d1", "t1", [(0, "succeeded", [_topic("A")])])

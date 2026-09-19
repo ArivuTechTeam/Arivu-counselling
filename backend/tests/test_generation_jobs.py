@@ -8,6 +8,7 @@ from app.services.generation_jobs import (
     GenerationJobRunner,
     create_generation_job,
 )
+from app.services.extraction import ExtractedText, PageSpan
 
 MODULE = "app.services.generation_jobs"
 
@@ -127,6 +128,31 @@ class _StubProfiler:
     def __call__(self, text):
         self.calls += 1
         return self.profile
+
+
+class _StubSingleCallAnalyzer:
+    def __init__(self, blueprint=None, error=None, raw_response=None):
+        self.blueprint = blueprint
+        self.error = error
+        self.raw_response = raw_response
+        self.calls = 0
+        self.saved_responses = []
+
+    def __call__(
+        self,
+        extracted,
+        *,
+        document_title="",
+        saved_response=None,
+        response_checkpoint=None,
+    ):
+        self.calls += 1
+        self.saved_responses.append(saved_response)
+        if response_checkpoint is not None and self.raw_response is not None:
+            response_checkpoint(self.raw_response)
+        if self.error:
+            raise self.error
+        return self.blueprint
 
 
 def _seed_job(fake, *, job_id="j1", tenant_id="t1", document_id="d1", chapter="Ch"):
@@ -275,6 +301,208 @@ class RunTests(unittest.TestCase):
             self._runner(fake).run(job_id="j1")
         limit.assert_called_once()
         self.assertEqual(limit.call_args.kwargs["endpoint"], "topic_extraction")
+
+    def test_confident_local_outline_skips_every_ai_analysis_stage(self) -> None:
+        fake = _Fake(); _seed_job(fake)
+        fake.db["quiz_generation_jobs"][0]["params"] = {
+            "prefer_local_outline": True,
+            "profile_rate_limit_reserved": False,
+        }
+        local_blueprint = {
+            "analysis_mode": "local_typed_pdf_outline",
+            "source_topic_count": 1,
+            "topics": [{"topic_name": "Networks"}],
+            "local_outline": {"provider_calls": 0},
+        }
+        chunker = _StubChunker(fake, 3)
+        mapper = _StubMapper({"total": 3, "succeeded": 3, "failed": 0})
+        reducer = _StubReducer(blueprint=BP)
+        profiler = _StubProfiler()
+        extracted = ExtractedText(
+            "typed pdf text",
+            (PageSpan(1, 0, len("typed pdf text")),),
+        )
+        runner = GenerationJobRunner(
+            service=fake,
+            chunker=chunker,
+            mapper=mapper,
+            reducer=reducer,
+            text_loader=lambda *_a: extracted,
+            profiler=profiler,
+        )
+        with patch(f"{MODULE}.build_local_pdf_outline", return_value=local_blueprint), patch(
+            f"{MODULE}.enforce_ai_rate_limit"
+        ) as limit:
+            result = runner.run(job_id="j1")
+
+        self.assertEqual(result["analysis_mode"], "local_typed_pdf_outline")
+        self.assertEqual(chunker.calls, 0)
+        self.assertEqual(mapper.calls, 0)
+        self.assertEqual(reducer.calls, 0)
+        self.assertEqual(profiler.calls, 0)
+        limit.assert_not_called()
+        job = fake.db["quiz_generation_jobs"][0]
+        self.assertEqual(job["status"], "completed")
+        self.assertEqual(job["master_blueprint"]["topics"][0]["topic_name"], "Networks")
+
+    def test_inconclusive_local_outline_uses_exactly_one_ai_analysis(self) -> None:
+        fake = _Fake(); _seed_job(fake)
+        fake.db["quiz_generation_jobs"][0]["params"] = {
+            "prefer_local_outline": True,
+            "profile_rate_limit_reserved": False,
+            "single_call_ai_outline": True,
+            "allow_multi_call_fallback": False,
+        }
+        blueprint = {
+            "analysis_mode": "single_call_ai_outline",
+            "source_topic_count": 3,
+            "topics": [{"topic_name": "Networks"}],
+        }
+        analyzer = _StubSingleCallAnalyzer(blueprint)
+        chunker = _StubChunker(fake, 3)
+        mapper = _StubMapper({"total": 3, "succeeded": 3, "failed": 0})
+        reducer = _StubReducer(blueprint=BP)
+        profiler = _StubProfiler()
+        extracted = ExtractedText("typed pdf text", (PageSpan(1, 0, 14),))
+        runner = GenerationJobRunner(
+            service=fake,
+            chunker=chunker,
+            mapper=mapper,
+            reducer=reducer,
+            text_loader=lambda *_a: extracted,
+            profiler=profiler,
+            single_call_analyzer=analyzer,
+        )
+        with patch(f"{MODULE}.build_local_pdf_outline", return_value=None), patch(
+            f"{MODULE}.enforce_ai_rate_limit"
+        ) as limit:
+            result = runner.run(job_id="j1")
+
+        self.assertEqual(result["analysis_mode"], "single_call_ai_outline")
+        self.assertEqual(analyzer.calls, 1)
+        self.assertEqual(chunker.calls, 0)
+        self.assertEqual(mapper.calls, 0)
+        self.assertEqual(reducer.calls, 0)
+        self.assertEqual(profiler.calls, 0)
+        limit.assert_called_once()
+        self.assertEqual(fake.db["quiz_generation_jobs"][0]["status"], "completed")
+
+    def test_non_paginated_document_uses_same_single_call_path(self) -> None:
+        fake = _Fake(); _seed_job(fake)
+        fake.db["quiz_generation_jobs"][0]["params"] = {
+            "prefer_local_outline": False,
+            "profile_rate_limit_reserved": True,
+            "single_call_ai_outline": True,
+            "allow_multi_call_fallback": False,
+        }
+        blueprint = {
+            "analysis_mode": "single_call_ai_outline",
+            "source_topic_count": 1,
+            "topics": [{"topic_name": "Employment law"}],
+        }
+        analyzer = _StubSingleCallAnalyzer(blueprint)
+        chunker = _StubChunker(fake, 3)
+        mapper = _StubMapper({"total": 3, "succeeded": 3, "failed": 0})
+        reducer = _StubReducer(blueprint=BP)
+        profiler = _StubProfiler()
+        runner = GenerationJobRunner(
+            service=fake,
+            chunker=chunker,
+            mapper=mapper,
+            reducer=reducer,
+            text_loader=lambda *_a: ExtractedText("A long DOCX document"),
+            profiler=profiler,
+            single_call_analyzer=analyzer,
+        )
+
+        with patch(f"{MODULE}.enforce_ai_rate_limit") as limit:
+            result = runner.run(job_id="j1")
+
+        self.assertEqual(result["analysis_mode"], "single_call_ai_outline")
+        self.assertEqual(analyzer.calls, 1)
+        self.assertEqual(chunker.calls, 0)
+        self.assertEqual(mapper.calls, 0)
+        self.assertEqual(reducer.calls, 0)
+        self.assertEqual(profiler.calls, 0)
+        limit.assert_not_called()
+
+    def test_one_call_failure_never_enters_costly_map_reduce(self) -> None:
+        fake = _Fake(); _seed_job(fake)
+        fake.db["quiz_generation_jobs"][0]["params"] = {
+            "prefer_local_outline": True,
+            "profile_rate_limit_reserved": False,
+            "single_call_ai_outline": True,
+            "allow_multi_call_fallback": False,
+        }
+        analyzer = _StubSingleCallAnalyzer(error=RuntimeError("provider failed"))
+        chunker = _StubChunker(fake, 3)
+        mapper = _StubMapper({"total": 3, "succeeded": 3, "failed": 0})
+        reducer = _StubReducer(blueprint=BP)
+        extracted = ExtractedText("typed pdf text", (PageSpan(1, 0, 14),))
+        runner = GenerationJobRunner(
+            service=fake,
+            chunker=chunker,
+            mapper=mapper,
+            reducer=reducer,
+            text_loader=lambda *_a: extracted,
+            profiler=_StubProfiler(),
+            single_call_analyzer=analyzer,
+        )
+        with patch(f"{MODULE}.build_local_pdf_outline", return_value=None), patch(
+            f"{MODULE}.enforce_ai_rate_limit"
+        ):
+            with self.assertRaisesRegex(RuntimeError, "provider failed"):
+                runner.run(job_id="j1")
+
+        self.assertEqual(analyzer.calls, 1)
+        self.assertEqual(chunker.calls, 0)
+        self.assertEqual(mapper.calls, 0)
+        self.assertEqual(reducer.calls, 0)
+        self.assertEqual(fake.db["quiz_generation_jobs"][0]["status"], "failed")
+
+    def test_one_call_retry_reuses_checkpoint_without_provider_or_rate_limit(self) -> None:
+        fake = _Fake(); _seed_job(fake)
+        fake.db["quiz_generation_jobs"][0]["params"] = {
+            "prefer_local_outline": False,
+            "profile_rate_limit_reserved": False,
+            "single_call_ai_outline": True,
+            "allow_multi_call_fallback": False,
+        }
+        raw_response = {"document_title": "Saved", "groups": []}
+        first = _StubSingleCallAnalyzer(
+            error=RuntimeError("local processing failed"),
+            raw_response=raw_response,
+        )
+        extracted = ExtractedText("typed pdf text", (PageSpan(1, 0, 14),))
+        first_runner = GenerationJobRunner(
+            service=fake,
+            text_loader=lambda *_a: extracted,
+            single_call_analyzer=first,
+        )
+        with patch(f"{MODULE}.enforce_ai_rate_limit") as first_limit:
+            with self.assertRaisesRegex(RuntimeError, "local processing failed"):
+                first_runner.run(job_id="j1")
+        first_limit.assert_called_once()
+
+        job = fake.db["quiz_generation_jobs"][0]
+        self.assertEqual(
+            job["params"]["single_call_response_checkpoint"], raw_response
+        )
+        job["status"] = "queued"
+        resumed = _StubSingleCallAnalyzer(blueprint=BP)
+        resumed_runner = GenerationJobRunner(
+            service=fake,
+            text_loader=lambda *_a: extracted,
+            single_call_analyzer=resumed,
+        )
+        with patch(f"{MODULE}.enforce_ai_rate_limit") as retry_limit:
+            result = resumed_runner.run(job_id="j1")
+
+        retry_limit.assert_not_called()
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(resumed.calls, 1)
+        self.assertEqual(resumed.saved_responses, [raw_response])
+        self.assertEqual(job["params"]["single_call_checkpoint_status"], "processed")
 
 
 class CreateJobTests(unittest.TestCase):

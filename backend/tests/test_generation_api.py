@@ -108,65 +108,34 @@ DOC_DB = {"documents": [
 
 
 class AnalyzeTests(unittest.TestCase):
-    def test_small_document_returns_direct_topics(self) -> None:
+    def test_small_pdf_immediately_creates_durable_analysis_job(self) -> None:
         with patch(f"{MOD}.get_settings", return_value=SETTINGS), patch(
             f"{MOD}.get_service_client", return_value=_Fake(dict(DOC_DB))
-        ), patch(
-            f"{MOD}.download_bytes", return_value=b""
-        ), patch(f"{MOD}.extract_text", return_value="short text"), patch(
-            f"{MOD}.enforce_ai_rate_limit"
-        ), patch(f"{MOD}.profile_document", return_value={}), patch(
-            f"{MOD}.extract_topic_details",
-            return_value=[
-                {"topic_name": "Alpha", "source_excerpts": [{"text": "Alpha fact"}]},
-                {
-                    "topic_name": "Beta",
-                    "formulas": [{"formula": "x = 2"}],
-                    "source_excerpts": [{"text": "x = 2"}],
-                },
-            ],
-        ):
+        ), patch(f"{MOD}.enforce_ai_rate_limit") as limit, patch(
+            f"{MOD}.create_generation_job", return_value="job-small"
+        ) as create:
             res = _client().post("/api/v1/quiz-sets/analyze", json={"document_id": "d1"})
         self.assertEqual(res.status_code, 200)
         body = res.json()
-        self.assertEqual(body["mode"], "direct")
-        self.assertEqual(body["topics"], ["Alpha", "Beta"])
-        self.assertEqual(body["topic_question_limits"], {"Alpha": 1, "Beta": 3})
-
-    def test_small_document_promotes_assessable_children_from_broad_parent(self) -> None:
-        with patch(f"{MOD}.get_settings", return_value=SETTINGS), patch(
-            f"{MOD}.get_service_client", return_value=_Fake(dict(DOC_DB))
-        ), patch(f"{MOD}.download_bytes", return_value=b""), patch(
-            f"{MOD}.extract_text", return_value="short text"
-        ), patch(f"{MOD}.enforce_ai_rate_limit"), patch(
-            f"{MOD}.profile_document", return_value={}
-        ), patch(
-            f"{MOD}.extract_topic_details",
-            return_value=[{
-                "topic_name": "Electromagnetism",
-                "subtopics": ["Ohm's Law", "Coulomb's Law"],
-                "formulas": [
-                    {"name": "Ohm's Law", "formula": "V = IR"},
-                    {"name": "Coulomb's Law", "formula": "F = k(q1q2)/r²"},
-                ],
-            }],
-        ):
-            res = _client().post(
-                "/api/v1/quiz-sets/analyze", json={"document_id": "d1"}
-            )
-
-        self.assertEqual(res.status_code, 200)
-        self.assertEqual(res.json()["topics"], ["Ohm's Law", "Coulomb's Law"])
+        self.assertEqual(body["mode"], "job")
+        self.assertEqual(body["job_id"], "job-small")
+        create.assert_called_once_with(
+            document_id="d1", tenant_id="t1", created_by="u1",
+            params={
+                "prefer_local_outline": True,
+                "profile_rate_limit_reserved": False,
+                "single_call_ai_outline": True,
+                "allow_multi_call_fallback": False,
+            },
+        )
+        limit.assert_not_called()
 
     def test_large_document_creates_job(self) -> None:
         big = "x" * 200_000  # > default 100k trigger
         with patch(f"{MOD}.get_settings", return_value=SETTINGS), patch(
             f"{MOD}.get_service_client", return_value=_Fake(dict(DOC_DB))
-        ), patch(
-            f"{MOD}.download_bytes", return_value=b""
-        ), patch(f"{MOD}.extract_text", return_value=big), patch(
-            f"{MOD}.enforce_ai_rate_limit"
-        ) as limit, patch(f"{MOD}.create_generation_job", return_value="job-1"
+        ), patch(f"{MOD}.enforce_ai_rate_limit") as limit, patch(
+            f"{MOD}.create_generation_job", return_value="job-1"
         ) as create:
             res = _client().post("/api/v1/quiz-sets/analyze", json={"document_id": "d1"})
         self.assertEqual(res.status_code, 200)
@@ -175,34 +144,62 @@ class AnalyzeTests(unittest.TestCase):
         self.assertEqual(body["job_id"], "job-1")
         create.assert_called_once_with(
             document_id="d1", tenant_id="t1", created_by="u1",
-            params={"profile_rate_limit_reserved": True},
+            params={
+                "prefer_local_outline": True,
+                "profile_rate_limit_reserved": False,
+                "single_call_ai_outline": True,
+                "allow_multi_call_fallback": False,
+            },
         )
-        limit.assert_called_once()
+        limit.assert_not_called()
 
-    def test_large_document_rate_limit_blocks_before_job_creation(self) -> None:
+    def test_large_non_pdf_rate_limit_blocks_before_job_creation(self) -> None:
         big = "x" * 200_000
+        docx_db = {"documents": [{**DOC_DB["documents"][0], "file_type": "docx"}]}
         with patch(f"{MOD}.get_settings", return_value=SETTINGS), patch(
-            f"{MOD}.get_service_client", return_value=_Fake(dict(DOC_DB))
-        ), patch(f"{MOD}.download_bytes", return_value=b""), patch(
-            f"{MOD}.extract_text", return_value=big
-        ), patch(
-            f"{MOD}.enforce_ai_rate_limit",
+            f"{MOD}.get_service_client", return_value=_Fake(docx_db)
+        ), patch(f"{MOD}.enforce_ai_rate_limit",
             side_effect=HTTPException(status_code=429, detail="limit reached"),
         ), patch(f"{MOD}.create_generation_job") as create:
             res = _client().post("/api/v1/quiz-sets/analyze", json={"document_id": "d1"})
         self.assertEqual(res.status_code, 429)
         create.assert_not_called()
 
+    def test_large_non_pdf_creates_the_same_bounded_single_call_job(self) -> None:
+        big = "x" * 200_000
+        docx_db = {"documents": [{**DOC_DB["documents"][0], "file_type": "docx"}]}
+        with patch(f"{MOD}.get_settings", return_value=SETTINGS), patch(
+            f"{MOD}.get_service_client", return_value=_Fake(docx_db)
+        ), patch(f"{MOD}.enforce_ai_rate_limit") as limit, patch(
+            f"{MOD}.create_generation_job", return_value="job-docx"
+        ) as create:
+            res = _client().post(
+                "/api/v1/quiz-sets/analyze", json={"document_id": "d1"}
+            )
+
+        self.assertEqual(res.status_code, 200)
+        create.assert_called_once_with(
+            document_id="d1",
+            tenant_id="t1",
+            created_by="u1",
+            params={
+                "prefer_local_outline": False,
+                "profile_rate_limit_reserved": True,
+                "single_call_ai_outline": True,
+                "allow_multi_call_fallback": False,
+            },
+        )
+        limit.assert_called_once()
+
     def test_repeated_large_analyze_requests_stop_at_configured_limit(self) -> None:
         settings = SimpleNamespace(**{**SETTINGS.__dict__, "rate_limit_topic_extraction_per_hour": 2})
-        service = _RateLimitedFake(dict(DOC_DB))
+        docx_db = {"documents": [{**DOC_DB["documents"][0], "file_type": "docx"}]}
+        service = _RateLimitedFake(docx_db)
         big = "x" * 200_000
         with patch(f"{MOD}.get_settings", return_value=settings), patch(
             f"{MOD}.get_service_client", return_value=service
         ), patch(
             "app.services.rate_limit.get_service_client", return_value=service
-        ), patch(f"{MOD}.download_bytes", return_value=b""), patch(
-            f"{MOD}.extract_text", return_value=big
         ), patch(f"{MOD}.create_generation_job", return_value="job-1") as create:
             responses = [
                 _client().post("/api/v1/quiz-sets/analyze", json={"document_id": "d1"})
@@ -211,15 +208,6 @@ class AnalyzeTests(unittest.TestCase):
         self.assertEqual([response.status_code for response in responses], [200, 200, 429])
         self.assertEqual(create.call_count, 2)
         self.assertEqual(service.last_rpc[0], "consume_ai_rate_limit")
-
-    def test_empty_text_is_rejected(self) -> None:
-        with patch(f"{MOD}.get_settings", return_value=SETTINGS), patch(
-            f"{MOD}.get_service_client", return_value=_Fake(dict(DOC_DB))
-        ), patch(
-            f"{MOD}.download_bytes", return_value=b""
-        ), patch(f"{MOD}.extract_text", return_value="   "):
-            res = _client().post("/api/v1/quiz-sets/analyze", json={"document_id": "d1"})
-        self.assertEqual(res.status_code, 400)
 
     def test_missing_document_404(self) -> None:
         with patch(f"{MOD}.get_service_client", return_value=_Fake({"documents": []})):
@@ -238,7 +226,11 @@ JOB_ROW = {
     "status": "completed", "phase": "ready", "total_chunks": 3, "done_chunks": 3,
     "error_message": None, "quiz_set_id": None,
     "master_blueprint": {"topics": [
-        {"topic_name": "Strings", "subtopics": ["indexing"]},
+        {
+            "topic_name": "Strings",
+            "parent_group": "Programming fundamentals",
+            "subtopics": ["indexing"],
+        },
         {"topic_name": ""},  # dropped
     ]},
 }
@@ -254,6 +246,7 @@ class JobStatusTests(unittest.TestCase):
         self.assertEqual(body["status"], "completed")
         self.assertEqual(body["done_chunks"], 3)
         self.assertEqual([t["name"] for t in body["topics"]], ["Strings"])
+        self.assertEqual(body["topics"][0]["group_name"], "Programming fundamentals")
 
     def test_stale_running_job_becomes_retryable_failure(self) -> None:
         stale = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()

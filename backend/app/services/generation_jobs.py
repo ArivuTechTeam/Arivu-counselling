@@ -36,6 +36,8 @@ from app.services.chunking_service import ChunkingService
 from app.services.document_profile import profile_document, profile_to_summary
 from app.services.extraction import ExtractedText, extract_text_with_pages
 from app.services.master_blueprint_synthesizer import MasterBlueprintSynthesizer
+from app.services.local_document_outline import build_local_pdf_outline
+from app.services.single_call_document_outline import build_single_call_ai_outline
 from app.services.topic_extraction_pipeline import TopicExtractionPipeline
 from app.services.rate_limit import TOPIC_EXTRACTION, enforce_ai_rate_limit
 from app.services.ai_call_logging import ai_call_context
@@ -80,6 +82,7 @@ class GenerationJobRunner:
         reducer=None,
         text_loader=None,
         profiler=None,
+        single_call_analyzer=None,
     ) -> None:
         self._service = service
         self._chunker = chunker or ChunkingService(service)
@@ -87,6 +90,7 @@ class GenerationJobRunner:
         self._reducer = reducer or MasterBlueprintSynthesizer(service)
         self._text_loader = text_loader or _default_text_loader
         self._profiler = profiler or profile_document
+        self._single_call_analyzer = single_call_analyzer or build_single_call_ai_outline
 
     @property
     def _client(self):
@@ -147,6 +151,111 @@ class GenerationJobRunner:
             actor_profile = CurrentProfile(
                 user_id=job["created_by"], tenant_id=tenant_id, role="teacher"
             )
+
+            # Typed PDFs with a reliable index can be analysed deterministically.
+            # This optional optimization is never required by the universal path.
+            params = job.get("params") or {}
+            if isinstance(loaded, ExtractedText) and params.get("prefer_local_outline"):
+                local_blueprint = build_local_pdf_outline(loaded)
+                if local_blueprint:
+                    self._update(
+                        job_id,
+                        tenant_id,
+                        master_blueprint={
+                            "document_title": title,
+                            **local_blueprint,
+                        },
+                        params={
+                            **params,
+                            "analysis_mode": "local_typed_pdf_outline",
+                        },
+                        total_chunks=0,
+                        done_chunks=0,
+                        phase="ready",
+                        status="completed",
+                    )
+                    return {
+                        "status": "completed",
+                        "analysis_mode": "local_typed_pdf_outline",
+                        "total": 0,
+                        "succeeded": 0,
+                        "failed": 0,
+                    }
+
+            # All supported typed formats use the same bounded one-call analysis
+            # when a deterministic PDF outline was unavailable. DOCX locations
+            # are stable text sections instead of page numbers.
+            if isinstance(loaded, ExtractedText) and params.get("single_call_ai_outline"):
+                saved_response = params.get("single_call_response_checkpoint")
+                if isinstance(saved_response, dict):
+                    self._update(job_id, tenant_id, phase="single_call_processing")
+                    blueprint = self._single_call_analyzer(
+                        loaded,
+                        document_title=title,
+                        saved_response=saved_response,
+                    )
+                else:
+                    if not params.get("profile_rate_limit_reserved"):
+                        enforce_ai_rate_limit(
+                            profile=actor_profile,
+                            endpoint=TOPIC_EXTRACTION,
+                            hourly_limit=get_settings().rate_limit_topic_extraction_per_hour,
+                            action_label="one-call document analysis",
+                        )
+                    self._update(job_id, tenant_id, phase="single_call_analysis")
+
+                    def save_response(raw_response: dict) -> None:
+                        nonlocal params
+                        params = {
+                            **params,
+                            "single_call_response_checkpoint": raw_response,
+                            "single_call_response_received_at": _now(),
+                        }
+                        self._update(
+                            job_id,
+                            tenant_id,
+                            params=params,
+                            phase="single_call_processing",
+                        )
+
+                    with ai_call_context(
+                        "single_call_topic_analysis",
+                        tenant_id=tenant_id,
+                        document_id=document_id,
+                        job_id=job_id,
+                    ):
+                        blueprint = self._single_call_analyzer(
+                            loaded,
+                            document_title=title,
+                            response_checkpoint=save_response,
+                        )
+                self._update(
+                    job_id,
+                    tenant_id,
+                    master_blueprint=blueprint,
+                    params={
+                        **params,
+                        "analysis_mode": "single_call_ai_outline",
+                        "single_call_checkpoint_status": "processed",
+                    },
+                    total_chunks=0,
+                    done_chunks=0,
+                    phase="ready",
+                    status="completed",
+                )
+                return {
+                    "status": "completed",
+                    "analysis_mode": "single_call_ai_outline",
+                    "total": 0,
+                    "succeeded": 0,
+                    "failed": 0,
+                }
+
+            if params.get("allow_multi_call_fallback") is False:
+                raise RuntimeError(
+                    "One-call analysis is unavailable and costly multi-call analysis "
+                    "is disabled for this document."
+                )
 
             # 1b) PROFILE — understand the document once (subject + summary), so
             #     MAP/REDUCE can judge what is core vs. noise. Reused on resume.

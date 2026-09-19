@@ -12,7 +12,9 @@ _BLUEPRINT_RANGE = re.compile(
     r"^Approximate source pages:\s*(.+)$", re.MULTILINE | re.IGNORECASE
 )
 _RANGE = re.compile(r"(\d+)\s*-\s*(\d+)")
-_EXPLICIT_EXCERPT = re.compile(r'^- Source excerpt:\s*"(.+)"$', re.MULTILINE)
+_EXPLICIT_EXCERPT = re.compile(
+    r'^- Source excerpt(?:\s+\[E\d+\])?:\s*"(.+)"$', re.MULTILINE
+)
 _SUPERSCRIPT_TRANSLATION = str.maketrans("⁰¹²³⁴⁵⁶⁷⁸⁹", "0123456789")
 _SUBSCRIPT_TRANSLATION = str.maketrans("₀₁₂₃₄₅₆₇₈₉", "0123456789")
 _FORMULA_OPERATORS = re.compile(r"[=<>≤≥+−*/×÷^√∑∫²³₀-₉]")
@@ -68,13 +70,18 @@ def is_symbolic_evidence(value: str) -> bool:
     compact = normalise_symbolic_evidence(value)
     if len(compact) < 3 or not re.search(r"[a-z0-9]", compact):
         return False
-    if _FORMULA_OPERATORS.search(value):
-        return True
-    return bool(
+    code_signal = bool(
         re.search(r"\b(def|return|select|from|where|class|function)\b", value, re.I)
         or "=>" in value
         or "->" in value
     )
+    # A slash, minus, or number inside a full prose paragraph must not turn the
+    # entire paragraph into a formula. Symbolic evidence is intentionally compact.
+    if len(value) > 240 and not code_signal:
+        return False
+    if _FORMULA_OPERATORS.search(value):
+        return True
+    return code_signal
 
 
 def is_meaningful_evidence(value: str) -> bool:

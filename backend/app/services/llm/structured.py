@@ -31,7 +31,11 @@ def gemini_json(
     schema: dict | None = None,
     *,
     model: str | None = None,
-    temperature: float = 0.2,
+    temperature: float | None = 0.2,
+    max_output_tokens: int | None = None,
+    thinking_budget: int | None = None,
+    thinking_level: str | None = None,
+    allow_model_fallback: bool = True,
 ) -> dict:
     """
     Call Gemini and return the parsed top-level JSON object.
@@ -50,12 +54,21 @@ def gemini_json(
         raise LLMError("GEMINI_API_KEY is not set — cannot call Gemini.")
 
     model = model or settings.gemini_blueprint_model
-    generation_config: dict = {
-        "temperature": temperature,
-        "responseMimeType": "application/json",
-    }
+    generation_config: dict = {"responseMimeType": "application/json"}
+    if temperature is not None:
+        generation_config["temperature"] = temperature
     if schema is not None:
         generation_config["responseSchema"] = schema
+    if max_output_tokens is not None:
+        generation_config["maxOutputTokens"] = max_output_tokens
+    if thinking_budget is not None:
+        generation_config["thinkingConfig"] = {"thinkingBudget": thinking_budget}
+    if thinking_level is not None:
+        if thinking_budget is not None:
+            raise ValueError("Use either thinking_budget or thinking_level, not both.")
+        generation_config["thinkingConfig"] = {
+            "thinkingLevel": thinking_level.upper()
+        }
     payload = {
         "systemInstruction": {"parts": [{"text": system_prompt}]},
         "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
@@ -73,6 +86,7 @@ def gemini_json(
             payload=payload,
             headers=headers,
             timeout=180.0,
+            allow_model_fallback=allow_model_fallback,
         )
     except httpx.HTTPStatusError as exc:
         raise LLMError(f"Gemini returned HTTP {exc.response.status_code}.") from exc

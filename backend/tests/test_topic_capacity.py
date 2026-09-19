@@ -23,7 +23,7 @@ def test_capacity_has_a_small_fallback_for_unstructured_topics() -> None:
     assert suggested_question_limit({}) == 1
 
 
-def test_broad_science_parent_exposes_named_assessable_children() -> None:
+def test_broad_science_parent_keeps_named_concepts_nested() -> None:
     choices = selectable_topic_choices([{
         "topic_name": "Electromagnetism",
         "subtopics": ["Ohm's Law", "Electric Power", "Coulomb's Law"],
@@ -34,31 +34,32 @@ def test_broad_science_parent_exposes_named_assessable_children() -> None:
         ],
     }])
 
-    assert [choice["name"] for choice in choices] == [
+    assert [choice["name"] for choice in choices] == ["Electromagnetism"]
+    assert choices[0]["subtopics"] == [
         "Ohm's Law", "Electric Power", "Coulomb's Law"
     ]
-    assert all(choice["suggested_question_limit"] == 3 for choice in choices)
+    assert choices[0]["suggested_question_limit"] == 9
 
 
-def test_humanities_parent_exposes_independent_subtopics() -> None:
+def test_humanities_parent_keeps_independent_subtopics_as_preview() -> None:
     choices = selectable_topic_choices([{
         "topic_name": "French Revolution",
         "subtopics": ["Estates-General", "Reign of Terror", "Directory"],
     }])
 
-    assert [choice["name"] for choice in choices] == [
+    assert [choice["name"] for choice in choices] == ["French Revolution"]
+    assert choices[0]["subtopics"] == [
         "Estates-General", "Reign of Terror", "Directory"
     ]
 
 
-def test_over_grouped_source_names_are_recovered_without_formulas() -> None:
+def test_source_names_are_preserved_as_child_preview() -> None:
     choices = selectable_topic_choices([{
         "topic_name": "Estates-General",
         "source_topic_names": ["Estates-General", "Reign of Terror", "Directory"],
     }])
-    assert [choice["name"] for choice in choices] == [
-        "Estates-General", "Reign of Terror", "Directory"
-    ]
+    assert [choice["name"] for choice in choices] == ["Estates-General"]
+    assert choices[0]["subtopics"] == ["Reign of Terror", "Directory"]
 
 
 def test_focused_topic_remains_a_single_choice() -> None:
@@ -68,12 +69,16 @@ def test_focused_topic_remains_a_single_choice() -> None:
         "key_facts_and_figures": ["Plants convert light energy into chemical energy."],
     }
     assert selectable_topic_choices([topic]) == [{
-        "name": "Photosynthesis", "suggested_question_limit": 1
+        "name": "Photosynthesis",
+        "group_name": "",
+        "subtopics": ["Chlorophyll"],
+        "page_ranges": [],
+        "suggested_question_limit": 1,
     }]
     assert topic_choice_names(topic) == {"photosynthesis", "chlorophyll"}
 
 
-def test_definition_terms_are_fallback_choices_for_non_formula_subjects() -> None:
+def test_definition_terms_do_not_become_hundreds_of_flat_choices() -> None:
     choices = selectable_topic_choices([{
         "topic_name": "Accounting Foundations",
         "key_definitions": [
@@ -81,4 +86,21 @@ def test_definition_terms_are_fallback_choices_for_non_formula_subjects() -> Non
             {"term": "Liability", "definition": "A present obligation."},
         ],
     }])
-    assert [choice["name"] for choice in choices] == ["Asset", "Liability"]
+    assert [choice["name"] for choice in choices] == ["Accounting Foundations"]
+    assert choices[0]["subtopics"] == []
+
+
+def test_page_ranges_are_available_to_the_topic_picker() -> None:
+    choices = selectable_topic_choices([{
+        "topic_name": "Transport Layer",
+        "source_page_ranges": [{"start": 120, "end": 145}],
+    }])
+    assert choices[0]["page_ranges"] == [{"start": 120, "end": 145}]
+
+
+def test_parent_group_is_available_to_the_topic_picker() -> None:
+    choices = selectable_topic_choices([{
+        "topic_name": "Transmission Control Protocol",
+        "parent_group": "Transport layer",
+    }])
+    assert choices[0]["group_name"] == "Transport layer"
