@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import useSWR from "swr";
 
 import { ErrorCard } from "@/components/ui/error-card";
@@ -8,9 +8,9 @@ import { PageHeader } from "@/components/ui/page-header";
 import { Skeleton, SkeletonStats } from "@/components/ui/skeleton";
 import {
   ApiCallLog,
+  ApiCallLogPage,
   ApiLogFilters,
   getApiLog,
-  getApiLogsByDocument,
   listApiLogs,
 } from "@/lib/api";
 
@@ -65,18 +65,49 @@ function LogDetail({ id, inrPerUsd, onClose }: { id: string; inrPerUsd: number; 
   );
 }
 
+function CallRows({
+  calls,
+  inrPerUsd,
+  onView,
+}: {
+  calls: ApiCallLog[];
+  inrPerUsd: number;
+  onView: (id: string) => void;
+}) {
+  return <table className="w-full min-w-[850px] text-left text-sm">
+    <thead className="bg-muted/50 text-xs uppercase tracking-wide text-muted-foreground">
+      <tr>{["Time", "Type", "Provider / model", "Tokens (in / out / cache / think)", "USD", "INR", "Status", ""].map(x => <th key={x} className="px-4 py-3 font-medium">{x}</th>)}</tr>
+    </thead>
+    <tbody>{calls.map(item => <tr key={item.id} className="border-t hover:bg-background/60">
+      <td className="px-4 py-3 whitespace-nowrap">{new Date(item.created_at).toLocaleString()}</td>
+      <td className="px-4 py-3">{item.call_type}</td>
+      <td className="px-4 py-3">{item.provider}<br/><span className="text-xs text-muted-foreground">{item.model}</span></td>
+      <td className="px-4 py-3">{number(item.input_tokens)} / {number(item.output_tokens)} / {number(item.cached_tokens)} / {number(item.thinking_tokens)}</td>
+      <td className="px-4 py-3">{money(item.cost_usd, "USD")}</td>
+      <td className="px-4 py-3">{money(item.cost_usd === null ? null : item.cost_usd * inrPerUsd, "INR")}</td>
+      <td className="px-4 py-3"><span className={`rounded-full px-2 py-1 text-xs ${item.status === "success" ? "bg-emerald-100 text-emerald-700" : "bg-rose-100 text-rose-700"}`}>{item.status}</span></td>
+      <td className="px-4 py-3"><button onClick={() => onView(item.id)} className="text-primary hover:underline">View</button></td>
+    </tr>)}</tbody>
+  </table>;
+}
+
+function Pagination({ data, filters, setFilters }: {
+  data: ApiCallLogPage | undefined;
+  filters: ApiLogFilters;
+  setFilters: (filters: ApiLogFilters) => void;
+}) {
+  const page = filters.page ?? 1;
+  const pageSize = filters.page_size ?? 50;
+  return <div className="flex items-center justify-between rounded-2xl border bg-card p-4 text-sm shadow-sm"><span>{data?.total ?? 0} total calls</span><div className="flex gap-2"><button disabled={page <= 1} onClick={() => setFilters({ ...filters, page: page - 1 })} className="rounded border px-3 py-1 disabled:opacity-40">Previous</button><button disabled={page * pageSize >= (data?.total ?? 0)} onClick={() => setFilters({ ...filters, page: page + 1 })} className="rounded border px-3 py-1 disabled:opacity-40">Next</button></div></div>;
+}
+
 export default function ApiLogsPage() {
   const [filters, setFilters] = useState<ApiLogFilters>({ page: 1, page_size: 50 });
   const [draft, setDraft] = useState<ApiLogFilters>({});
-  const [grouped, setGrouped] = useState(false);
+  const [grouped, setGrouped] = useState(true);
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [expandedDocument, setExpandedDocument] = useState<string | null>(null);
   const [inrPerUsdInput, setInrPerUsdInput] = useState("83");
   const { data, error, isLoading } = useSWR(["api-logs", filters], () => listApiLogs(filters));
-  const { data: expanded } = useSWR(
-    expandedDocument ? ["api-log-document", expandedDocument] : null,
-    () => getApiLogsByDocument(expandedDocument!),
-  );
   const groups = useMemo(() => {
     const rows = new Map<string, ApiCallLog[]>();
     for (const item of data?.items ?? []) {
@@ -85,7 +116,6 @@ export default function ApiLogsPage() {
     }
     return Array.from(rows.entries());
   }, [data]);
-  useEffect(() => { if (!grouped) setExpandedDocument(null); }, [grouped]);
   const apply = () => setFilters({
     ...draft,
     // Browser date inputs have no timezone. Send an explicit inclusive UTC
@@ -124,13 +154,20 @@ export default function ApiLogsPage() {
         <label className="text-xs font-medium">To date<input type="date" value={draft.date_to ?? ''} onChange={e => setDraft({ ...draft, date_to: e.target.value })} className="mt-1 h-9 w-full rounded-md border border-input bg-background px-2 text-sm" /></label>
         <button onClick={apply} className="mt-5 h-9 rounded-md bg-primary px-3 text-sm font-medium text-primary-foreground">Apply filters</button>
       </div>
-      <div className="mt-4 flex gap-2"><button onClick={() => setGrouped(false)} className={`rounded-full px-3 py-1.5 text-sm ${!grouped ? 'bg-primary text-primary-foreground' : 'border border-input'}`}>Flat calls</button><button onClick={() => setGrouped(true)} className={`rounded-full px-3 py-1.5 text-sm ${grouped ? 'bg-primary text-primary-foreground' : 'border border-input'}`}>Grouped by paper</button></div>
+      <div className="mt-4 flex gap-2"><button onClick={() => setGrouped(true)} className={`rounded-full px-3 py-1.5 text-sm ${grouped ? 'bg-primary text-primary-foreground' : 'border border-input'}`}>By paper</button><button onClick={() => setGrouped(false)} className={`rounded-full px-3 py-1.5 text-sm ${!grouped ? 'bg-primary text-primary-foreground' : 'border border-input'}`}>Flat calls</button></div>
     </div>
-    <div className="overflow-hidden rounded-2xl border bg-card shadow-sm">
-      {!grouped ? <table className="w-full min-w-[1050px] text-left text-sm"><thead className="bg-muted/50 text-xs uppercase tracking-wide text-muted-foreground"><tr>{['Time','Paper','Type','Provider / model','Tokens (in / out / cache / think)','USD','INR','Status',''].map(x => <th key={x} className="px-4 py-3 font-medium">{x}</th>)}</tr></thead><tbody>{items.map(item => <tr key={item.id} className="border-t hover:bg-muted/30"><td className="px-4 py-3 whitespace-nowrap">{new Date(item.created_at).toLocaleString()}</td><td className="max-w-40 truncate px-4 py-3">{item.document_name ?? 'Unlinked call'}</td><td className="px-4 py-3">{item.call_type}</td><td className="px-4 py-3">{item.provider}<br/><span className="text-xs text-muted-foreground">{item.model}</span></td><td className="px-4 py-3">{number(item.input_tokens)} / {number(item.output_tokens)} / {number(item.cached_tokens)} / {number(item.thinking_tokens)}</td><td className="px-4 py-3">{money(item.cost_usd, 'USD')}</td><td className="px-4 py-3">{money(inrFromUsd(item.cost_usd), 'INR')}</td><td className="px-4 py-3"><span className={`rounded-full px-2 py-1 text-xs ${item.status === 'success' ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700'}`}>{item.status}</span></td><td className="px-4 py-3"><button onClick={() => setSelectedId(item.id)} className="text-primary hover:underline">View</button></td></tr>)}</tbody></table> : <div className="divide-y">{groups.map(([id, calls]) => <div key={id} className="p-4"><button className="flex w-full items-center justify-between text-left" onClick={() => setExpandedDocument(expandedDocument === calls[0].document_id ? null : calls[0].document_id)}><span><span className="font-semibold">{calls[0].document_name ?? 'Unlinked calls'}</span><span className="ml-2 text-sm text-muted-foreground">{calls.length} call(s) on this page</span></span><span className="text-sm text-primary">{money(inrFromUsd(calls.reduce((s,c)=>s+(c.cost_usd ?? 0),0)), 'INR')}</span></button>{expandedDocument === calls[0].document_id && <div className="mt-3 rounded-lg bg-muted/40 p-3 text-sm">{expanded ? <><p className="mb-2 text-muted-foreground">{expanded.summary.call_count} calls · {number(expanded.summary.input_tokens)} input · {money(expanded.summary.cost_usd,'USD')} · {money(inrFromUsd(expanded.summary.cost_usd),'INR')}</p>{expanded.items.map(call => <button key={call.id} onClick={() => setSelectedId(call.id)} className="mr-2 mb-2 rounded border bg-card px-2 py-1 hover:bg-accent">{call.call_type} · {call.provider}</button>)}</> : 'Loading paper rollup…'}</div>}</div>)}</div>}
-      {items.length === 0 && <p className="p-10 text-center text-sm text-muted-foreground">No API calls match these filters yet.</p>}
-      <div className="flex items-center justify-between border-t p-4 text-sm"><span>{data?.total ?? 0} total calls</span><div className="flex gap-2"><button disabled={(filters.page ?? 1) <= 1} onClick={() => setFilters({...filters, page: (filters.page ?? 1) - 1})} className="rounded border px-3 py-1 disabled:opacity-40">Previous</button><button disabled={(filters.page ?? 1) * (filters.page_size ?? 50) >= (data?.total ?? 0)} onClick={() => setFilters({...filters, page: (filters.page ?? 1) + 1})} className="rounded border px-3 py-1 disabled:opacity-40">Next</button></div></div>
-    </div>
+    {!grouped ? <div className="overflow-hidden rounded-2xl border bg-card shadow-sm"><CallRows calls={items} inrPerUsd={inrPerUsd} onView={setSelectedId} /><Pagination data={data} filters={filters} setFilters={setFilters} /></div> : <div className="space-y-4">{groups.map(([id, calls], index) => {
+      const callUsd = calls.reduce((sum, call) => sum + (call.cost_usd ?? 0), 0);
+      const linkedPaper = Boolean(calls[0].document_id);
+      return <section key={id} className={`overflow-hidden rounded-2xl border shadow-sm ${index % 2 === 0 ? "border-emerald-200 bg-emerald-50/60" : "border-sky-200 bg-sky-50/60"}`}>
+        <header className="flex flex-col gap-3 border-b border-inherit px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
+          <div><p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">{linkedPaper ? "Paper calls" : "Unlinked provider calls"}</p><h2 className="mt-1 text-lg font-semibold">{calls[0].document_name ?? "No linked paper"}</h2><p className="mt-1 text-sm text-muted-foreground">Every row in this shaded block belongs to {linkedPaper ? "this paper" : "the same unlinked call group"}.</p></div>
+          <div className="flex flex-wrap gap-2 text-sm"><span className="rounded-full border bg-background/70 px-3 py-1">{calls.length} call{calls.length === 1 ? "" : "s"}</span><span className="rounded-full border bg-background/70 px-3 py-1">{money(callUsd, "USD")}</span><span className="rounded-full border bg-background/70 px-3 py-1">{money(inrFromUsd(callUsd), "INR")}</span></div>
+        </header>
+        <div className="overflow-x-auto"><CallRows calls={calls} inrPerUsd={inrPerUsd} onView={setSelectedId} /></div>
+      </section>;
+    })}<Pagination data={data} filters={filters} setFilters={setFilters} /></div>}
+    {items.length === 0 && <div className="rounded-2xl border bg-card p-10 text-center text-sm text-muted-foreground">No API calls match these filters yet.</div>}
     {selectedId && <><div onClick={() => setSelectedId(null)} className="fixed inset-0 z-30 bg-black/30" /><LogDetail id={selectedId} inrPerUsd={inrPerUsd} onClose={() => setSelectedId(null)} /></>}
   </div>;
 }
