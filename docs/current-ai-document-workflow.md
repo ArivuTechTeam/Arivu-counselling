@@ -40,13 +40,16 @@ The file extension alone does not decide the AI path.
 - Typed PDF: `pdfplumber` extracts a usable text layer locally.
 - DOCX: `python-docx` extracts text locally.
 - Scanned/image PDF or PNG/JPG: little or no usable text is available, so the
-  existing-quiz Extract flow sends bytes to Gemini vision.
+  existing-quiz Extract flow sends bytes to Gemini vision. A PDF with a
+  substantial image-only section (at least two sparse image pages covering at
+  least 20% of its pages) is also treated as mixed/scanned.
 - The ordinary Generate Quiz upload accepts PDF/DOCX and requires readable
   text. A scan with insufficient text is rejected with guidance to use Extract
   Quiz. No OCR library is installed.
 
-Images embedded in an otherwise typed teaching PDF are not interpreted for quiz
-generation in Phase 1. Diagram/puzzle-aware image extraction was intentionally
+An isolated blank cover or decorative image does not force an otherwise typed
+PDF through full-document vision. Images embedded in an otherwise typed teaching
+PDF are not interpreted for quiz generation in Phase 1. Diagram/puzzle-aware image extraction was intentionally
 deferred to Phase 2. The current quiz must therefore be grounded in the
 extracted text, except when the separate scanned existing-quiz vision path is
 used.
@@ -98,6 +101,9 @@ them. Student grading is deterministic and never calls an LLM.
   coverage is complete.
 - Final quiz generation also uses a durable background job with idempotent job
   creation, so refresh/double-click does not create a second quiz job.
+- The optional `faculty_jobs` queue extends that recovery to final generation
+  and quiz import. It remains off until migration 43 is applied and a separate
+  worker process is deployed; with the flag off, the established paths remain.
 - The teacher page stores the current workflow/job identifiers and form state in
   the current tab's `sessionStorage`, reconnects to the durable backend job after
   refresh, and clears the saved workflow after completion or an explicit reset.

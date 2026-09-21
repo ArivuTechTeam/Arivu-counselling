@@ -104,6 +104,9 @@ class Settings:
     """Typed, validated view of our environment variables."""
 
     def __init__(self) -> None:
+        # Enable only after the additive faculty-job migration and worker are ready.
+        self.faculty_jobs_enabled = _boolean("FACULTY_JOBS_ENABLED", False)
+        self.faculty_jobs_poll_seconds = _positive_int("FACULTY_JOBS_POLL_SECONDS", 3)
         self.app_env: str = os.getenv("APP_ENV", "production").strip().lower()
         if self.app_env not in {"production", "development", "test"}:
             raise RuntimeError("APP_ENV must be production, development, or test.")

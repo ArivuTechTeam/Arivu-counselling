@@ -15,7 +15,8 @@ from app.api.extraction import (
     extract_quiz_endpoint,
 )
 from app.lib.auth import CurrentProfile
-from app.services.quiz_extraction import _extract_document_content, extract_quiz
+from app.services.extraction import ExtractedText, PageSpan
+from app.services.quiz_extraction import _extract_document_content, _merge_questions, _validate_import_candidates, extract_quiz
 
 
 def profile(role: str = "teacher") -> CurrentProfile:
@@ -141,7 +142,8 @@ class ExtractionProviderTests(unittest.TestCase):
         ):
             result = _extract_document_content(content=b"docx", ext="docx")
 
-        self.assertEqual(result, expected)
+        self.assertEqual(result[0]["questions"], expected[0]["questions"])
+        self.assertEqual(result[1], expected[1])
         fallback.assert_called_once()
 
     def test_typed_pdf_uses_text_fallback_not_vision(self) -> None:
@@ -150,8 +152,8 @@ class ExtractionProviderTests(unittest.TestCase):
         expected = ({"questions": []}, "gemini")
         with (
             patch(
-                "app.services.quiz_extraction.extract_text",
-                return_value="Q1. What is 2+2?  a) 3  b) 4  Answer: b" * 10,
+                "app.services.quiz_extraction.extract_text_with_pages",
+                return_value=ExtractedText("Q1. What is 2+2?  a) 3  b) 4  Answer: b" * 10, (PageSpan(1, 0, 370),)),
             ),
             patch(
                 "app.services.quiz_extraction.complete_json_with_fallback",
@@ -170,7 +172,9 @@ class ExtractionProviderTests(unittest.TestCase):
         ):
             result = _extract_document_content(content=b"%PDF", ext="pdf")
 
-        self.assertEqual(result, expected)
+        self.assertEqual(result[0]["questions"], expected[0]["questions"])
+        self.assertEqual(result[1], expected[1])
+        self.assertEqual(result[0]["source_manifest"]["route"], "text")
         fallback.assert_called_once()
         multimodal.assert_not_called()
 
@@ -178,8 +182,8 @@ class ExtractionProviderTests(unittest.TestCase):
         # No extractable text (a scanned image PDF) -> Gemini vision.
         with (
             patch(
-                "app.services.quiz_extraction.extract_text",
-                return_value="",
+                "app.services.quiz_extraction.extract_text_with_pages",
+                return_value=ExtractedText("", (PageSpan(1, 0, 0),)),
             ),
             patch(
                 "app.services.quiz_extraction.gemini_json_multimodal",
@@ -188,7 +192,9 @@ class ExtractionProviderTests(unittest.TestCase):
         ):
             result = _extract_document_content(content=b"%PDF", ext="pdf")
 
-        self.assertEqual(result, ({"questions": []}, "gemini-vision"))
+        self.assertEqual(result[0]["questions"], [])
+        self.assertEqual(result[1], "gemini-vision")
+        self.assertEqual(result[0]["source_manifest"]["sparse_pages"], [1])
         multimodal.assert_called_once()
 
     def test_image_uses_multimodal_gemini(self) -> None:
@@ -202,9 +208,9 @@ class ExtractionProviderTests(unittest.TestCase):
         self.assertEqual(result, ({"questions": []}, "gemini-vision"))
         multimodal.assert_called_once()
 
-    def test_large_text_is_chunked_and_deduped(self) -> None:
+    def test_large_text_is_chunked_and_preserves_occurrences(self) -> None:
         # A 120-150 page document must be split into several bounded calls, and
-        # questions repeated across chunk boundaries must be de-duplicated.
+        # source occurrences must survive merging, even when their text repeats.
         big_text = "\n\n".join(f"Paragraph {i} " * 40 for i in range(500))
         self.assertGreater(len(big_text), 18000)
         per_chunk = (
@@ -236,7 +242,7 @@ class ExtractionProviderTests(unittest.TestCase):
             raw, provider = _extract_document_content(content=b"docx", ext="docx")
 
         self.assertGreater(fallback.call_count, 1)  # actually chunked
-        self.assertEqual(len(raw["questions"]), 2)  # deduped across chunks
+        self.assertEqual(len(raw["questions"]), 2 * fallback.call_count)
         self.assertIn("chunked", provider)
 
 

@@ -1,0 +1,96 @@
+"""Durable faculty work. No provider calls or daemon workers in HTTP handlers."""
+from __future__ import annotations
+
+import hashlib
+import json
+from uuid import UUID
+
+from fastapi import HTTPException
+
+from app.lib.auth import CurrentProfile
+from app.lib.config import get_settings
+from app.lib.supabase import get_service_client
+from app.services.teacher_access import teacher_has_subject
+
+
+PUBLIC_COLUMNS = "id,kind,status,phase,attempts,result,error_message,created_at,updated_at"
+
+
+def public_job(row: dict) -> dict:
+    result = {key: row.get(key) for key in PUBLIC_COLUMNS.split(",")}
+    if result["result"]:
+        # Status polling should not transfer entire question banks every few seconds.
+        result["result"] = {"quiz_set_id": result["result"].get("quiz_set_id")}
+    elif row.get("quiz_set_id"):
+        result["result"] = {"quiz_set_id": row["quiz_set_id"]}
+    result["source_document_id"] = (row.get("request") or {}).get("document_id")
+    return result
+
+
+def validate_source(service, profile: CurrentProfile, request: dict) -> None:
+    if not teacher_has_subject(service, profile, request["subject_id"]):
+        raise HTTPException(404, "Subject not found.")
+    document = (service.table("documents").select("id,status")
+                .eq("id", request["document_id"]).eq("tenant_id", profile.tenant_id)
+                .eq("uploaded_by", profile.user_id).maybe_single().execute())
+    if not document or not document.data or document.data.get("status") == "archived":
+        raise HTTPException(404, "Document not found.")
+    if request.get("chapter_id"):
+        chapter = (service.table("chapters").select("id").eq("id", request["chapter_id"])
+                   .eq("subject_id", request["subject_id"]).eq("tenant_id", profile.tenant_id)
+                   .maybe_single().execute())
+        if not chapter or not chapter.data:
+            raise HTTPException(404, "Chapter not found.")
+
+
+def find_request(profile: CurrentProfile, key: str) -> dict | None:
+    try:
+        key = str(UUID(key))
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(400, "Invalid request identifier.") from exc
+    response = (get_service_client().table("faculty_jobs").select("*")
+                .eq("request_key", key).eq("tenant_id", profile.tenant_id)
+                .eq("created_by", profile.user_id).maybe_single().execute())
+    return response.data if response else None
+
+
+def enqueue(profile: CurrentProfile, key: str, kind: str, request: dict) -> dict:
+    if not get_settings().faculty_jobs_enabled:
+        raise HTTPException(503, "Background processing is not enabled yet.")
+    if profile.role != "teacher":
+        raise HTTPException(403, "Only teachers can create these jobs.")
+    try:
+        key = str(UUID(key))
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(400, "Invalid request identifier.") from exc
+    service = get_service_client()
+    validate_source(service, profile, request)
+    settings = get_settings()
+    limit = settings.rate_limit_quiz_extraction_per_hour if kind == "extraction" else settings.rate_limit_blueprint_per_hour
+    identity = dict(request)
+    if kind == "extraction" and identity.get("content_hash"):
+        # Concurrent upload retries may create distinct temporary document rows.
+        # File bytes + academic selection define the same import intent.
+        identity.pop("document_id", None)
+    fingerprint = hashlib.sha256(json.dumps({"kind": kind, "request": identity}, sort_keys=True).encode()).hexdigest()
+    row = service.rpc("enqueue_faculty_job", {
+        "p_tenant": profile.tenant_id, "p_actor": profile.user_id, "p_key": key,
+        "p_kind": kind, "p_request": request, "p_hash": fingerprint, "p_limit": limit,
+    }).execute().data
+    if not isinstance(row, dict):
+        raise HTTPException(503, "Could not confirm the background request. Check your recent tasks before retrying.")
+    if row.get("conflict"):
+        raise HTTPException(409, "This request identifier belongs to different settings. Start a new request.")
+    if row.get("rate_limited"):
+        raise HTTPException(429, "You have reached the hourly limit. Please try again later.",
+                            headers={"Retry-After": str(row.get("retry_after_seconds", 60))})
+    return public_job(row)
+
+
+def load_owned(job_id: str, profile: CurrentProfile) -> dict:
+    row = (get_service_client().table("faculty_jobs").select(PUBLIC_COLUMNS)
+           .eq("id", job_id).eq("tenant_id", profile.tenant_id)
+           .eq("created_by", profile.user_id).maybe_single().execute())
+    if not row or not row.data:
+        raise HTTPException(404, "Task not found.")
+    return public_job(row.data)

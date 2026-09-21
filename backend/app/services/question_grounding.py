@@ -142,7 +142,9 @@ def validate_question_grounding(question: Any, material: str) -> GroundingCheck:
     page_start = getattr(question, "source_page_start", None)
     page_end = getattr(question, "source_page_end", None)
     if material_page_ranges(material):
-        if not page_range_is_available(
+        if page_start is None and page_end is None:
+            check.flag("needs_teacher_review", "Source page reference is missing; compare the quoted passage with the original document.")
+        elif not page_range_is_available(
             material, page_start, page_end, excerpt=excerpt
         ):
             check.flag("unsupported", "Claimed source pages are outside the selected material.")

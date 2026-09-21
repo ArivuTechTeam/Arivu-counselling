@@ -566,6 +566,7 @@ export function BlueprintGenerator() {
       // browser request open until it finishes.
       const res = jobId
         ? await queueGenerationFromJob(jobId, {
+            document_id: documentId,
             subject_id: subjectId,
             chapter_name: chapterName,
             selected_topics: selectedPayload,
@@ -582,6 +583,14 @@ export function BlueprintGenerator() {
             cognitive_level: level,
             difficulty,
           });
+      if ("background_job" in res) {
+        setGenerating(false);
+        notify(
+          "Generation queued. You can leave this page and open the finished draft from Recent tasks.",
+          "success",
+        );
+        return;
+      }
       setFinalGenerationJobId(res.job_id);
       window.sessionStorage.setItem("quiz-final-generation-job", res.job_id);
       notify(
