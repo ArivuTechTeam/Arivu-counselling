@@ -20,6 +20,7 @@ _SLUG = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 class InstitutionBranding(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    tenant_id: str
     name: str
     subdomain: str
     logo_url: str | None
@@ -35,7 +36,7 @@ def institution_branding(subdomain: str) -> dict:
     result = (
         get_service_client()
         .table("tenants")
-        .select("name, subdomain, logo_url")
+        .select("id, name, subdomain, logo_url")
         .eq("subdomain", slug)
         .eq("is_active", True)
         .maybe_single()
@@ -57,6 +58,7 @@ def institution_branding(subdomain: str) -> dict:
             )
 
     return {
+        "tenant_id": str(result.data["id"]),
         "name": result.data["name"],
         "subdomain": result.data["subdomain"],
         "logo_url": browser_logo,

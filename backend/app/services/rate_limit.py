@@ -1,4 +1,4 @@
-"""Atomic, Supabase-backed rate limits for authenticated AI endpoints."""
+"""Atomic, Supabase-backed rate limits for authenticated endpoints."""
 
 from __future__ import annotations
 
@@ -18,16 +18,20 @@ TOPIC_EXTRACTION = "topic_extraction"
 QUESTION_REGENERATE = "question_regenerate"
 QUESTION_EXPLAIN = "question_explain"
 QUIZ_EXTRACTION = "quiz_extraction"
+CHALLENGE_JOIN = "challenge_join"
 
 
-def enforce_ai_rate_limit(
+def enforce_rate_limit(
     *,
     profile: CurrentProfile,
     endpoint: str,
     hourly_limit: int,
     action_label: str,
+    unavailable_detail: str = (
+        "This feature is temporarily unavailable. Please try again shortly."
+    ),
 ) -> None:
-    """Consume one request or raise a friendly 429 response."""
+    """Consume one request from the shared rolling-hour limiter."""
     try:
         result = get_service_client().rpc(
             "consume_ai_rate_limit",
@@ -40,13 +44,13 @@ def enforce_ai_rate_limit(
         ).execute()
     except Exception as exc:  # noqa: BLE001 - fail closed if quota state is unknown
         logger.error(
-            "Could not enforce AI rate limit for %s (%s)",
+            "Could not enforce rate limit for %s (%s)",
             endpoint,
             type(exc).__name__,
         )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="AI features are temporarily unavailable. Please try again shortly.",
+            detail=unavailable_detail,
         ) from exc
 
     data = result.data
@@ -55,13 +59,13 @@ def enforce_ai_rate_limit(
         # Never log an upstream response body: provider/database payloads can
         # contain user data or credentials in an error envelope.
         logger.error(
-            "Malformed AI rate-limit response for %s (response_type=%s)",
+            "Malformed rate-limit response for %s (response_type=%s)",
             endpoint,
             type(data).__name__,
         )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="AI features are temporarily unavailable. Please try again shortly.",
+            detail=unavailable_detail,
         )
 
     if row["allowed"]:
@@ -77,4 +81,23 @@ def enforce_ai_rate_limit(
             f"Please try again in {retry_minutes} {minute_word}."
         ),
         headers={"Retry-After": str(retry_seconds)},
+    )
+
+
+def enforce_ai_rate_limit(
+    *,
+    profile: CurrentProfile,
+    endpoint: str,
+    hourly_limit: int,
+    action_label: str,
+) -> None:
+    """Consume one request or raise a friendly 429 response."""
+    enforce_rate_limit(
+        profile=profile,
+        endpoint=endpoint,
+        hourly_limit=hourly_limit,
+        action_label=action_label,
+        unavailable_detail=(
+            "AI features are temporarily unavailable. Please try again shortly."
+        ),
     )

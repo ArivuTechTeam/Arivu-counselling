@@ -41,6 +41,9 @@ function ArrowIcon() {
 export default function LoginPage() {
   const router = useRouter();
   const pathname = usePathname();
+  const institutionSlug = pathname.startsWith("/login/")
+    ? decodeURIComponent(pathname.slice("/login/".length).split("/")[0] ?? "")
+    : "";
   const pageRef = useRef<HTMLDivElement>(null);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -51,9 +54,7 @@ export default function LoginPage() {
   const [googleLoading, setGoogleLoading] = useState(false);
   const [branding, setBranding] = useState<InstitutionBranding | null>(null);
   const [brandingError, setBrandingError] = useState<string | null>(null);
-  const institutionSlug = pathname.startsWith("/login/")
-    ? decodeURIComponent(pathname.slice("/login/".length).split("/")[0] ?? "")
-    : "";
+  const [signupHref, setSignupHref] = useState("/signup");
 
   function requestedDestination() {
     return safeDashboardNext(
@@ -89,9 +90,16 @@ export default function LoginPage() {
     setNotice(null);
     setGoogleLoading(true);
     try {
+      if (institutionSlug && !branding) {
+        throw new Error("Institution branding is not ready.");
+      }
       // Existing users do not need a course. New Google users choose one on
       // the callback page before the profile is created.
-      await signInWithGoogle(undefined, requestedDestination());
+      await signInWithGoogle(
+        undefined,
+        requestedDestination(),
+        branding?.tenant_id,
+      );
     } catch {
       setError("Google sign-in could not start. Please try again.");
       setGoogleLoading(false);
@@ -100,6 +108,13 @@ export default function LoginPage() {
 
   useEffect(() => {
     const url = new URL(window.location.href);
+    const signupParams = new URLSearchParams();
+    if (institutionSlug) signupParams.set("institution", institutionSlug);
+    const signupNext = safeDashboardNext(url.searchParams.get("next"));
+    if (signupNext !== "/dashboard") signupParams.set("next", signupNext);
+    setSignupHref(
+      `/signup${signupParams.size ? `?${signupParams.toString()}` : ""}`,
+    );
     const reason = url.searchParams.get("reason");
     if (reason === "session-expired") {
       setNotice("Your session expired. Please log in again.");
@@ -112,6 +127,16 @@ export default function LoginPage() {
       url.searchParams.delete("reason");
       window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
     }
+  }, [institutionSlug]);
+
+  useEffect(() => {
+    let active = true;
+    createClient().auth.getUser().then(({ data: { user } }) => {
+      if (active && user) router.replace(requestedDestination());
+    });
+    return () => { active = false; };
+    // The intended destination is read from the current URL once on mount.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -291,14 +316,18 @@ export default function LoginPage() {
                 </div>
 
                 <GoogleAuthButton
-                  busy={googleLoading || loading}
+                  busy={
+                    googleLoading ||
+                    loading ||
+                    Boolean(institutionSlug && !branding)
+                  }
                   onClick={handleGoogleSignIn}
                 />
               </form>
 
               <div className="login-register">
                 <p>New here?</p>
-                <Link href="/signup">Create a student account <ArrowIcon /></Link>
+                <Link href={signupHref}>Create a student account <ArrowIcon /></Link>
               </div>
 
               <p className="login-legal">

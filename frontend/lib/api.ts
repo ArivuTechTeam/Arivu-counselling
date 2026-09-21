@@ -1000,6 +1000,8 @@ export type ChallengeLeaderRow = {
 };
 export type ChallengeInfo = {
   token: string;
+  join_code: string | null;
+  institution_slug: string | null;
   creator_name: string;
   subject_name: string | null;
   questions: number;
@@ -1016,6 +1018,8 @@ export type ChallengeInfo = {
 };
 export type MyChallenge = {
   token: string;
+  join_code: string | null;
+  institution_slug: string | null;
   subject_name: string | null;
   questions: number;
   duration_minutes: number | null;
@@ -1031,6 +1035,8 @@ export const listMyChallenges = () =>
   jsonRequest<MyChallenge[]>("/api/v1/challenges/mine", "GET");
 export type CreatedChallenge = {
   token: string;
+  join_code: string;
+  institution_slug: string | null;
   questions: number;
   duration_minutes: number;
   type_counts: Record<string, number>;
@@ -1046,6 +1052,8 @@ export const createChallenge = (input: {
   );
 export const getChallenge = (token: string) =>
   jsonRequest<ChallengeInfo>(`/api/v1/challenges/${token}`, "GET");
+export const joinChallenge = (code: string) =>
+  jsonRequest<{ token: string }>("/api/v1/challenges/join", "POST", { code });
 export const acceptChallenge = async (token: string) => {
   const state = await jsonRequest<StartedPracticeSession>(
     `/api/v1/challenges/${token}/accept`,
@@ -1491,6 +1499,7 @@ export const updateInstitution = (id: string, input: InstitutionUpdateInput) =>
   jsonRequest<InstitutionDetails>(`/api/v1/platform/tenants/${id}`, "PATCH", input);
 
 export type InstitutionBranding = {
+  tenant_id: string;
   name: string;
   subdomain: string;
   logo_url: string | null;

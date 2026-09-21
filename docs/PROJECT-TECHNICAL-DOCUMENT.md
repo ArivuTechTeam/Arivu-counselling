@@ -314,7 +314,9 @@ Guards: **public** / **student** / **staff** (teacher+admin+super) / **admin** (
 
 **Practice** (`/api/v1`) — `/practice/sessions` (start/get/submit), bookmarks, `/daily` + `/daily/start`, `/exam/config` + `/exam/start`, `/leaderboard` (all student).
 
-**Challenge** (`/api/v1`) — `/challenges` (create), `/challenges/{token}` (hub), `/challenges/{token}/accept` (student).
+**Challenge** (`/api/v1`) — `/challenges` (create), `/challenges/join`
+(tenant/course-scoped friendly-code lookup), `/challenges/{token}` (hub),
+`/challenges/{token}/accept` (student).
 
 ### 6.3 The AI / LLM layer (the heart of the product)
 - **Two providers behind one interface** (`services/llm/`), both called via raw HTTPS (`httpx`): DeepSeek is the default text provider; Gemini is the scanned/image vision provider and default text fallback.
@@ -384,6 +386,10 @@ PostgreSQL on Supabase. The repository baseline is `migrations/schema.sql` plus 
 - Self-serve practice path (added in migration-05): `practice_sessions` → `practice_answers`, plus `bookmarks`.
 - `revised_topics` — topics a student marked "revised".
 - `challenges` — a frozen, shareable question set (unique `share_token`); takers play as `practice_sessions` tagged with `challenge_id`.
+- Each challenge also has a friendly eight-character `join_code`, unique within
+  its institution. The long `share_token` remains the opaque route identifier;
+  code resolution is authenticated, rate-limited, tenant-scoped, and followed
+  by course-enrolment validation.
 - **There is no separate "daily" or "exam" table** — Daily Challenge, Exam Simulator, and Challenge-a-Friend are all `practice_sessions` distinguished by a `mode` string (+ `challenge_id`). Exam pattern config lives on `tenants.exam_config`.
 
 **AI tutor** — `ai_explanations` (one cached explanation per question, reused across students).
@@ -466,8 +472,13 @@ erDiagram
 | 37 student-attempt-snapshots | Freezes question and scoring data when student quiz and practice attempts start. |
 | 38 repair-auth-profile-trigger | Repairs Auth profile provisioning with a postgres-owned, security-definer trigger and explicit Auth-role execution privilege. |
 | 39 decouple-backend-auth-provisioning | Keeps self-signup validation in the Auth trigger while moving trusted teacher/admin profile creation and rollback into the service-role backend. |
+| 40 fix-admin-auth-insert-order | Lets the Auth trigger recognize backend provisioning intent before app metadata is merged, while leaving authoritative role/tenant assignment to the backend. |
+| 41 question-review-default | Makes new question review state default to pending review. |
+| 42 API-call-logs | Stores protected provider-call usage, cost, and diagnostic payloads for super-admin monitoring. |
+| 43 faculty-background-jobs | Adds the durable service-role-only faculty job queue and checkpoint RPCs. |
+| 44 challenge-join-codes | Adds/backfills tenant-scoped friendly codes and permits the rate-limited code lookup endpoint. |
 
-> **Verified 2026-09-17:** migrations 13–39 above are recorded in this table
+> **Verified 2026-09-21:** migrations 13–44 above are recorded in this table
 > (the table originally stopped at 12).
 > `docs/deploy-runbook.md` is the authoritative source for exact filenames,
 > apply order, and cross-migration dependencies — it was corrected in the same

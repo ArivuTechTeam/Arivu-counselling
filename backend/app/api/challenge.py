@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import secrets
 from collections import Counter
 from datetime import datetime, timedelta, timezone
@@ -15,6 +16,7 @@ from app.lib.auth import CurrentProfile, get_current_profile
 from app.lib.config import get_settings
 from app.lib.supabase import get_service_client
 from app.services.attempt_timing import effective_time_limit_minutes
+from app.services.rate_limit import CHALLENGE_JOIN, enforce_rate_limit
 from app.services.selector import (
     SELECTABLE_QUESTION_TYPES,
     select_question_ids,
@@ -22,6 +24,35 @@ from app.services.selector import (
 )
 
 router = APIRouter(prefix="/api/v1", tags=["challenge"])
+
+_JOIN_CODE_ALPHABET = "23456789ABCDEFGHJKMNPQRSTUVWXYZ"
+_JOIN_CODE_PATTERN = re.compile(r"^[2-9A-HJ-NP-Z]{8}$")
+
+
+def _new_join_code() -> str:
+    return "".join(secrets.choice(_JOIN_CODE_ALPHABET) for _ in range(8))
+
+
+def _normalise_join_code(value: str) -> str:
+    code = value.strip().upper().replace("-", "").replace(" ", "")
+    if not _JOIN_CODE_PATTERN.fullmatch(code):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Enter a valid 8-character challenge code.",
+        )
+    return code
+
+
+def _tenant_subdomain(service, tenant_id: str) -> str | None:
+    row = (
+        service.table("tenants")
+        .select("subdomain")
+        .eq("id", tenant_id)
+        .maybe_single()
+        .execute()
+    )
+    value = (row.data or {}).get("subdomain") if row and row.data else None
+    return str(value) if value else None
 
 
 def _require_student(profile: CurrentProfile) -> None:
@@ -215,7 +246,7 @@ def my_challenges(
     challenges = (
         service.table("challenges")
         .select(
-            "id, share_token, subject_id, question_ids, duration_minutes, "
+            "id, share_token, join_code, subject_id, question_ids, duration_minutes, "
             "created_at, expires_at, is_active"
         )
         .eq("tenant_id", profile.tenant_id)
@@ -256,6 +287,7 @@ def my_challenges(
         else []
     )
     names = {row["id"]: row.get("name") for row in subjects}
+    institution_slug = _tenant_subdomain(service, profile.tenant_id)
     result = []
     for challenge in challenges:
         related = [s for s in sessions if s.get("challenge_id") == challenge["id"]]
@@ -265,6 +297,8 @@ def my_challenges(
         result.append(
             {
                 "token": challenge["share_token"],
+                "join_code": challenge.get("join_code"),
+                "institution_slug": institution_slug,
                 "subject_name": names.get(challenge.get("subject_id")),
                 "questions": len(challenge.get("question_ids") or []),
                 "duration_minutes": challenge.get("duration_minutes"),
@@ -355,6 +389,7 @@ def create_challenge(
                         "question_snapshot": questions,
                         "duration_minutes": duration_minutes,
                         "share_token": secrets.token_urlsafe(18),
+                        "join_code": _new_join_code(),
                         "expires_at": (
                             now
                             + timedelta(days=get_settings().challenge_expiry_days)
@@ -374,10 +409,53 @@ def create_challenge(
         raise HTTPException(status_code=500, detail="Could not create the challenge.")
     return {
         "token": created["share_token"],
+        "join_code": created["join_code"],
+        "institution_slug": _tenant_subdomain(service, profile.tenant_id),
         "questions": len(ids),
         "duration_minutes": duration_minutes,
         "type_counts": _type_counts(questions),
     }
+
+
+class JoinChallenge(BaseModel):
+    code: str = Field(min_length=8, max_length=11)
+
+
+@router.post("/challenges/join")
+def join_challenge(
+    body: JoinChallenge,
+    profile: CurrentProfile = Depends(get_current_profile),
+) -> dict:
+    """Resolve a friendly code inside the caller's tenant and course scope."""
+    _require_student(profile)
+    enforce_rate_limit(
+        profile=profile,
+        endpoint=CHALLENGE_JOIN,
+        hourly_limit=get_settings().rate_limit_challenge_join_per_hour,
+        action_label="challenge code lookups",
+        unavailable_detail=(
+            "Challenge lookup is temporarily unavailable. Please try again shortly."
+        ),
+    )
+    code = _normalise_join_code(body.code)
+    service = get_service_client()
+    row = (
+        service.table("challenges")
+        .select("*")
+        .eq("join_code", code)
+        .eq("tenant_id", profile.tenant_id)
+        .maybe_single()
+        .execute()
+    )
+    if row is None or not row.data:
+        raise HTTPException(status_code=404, detail="Challenge code not found.")
+    challenge = row.data
+    if not challenge.get("is_active", True):
+        raise HTTPException(status_code=410, detail="This challenge was closed.")
+    if _is_expired(challenge):
+        raise HTTPException(status_code=410, detail="This challenge has expired.")
+    _require_course_access(service, challenge, profile)
+    return {"token": challenge["share_token"]}
 
 
 def _challenge_sessions(service, challenge_id: str, tenant_id: str) -> list[dict]:
@@ -492,6 +570,8 @@ def get_challenge(
     my_pct = next((row["pct"] for row in leaderboard if row["is_you"]), None)
     return {
         "token": token,
+        "join_code": ch.get("join_code"),
+        "institution_slug": _tenant_subdomain(service, profile.tenant_id),
         "creator_name": ch["creator_name"],
         "subject_name": _subject_name(service, ch, profile.tenant_id),
         "questions": len(ch.get("question_ids") or []),

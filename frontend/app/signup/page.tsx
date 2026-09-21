@@ -8,10 +8,11 @@ import type { AuthError } from "@supabase/supabase-js";
 import { GoogleAuthButton } from "@/components/auth/google-auth-button";
 import { SplitText } from "@/components/shared/split-text";
 import { Brand } from "@/components/ui/brand";
-import { listPublicCourses } from "@/lib/api";
+import { getInstitutionBranding, listPublicCourses } from "@/lib/api";
 import { initAuthFx } from "@/lib/auth-fx";
 import { signInWithGoogle } from "@/lib/google-auth";
 import { PUBLIC_ENV } from "@/lib/public-env";
+import { safeDashboardNext } from "@/lib/safe-next";
 import { createClient } from "@/lib/supabase";
 import "../login/login.css";
 
@@ -100,7 +101,33 @@ export default function SignupPage() {
   const [loading, setLoading] = useState(false);
   const [googleLoading, setGoogleLoading] = useState(false);
 
-  const tenantId = PUBLIC_ENV.defaultTenantId;
+  const [tenantId, setTenantId] = useState("");
+  const [destination, setDestination] = useState("/dashboard");
+
+  useEffect(() => {
+    let active = true;
+    const params = new URL(window.location.href).searchParams;
+    const institutionSlug = (params.get("institution") ?? "")
+      .trim()
+      .toLowerCase();
+    setDestination(safeDashboardNext(params.get("next")));
+    if (!institutionSlug) {
+      setTenantId(PUBLIC_ENV.defaultTenantId);
+      return () => { active = false; };
+    }
+    setTenantId("");
+    setCourses([]);
+    getInstitutionBranding(institutionSlug)
+      .then((branding) => {
+        if (active) setTenantId(branding.tenant_id);
+      })
+      .catch(() => {
+        if (active) {
+          setError("This institution signup link is unavailable.");
+        }
+    });
+    return () => { active = false; };
+  }, []);
 
   useEffect(() => {
     if (tenantId) {
@@ -154,7 +181,7 @@ export default function SignupPage() {
       return;
     }
     if (data.session) {
-      router.push("/dashboard");
+      router.push(destination);
     } else {
       setNotice("Account created. Check your email to confirm it, then sign in.");
     }
@@ -174,7 +201,7 @@ export default function SignupPage() {
       // for it after Google sign-in when they haven't — the database
       // callback validates whichever course arrives and derives the tenant
       // before creating a student profile.
-      await signInWithGoogle(courseId);
+      await signInWithGoogle(courseId, destination, tenantId);
     } catch {
       setError("Google sign-in could not start. Please try again.");
       setGoogleLoading(false);
