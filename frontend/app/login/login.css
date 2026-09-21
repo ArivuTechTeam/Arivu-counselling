@@ -1104,6 +1104,7 @@
   display: flex;
   min-height: 80px;
   align-items: center;
+  justify-content: center;
   margin-bottom: 30px;
 }
 
@@ -1114,7 +1115,7 @@
   height: auto;
   max-height: 80px;
   object-fit: contain;
-  object-position: left center;
+  object-position: center;
 }
 
 @media (max-width: 900px) {
