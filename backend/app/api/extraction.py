@@ -22,6 +22,7 @@ import zipfile
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 from starlette.concurrency import run_in_threadpool
+from pydantic import BaseModel
 
 from app.lib.auth import CurrentProfile, get_current_profile
 from app.lib.api_errors import public_error
@@ -31,6 +32,8 @@ from app.lib.supabase import get_service_client
 from app.services.llm import LLMError
 from app.services.quiz_extraction import extract_quiz
 from app.services.rate_limit import QUIZ_EXTRACTION, enforce_ai_rate_limit
+from app.services.faculty_jobs import enqueue, find_request, public_job
+from app.services.teacher_access import teacher_has_subject
 
 router = APIRouter(prefix="/api/v1/quiz-sets", tags=["extraction"])
 logger = logging.getLogger(__name__)
@@ -89,6 +92,8 @@ async def extract_quiz_endpoint(
     chapter_id: str = Form(...),
     force: bool = Form(False),
     profile: CurrentProfile = Depends(get_current_profile),
+    background: bool = Form(False),
+    request_key: str | None = Form(None),
 ) -> dict:
     _require_teacher(profile)
 
@@ -123,6 +128,26 @@ async def extract_quiz_endpoint(
     # tenant, ask the teacher to confirm (409) rather than silently duplicating.
     # (Checked BEFORE storing so a declined duplicate leaves no orphan file/row.)
     content_hash = hashlib.sha256(content).hexdigest()
+    if background is True:
+        if not get_settings().faculty_jobs_enabled:
+            raise HTTPException(503, "Background processing is not enabled yet.")
+        if not request_key or not isinstance(request_key, str):
+            raise HTTPException(400, "A request identifier is required.")
+        if not teacher_has_subject(service, profile, subject_id):
+            raise HTTPException(404, "Subject not found.")
+        chapter = (service.table("chapters").select("id").eq("id", chapter_id)
+                   .eq("subject_id", subject_id).eq("tenant_id", profile.tenant_id)
+                   .maybe_single().execute())
+        if not chapter or not chapter.data:
+            raise HTTPException(404, "Chapter not found.")
+        existing = find_request(profile, request_key)
+        if existing:
+            prior = existing["request"]
+            if existing["kind"] != "extraction" or any(prior.get(key) != value for key, value in {
+                "content_hash": content_hash, "subject_id": subject_id, "chapter_id": chapter_id,
+            }.items()):
+                raise HTTPException(409, "This request identifier belongs to a different import.")
+            return {"background_job": public_job(existing)}
     if not force:
         dup = (
             service.table("documents")
@@ -144,12 +169,13 @@ async def extract_quiz_endpoint(
             msg += " Extract it again anyway?"
             raise HTTPException(status_code=409, detail=msg)
 
-    enforce_ai_rate_limit(
-        profile=profile,
-        endpoint=QUIZ_EXTRACTION,
-        hourly_limit=get_settings().rate_limit_quiz_extraction_per_hour,
-        action_label="quiz extraction",
-    )
+    if background is not True:
+        enforce_ai_rate_limit(
+            profile=profile,
+            endpoint=QUIZ_EXTRACTION,
+            hourly_limit=get_settings().rate_limit_quiz_extraction_per_hour,
+            action_label="quiz extraction",
+        )
 
     # 1) Store the original under the tenant folder.
     object_path = f"{profile.tenant_id}/{uuid.uuid4()}.{ext}"
@@ -168,6 +194,7 @@ async def extract_quiz_endpoint(
                     "file_type": ext,
                     "status": "uploaded",
                     "content_hash": content_hash,
+                    **({"chapter_id": chapter_id} if background is True else {}),
                 }
             )
             .execute()
@@ -182,6 +209,22 @@ async def extract_quiz_endpoint(
             )
         raise
     document_id = inserted.data[0]["id"]
+
+    if background is True:
+        job = enqueue(profile, request_key, "extraction", {
+            "document_id": document_id, "subject_id": subject_id, "chapter_id": chapter_id,
+            "content_hash": content_hash,
+        })
+        if job.get("source_document_id") != document_id:
+            # Another identical submission won the atomic enqueue. Remove only
+            # this handler's unused upload; never the winning job's source.
+            try:
+                service.table("documents").delete().eq("id", document_id).eq(
+                    "tenant_id", profile.tenant_id).eq("uploaded_by", profile.user_id).execute()
+                delete_bytes(object_path)
+            except Exception as exc:
+                logger.warning("Duplicate upload cleanup deferred (%s)", type(exc).__name__)
+        return {"background_job": job}
 
     # 3) Extract with the configured AI providers and persist. Off the event
     #    loop because it performs blocking network and database work.
@@ -219,10 +262,15 @@ async def extract_quiz_endpoint(
     return result
 
 
+class BackgroundExtractionRequest(BaseModel):
+    request_key: uuid.UUID
+
+
 @router.post("/{document_id}/re-extract")
 async def re_extract_quiz_endpoint(
     document_id: str,
     profile: CurrentProfile = Depends(get_current_profile),
+    body: BackgroundExtractionRequest | None = None,
 ) -> dict:
     """Retry extraction on an ALREADY-uploaded document — no re-upload.
 
@@ -237,7 +285,7 @@ async def re_extract_quiz_endpoint(
     # Own document only, tenant-scoped (service client bypasses RLS).
     doc = (
         service.table("documents")
-        .select("chapter_id")
+        .select("chapter_id,content_hash")
         .eq("id", document_id)
         .eq("tenant_id", profile.tenant_id)
         .eq("uploaded_by", profile.user_id)
@@ -265,6 +313,12 @@ async def re_extract_quiz_endpoint(
     if chapter is None or not chapter.data:
         raise HTTPException(status_code=404, detail="Chapter not found.")
     subject_id = chapter.data["subject_id"]
+
+    if body is not None:
+        return {"background_job": enqueue(profile, str(body.request_key), "extraction", {
+            "document_id": document_id, "subject_id": subject_id, "chapter_id": chapter_id,
+            "content_hash": doc.data.get("content_hash"),
+        })}
 
     enforce_ai_rate_limit(
         profile=profile,

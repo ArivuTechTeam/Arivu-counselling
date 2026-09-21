@@ -54,6 +54,7 @@ class PageSpan:
     page_number: int
     char_start: int
     char_end: int
+    has_images: bool = False
 
 
 @dataclass(frozen=True)
@@ -97,7 +98,7 @@ def _extract_pdf_with_pages(content: bytes) -> ExtractedText:
             page_text = _extract_pdf_page_text(page)
             start = cursor
             cursor += len(page_text)
-            untrimmed_spans.append(PageSpan(page_number, start, cursor))
+            untrimmed_spans.append(PageSpan(page_number, start, cursor, bool(getattr(page, "images", []))))
             parts.append(page_text)
 
     untrimmed = "\n\n".join(parts)
@@ -109,10 +110,20 @@ def _extract_pdf_with_pages(content: bytes) -> ExtractedText:
             span.page_number,
             min(text_length, max(0, span.char_start - leading)),
             min(text_length, max(0, span.char_end - leading)),
+            span.has_images,
         )
         for span in untrimmed_spans
     )
     return ExtractedText(text=text, page_spans=spans)
+
+
+def require_readable_generation_pages(extracted: ExtractedText) -> None:
+    """Reject image-only content instead of silently dropping it in text generation."""
+    unreadable = [span.page_number for span in extracted.page_spans
+                  if span.has_images and len(extracted.text[span.char_start:span.char_end].strip()) < 40]
+    if unreadable:
+        pages = ", ".join(str(page) for page in unreadable[:20])
+        raise ValueError(f"Pages {pages} contain images with too little readable text for generation. Use an OCR/text-based copy, or Extract Quiz for an existing question paper.")
 
 
 def _extract_pdf_page_text(page) -> str:

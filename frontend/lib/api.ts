@@ -8,6 +8,9 @@ let latestBearerToken: string | null = null;
 // Base URL of the FastAPI backend (from .env.local).
 const API_BASE = PUBLIC_ENV.apiBaseUrl;
 const DEFAULT_TIMEOUT_MS = 20_000;
+// Legacy synchronous generation includes writing, verification and bounded
+// repairs/provider fallback. Prefer durable faculty jobs when enabled.
+const QUIZ_GENERATION_TIMEOUT_MS = 15 * 60_000;
 export const DOCUMENT_UPLOAD_MAX_MB = 30;
 export const DOCUMENT_UPLOAD_MAX_BYTES = DOCUMENT_UPLOAD_MAX_MB * 1024 * 1024;
 // A 30 MiB upload can still take several minutes on a slow connection before
@@ -128,7 +131,9 @@ async function apiFetch(
     if (controller.signal.aborted) {
       if (timedOut) {
         throw new ApiRequestError(
-          `The request timed out. Please check your connection and try again.${requestReference(requestId)}`,
+          `${timeoutMs >= QUIZ_EXTRACTION_TIMEOUT_MS
+            ? "Processing is taking longer than this page can wait. Check Recent tasks and the Review queue before starting again; the server may still finish this request."
+            : "The service did not respond in time. Please try again shortly."}${requestReference(requestId)}`,
           {
             code: "request_timeout",
             requestId,
@@ -313,6 +318,21 @@ export async function uploadDocument(file: File): Promise<UploadResult> {
 // Quiz extraction — pull an EXISTING quiz out of an uploaded document
 // ---------------------------------------------------------------------------
 
+export type ImportSummary = {
+  source_inventory?: {
+    detected: number; matched: number; coverage_verified: boolean; scope: string;
+    missing: { source_id: string; source_number: string; question_preview: string }[];
+    duplicate_matches: string[]; warnings: string[];
+    items: { source_id: string; source_number: string; candidate_index: number; answer_origin: string; state: string }[];
+  } | null;
+  source_manifest?: { route: string; sparse_pages: number[]; pages: { page: number; text_characters: number }[] } | null;
+  candidates: number;
+  imported: number;
+  skipped: number;
+  coverage_verified: boolean;
+  issues: { candidate_index: number; question_preview: string; reason: string }[];
+};
+
 export type ExtractResult = {
   quiz_set_id: string;
   variant_id: string;
@@ -320,6 +340,7 @@ export type ExtractResult = {
   extraction_job_id: string;
   extracted: number;
   skipped: number;
+  import_summary?: ImportSummary;
   overall_confidence: number | null;
   questions: GeneratedQuestion[];
 };
@@ -340,18 +361,25 @@ export async function extractQuiz(
   subjectId: string,
   chapterId: string,
   force = false,
-): Promise<ExtractResult> {
+): Promise<ExtractResult | QueuedFacultyResponse> {
   const headers = await authHeader();
+  const background = (await listFacultyJobs()).enabled;
   const form = new FormData();
   form.append("file", file);
   form.append("subject_id", subjectId);
   form.append("chapter_id", chapterId);
   form.append("force", String(force));
-  const res = await apiFetch(
-    `${API_BASE}/api/v1/quiz-sets/extract`,
-    { method: "POST", headers, body: form },
-    QUIZ_EXTRACTION_TIMEOUT_MS,
-  );
+  if (background) {
+    form.append("background", "true");
+    form.append("request_key", crypto.randomUUID());
+  }
+  const send = () => apiFetch(`${API_BASE}/api/v1/quiz-sets/extract`,
+    { method: "POST", headers, body: form }, QUIZ_EXTRACTION_TIMEOUT_MS);
+  let res: Response;
+  try { res = await send(); } catch (error) {
+    if (!background || !(error instanceof ApiRequestError) || !["network_error", "request_timeout"].includes(error.code)) throw error;
+    res = await send(); // Preserve the same form/request key after a lost acknowledgement.
+  }
   if (res.status === 409) {
     const body = await res.json().catch(() => ({}));
     throw new DuplicateFileError(body.detail || "You already uploaded this file.");
@@ -436,7 +464,15 @@ export const archiveDocument = (id: string) =>
  */
 export async function reExtractDocument(
   documentId: string,
-): Promise<{ quiz_set_id: string }> {
+): Promise<{ quiz_set_id: string } | QueuedFacultyResponse> {
+  if ((await listFacultyJobs()).enabled) {
+    const body = { request_key: crypto.randomUUID() };
+    const send = () => jsonRequest<QueuedFacultyResponse>(`/api/v1/quiz-sets/${documentId}/re-extract`, "POST", body);
+    try { return await send(); } catch (error) {
+      if (!(error instanceof ApiRequestError) || !["network_error", "request_timeout"].includes(error.code)) throw error;
+      return send();
+    }
+  }
   const headers = await authHeader();
   const res = await apiFetch(
     `${API_BASE}/api/v1/quiz-sets/${documentId}/re-extract`,
@@ -531,6 +567,8 @@ export type ReviewQuestion = {
   difficulty?: string;
   marks?: number;
   review_status: string;
+  source?: string | null;
+  confidence_score?: number | null;
   source_excerpt?: string | null;
   source_page_start?: number | null;
   source_page_end?: number | null;
@@ -540,6 +578,7 @@ export type ReviewQuestion = {
 };
 
 export type QuizSetDetail = QuizSetSummary & {
+  import_summaries?: (ImportSummary & { extraction_job_id: string })[];
   variants: {
     id: string;
     variant_type: string;
@@ -595,8 +634,11 @@ async function listBoundedPages<T>(
   }
 }
 
-export const listQuizSets = () =>
-  listBoundedPages<QuizSetSummary>("/api/v1/quiz-sets");
+export const listQuizSets = (archived = false) =>
+  listBoundedPages<QuizSetSummary>("/api/v1/quiz-sets", new URLSearchParams({ archived: String(archived) }));
+
+export const restoreQuizSet = (id: string) =>
+  jsonRequest<QuizSetSummary>(`/api/v1/quiz-sets/${id}/restore`, "POST");
 
 export const getQuizSet = (id: string) =>
   jsonRequest<QuizSetDetail>(`/api/v1/quiz-sets/${id}`, "GET");
@@ -604,8 +646,9 @@ export const getQuizSet = (id: string) =>
 export const editQuestion = (id: string, patch: QuestionPatch) =>
   jsonRequest<ReviewQuestion>(`/api/v1/questions/${id}`, "PATCH", patch);
 
-export const approveQuestion = (id: string) =>
-  jsonRequest<ReviewQuestion>(`/api/v1/questions/${id}/approve`, "POST");
+export const approveQuestion = (id: string, resolutionNote?: string) =>
+  jsonRequest<ReviewQuestion>(`/api/v1/questions/${id}/approve`, "POST",
+    resolutionNote ? { resolution_note: resolutionNote } : undefined);
 
 export const rejectQuestion = (id: string) =>
   jsonRequest<ReviewQuestion>(`/api/v1/questions/${id}/reject`, "POST");
@@ -639,7 +682,7 @@ export const archiveQuizSet = (id: string) =>
 
 /** Approve every still-pending question in the set in one call. */
 export const approveAllQuestions = (id: string) =>
-  jsonRequest<{ approved: number }>(`/api/v1/quiz-sets/${id}/approve-all`, "POST");
+  jsonRequest<{ approved: number; skipped?: number }>(`/api/v1/quiz-sets/${id}/approve-all`, "POST", undefined, 90_000);
 
 // ---------------------------------------------------------------------------
 // Student quiz-taking (Slice 5)
@@ -1774,15 +1817,18 @@ export type BlueprintGenerateResponse = {
   questions: (GeneratedQuestion & { topic?: string | null })[];
 };
 
-/** Blueprint generation (small documents): whole-doc coverage weighted to
- * selected topics, in one AI call. ~20-40s. */
-export const generateBlueprintQuiz = (req: BlueprintGenerateRequest) =>
-  jsonRequest<BlueprintGenerateResponse>(
+/** Prefer durable jobs; older installations use a bounded synchronous fallback. */
+export const generateBlueprintQuiz = async (req: BlueprintGenerateRequest) => {
+  if ((await listFacultyJobs()).enabled) {
+    return submitFacultyGeneration(req);
+  }
+  return jsonRequest<BlueprintGenerateResponse>(
     "/api/v1/quiz-sets/generate-blueprint",
     "POST",
     req,
-    90_000,
+    QUIZ_GENERATION_TIMEOUT_MS,
   );
+};
 
 // --- Large-document analysis (chunked Map-Reduce) -------------------------
 // Route a document by size: a small document returns its topics immediately;
@@ -1838,16 +1884,53 @@ export const retryGenerationJob = (jobId: string) =>
 
 /** Generate the quiz from a ready analysis job's Master Blueprint (single AI
  * call), then hand off to review — same result shape as small-doc generation. */
-export const generateFromJob = (
+export const generateFromJob = async (
   jobId: string,
-  req: Omit<BlueprintGenerateRequest, "document_id">,
-) =>
-  jsonRequest<BlueprintGenerateResponse & { job_id: string }>(
+  req: Omit<BlueprintGenerateRequest, "document_id"> & { document_id?: string },
+) => {
+  if (req.document_id && (await listFacultyJobs()).enabled) {
+    return submitFacultyGeneration({ ...req, document_id: req.document_id }, jobId);
+  }
+  return jsonRequest<BlueprintGenerateResponse & { job_id: string }>(
     `/api/v1/quiz-sets/generation-jobs/${jobId}/generate`,
     "POST",
     req,
-    90_000,
+    QUIZ_GENERATION_TIMEOUT_MS,
   );
+};
+
+export type FacultyJob = {
+  id: string;
+  kind: "blueprint" | "analysis_quiz" | "extraction";
+  status: "queued" | "running" | "completed" | "failed" | "cancelled";
+  phase: string;
+  attempts: number;
+  error_message: string | null;
+  result: { quiz_set_id: string } | null;
+  created_at: string;
+};
+
+export type QueuedFacultyResponse = { background_job: FacultyJob };
+
+export const listFacultyJobs = () =>
+  jsonRequest<{ enabled: boolean; jobs: FacultyJob[] }>("/api/v1/faculty-jobs", "GET");
+
+export const cancelFacultyJob = (id: string) =>
+  jsonRequest<FacultyJob>(`/api/v1/faculty-jobs/${id}/cancel`, "POST");
+
+async function submitFacultyGeneration(req: BlueprintGenerateRequest, analysisJobId?: string): Promise<QueuedFacultyResponse> {
+  const body = { ...req, request_key: crypto.randomUUID(), analysis_job_id: analysisJobId };
+  let job: FacultyJob;
+  try {
+    job = await jsonRequest<FacultyJob>("/api/v1/faculty-jobs", "POST", body);
+  } catch (error) {
+    if (!(error instanceof ApiRequestError) || !["network_error", "request_timeout"].includes(error.code)) throw error;
+    // A lost acknowledgement is retried with the SAME intent key.
+    job = await jsonRequest<FacultyJob>("/api/v1/faculty-jobs", "POST", body);
+  }
+  window.dispatchEvent(new Event("faculty-job-queued"));
+  return { background_job: job };
+}
 
 export type DuplicateCheck = {
   duplicate: boolean;

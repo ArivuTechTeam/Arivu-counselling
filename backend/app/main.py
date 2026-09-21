@@ -30,6 +30,7 @@ from app.api import (
     challenge,
     documents,
     extraction,
+    faculty_jobs,
     practice,
     questions,
     quiz,
@@ -257,6 +258,7 @@ app.include_router(super_admin.router)
 app.include_router(challenge.router)
 app.include_router(documents.router)
 app.include_router(extraction.router)
+app.include_router(faculty_jobs.router)
 app.include_router(practice.router)
 app.include_router(quiz.router)
 app.include_router(questions.router)

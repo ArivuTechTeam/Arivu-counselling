@@ -414,6 +414,7 @@ export function BlueprintGenerator() {
       // small document → the existing single-call blueprint path.
       const res = jobId
         ? await generateFromJob(jobId, {
+            document_id: documentId,
             subject_id: subjectId,
             chapter_name: chapterName,
             selected_topics: selectedPayload,
@@ -430,6 +431,11 @@ export function BlueprintGenerator() {
             cognitive_level: level,
             difficulty,
           });
+      if ("background_job" in res) {
+        setGenerating(false);
+        notify("Generation queued. You can leave this page and open the finished draft from Recent tasks.", "success");
+        return;
+      }
       notify("✓ Quiz generated — opening your review queue", "success");
       // → page 2/3: review + publish
       router.push(`/dashboard/teacher/review/${res.quiz_set_id}`);

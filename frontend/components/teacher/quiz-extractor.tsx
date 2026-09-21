@@ -121,7 +121,16 @@ export function QuizExtractor() {
         chapterId = chapter.id;
       }
       const res = await extractQuiz(file, subjectId, chapterId, force);
-      notify("✓ Quiz extracted — opening your review queue", "success");
+      if ("background_job" in res) {
+        setBusy(false);
+        window.dispatchEvent(new Event("faculty-job-queued"));
+        notify("Import queued. You can leave this page and open the finished draft from Recent tasks.", "success");
+        return;
+      }
+      notify(
+        `${res.extracted} questions imported${res.skipped ? `; ${res.skipped} skipped — check the import receipt` : " — review against your original paper"}`,
+        "success",
+      );
       // Hand off to the existing review screen to check/edit/publish.
       router.push(`/dashboard/teacher/review/${res.quiz_set_id}`);
     } catch (e) {

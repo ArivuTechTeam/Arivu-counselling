@@ -145,23 +145,15 @@ export default function ReviewDetailPage({ params }: { params: { id: string } })
   async function handleApproveAll() {
     setError(null);
     setApproving(true);
-    const count = detail
-      ? detail.variants
-          .flatMap((v) => v.questions)
-          .filter(
-            (q) =>
-              q.review_status === "pending_review" &&
-              q.verification_status !== "unsupported",
-          ).length
-      : 0;
     try {
-      await approveAllQuestions(params.id);
+      const { approved: count, skipped = 0 } = await approveAllQuestions(params.id);
+      if (skipped) setError(`${skipped} question(s) need an answer-format correction or changed during approval. Open them to check.`);
       setDetail(await getQuizSet(params.id));
       celebrateBurst();
       notify(
         count > 0
           ? `✓ ${count} question${count === 1 ? "" : "s"} approved`
-          : "✓ All questions approved",
+          : "No additional questions were approved. Check any remaining answer-format errors.",
         "success",
       );
     } catch (e) {
@@ -209,11 +201,7 @@ export default function ReviewDetailPage({ params }: { params: { id: string } })
   const rejected = all.filter((q) => q.review_status === "rejected").length;
   const needsEdit = all.filter((q) => q.review_status === "needs_edit").length;
   const unresolved = pending + needsEdit;
-  const approvablePending = all.filter(
-    (q) =>
-      q.review_status === "pending_review" &&
-      q.verification_status !== "unsupported",
-  ).length;
+  const approvablePending = unresolved;
   const questionNumbers = Object.fromEntries(
     all.map((question, index) => [question.id, index + 1]),
   );
@@ -364,10 +352,53 @@ export default function ReviewDetailPage({ params }: { params: { id: string } })
       {error && (
         <p className="text-sm text-destructive">{error}</p>
       )}
+      {detail.import_summaries?.map((summary) => (
+        <details key={summary.extraction_job_id} open={summary.skipped > 0 || !!summary.source_inventory?.missing.length}
+          className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+          <summary className="cursor-pointer font-medium">
+            Import receipt: {summary.imported} imported, {summary.skipped} skipped
+            from {" "}{summary.candidates} AI-detected candidates
+          </summary>
+          <p className="mt-2">
+            Compare with your original paper: these counts do not prove every source question
+            was detected. Candidate numbers below are extraction order, not original paper numbers.
+          </p>
+          {summary.issues.map((issue) => (
+            <p key={issue.candidate_index} className="mt-2">
+              Candidate {issue.candidate_index}: {issue.question_preview || "Unreadable question"}
+              {" — "}{issue.reason}
+            </p>
+          ))}
+          {summary.source_inventory && (
+            <div className="mt-3 space-y-2">
+              <p>Source check: {summary.source_inventory.detected} numbered questions detected;
+                {" "}{summary.source_inventory.matched} matched to AI candidates. {summary.source_inventory.scope}</p>
+              {summary.source_inventory.missing.map((item) => (
+                <p key={item.source_id}>Not matched — source question {item.source_number}: {item.question_preview}</p>
+              ))}
+              {summary.source_inventory.warnings.map((warning, index) => <p key={index}>{warning}</p>)}
+              {summary.source_inventory.duplicate_matches.length > 0 && <p>Some source items matched multiple candidates. Check for repeated imports.</p>}
+              <details>
+                <summary className="cursor-pointer">Source question and answer tracking</summary>
+                {summary.source_inventory.items.map((item) => (
+                  <p key={`${item.source_id}-${item.candidate_index}`}>
+                    Source {item.source_number} → candidate {item.candidate_index}: {item.state};
+                    {" "}{item.answer_origin.replaceAll("_", " ")}
+                  </p>
+                ))}
+              </details>
+            </div>
+          )}
+          {summary.source_manifest && <p className="mt-2">
+            {summary.source_manifest.pages.length} source pages; read using {summary.source_manifest.route === "vision" ? "visual document processing" : "document text"}.
+            {summary.source_manifest.sparse_pages.length > 0 && ` Pages with little readable text: ${summary.source_manifest.sparse_pages.join(", ")}. These were included in visual processing.`}
+          </p>}
+        </details>
+      ))}
       {detail.status !== "published" && unresolved > 0 && (
         <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
           Review {unresolved} remaining question{unresolved === 1 ? "" : "s"} before
-          publishing. Questions marked “Needs edit” must be edited or regenerated.
+          publishing. Use Approve all to accept them together, or approve, edit, or reject individual questions.
         </p>
       )}
 

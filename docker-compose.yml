@@ -7,12 +7,13 @@ services:
       # host:container — container keeps the app's normal port (8000);
       # only the host side is moved to 8001 to avoid arivupro_examapp's 8000.
       - "8001:8000"
-    environment:
+    environment: &backend-environment
       PIP_DISABLE_PIP_VERSION_CHECK: "1"
       PIP_ROOT_USER_ACTION: ignore
       WATCHFILES_FORCE_POLLING: "true"
       APP_ENV: development
       APP_DEBUG: "false"
+      FACULTY_JOBS_ENABLED: ${FACULTY_JOBS_ENABLED:-false}
       SUPABASE_URL: ${SUPABASE_URL}
       SUPABASE_ANON_KEY: ${SUPABASE_ANON_KEY}
       SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY}
@@ -39,6 +40,21 @@ services:
     command: >-
       sh -c "pip install -q --require-hashes -r requirements.lock &&
       exec uvicorn app.main:app --host 0.0.0.0 --port 8000 --no-access-log"
+    networks:
+      - quiz-generator-net
+
+  faculty-worker:
+    profiles: ["faculty-jobs"]
+    build:
+      context: ./backend
+    environment: *backend-environment
+    volumes:
+      - ./backend:/app
+    command: >-
+      sh -c "pip install -q --require-hashes -r requirements.lock &&
+      exec python -m app.services.faculty_worker"
+    restart: unless-stopped
+    stop_grace_period: 30s
     networks:
       - quiz-generator-net
 

@@ -72,7 +72,7 @@ def get_quiz_set_detail(quiz_set_id: str, tenant_id: str) -> dict:
                     "id, type, question_text, options, correct_answer, explanation, "
                     "difficulty, marks, review_status, source_excerpt, "
                     "source_page_start, source_page_end, grounding_confidence, "
-                    "verification_status, verification_warnings"
+                    "verification_status, verification_warnings, source, confidence_score, extraction_job_id"
                 )
                 .in_("id", question_ids)
                 .eq("tenant_id", tenant_id)
@@ -89,7 +89,19 @@ def get_quiz_set_detail(quiz_set_id: str, tenant_id: str) -> dict:
             ]
         out_variants.append({**variant, "questions": questions})
 
-    return {**qs.data, "variants": out_variants}
+    job_ids = sorted({
+        q["extraction_job_id"] for variant in out_variants for q in variant["questions"]
+        if q.get("extraction_job_id")
+    })
+    import_summaries = []
+    if job_ids:
+        jobs = (service.table("ai_extraction_jobs").select("id,raw_output")
+                .in_("id", job_ids).eq("tenant_id", tenant_id).execute().data or [])
+        for job in jobs:
+            summary = (job.get("raw_output") or {}).get("import_summary")
+            if isinstance(summary, dict):
+                import_summaries.append({"extraction_job_id": job["id"], **summary})
+    return {**qs.data, "variants": out_variants, "import_summaries": import_summaries}
 
 
 def _question_source_material(service, question: dict, tenant_id: str) -> str:

@@ -71,8 +71,9 @@ export function useTeacherSubjectMetrics() {
   return useSWR(STAFF_QUERY_KEYS.teacherSubjectMetrics, listSubjectMetrics);
 }
 
-export function useTeacherQuizSets() {
-  return useSWR(STAFF_QUERY_KEYS.teacherQuizSets, listQuizSets);
+export function useTeacherQuizSets(archived = false) {
+  return useSWR(archived ? `${STAFF_QUERY_KEYS.teacherQuizSets}:archived` : STAFF_QUERY_KEYS.teacherQuizSets,
+    () => listQuizSets(archived));
 }
 
 export function useTeacherDocumentLog() {

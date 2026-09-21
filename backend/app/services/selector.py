@@ -15,6 +15,7 @@ from __future__ import annotations
 import random
 
 from app.lib.auth import CurrentProfile
+from app.lib.supabase_queries import select_all_in
 
 # Absolute ceiling on how many questions one selection scans / returns.
 # 100 covers a full-length exam (e.g. CA Foundation 100Q); shorter modes cap lower.
@@ -68,6 +69,38 @@ def _chapter_ids(service, subject_ids: list[str], tenant_id: str) -> list[str]:
         or []
     )
     return [r["id"] for r in rows]
+
+
+def _released_practice_ids(service, question_ids: list[str], tenant_id: str) -> set[str]:
+    """Linked draft/archive content must not leak through self-serve practice.
+
+    Existing standalone approved bank items remain available. A quiz-linked
+    item is available only through at least one currently published quiz.
+    Separate practice/exam eligibility is a later additive schema change.
+    """
+    links = select_all_in(
+        service, "quiz_variant_questions", "id,question_id,variant_id",
+        in_column="question_id", values=question_ids,
+        configure=lambda q: q.eq("tenant_id", tenant_id),
+    )
+    linked_ids = {row["question_id"] for row in links}
+    if not links:
+        return set(question_ids)
+    variants = select_all_in(
+        service, "quiz_variants", "id,quiz_set_id",
+        in_column="id", values=[row["variant_id"] for row in links],
+        configure=lambda q: q.eq("tenant_id", tenant_id),
+    )
+    published = select_all_in(
+        service, "quiz_sets", "id", in_column="id",
+        values=[row["quiz_set_id"] for row in variants],
+        configure=lambda q: q.eq("tenant_id", tenant_id).eq("status", "published"),
+    )
+    published_ids = {row["id"] for row in published}
+    released_variants = {row["id"] for row in variants if row["quiz_set_id"] in published_ids}
+    return (set(question_ids) - linked_ids) | {
+        row["question_id"] for row in links if row["variant_id"] in released_variants
+    }
 
 
 def select_question_ids(
@@ -125,7 +158,8 @@ def select_question_ids(
         q = q.eq("difficulty", difficulty)
 
     rows = q.limit(_MAX_POOL).execute().data or []
-    ids = [r["id"] for r in rows]
+    released = _released_practice_ids(service, [r["id"] for r in rows], tenant_id)
+    ids = [r["id"] for r in rows if r["id"] in released]
     random.shuffle(ids)
     return ids[:count]
 
@@ -166,8 +200,11 @@ def select_question_ids_by_type(
         .data
         or []
     )
+    released = _released_practice_ids(service, [row["id"] for row in rows], tenant_id)
     pools = {question_type: [] for question_type in requested_types}
     for row in rows:
+        if row["id"] not in released:
+            continue
         question_type = row.get("type")
         if question_type in pools:
             pools[question_type].append(row["id"])

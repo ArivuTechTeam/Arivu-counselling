@@ -31,7 +31,7 @@ from app.lib.storage import download_bytes
 from app.lib.supabase import get_service_client
 from app.services.chunking_service import ChunkingService
 from app.services.document_profile import profile_document, profile_to_summary
-from app.services.extraction import ExtractedText, extract_text_with_pages
+from app.services.extraction import ExtractedText, extract_text_with_pages, require_readable_generation_pages
 from app.services.master_blueprint_synthesizer import MasterBlueprintSynthesizer
 from app.services.topic_extraction_pipeline import TopicExtractionPipeline
 from app.services.rate_limit import TOPIC_EXTRACTION, enforce_ai_rate_limit
@@ -60,6 +60,7 @@ def _default_text_loader(client, document_id: str, tenant_id: str) -> ExtractedT
     )
     if not extracted.text.strip():
         raise ValueError("This document has no extractable text (scanned image PDF?).")
+    require_readable_generation_pages(extracted)
     return extracted
 
 

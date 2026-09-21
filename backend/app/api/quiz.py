@@ -22,7 +22,7 @@ from app.lib.storage import download_bytes
 from app.lib.supabase import get_service_client
 from app.lib.supabase_queries import select_all, select_all_in
 from app.services.blueprint import generate_blueprint_quiz
-from app.services.events import QUIZ_PUBLISHED, log_event
+from app.services.events import QUESTION_APPROVED, QUIZ_PUBLISHED, log_event, log_events, make_event
 from app.services.extraction import extract_text
 from app.services.generation import generate_quiz
 from app.services.generation_jobs import create_generation_job, launch_job
@@ -603,6 +603,7 @@ def list_quiz_sets(
     profile: CurrentProfile = Depends(get_current_profile),
     page: int = 1,
     page_size: int = 50,
+    archived: bool = False,
 ) -> list[dict]:
     """List one bounded page of the teacher's quiz sets, newest first."""
     _require_teacher(profile)
@@ -616,12 +617,15 @@ def list_quiz_sets(
         )
     service = get_service_client()
     start = (page - 1) * page_size
-    rows = (
+    query = (
         service.table("quiz_sets")
         .select("id, title, status, created_at, published_at")
         .eq("tenant_id", profile.tenant_id)
         .eq("created_by", profile.user_id)
-        .neq("status", "archived")
+    )
+    query = query.eq("status", "archived") if archived else query.neq("status", "archived")
+    rows = (
+        query
         .order("created_at", desc=True)
         .range(start, start + page_size - 1)
         .execute()
@@ -820,15 +824,38 @@ def archive_quiz_set(
     }
 
 
+@router.post("/{quiz_set_id}/restore")
+def restore_quiz_set(
+    quiz_set_id: str,
+    profile: CurrentProfile = Depends(get_current_profile),
+) -> dict:
+    """Restore an owned archived quiz to draft without publishing it."""
+    _require_teacher(profile)
+    service = get_service_client()
+    _teacher_quiz_set(service, quiz_set_id, profile)
+    updated = (
+        service.table("quiz_sets")
+        .update({"status": "draft", "published_at": None})
+        .eq("id", quiz_set_id)
+        .eq("tenant_id", profile.tenant_id)
+        .eq("created_by", profile.user_id)
+        .eq("status", "archived")
+        .execute()
+    )
+    if not updated.data:
+        raise HTTPException(status_code=409, detail="Only archived quizzes can be restored. Refresh the list.")
+    row = updated.data[0]
+    return {key: row.get(key) for key in ("id", "title", "status", "created_at", "published_at")}
+
+
 @router.post("/{quiz_set_id}/approve-all")
 def approve_all_questions(
     quiz_set_id: str,
     profile: CurrentProfile = Depends(get_current_profile),
 ) -> dict:
     """
-    Bulk-approve every still-'pending_review' question in the set. Questions the
-    teacher explicitly rejected stay rejected. Lets a teacher accept a good batch
-    in one click instead of approving 20 questions individually.
+    Approve pending and needs-edit questions regardless of AI verification.
+    Invalid answers and concurrent edits are skipped; rejected items remain rejected.
     """
     _require_teacher(profile)
     service = get_service_client()
@@ -860,37 +887,35 @@ def approve_all_questions(
     if not question_ids:
         return {"approved": 0}
 
-    eligible_rows = (
-        service.table("questions")
-        .select("id,verification_status")
-        .in_("id", question_ids)
-        .eq("tenant_id", profile.tenant_id)
-        .eq("created_by", profile.user_id)
-        .eq("review_status", "pending_review")
-        .execute()
-        .data
-        or []
-    )
-    eligible_ids = [
-        row["id"]
-        for row in eligible_rows
-        if row.get("verification_status") != "unsupported"
-    ]
-    if not eligible_ids:
-        return {"approved": 0}
+    from app.api.questions import _match_review_snapshot
+    from app.services.question_validation import validate_question_answer_shape
 
-    updated = (
-        service.table("questions")
-        .update(
-            {
-                "review_status": "approved",
-                "reviewed_by": profile.user_id,
-                "reviewed_at": datetime.now(timezone.utc).isoformat(),
-            }
-        )
-        .in_("id", eligible_ids)
-        .eq("review_status", "pending_review")
-        .eq("tenant_id", profile.tenant_id)
-        .execute()
+    eligible_rows = select_all_in(
+        service, "questions", "*", in_column="id", values=question_ids,
+        configure=lambda query: query.eq("tenant_id", profile.tenant_id)
+        .eq("created_by", profile.user_id).in_("review_status", ["pending_review", "needs_edit"]),
     )
-    return {"approved": len(updated.data or [])}
+    approved_rows = []
+    skipped = 0
+    for row in eligible_rows:
+        try:
+            validate_question_answer_shape(row.get("type"), row.get("options"), row.get("correct_answer"))
+        except ValueError:
+            skipped += 1
+            continue
+        query = (service.table("questions").update({
+            "review_status": "approved", "reviewed_by": profile.user_id,
+            "reviewed_at": datetime.now(timezone.utc).isoformat(),
+        }).eq("id", row["id"]).eq("created_by", profile.user_id).eq("tenant_id", profile.tenant_id))
+        updated = _match_review_snapshot(query, row).execute()
+        approved_rows.extend(updated.data or [])
+        if not updated.data:
+            skipped += 1
+    log_events([
+        make_event(tenant_id=profile.tenant_id, event_type=QUESTION_APPROVED,
+                   actor_id=profile.user_id, actor_role=profile.role,
+                   subject_type="question", subject_id=row["id"],
+                   metadata={"method": "bulk_teacher_approval"})
+        for row in approved_rows
+    ])
+    return {"approved": len(approved_rows), "skipped": skipped}

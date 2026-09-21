@@ -14,6 +14,8 @@ to the job -> normal teacher review + publish.
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 from app.lib.auth import CurrentProfile
 from app.lib.config import get_settings
 from app.lib.supabase import get_service_client
@@ -111,6 +113,7 @@ class QuizGeneratorService:
         difficulty: str,
         profile: CurrentProfile,
         type_counts: dict[str, int] | None = None,
+        persist_result: Callable[[dict], dict] | None = None,
     ) -> dict:
         service = self._client
         job = self._load_ready_job(job_id, profile)
@@ -145,6 +148,7 @@ class QuizGeneratorService:
                 "generation call. Select fewer topics and try again."
             )
 
+        persistence_options = {"persist_result": persist_result} if persist_result else {}
         result = generate_and_persist_from_material(
             service=service,
             tenant_id=profile.tenant_id,
@@ -160,7 +164,12 @@ class QuizGeneratorService:
             type_counts=type_counts,
             selected_only_material=True,
             source_document_id=job["document_id"],
+            **persistence_options,
         )
+
+        if persist_result is not None:
+            # The transactional worker commit also links the analysis job.
+            return result
 
         # Link the created quiz set back to the job (best-effort; non-fatal).
         quiz_set_id = result.get("quiz_set_id")
