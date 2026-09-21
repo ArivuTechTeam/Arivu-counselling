@@ -13,6 +13,7 @@ import {
   getApiLog,
   listApiLogs,
 } from "@/lib/api";
+import { useSessionStorageState } from "@/lib/use-session-storage-state";
 
 const INR_RATE_STORAGE_KEY = "super-admin-api-logs-inr-rate";
 const DEFAULT_INR_PER_USD = "83";
@@ -132,9 +133,21 @@ function Pagination({ data, filters, setFilters }: {
 }
 
 export default function ApiLogsPage() {
-  const [filters, setFilters] = useState<ApiLogFilters>({ page: 1, page_size: 50 });
-  const [draft, setDraft] = useState<ApiLogFilters>({});
-  const [grouped, setGrouped] = useState(true);
+  const [filters, setFilters] = useSessionStorageState<ApiLogFilters>(
+    "super-admin-api-logs-filters",
+    { page: 1, page_size: 50 },
+    (value): value is ApiLogFilters => !!value && typeof value === "object",
+  );
+  const [draft, setDraft] = useSessionStorageState<ApiLogFilters>(
+    "super-admin-api-logs-filter-draft",
+    {},
+    (value): value is ApiLogFilters => !!value && typeof value === "object",
+  );
+  const [grouped, setGrouped] = useSessionStorageState(
+    "super-admin-api-logs-grouped",
+    true,
+    (value): value is boolean => typeof value === "boolean",
+  );
   const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [inrPerUsdInput, setInrPerUsdInput] = useState(DEFAULT_INR_PER_USD);

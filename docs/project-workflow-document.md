@@ -1,5 +1,11 @@
 # AI Quiz Generator Platform — Project Workflow Document
 
+> **Historical planning document (August 2026).** The workflow and commercial
+> estimates below preserve the original specification and are not the current
+> implementation source of truth. For current behavior use
+> `docs/PROJECT-TECHNICAL-DOCUMENT.md`,
+> `docs/current-ai-document-workflow.md`, and `docs/dashboard-state-persistence.md`.
+
 **Document Type:** Project Overview & Workflow Specification
 **Version:** 1.0
 **Date:** August 2026
@@ -255,11 +261,10 @@ Six auto-gradeable question types, all mobile-friendly:
                               ┌──────────────────────────────────┐
                               │       AI LAYER                   │
                               │                                  │
-│  Primary: Google Gemini          │
-│  (provider abstraction)          │
+│  Text primary: DeepSeek          │
+│  (stage-aware provider routing)  │
                               │                                  │
-│  Fallback: DeepSeek              │
-│  (when Gemini is unavailable)    │
+│  Gemini: text fallback + vision  │
                               └──────────────────────────────────┘
 ```
 
@@ -269,12 +274,15 @@ Six auto-gradeable question types, all mobile-friendly:
 1. Teacher uploads PDF via frontend
 2. Frontend sends file to backend API (/api/documents/upload)
 3. Backend saves file to Supabase Storage
-4. Backend extracts text using pdfplumber (or Tesseract OCR fallback)
-5. Text is chunked into manageable sections
-6. Backend sends chunks + quiz parameters to the configured AI provider
-7. The provider returns structured JSON with questions
-8. Backend validates the JSON and stores questions in database
-9. Frontend displays Quiz Set to teacher for review
+4. Backend extracts typed text locally using pdfplumber/python-docx; the standard
+   Generate Quiz path rejects unreadable scans (there is no Tesseract dependency)
+5. A durable analysis job builds a local PDF outline when reliable, otherwise a
+   bounded DeepSeek-first call returns grouped selectable topics; persisted
+   map/reduce is an explicit compatibility fallback
+6. Faculty selects topics and exact question-type counts
+7. Backend sends the selected source ranges + plan to the stage-aware provider
+8. Backend validates structured questions and stores them as pending review
+9. Frontend reconnects to durable jobs after refresh and opens teacher review
 ```
 
 ### 5.3 Data flow — student taking quiz
@@ -319,9 +327,9 @@ at the database level, not just the application level.
 | **Database** | PostgreSQL (via Supabase) | Industry standard, RLS built-in |
 | **Authentication** | Supabase Auth | Free until 50K users, integrated |
 | **File Storage** | Supabase Storage | Integrated with auth and database |
-| **Primary AI** | Google Gemini | Primary provider for generation and extraction |
-| **Fallback AI** | DeepSeek | Used when Gemini is unavailable |
-| **PDF Processing** | pdfplumber + Tesseract OCR | Standard tools, free |
+| **Primary text AI** | DeepSeek | Preferred for topic analysis, generation, typed extraction, verification, and regeneration |
+| **Vision + text fallback AI** | Google Gemini | Scanned/image extraction and controlled text fallback |
+| **PDF Processing** | pdfplumber | Local typed-text extraction; no OCR library |
 | **Frontend Hosting** | Vercel | Optimized for Next.js |
 | **Backend Hosting** | Railway | Runs the FastAPI Docker service |
 | **Version Control** | GitHub | Industry standard |
@@ -450,8 +458,8 @@ Phase 1 is considered successful when:
 | Risk | Likelihood | Impact | Mitigation |
 |---|:-:|:-:|---|
 | AI generates incorrect questions | High | Medium | Mandatory teacher review before student sees anything |
-| Gemini API unreliability | Medium | Medium | DeepSeek automatic fallback |
-| Uploaded PDFs are scanned images | Medium | Low | Tesseract OCR fallback for image-based PDFs |
+| Text-provider unreliability | Medium | Medium | Stage-aware DeepSeek/Gemini fallback with logged attempts |
+| Uploaded PDFs are scanned images | Medium | Low | Reject in Generate Quiz; use Gemini vision in the separate Extract Quiz flow |
 | Multi-tenant data leakage bug | Low | High | Postgres Row Level Security enforced at DB level |
 | Vercel serverless cold-start latency | Medium | Low | Migrate to Railway/Fly.io if timing becomes an issue |
 

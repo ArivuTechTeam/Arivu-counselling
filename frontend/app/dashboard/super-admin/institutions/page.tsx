@@ -34,17 +34,38 @@ import {
   generateTemporaryPassword,
   validTemporaryPassword,
 } from "@/lib/temporary-password";
+import { useSessionStorageState } from "@/lib/use-session-storage-state";
 
 const field =
   "h-10 w-full rounded-md border border-input bg-background px-3 text-sm shadow-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20";
 
 function OnboardForm({ onDone }: { onDone: () => void | Promise<void> }) {
   const { notify } = useToast();
-  const [name, setName] = useState("");
-  const [subdomain, setSubdomain] = useState("");
-  const [plan, setPlan] = useState("free");
-  const [adminName, setAdminName] = useState("");
-  const [adminEmail, setAdminEmail] = useState("");
+  const [name, setName] = useSessionStorageState(
+    "super-admin-onboard-name",
+    "",
+    (value): value is string => typeof value === "string",
+  );
+  const [subdomain, setSubdomain] = useSessionStorageState(
+    "super-admin-onboard-subdomain",
+    "",
+    (value): value is string => typeof value === "string",
+  );
+  const [plan, setPlan] = useSessionStorageState(
+    "super-admin-onboard-plan",
+    "free",
+    (value): value is string => typeof value === "string",
+  );
+  const [adminName, setAdminName] = useSessionStorageState(
+    "super-admin-onboard-admin-name",
+    "",
+    (value): value is string => typeof value === "string",
+  );
+  const [adminEmail, setAdminEmail] = useSessionStorageState(
+    "super-admin-onboard-admin-email",
+    "",
+    (value): value is string => typeof value === "string",
+  );
   const [adminPassword, setAdminPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -97,6 +118,7 @@ function OnboardForm({ onDone }: { onDone: () => void | Promise<void> }) {
       notify(`Institution "${name.trim()}" created successfully.`, "success");
       setName("");
       setSubdomain("");
+      setPlan("free");
       setAdminName("");
       setAdminEmail("");
       setAdminPassword("");

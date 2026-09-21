@@ -1,5 +1,9 @@
 # Quarterly Progress Report — AI Quiz Generator Platform
 
+> **Historical management report for the period ending August 2026.** It is not
+> a current architecture, provider-routing, deployment, or cost reference. See
+> `docs/README.md` for current documentation.
+
 **Project:** Quiz Generator (multi-tenant AI quiz platform for educational institutions)
 **Report type:** Quarterly Progress Review
 **Reporting period:** Last quarter, ending August 2026

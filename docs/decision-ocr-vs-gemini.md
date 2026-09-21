@@ -1,5 +1,11 @@
 # Decision: Use Gemini directly for document → quiz, not a separate OCR
 
+> **Historical decision, narrowed by the current implementation.** There is
+> still no separate OCR service/library. Typed PDFs and DOCX are extracted
+> locally and use the DeepSeek-first text router; only scanned PDFs/images in
+> the existing-quiz Extract flow use Gemini vision. Generate Quiz rejects scans
+> without a usable text layer. See `docs/current-ai-document-workflow.md`.
+
 **Status:** Recommended
 **Date:** 5 August 2026
 **Applies to:** Quiz Generator v1 — the "Import questions from a document" feature

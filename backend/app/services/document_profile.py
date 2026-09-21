@@ -29,7 +29,11 @@ def profile_document(text: str) -> dict:
     window = text[: get_settings().generation_profile_max_chars]
     try:
         data, _provider = complete_json_large(
-            PROFILE_SYSTEM, build_profile_user_prompt(window)
+            PROFILE_SYSTEM,
+            build_profile_user_prompt(window),
+            preferred_provider=getattr(
+                get_settings(), "topic_analysis_provider", "deepseek"
+            ),
         )
     except Exception as exc:  # noqa: BLE001 - best-effort; degrade gracefully
         logger.warning("Document profiling failed: %s", type(exc).__name__)

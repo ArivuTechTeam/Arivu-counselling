@@ -10,7 +10,7 @@ questions.
 
 Deliberately separate from generation.py so the core generator is untouched.
 Routing is by document nature, not just extension — only scans need vision:
-  Typed PDF / DOCX (has a text layer) -> extract text -> Gemini text + DeepSeek
+  Typed PDF / DOCX (has a text layer) -> extract text -> DeepSeek + Gemini fallback
   Scanned PDF / image (no text layer) -> Gemini vision (bytes inline, no OCR)
 
 Raises ValueError for caller/input problems and LLMError for model problems; the
@@ -150,7 +150,11 @@ def _extract_text_chunk(
                 "quiz_extraction", tenant_id=tenant_id, document_id=document_id, job_id=job_id
             ):
                 return complete_json_with_fallback(
-                    EXTRACTION_SYSTEM, build_extraction_user_text(chunk)
+                    EXTRACTION_SYSTEM,
+                    build_extraction_user_text(chunk),
+                    preferred_provider=getattr(
+                        get_settings(), "typed_quiz_extraction_provider", "deepseek"
+                    ),
                 )
         except LLMError as exc:
             last_error = exc
@@ -162,8 +166,7 @@ def _text_extract(
     text: str, *, tenant_id: str | None = None, document_id: str | None = None,
     job_id: str | None = None,
 ) -> tuple[dict, str]:
-    """Parse already-extracted document text with the cheap text LLM (Gemini +
-    DeepSeek fallback) — no vision, far fewer tokens, and it has a real fallback.
+    """Parse locally extracted text with the configured text provider and fallback.
 
     Small documents go in one call. Large ones (120-150+ pages) are split into
     bounded chunks extracted in parallel, then merged + de-duplicated — so no
@@ -180,7 +183,11 @@ def _text_extract(
             "quiz_extraction", tenant_id=tenant_id, document_id=document_id, job_id=job_id
         ):
             return complete_json_with_fallback(
-                EXTRACTION_SYSTEM, build_extraction_user_text(text)
+                EXTRACTION_SYSTEM,
+                build_extraction_user_text(text),
+                preferred_provider=getattr(
+                    settings, "typed_quiz_extraction_provider", "deepseek"
+                ),
             )
 
     chunks = _chunk_text(text, chunk_chars)
@@ -302,8 +309,6 @@ def extract_quiz(
         .execute()
     )
 
-    settings = get_settings()
-
     # 2) Open an extraction job (audit + confidence trail).
     job = (
         service.table("ai_extraction_jobs")
@@ -312,7 +317,9 @@ def extract_quiz(
                 "tenant_id": profile.tenant_id,
                 "document_id": document_id,
                 "status": "running",
-                "model_used": settings.gemini_model,
+                # The final provider/model is written after content inspection:
+                # typed documents use the text router, scans use Gemini vision.
+                "model_used": "pending-content-routing",
             }
         )
         .execute()
@@ -322,7 +329,8 @@ def extract_quiz(
     quiz_set_id: str | None = None
     created_question_ids: list[str] = []
     try:
-        # 3) Read PDF/images with Gemini vision; DOCX text has provider fallback.
+        # 3) Extract typed PDF/DOCX locally then use the text router. Only scans
+        # and images go through Gemini vision.
         content = download_bytes(doc_row["storage_path"])
         raw, provider = _extract_document_content(
             content=content,

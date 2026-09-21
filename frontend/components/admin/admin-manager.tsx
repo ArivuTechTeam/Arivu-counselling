@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import {
   Card,
@@ -39,6 +39,8 @@ import {
   validTemporaryPassword,
 } from "@/lib/temporary-password";
 
+const ADMIN_DRAFT_STORAGE_KEY = "super-admin-admin-draft";
+
 export function AdminManager({ embedded = false }: { embedded?: boolean }) {
   const { data: tenants = [], error: tenantsError } = usePlatformTenants();
   const {
@@ -52,6 +54,7 @@ export function AdminManager({ embedded = false }: { embedded?: boolean }) {
     password: "",
     tenant_id: "",
   });
+  const [formHydrated, setFormHydrated] = useState(false);
   const [busy, setBusy] = useState(false);
   const [removing, setRemoving] = useState<string | null>(null);
   const [confirmTarget, setConfirmTarget] = useState<InstitutionAdmin | null>(null);
@@ -65,6 +68,41 @@ export function AdminManager({ embedded = false }: { embedded?: boolean }) {
 
   const selectedTenant = form.tenant_id || tenants[0]?.id || "";
   const directoryError = error ?? tenantsError?.message ?? adminsError?.message ?? null;
+
+  useEffect(() => {
+    try {
+      const saved = window.sessionStorage.getItem(ADMIN_DRAFT_STORAGE_KEY);
+      if (saved) {
+        const parsed = JSON.parse(saved) as Record<string, unknown>;
+        setForm((current) => ({
+          ...current,
+          full_name: typeof parsed.full_name === "string" ? parsed.full_name : "",
+          email: typeof parsed.email === "string" ? parsed.email : "",
+          tenant_id: typeof parsed.tenant_id === "string" ? parsed.tenant_id : "",
+        }));
+      }
+    } catch {
+      // Keep the blank form when the saved draft is invalid or unavailable.
+    } finally {
+      setFormHydrated(true);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!formHydrated) return;
+    try {
+      window.sessionStorage.setItem(
+        ADMIN_DRAFT_STORAGE_KEY,
+        JSON.stringify({
+          full_name: form.full_name,
+          email: form.email,
+          tenant_id: form.tenant_id,
+        }),
+      );
+    } catch {
+      // The form still works if browser storage is unavailable.
+    }
+  }, [form.email, form.full_name, form.tenant_id, formHydrated]);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();

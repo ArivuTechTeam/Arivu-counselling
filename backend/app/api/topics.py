@@ -3,7 +3,8 @@ Topic extraction API (blueprint quiz — Slice 6).
 
   POST /api/v1/documents/{document_id}/topics
     Staff-only. Reads the uploaded document and returns the list of teachable
-    topics (via Gemini Flash-Lite). The teacher then selects the important ones
+    topics through the configured stage-aware text provider (DeepSeek by
+    default, with Gemini fallback). The teacher then selects the important ones
     and marks each High/Medium/Low on the generate screen.
 """
 

@@ -1,5 +1,12 @@
 # AI quiz generation — large-document gap & options (decision brief)
 
+> **Superseded decision brief.** The truncation and “nothing built yet” statements
+> below describe the pre-implementation state. The implemented architecture is
+> documented in `docs/current-ai-document-workflow.md` and
+> `docs/chunked-generation-architecture.md`: durable jobs, optional local PDF
+> outline, one bounded AI topic-analysis call by default, checkpoint-aware retry,
+> selected-range grounding, and DeepSeek-first text routing.
+
 **Purpose:** decide how the "Generate quiz" pipeline should handle **large chapter
 documents (120–150+ pages)**. Today it silently uses only a fraction of a big
 chapter. This doc explains the current pipeline, the exact gap, the three options
@@ -7,7 +14,7 @@ chapter. This doc explains the current pipeline, the exact gap, the three option
 genuinely helps, and the decision we need to make.
 
 **Audience:** engineering + manager.
-**Status:** discussion / decision pending — nothing built yet.
+**Status:** superseded historical proposal — do not use as current behavior.
 
 ---
 

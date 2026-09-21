@@ -15,6 +15,7 @@ import {
   getCourseImpact,
 } from "@/lib/api";
 import { useCourses } from "@/lib/staff-queries";
+import { useSessionStorageState } from "@/lib/use-session-storage-state";
 
 // --- per-course colour (auto-assigned — backend has no colour field) ---------
 const PALETTE = [
@@ -268,9 +269,22 @@ export function CourseManager() {
   const error = actionError ?? coursesQuery.error?.message ?? null;
   const [busy, setBusy] = useState(false);
 
-  const [openCourseId, setOpenCourseId] = useState<string | null>(null);
-  const [modal, setModal] = useState<"course" | "subject" | null>(null);
-  const [name, setName] = useState("");
+  const [openCourseId, setOpenCourseId] = useSessionStorageState<string | null>(
+    "course-manager-open-course",
+    null,
+    (value): value is string | null => value === null || typeof value === "string",
+  );
+  const [modal, setModal] = useSessionStorageState<"course" | "subject" | null>(
+    "course-manager-modal",
+    null,
+    (value): value is "course" | "subject" | null =>
+      value === null || value === "course" || value === "subject",
+  );
+  const [name, setName] = useSessionStorageState(
+    "course-manager-name-draft",
+    "",
+    (value): value is string => typeof value === "string",
+  );
   const [del, setDel] = useState<DeleteTarget | null>(null);
 
   function refresh() {

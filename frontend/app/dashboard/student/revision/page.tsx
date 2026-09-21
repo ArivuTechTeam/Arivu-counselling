@@ -20,6 +20,7 @@ import {
   useStudentBookmarks,
   useStudentRevisionTopics,
 } from "@/lib/student-queries";
+import { useSessionStorageState } from "@/lib/use-session-storage-state";
 
 type Tab = "questions" | "topics";
 
@@ -69,7 +70,11 @@ function TabButton({
 }
 
 export default function RevisionPage() {
-  const [tab, setTab] = useState<Tab>("questions");
+  const [tab, setTab] = useSessionStorageState<Tab>(
+    "student-revision-tab",
+    "questions",
+    (value): value is Tab => value === "questions" || value === "topics",
+  );
   const bookmarksQuery = useStudentBookmarks();
   const topicsQuery = useStudentRevisionTopics();
   const items = bookmarksQuery.data;

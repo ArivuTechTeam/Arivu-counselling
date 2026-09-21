@@ -70,9 +70,23 @@ class LoggingPayloadTests(unittest.TestCase):
     def test_deepseek_usage_mapping(self) -> None:
         self.assertEqual(
             logs._usage("deepseek", {"usage": {"prompt_tokens": 9, "completion_tokens": 4,
-                                              "prompt_cache_hit_tokens": 2}}),
-            (9, 4, 2, None),
+                                              "prompt_cache_hit_tokens": 2,
+                                              "completion_tokens_details": {
+                                                  "reasoning_tokens": 3
+                                              }}}),
+            (9, 4, 2, 3),
         )
+
+    def test_deepseek_flash_uses_conservative_peak_pricing(self) -> None:
+        usd, _inr = logs.calculate_costs(
+            model="deepseek-flash",
+            input_tokens=1_000_000,
+            output_tokens=1_000_000,
+            cached_tokens=0,
+            thinking_tokens=0,
+            usd_to_inr_rate=83,
+        )
+        self.assertEqual(str(usd), "1.50000000")
 
 
 class _LogsQuery:

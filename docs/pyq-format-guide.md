@@ -1,12 +1,13 @@
 # PYQ Upload — PDF Format Guide (for teachers)
 
-To upload Previous Year Questions, prepare your document in the **exact format**
-below and export it as a **PDF**. Following this format lets the system read every
-question, option, and answer with ~100% accuracy.
+For the most predictable Previous Year Question extraction, prepare the document
+in the format below and export it as a typed PDF. AI extraction is still
+probabilistic, so faculty must review every imported question before publishing.
 
 > Tip: Type it in **Google Docs** or **Microsoft Word**, then use
-> **File → Download / Save as → PDF**. Do **not** upload a scanned or photographed
-> PDF — it must be a typed (text) PDF.
+> **File → Download / Save as → PDF**. Typed PDFs use the cheaper text path.
+> Scanned/photographed papers are supported by Gemini vision in Extract Quiz,
+> but usually cost more and still require careful faculty review.
 
 ---
 
@@ -79,7 +80,7 @@ Answer: B
 
 ## What breaks it (avoid these)
 
-- Scanned images or photos of question papers (no readable text).
+- Low-resolution, skewed, cropped, or visually ambiguous scans.
 - Using `1.` `2.` for options instead of `(A) (B) (C) (D)`.
 - More or fewer than 4 options.
 - Missing the `Answer:` line.
@@ -91,5 +92,6 @@ Answer: B
 
 - Q3 above has no `[PYQ ...]` tag — that's fine on the PYQ upload (everything you
   upload here is treated as PYQ); the tag is only there to record the **year**.
-- v1 supports 4-option multiple-choice questions. Other types (numerical, true/false)
-  can be added later.
+- Extraction supports single-choice, multiple-choice, true/false, numerical, and
+  fill-in-the-blank questions. This template intentionally remains the simplest
+  reliable 4-option single-choice format.

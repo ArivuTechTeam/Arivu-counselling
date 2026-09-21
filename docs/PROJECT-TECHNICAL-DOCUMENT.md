@@ -1,14 +1,14 @@
 # ArivuPro Quiz Platform (quiz-generator-v1) — Technical Project Document
 
-> **Purpose of this document.** A single, self-contained technical reference for the ArivuPro Quiz Platform. It is written so that **any technically literate reader — with no prior exposure to this codebase — can understand what the system is, how it is built, how it runs, what it costs, and how to extend it.** Technical statements were originally reviewed against `main` at commit `016830e` (7 September 2026) and partially refreshed against `main` at `59e0b27` (15 September 2026) — see the per-section "Verified 2026-09-15" notes for what was re-checked in that pass. A 17 September 2026 metadata-only pass added the migration-count/gap note below and one Known Gaps entry (§12.7); it did **not** re-verify the body of §§1–11 or §13–15 against `migrations/` through migration-40 or the code changes landed since `59e0b27` (universal question grounding, super-admin aggregates, student-attempt snapshots, auth-provisioning fixes across migrations 38–40, institution-admin credential reset). Sections without a "Verified" note for the date you're reading this should still be re-checked before being relied on. The Railway **production deployment itself** (as opposed to the repository) was last independently verified on 2026-09-04/07 per `docs/deploy-runbook.md` — this document does not re-verify production on its own. Provider pricing and operational settings can change independently and must be rechecked before making financial or deployment decisions.
+> **Purpose of this document.** A single technical reference for the ArivuPro Quiz Platform. AI/document routing, durable jobs, retry behavior, cost controls, and dashboard refresh persistence were refreshed against the feature branch on 21 September 2026. See `docs/current-ai-document-workflow.md` and `docs/dashboard-state-persistence.md` for focused current references. Dated evidence, changelogs, and original plans remain historical. Repository state does not prove Railway environment values, provider health, deployed code, or applied Supabase migrations; verify those separately.
 
 | | |
 |---|---|
 | **Product** | ArivuPro Quiz Platform — multi-tenant AI quiz generator for coaching institutions |
 | **Repository** | `ArivuTechTeam/quiz-generator` |
 | **Document version** | 1.3 |
-| **Document date** | 7 September 2026; partially refreshed 15 September 2026; metadata/gaps-only touch-up 17 September 2026 |
-| **Basis** | Originally `main` at `016830e` (migrations 11–12); partially refreshed against `main` at `59e0b27` (migrations through 34) — sections not marked "Verified 2026-09-15" (or later) were not re-checked. `migrations/` now goes through `migration-40-fix-admin-auth-insert-order.sql` (verified 2026-09-17 via `ls migrations/`); the section-by-section content below has not been re-verified against it |
+| **Document date** | 7 September 2026; AI/document and refresh-persistence sections refreshed 21 September 2026 |
+| **Basis** | Current feature branch through `7774aa6` for the 21 September AI/document and UI persistence refresh; older unrelated sections retain their dated verification notes |
 | **Status of product** | Phase 1 (functional product + multi-tenant foundation) — **live in production pilot** (production status confirmed only as of 2026-09-04/07, not re-verified in this refresh) |
 | **Audience** | Engineering, technical leadership, prospective contributors, stakeholders |
 
@@ -42,13 +42,13 @@ The ArivuPro Quiz Platform is a **multi-tenant SaaS web application** that lets 
 - **Frontend:** Next.js 14 (React, TypeScript, Tailwind) → deployed on **Vercel**.
 - **Backend:** FastAPI (Python) REST API → deployed on **Railway**.
 - **Data & Auth:** **Supabase** (managed PostgreSQL + Auth + Storage).
-- **AI:** **Google Gemini** as the primary LLM, with **DeepSeek** as an automatic fallback.
+- **AI:** **DeepSeek** is the primary LLM for text workflows, with **Google Gemini** as the automatic fallback and the vision provider for scanned/image documents.
 
 **Multi-tenancy** is built in from day one: every business table carries a `tenant_id`, PostgreSQL **Row-Level Security (RLS)** policies isolate each institution's data, and one shared deployment serves all institutions (no per-customer servers).
 
 **Commercial status:** the product and its multi-tenant foundation are complete and live, but **billing/subscription enforcement is intentionally not yet built** (deferred to Phase 2). The database contains inert "scaffolding" (plan tiers, prices, usage counters) that no code currently enforces. See §12 and §14.
 
-**Cost profile:** extremely low variable cost. A full ~20-question quiz generation costs roughly **₹1 (about US$0.012)** in AI spend; grading, analytics, and quiz-taking use **no AI at all**. At a 10-institution scale, total monthly infrastructure + AI cost is on the order of **₹10,000/month**, against a target price of ₹5,000–15,000 per institution per month — an ~80–90% gross margin. See §11.
+**Cost profile:** text stages now prefer DeepSeek, topic analysis is normally one bounded call, and selected source ranges are reused for generation. One local 300-page analysis + generation + verification run was about **₹5**; this is measured evidence, not a guaranteed price. Grading, analytics, and quiz-taking use no AI. See §11.
 
 ---
 
@@ -109,9 +109,9 @@ The application has one authoritative profile table (`profiles`) linked 1:1 to S
                         │  HTTPS (server-to-server)
                         ▼
         ┌───────────────────────────────────────┐
-        │   AI PROVIDERS (LLM)                    │
-        │   1. Google Gemini   (PRIMARY)          │
-        │   2. DeepSeek        (FALLBACK)         │
+        │   AI PROVIDERS (stage-aware)            │
+        │   DeepSeek: text stages (preferred)     │
+        │   Gemini: text fallback + vision        │
         │   Called via raw HTTPS from backend     │
         └───────────────────────────────────────┘
 ```
@@ -126,8 +126,8 @@ flowchart TD
     BE -->|"service-role key"| SB_DB[("Supabase PostgreSQL<br/>+ Row-Level Security")]
     BE -->|"admin API"| SB_AUTH
     BE -->|"private bucket"| SB_ST["Supabase Storage"]
-    BE -->|"primary"| GEM["Google Gemini API"]
-    BE -->|"fallback"| DS["DeepSeek API"]
+    BE -->|"text fallback + vision"| GEM["Google Gemini API"]
+    BE -->|"text primary"| DS["DeepSeek API"]
 ```
 
 ### 3.3 Why this shape
@@ -152,11 +152,13 @@ flowchart TD
 | Database | PostgreSQL (via Supabase) | 15/16 managed | Supabase |
 | Auth | Supabase Auth (GoTrue), JWT (ES256) | — | Supabase |
 | File storage | Supabase Storage (private bucket) | — | Supabase |
-| Primary LLM | **Google Gemini** — `GEMINI_MODEL`, code default `gemini-3.5-flash` (verified 2026-09-15 in `backend/app/lib/config.py`; was `gemini-2.5-flash` when this table was first written). Used for **all** text/JSON features (generation, blueprint, regeneration, topic extraction, AI tutor) and vision extraction — see the note in §6.3 correcting the earlier "flash-lite tier" claim | — | Google |
-| Fallback LLM | **DeepSeek** — `deepseek-chat` (OpenAI-compatible) | — | DeepSeek |
+| Primary text LLM | **DeepSeek** — `deepseek-flash` (OpenAI-compatible), thinking disabled by default. Used for topic analysis, generation, regeneration, typed extraction, and verification. | — | DeepSeek |
+| Vision + text fallback LLM | **Google Gemini** — `GEMINI_MODEL`, code default `gemini-3.5-flash`. Used for scanned/image extraction and controlled fallback. | — | Google |
 | PDF/DOCX extraction | pdfplumber, python-docx | — | — |
 
-> **Important:** the historical project specification named DeepSeek as primary and Claude as fallback, and named SQLModel as the ORM. The **deployed code uses Gemini primary + DeepSeek fallback, has no Claude integration, and does not use SQLModel** (all DB access is via the Supabase client). See §13.
+> **Important:** routing is stage-aware and configurable. DeepSeek is the default
+> text provider, Gemini remains the vision provider and text fallback, no Claude
+> integration exists, and database access uses the Supabase client rather than SQLModel.
 
 ---
 
@@ -226,6 +228,13 @@ Two independent channels:
 - Used **only for auth**: `signInWithPassword`, student `signUp` (with `full_name` and `course_id`; legacy `tenant_id` is ignored by the hardened trigger), `getUser`/`getSession`, `signOut`, and reading the caller's own `profiles.role` for role-routing.
 - **All business data goes through the FastAPI backend**, never direct table reads.
 
+**Refresh persistence:** non-sensitive dashboard filters, selections, and drafts
+use per-tab `sessionStorage`. The teacher generation wizard additionally stores
+job identifiers and reconnects to durable backend analysis/final-generation jobs
+after refresh. Passwords, tokens, uploaded `File` objects, and destructive
+confirmation state are never stored by this mechanism. See
+`docs/dashboard-state-persistence.md`.
+
 ### 5.4 Auth & session flow
 1. **Login** → `supabase.auth.signInWithPassword` → redirect to `/dashboard`.
 2. **Role router** (`dashboard/page.tsx`) → reads `profiles.role` → redirects to the correct role home; unknown/missing profile → styled error with "Back to sign in".
@@ -243,7 +252,7 @@ Two independent channels:
 |---|---|
 | `quiz-attempt.tsx` | Universal take-and-results engine for **all** attempt types (quiz, practice, challenge, daily, exam): questions, timer, submit, graded results, per-question AI tutor, PDF/share-card export. |
 | `student-dashboard.tsx` | Student home: stats, streak, accuracy-over-time chart, quick actions. |
-| `blueprint-generator.tsx` | Teacher generation wizard: upload → extract topics → assign weights + per-type counts → generate. |
+| `blueprint-generator.tsx` | Teacher generation wizard: upload → durable topic analysis → select grouped topics + exact per-type counts → durable grounded generation; refresh-safe job reconnection and retry. |
 | `question-review-card.tsx` | One reviewable question: inline edit, approve/reject, AI regenerate. |
 | `course-manager.tsx` | Admin CRUD for courses & subjects. |
 | `admin-manager.tsx` | Super-admin management of institution admins. |
@@ -285,11 +294,11 @@ Guards: **public** / **student** / **staff** (teacher+admin+super) / **admin** (
 
 **Documents** (`/api/v1/documents`) — `POST /upload` and `GET ""` are teacher-only by design. Limits: PDF/DOCX only, 30 MiB, 5000-char preview.
 
-**Extraction** (`/api/v1`, `extraction.py`) — teacher-only upload of an *existing* quiz document (PDF/DOCX/image, ≤20 MB) that Gemini vision/text reads into draft questions under a chosen subject+chapter; separate limit and pipeline from `documents.py` — see `docs/pavyaa_changelog/EXTRACTION-FEATURE.md`.
+**Extraction** (`/api/v1`, `extraction.py`) — teacher-only upload of an *existing* quiz document (PDF/DOCX/image, ≤20 MB). Typed PDF/DOCX text is extracted locally and structured through the DeepSeek-first text router; scans/images use Gemini vision. Questions enter the normal draft review flow. This is separate from `documents.py`; see `docs/current-ai-document-workflow.md`.
 
 **Topics** (`/api/v1`, `topics.py`) — teacher-only topic extraction from an uploaded document, feeding the blueprint wizard (§8.1).
 
-**Quiz sets** (`/api/v1/quiz-sets`) — `POST /generate`, `POST /generate-blueprint`, `GET ""`, `GET /{id}`, `POST /{id}/publish`, `POST /{id}/archive`, and `POST /{id}/approve-all` are teacher-only by design. Large-document generation additionally exposes `POST /analyze`, `GET /generation-jobs/{id}`, `POST /generation-jobs/{id}/retry`, and `POST /generation-jobs/{id}/generate` — the resumable, chunked map-reduce path for documents over `CHUNKING_TRIGGER_CHARS` (see §8.1 and `docs/chunked-generation-architecture.md`).
+**Quiz sets** (`/api/v1/quiz-sets`) — `POST /generate`, `POST /generate-blueprint`, `GET ""`, `GET /{id}`, `POST /{id}/publish`, `POST /{id}/archive`, and `POST /{id}/approve-all` are teacher-only by design. Document analysis additionally exposes `POST /analyze`, `GET /generation-jobs/{id}`, and `POST /generation-jobs/{id}/retry`; final generation is a durable idempotent job. The normal typed-document analysis is one cost-bounded call (or an optional zero-AI local PDF outline), with persisted map/reduce retained as a compatibility fallback. See `docs/chunked-generation-architecture.md`.
 
 **Questions** (`/api/v1/questions`) — `PATCH /{id}`, `POST /{id}/approve`, `POST /{id}/reject`, and `POST /{id}/regenerate` are teacher-only by design; `POST /{id}/explain` is available to a teacher for their own question or to a student after that question has been graded.
 
@@ -306,25 +315,12 @@ Guards: **public** / **student** / **staff** (teacher+admin+super) / **admin** (
 **Challenge** (`/api/v1`) — `/challenges` (create), `/challenges/{token}` (hub), `/challenges/{token}/accept` (student).
 
 ### 6.3 The AI / LLM layer (the heart of the product)
-- **Two providers behind one interface** (`services/llm/`), both called via raw HTTPS (`httpx`):
-  1. **Google Gemini** (`generativelanguage.googleapis.com`) — **primary**.
-  2. **DeepSeek** (OpenAI-compatible chat completions) — **fallback**.
-- **`complete_with_fallback(system, user)`** tries providers in order and returns the first success (with the provider name); if all fail it raises a clear error. Gemini is primary when `GEMINI_API_KEY` is set; DeepSeek is used if Gemini fails and `DEEPSEEK_API_KEY` is set.
-- **Correction, verified 2026-09-15 (this document previously described "two Gemini tiers" — that is no longer accurate for the live call path):**
-  standard generation, regeneration, blueprint generation, topic extraction, AND
-  the AI tutor **all** call `complete_with_fallback()` / `complete_json_with_fallback()`,
-  which route through `GeminiProvider.complete()` — and that always uses
-  `settings.gemini_model` (code default `gemini-3.5-flash`, JSON response mode,
-  temp 0.3). There is **no live code path that uses the cheaper
-  `GEMINI_BLUEPRINT_MODEL` tier** (default `gemini-3.5-flash-lite`): a
-  schema-constrained `gemini_json()` helper defaults to it in
-  `services/llm/structured.py`, but as of 2026-09-15 nothing in the codebase
-  calls that helper (confirmed by grep). Vision extraction
-  (`gemini_json_multimodal`) also explicitly defaults to the full `gemini_model`,
-  not the lite tier, per its own docstring ("vision extraction accuracy
-  matters"). See `docs/llm-prompts.md`'s "Model routing" section for the
+- **Two providers behind one interface** (`services/llm/`), both called via raw HTTPS (`httpx`): DeepSeek is the default text provider; Gemini is the scanned/image vision provider and default text fallback.
+- **Stage-aware routing** selects a preferred provider independently for topic analysis, quiz generation, typed extraction, verification, and regeneration. Missing credentials are skipped safely.
+- **Structured fallback** covers HTTP/provider failures and malformed JSON. DeepSeek thinking is disabled by default to control cost and latency; provider name, token use, fallback status, and estimated cost are logged.
+- **Vision isolation:** raw scanned PDFs/images are sent only to Gemini multimodal. Typed PDFs and DOCX files are extracted locally and only the relevant text is sent through the text router. See `docs/llm-prompts.md`'s "Model routing" section for the
   up-to-date picture, including the large-document map-reduce path
-  (`complete_json_large`, also full `gemini_model`).
+  (`complete_json_large`, which follows the configured topic-analysis provider).
 - **No embeddings / no vector search at runtime.** (A `vector(1536)` column exists on `questions` for future dedup, but nothing populates or queries it today.)
 - **Text extraction:** `pdfplumber` (PDF) and `python-docx` (DOCX). **No OCR** — scanned/image PDFs are rejected with a clear error from `documents.py`'s standard upload path; the separate `extraction.py` quiz-extraction path instead uses Gemini vision directly on scanned PDFs/images (no OCR library either way).
 
@@ -499,7 +495,7 @@ Teacher uploads PDF/DOCX
 [4] Build system + user prompt (exact JSON contract per question type & level)
         │
         ▼
-[5] complete_with_fallback()  →  Gemini (GEMINI_MODEL, primary)  →  DeepSeek (fallback)
+[5] complete_with_fallback()  →  DeepSeek (text primary)  →  Gemini (fallback)
         │
         ▼
 [6] Validate LLM output (Pydantic), enforce per-question shape, truncate to N
@@ -512,7 +508,7 @@ Teacher reviews → approve/edit/reject/regenerate → PUBLISH  →  visible to 
 ```
 - Before generation or chapter management, the backend verifies that the teacher is explicitly assigned to the selected subject through `teacher_subjects`.
 - **Blueprint generation** is a richer variant with two modes (verified 2026-09-15 — the per-topic mode is new since 7 September): the original **weighted mode** has the teacher extract topics, assign each a priority (High/Med/Low), and set overall per-type counts; the system converts priorities to a weighted mix (~70% to priority topics, 3:2:1 by weight) and tags each generated question with its topic. The newer **per-topic mode** instead has the teacher set exact per-topic, per-question-type counts directly — no weight math, no "general" coverage, and the quiz is built only from the topics the teacher listed. See `docs/llm-prompts.md` §2 for both prompt shapes.
-- **Large-document path (not shown above — added since 7 September, not previously documented in this section):** documents whose extracted text exceeds `CHUNKING_TRIGGER_CHARS` (default 100,000 chars) skip this single-call flow and instead go through a resumable, chunked map-reduce pipeline (`generation_chunking.py`, `generation_jobs.py`, `chunking_service.py`, `document_profile.py`, `master_blueprint_synthesizer.py`) exposed via `POST /api/v1/quiz-sets/analyze` and the `/generation-jobs/{id}` endpoints (§6.2). See `docs/chunked-generation-architecture.md` for the full design.
+- **Current document-analysis path:** the Generate Quiz wizard uses a durable analysis job. A reliable typed-PDF outline can be built locally without AI; otherwise the universal analyzer represents all source locations in one bounded DeepSeek-first call and validates/evidence-grounds the hierarchy locally. Persisted chunked map/reduce is a compatibility fallback, not the default based solely on document length. Final generation uses selected source ranges and a durable job. See `docs/current-ai-document-workflow.md` and `docs/chunked-generation-architecture.md`.
 
 ### 8.2 Grading (deterministic — no AI)
 `grade_answer(question, student_answer)` returns `(is_correct, marks_awarded)`:
@@ -532,7 +528,7 @@ A single pattern powers Smart Quiz, chapter practice, Daily Challenge, Exam Simu
 - **Exam pattern** (question count, duration, negative marking) defaults to `{50, 60 min, 0.25}` and is overridable per institution via `tenants.exam_config`.
 
 ### 8.4 AI Tutor (cached)
-When a student asks "why?" on a question, the backend returns a cached explanation from `ai_explanations` if present; otherwise it makes **one** flash-lite call and caches the result. So each question is explained by the LLM **at most once, ever**, across all students — keeping tutor cost negligible.
+When a student asks "why?" on a question, the backend returns a cached explanation from `ai_explanations` if present; otherwise it makes one routed LLM call and caches the result. AI Tutor currently retains the router's Gemini-first compatibility default with DeepSeek fallback. Each successfully cached explanation is reused across students.
 
 ### 8.5 Analytics & AI-quality dashboards (deterministic — no AI)
 The institution analytics, teacher class monitor, and super-admin "Question Quality" cockpit are built from the `events` ledger and SQL aggregates. They compute severity-ranked, plain-language "findings" using deterministic rules — **no AI is used to analyze data**, so these dashboards are fast, free, and reproducible.
@@ -580,8 +576,9 @@ SUPABASE (dashboard-configured): Postgres + Auth + Storage — settings apply in
 **Backend (secret):**
 - `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_JWT_SECRET`
 - `FRONTEND_ORIGIN` (CORS allow-list — the Vercel URL)
-- `GEMINI_API_KEY` (+ optional `GEMINI_MODEL`, `GEMINI_FALLBACK_MODEL`, `GEMINI_BLUEPRINT_MODEL` (currently unused, see §6.3), `GEMINI_BASE_URL`)
-- `DEEPSEEK_API_KEY` (+ optional `DEEPSEEK_MODEL`, `DEEPSEEK_BASE_URL`, `DEEPSEEK_MAX_OUTPUT_TOKENS`)
+- `DEEPSEEK_API_KEY` (+ optional `DEEPSEEK_MODEL`, `DEEPSEEK_BASE_URL`, `DEEPSEEK_THINKING_ENABLED`, `DEEPSEEK_STRUCTURED_MAX_OUTPUT_TOKENS`, `DEEPSEEK_REQUEST_TIMEOUT_SECONDS`, `DEEPSEEK_MAX_OUTPUT_TOKENS`)
+- `GEMINI_API_KEY` (+ optional `GEMINI_MODEL`, `GEMINI_FALLBACK_MODEL`, `GEMINI_BLUEPRINT_MODEL`, `GEMINI_BASE_URL`)
+- Stage routing: `AI_FALLBACK_PROVIDER`, `TOPIC_ANALYSIS_PROVIDER`, `QUIZ_GENERATION_PROVIDER`, `TYPED_QUIZ_EXTRACTION_PROVIDER`, `QUESTION_VERIFICATION_PROVIDER`, `QUESTION_REGENERATION_PROVIDER`, and `VISION_EXTRACTION_PROVIDER` (must remain `gemini`)
 - Large-document generation and extraction tuning (safe code defaults; see `backend/.env.example` for the full, commented list): `GENERATION_MAX_TEXT_CHARS`, `CHUNKING_TRIGGER_CHARS`, `GENERATION_CHUNK_CHARS`, `GENERATION_CHUNK_OVERLAP_CHARS`, `GENERATION_CHUNK_MIN_CHARS`, `GENERATION_CHUNK_CONCURRENCY`, `GENERATION_MAP_MAX_OUTPUT_TOKENS`, `GENERATION_LARGE_REQUEST_TIMEOUT_SECONDS`, `GENERATION_PROFILE_MAX_CHARS`, `GENERATION_CHUNK_STUCK_SECONDS`, `GEMINI_VISION_TIMEOUT_SECONDS`, `GEMINI_EXTRACTION_MAX_OUTPUT_TOKENS`, `EXTRACTION_TEXT_CHUNK_CHARS`, `EXTRACTION_CHUNK_CONCURRENCY`.
 - The six `RATE_LIMIT_*_PER_HOUR` AI rate limits, `STUDENT_QUIZ_ATTEMPT_LIMIT`, `DAILY_CHALLENGE_TIMEZONE`, `CHALLENGE_EXPIRY_DAYS` — see the "AI rate limits" section of `CLAUDE.md` for the rate-limit defaults
 
@@ -594,47 +591,52 @@ Email confirmation and password-reset emails require a custom SMTP provider (e.g
 
 ## 11. Cost Analysis
 
-> **Assumptions.** Prices were checked on **7 September 2026** against the official [Gemini](https://ai.google.dev/gemini-api/docs/pricing), [Supabase](https://supabase.com/pricing), [Vercel](https://vercel.com/pricing), and [Railway](https://docs.railway.com/pricing) pricing pages, for a model then called `gemini-2.5-flash`. **Not reconfirmed in the 2026-09-15 refresh:** the code's `GEMINI_MODEL` default is now `gemini-3.5-flash` (verified in `backend/app/lib/config.py`), and Google's per-token pricing for that specific model **was not re-checked against the live Gemini pricing page in this pass** — treat the $/1M figures below as the 7-September numbers for the *previous* default model, not a verified current price, and recheck before any budget decision. USD→INR at **₹88 = $1** is illustrative; adjust it and provider usage before making a budget decision. Token estimates are derived from the actual code (material window + JSON output contract).
+### 11.1 How cost is controlled now
 
-### 11.1 Gemini list pricing (models the code uses)
-| Model | Input / 1M tokens | Output / 1M tokens | Used for |
-|---|---|---|---|
-| `gemini-2.5-flash` (pricing as checked 7-Sep-2026; code default is now `gemini-3.5-flash` — price not reconfirmed, see caveat above) | **$0.30** | **$2.50** | **All** text/JSON features: standard quiz generation & regeneration, blueprint generation (both modes), topic extraction, AI tutor, and large-document map-reduce generation — verified 2026-09-15 that these all share one model tier, not two (see §6.3's correction) |
+- Typed PDF/DOCX text is extracted locally; Gemini vision is reserved for
+  scans/images in the separate Extract Quiz workflow.
+- Topic analysis normally uses one bounded DeepSeek-first call for the complete
+  document, rather than per-page/per-chunk discovery and consolidation calls.
+- Final generation receives only the source ranges needed for faculty-selected
+  topics.
+- DeepSeek thinking is disabled by default. Invalid output uses a controlled
+  Gemini fallback, which is logged and can raise the total.
+- Student quiz-taking, deterministic grading, analytics, leaderboards, and
+  practice selection do not call an LLM.
 
-*(Gemini offers a free tier with rate limits; the figures above are the paid tier used for planning at scale. The separate `gemini-3.5-flash-lite` "flash-lite tier" row present in earlier drafts of this table was removed 2026-09-15: `GEMINI_BLUEPRINT_MODEL` is configured but has no caller in the current codebase, so it contributes $0 to today's actual spend — see §6.3.)*
+### 11.2 Accounting source of truth
 
-### 11.2 Cost per AI action (variable cost)
-| Action | ~Input tokens | ~Output tokens | Cost (USD) | Cost (INR) |
-|---|---|---|---|---|
-| Standard quiz generation (~20 Q) | ~16,000 | ~3,000 | **~$0.012** | **~₹1.1** |
-| Blueprint generation (~20 Q) | ~16,000 | ~3,500 | ~$0.013 | ~₹1.2 |
-| Topic extraction (per document) | ~8,000 | ~500 | ~$0.004 | ~₹0.35 |
-| AI tutor explanation (per question, **cached once**) | ~600 | ~300 | ~$0.001 | ~₹0.08 |
-| **Grading / quiz-taking / analytics** | — | — | **$0 (no AI)** | **₹0** |
+`backend/app/config/ai_pricing.py` contains the model-price mapping used for
+observability. `ai_call_logs` records provider/model, input/output/cached/thinking
+tokens, fallback state, latency, result, and estimated USD cost. The super-admin
+API Logs page converts USD using a user-editable INR rate stored per browser tab;
+that display conversion does not change provider billing.
 
-**Key insight:** the only AI cost is at *content creation* time (teacher generating quizzes) and one-time tutor explanations. All *student consumption* (taking quizzes, grading, analytics, leaderboards, practice) is **free of AI cost** because it's deterministic.
+Model prices and exchange rates are operational data and can change. Update the
+pricing map after checking the provider's current published rates, and do not use
+old planning tables as a billing promise.
 
-### 11.3 Monthly cost — worked examples
-**One active institution (busy month):**
-- 200 quiz generations × ₹1.1 = ₹220
-- 200 topic extractions × ₹0.35 = ₹70
-- 2,000 unique tutor explanations (cached) × ₹0.08 = ₹160
-- **AI subtotal ≈ ₹450 / institution / month** (well under $10).
+### 11.3 Measured local evidence
 
-**Infrastructure (shared across all tenants):**
-| Service | Pilot (free tiers) | Production (paid) |
-|---|---|---|
-| Supabase | ₹0 (Free) | ~₹2,200 ($25 Pro) |
-| Vercel | ₹0 (Hobby) | ~₹1,800 ($20 Pro) |
-| Railway (backend) | ~₹450–900 (usage) | ~₹1,800 (usage) |
-| **Infra subtotal** | **~₹500–900 / month total** | **~₹6,000 / month total** |
+A local run using a roughly 300-page computer-networking PDF recorded:
 
-**Blended estimate at ~10 institutions:** infra (~₹6,000) + AI (~₹4,500 for 10 tenants) ≈ **~₹10,000–12,000 / month total** — consistent with the original planning estimate.
+| Stage | Model | Observed estimated cost |
+|---|---|---:|
+| Single-call topic analysis | `deepseek-flash` | ₹3.97 |
+| Quiz generation | `deepseek-flash` | ₹0.88 |
+| Question verification | `deepseek-flash` | ₹0.14 |
+| **Observed workflow total** | | **about ₹5.00** |
 
-### 11.4 Unit economics
-At the target price of **₹5,000–15,000 / institution / month**, 10 institutions generate **₹50,000–150,000 / month** revenue against **~₹10,000–12,000** total cost →  **~80–90% gross margin**. The architecture (one shared deployment, deterministic student-side features, cached tutor, cheap flash models) is the reason costs stay low as tenants grow.
+Another 300-page statistics topic-analysis run using Gemini Flash-Lite before
+the DeepSeek-first migration recorded ₹2.22 for analysis. These are individual
+local observations, not guarantees. Text density, requested question count,
+output length, cache use, fallback attempts, provider pricing, and the selected
+INR rate all affect the result.
 
-> **Caveat for stakeholders:** these are *infrastructure and AI* costs only. They exclude salaries, support, sales, and the (currently unbuilt) payment-processing fees. And note that **no billing is enforced yet** — the platform cannot *collect* this revenue until Phase 2 (see §14).
+The current engineering target is to keep a typical 300-page typed-document
+analysis plus one quiz within ₹1–₹10 when no fallback/retry is required. API-call
+logs, rather than a hard-coded estimate shown to faculty, are used to confirm
+that target.
 
 ---
 
@@ -648,7 +650,6 @@ Presented honestly, as a forward-deployed engineer would to a new maintainer:
 4. **Dead/unused code.** A PYQ (past-year-questions) parser and the RLS-respecting anon DB client exist but are unwired; the `questions.embedding` vector column is unused (no dedup yet).
 5. **SMTP not configured.** Email confirmation/reset won't deliver until a provider (e.g. Brevo) is set up.
 6. **Bundle size.** The quiz-attempt/practice/class-monitor routes are heavy (~640 kB first load) because they pull in Recharts + the PDF renderer; lazy-loading these is a quick win.
-7. **Undocumented feature (added 2026-09-17, not yet covered anywhere in this document):** super-admin-only institution-admin credential reset — `POST /api/v1/platform/admins/{user_id}/temporary-password` (`backend/app/api/admin.py`, path-whitelisted for `super_admin` in `backend/app/api/super_admin.py`) lets a super admin set a new temporary password for an `institution_admin` and forces `must_change_password` on next login; the frontend dialog is `frontend/components/admin/temporary-credentials-dialog.tsx`. No migration is required for it. This section flags the gap rather than fully documenting the feature's security model — verify against the code before relying on this description.
 
 ---
 
@@ -658,11 +659,11 @@ The historical project specification described some choices that the **deployed 
 
 | Topic | Original spec said | Deployed reality |
 |---|---|---|
-| Primary LLM | DeepSeek V4 | **Google Gemini** (`GEMINI_MODEL`, code default `gemini-3.5-flash` as of 2026-09-15 — was `gemini-2.5-flash` when this row was first written; check `backend/app/lib/config.py` for the current value) |
-| Fallback LLM | Anthropic Claude Sonnet | **DeepSeek** (`deepseek-chat`); **no Claude code exists** |
+| Primary LLM | DeepSeek V4 | **Stage-aware:** DeepSeek `deepseek-flash` is preferred for current text stages; Gemini is the default text fallback and only vision provider |
+| Fallback LLM | Anthropic Claude Sonnet | **Gemini for current DeepSeek-first text stages;** no Claude code exists. AI Tutor retains a Gemini-first compatibility route |
 | ORM | SQLModel | **No ORM** — all DB access via the Supabase (PostgREST) client |
 | Question types | 6 incl. `matching` | Enum has `descriptive`, **not `matching`** |
-| OCR | Planned | **Dropped** — Gemini-only, no OCR (scanned PDFs rejected) |
+| OCR | Planned | **No OCR library.** Generate Quiz rejects unreadable scans; the separate Extract Quiz flow sends scans/images to Gemini vision |
 | Font | Plus Jakarta Sans | **Inter** is actually loaded |
 | Icons | — | `lucide-react` installed but a **hand-rolled inline SVG set** is used |
 
@@ -711,7 +712,7 @@ This is the biggest missing block for a "real SaaS":
 | **Quiz Set / Variant** | One upload creates a *set*; a set has *variants* (by cognitive level: theory/practical/mixed); a variant links to ordered questions. |
 | **Blueprint** | A weighted generation mode where the teacher assigns topic priorities and per-type counts. |
 | **Practice session** | A frozen set of questions a student practises; one table (`practice_sessions`) powers smart quiz, daily, exam, challenge, and revision via a `mode` field. |
-| **Fallback (LLM)** | If the primary AI provider (Gemini) fails, the backend automatically retries with the secondary (DeepSeek). |
+| **Fallback (LLM)** | If a stage's preferred text provider fails or returns invalid JSON, the backend tries its configured fallback. Vision remains Gemini-only. |
 | **Findings** | Deterministic, plain-language insights on the analytics dashboards — computed by rules, not AI. |
 
 ---

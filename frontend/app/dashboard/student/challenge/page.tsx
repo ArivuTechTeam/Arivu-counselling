@@ -21,6 +21,7 @@ import {
   useMyChallenges,
   usePracticeSubjects,
 } from "@/lib/student-queries";
+import { useSessionStorageState } from "@/lib/use-session-storage-state";
 
 const QUESTION_TYPES = [
   "mcq_single",
@@ -45,8 +46,23 @@ export default function ChallengePage() {
   const { mutate: mutateCache } = useSWRConfig();
   const { data: subjects = null, error: subjectsError } = usePracticeSubjects();
   const { data: mine = null, error: mineError, mutate: mutateMine } = useMyChallenges();
-  const [subjectId, setSubjectId] = useState("");
-  const [typeCounts, setTypeCounts] = useState(DEFAULT_MIX);
+  const [subjectId, setSubjectId] = useSessionStorageState(
+    "student-challenge-subject",
+    "",
+    (value): value is string => typeof value === "string",
+  );
+  const [typeCounts, setTypeCounts] = useSessionStorageState(
+    "student-challenge-question-mix",
+    DEFAULT_MIX,
+    (value): value is Record<ChallengeQuestionType, number> =>
+      !!value &&
+      typeof value === "object" &&
+      QUESTION_TYPES.every(
+        (type) =>
+          typeof (value as Record<string, unknown>)[type] === "number" &&
+          Number.isFinite((value as Record<string, number>)[type]),
+      ),
+  );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [closingToken, setClosingToken] = useState<string | null>(null);

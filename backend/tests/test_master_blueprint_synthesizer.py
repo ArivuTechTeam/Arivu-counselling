@@ -174,7 +174,7 @@ class SynthesizeTests(unittest.TestCase):
 
         calls = {"n": 0}
 
-        def once_flaky(_s, _u):
+        def once_flaky(_s, _u, **_kwargs):
             calls["n"] += 1
             if calls["n"] == 1:
                 raise LLMError("transient")

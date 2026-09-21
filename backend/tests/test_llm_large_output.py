@@ -39,6 +39,9 @@ class DeepSeekLargeOutputTests(unittest.TestCase):
             result = _deepseek_json_large("system", "user", max_tokens=8192)
         self.assertEqual(result, {"topics": []})
         self.assertEqual(post.call_args.kwargs["json"]["max_tokens"], 8192)
+        self.assertEqual(
+            post.call_args.kwargs["json"]["thinking"], {"type": "disabled"}
+        )
         self.assertEqual(post.call_args.kwargs["timeout"], 600)
 
     def test_finish_reason_length_is_an_explicit_failure(self) -> None:

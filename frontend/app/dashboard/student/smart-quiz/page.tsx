@@ -15,6 +15,7 @@ import { AttemptReadiness } from "@/components/student/attempt-readiness";
 import { ErrorCard } from "@/components/ui/error-card";
 import { previewPracticeSession, startPracticeSession } from "@/lib/api";
 import { usePracticeSubjects } from "@/lib/student-queries";
+import { useSessionStorageState } from "@/lib/use-session-storage-state";
 
 const COUNTS = [10, 15, 20, 30];
 const DIFFICULTIES = [
@@ -30,9 +31,22 @@ const fieldClass =
 export default function SmartQuizPage() {
   const router = useRouter();
   const { data: subjects, error: subjectsError, mutate } = usePracticeSubjects();
-  const [subjectId, setSubjectId] = useState("");
-  const [count, setCount] = useState(15);
-  const [difficulty, setDifficulty] = useState("");
+  const [subjectId, setSubjectId] = useSessionStorageState(
+    "student-smart-quiz-subject",
+    "",
+    (value): value is string => typeof value === "string",
+  );
+  const [count, setCount] = useSessionStorageState(
+    "student-smart-quiz-count",
+    15,
+    (value): value is number => typeof value === "number" && COUNTS.includes(value),
+  );
+  const [difficulty, setDifficulty] = useSessionStorageState(
+    "student-smart-quiz-difficulty",
+    "",
+    (value): value is string =>
+      typeof value === "string" && DIFFICULTIES.some((item) => item.value === value),
+  );
   const [starting, setStarting] = useState(false);
   const [previewing, setPreviewing] = useState(false);
   const [availableCount, setAvailableCount] = useState<number | null>(null);

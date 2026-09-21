@@ -216,14 +216,25 @@ explicitly in Railway so the production policy is visible and easy to edit:
 | `SUPABASE_SERVICE_ROLE_KEY` | service role key (server-only, **secret**) |
 | `SUPABASE_JWT_SECRET` | verifies legacy HS256 JWTs; ES256/RS256 JWTs are verified with Supabase JWKS |
 | `FRONTEND_ORIGIN` | exact deployed **frontend origin** (scheme + hostname, no path or trailing slash) for CORS |
-| `GEMINI_API_KEY` | quiz generation (primary, if set) |
-| `GEMINI_MODEL` | full-tier Gemini model used for generation, blueprint, regeneration, topic extraction, and AI tutor (default `gemini-3.5-flash`; code default in `backend/app/lib/config.py`) |
-| `GEMINI_FALLBACK_MODEL` | retried once before falling back to DeepSeek if `GEMINI_MODEL` returns model-not-found (default `gemini-3.5-flash`) |
-| `GEMINI_BLUEPRINT_MODEL` | cheap-tier model read by an unused helper (`gemini_json()`) as of 2026-09-15 — see `backend/.env.example` (default `gemini-3.5-flash-lite`) |
-| `DEEPSEEK_API_KEY` | quiz generation (fallback) |
+| `DEEPSEEK_API_KEY` | preferred provider credential for current text stages |
+| `DEEPSEEK_MODEL` | text model (default `deepseek-flash`) |
+| `DEEPSEEK_THINKING_ENABLED` | keep `false` for predictable structured-output cost/latency unless deliberately testing reasoning |
+| `DEEPSEEK_STRUCTURED_MAX_OUTPUT_TOKENS` / `DEEPSEEK_MAX_OUTPUT_TOKENS` | ordinary and large-JSON output budgets |
+| `DEEPSEEK_REQUEST_TIMEOUT_SECONDS` | ordinary DeepSeek request timeout |
+| `GEMINI_API_KEY` | Gemini vision credential and default text-fallback credential |
+| `GEMINI_MODEL` | Gemini model used for vision, fallback, and AI Tutor compatibility route (default `gemini-3.5-flash`) |
+| `GEMINI_FALLBACK_MODEL` | retried for a Gemini model-specific 404 before the router continues (default `gemini-3.5-flash`) |
+| `GEMINI_BLUEPRINT_MODEL` | retained for direct Gemini structured-call compatibility (default `gemini-3.5-flash-lite`) |
+| `AI_FALLBACK_PROVIDER` | text fallback provider (default `gemini`) |
+| `TOPIC_ANALYSIS_PROVIDER` | topic/outline and compatibility map-reduce preferred provider (default `deepseek`) |
+| `QUIZ_GENERATION_PROVIDER` | standard/blueprint generation preferred provider (default `deepseek`) |
+| `TYPED_QUIZ_EXTRACTION_PROVIDER` | typed existing-quiz extraction preferred provider (default `deepseek`) |
+| `QUESTION_VERIFICATION_PROVIDER` | grounding-verification preferred provider (default `deepseek`) |
+| `QUESTION_REGENERATION_PROVIDER` | review regeneration preferred provider (default `deepseek`) |
+| `VISION_EXTRACTION_PROVIDER` | must remain `gemini` until another multimodal adapter exists |
 | `RATE_LIMIT_QUIZ_GENERATION_PER_HOUR` | per-user standard quiz generations per rolling hour (default `10`) |
 | `RATE_LIMIT_BLUEPRINT_PER_HOUR` | per-user blueprint generations per rolling hour (default `10`) |
-| `RATE_LIMIT_TOPIC_EXTRACTION_PER_HOUR` | per-user document-analysis AI calls per rolling hour (default `30`; a 300-page document can require 10–11 calls including profiling and consolidation retry) |
+| `RATE_LIMIT_TOPIC_EXTRACTION_PER_HOUR` | per-user document-analysis AI calls per rolling hour (default `30`; normal typed-document analysis is one provider call, while explicit compatibility fallback can use multiple calls) |
 | `RATE_LIMIT_QUESTION_REGENERATE_PER_HOUR` | per-user question regenerations per rolling hour (default `10`) |
 | `RATE_LIMIT_QUESTION_EXPLAIN_PER_HOUR` | per-user question explanations per rolling hour (default `10`) |
 | `RATE_LIMIT_QUIZ_EXTRACTION_PER_HOUR` | per-user existing-quiz document extractions per rolling hour (default `10`) |
@@ -231,7 +242,7 @@ explicitly in Railway so the production policy is visible and easy to edit:
 | `DAILY_CHALLENGE_TIMEZONE` | IANA timezone used to decide each student's institution-facing Daily Challenge calendar day (default `Asia/Kolkata`) |
 | `CHALLENGE_EXPIRY_DAYS` | number of days a new friend challenge accepts new participants (default `30`; existing sessions may still resume) |
 
-Document extraction and large-document ("chunked" map-reduce) generation add
+Document extraction and durable document analysis add
 further tunables — `GEMINI_VISION_TIMEOUT_SECONDS`, `GEMINI_EXTRACTION_MAX_OUTPUT_TOKENS`,
 `EXTRACTION_TEXT_CHUNK_CHARS`, `EXTRACTION_CHUNK_CONCURRENCY`,
 `GENERATION_MAX_TEXT_CHARS`, `CHUNKING_TRIGGER_CHARS`, `GENERATION_CHUNK_CHARS`,
@@ -242,6 +253,7 @@ further tunables — `GEMINI_VISION_TIMEOUT_SECONDS`, `GEMINI_EXTRACTION_MAX_OUT
 kept above the large-request timeout) — all read at
 startup in `backend/app/lib/config.py` with safe code defaults. See
 `backend/.env.example` for the authoritative, commented list and
+`docs/current-ai-document-workflow.md` plus
 `docs/chunked-generation-architecture.md` for what each one tunes; set them
 explicitly in Railway only if the defaults need overriding.
 

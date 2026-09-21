@@ -20,6 +20,7 @@ import { BookOpen } from "@/components/ui/icons";
 import { StudentQuiz, startAttempt } from "@/lib/api";
 import { variantLabel } from "@/lib/format";
 import { useStudentAttempts, useStudentQuizzes } from "@/lib/student-queries";
+import { useSessionStorageState } from "@/lib/use-session-storage-state";
 
 type TakeItem = {
   setId: string;
@@ -82,8 +83,17 @@ export default function StudentSubjectsPage() {
   const { data: quizzes = null, error: loadError, mutate } = useStudentQuizzes();
   const [actionError, setActionError] = useState<string | null>(null);
   const [starting, setStarting] = useState<string | null>(null);
-  const [active, setActive] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<"available" | "history">("available");
+  const [active, setActive] = useSessionStorageState<string | null>(
+    "student-subjects-active-subject",
+    null,
+    (value): value is string | null => value === null || typeof value === "string",
+  );
+  const [activeTab, setActiveTab] = useSessionStorageState<"available" | "history">(
+    "student-subjects-tab",
+    "available",
+    (value): value is "available" | "history" =>
+      value === "available" || value === "history",
+  );
   const [pending, setPending] = useState<TakeItem | null>(null);
   const {
     data: attempts,

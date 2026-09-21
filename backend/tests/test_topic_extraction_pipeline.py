@@ -297,7 +297,7 @@ class RunTests(unittest.TestCase):
         fake.seed_chunks("d1", "t1", 3)
         pipe = TopicExtractionPipeline(service=fake)
 
-        def flaky(_system, user):
+        def flaky(_system, user, **_kwargs):
             if "section 1 text" in user:  # chunk index 1 always fails
                 raise LLMError("boom")
             return (SAMPLE_TOPICS, "gemini")
@@ -322,7 +322,7 @@ class RunTests(unittest.TestCase):
 
         calls = {"n": 0}
 
-        def once_flaky(_system, _user):
+        def once_flaky(_system, _user, **_kwargs):
             calls["n"] += 1
             if calls["n"] == 1:
                 raise LLMError("transient")

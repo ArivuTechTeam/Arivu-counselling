@@ -1,5 +1,9 @@
 # Scoping: quiz-generator-v1 (SaaS Product — Phase 1)
 
+> **Historical locked scope, not a runtime reference.** Provider routing, OCR
+> decisions, deployment, question-type support, and delivered features have
+> changed since this plan. Use `docs/README.md` to find current references.
+
 **Status:** SCOPING + TECH STACK LOCKED — ready for architecture design
 **Version:** v2 (updated after tech stack discussion)
 **Date locked:** 2026-07-31

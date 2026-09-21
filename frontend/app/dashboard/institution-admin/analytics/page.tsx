@@ -8,6 +8,7 @@ import { ErrorCard } from "@/components/ui/error-card";
 import { PageHeader } from "@/components/ui/page-header";
 import { AdminQuizSet, Course as AcademicCourse, InstitutionAnalytics, QualityFinding } from "@/lib/api";
 import { useCourses, useInstitutionAnalytics, useInstitutionQuizSets } from "@/lib/staff-queries";
+import { useSessionStorageState } from "@/lib/use-session-storage-state";
 import { QuizPerformanceModal } from "../quizzes/_components/quiz-performance-modal";
 import { CourseSubjectDrilldownModal } from "./_components/course-subject-drilldown-modal";
 import { QuizDrilldownModal } from "./_components/quiz-drilldown-modal";
@@ -53,9 +54,32 @@ export default function InstitutionAnalyticsPage() {
   const courses = coursesQuery.data ?? EMPTY_COURSES;
   const error = analyticsQuery.error ?? quizzesQuery.error ?? coursesQuery.error;
   const loading = analyticsQuery.isValidating || quizzesQuery.isValidating || coursesQuery.isValidating;
-  const [teacherSort, setTeacherSort] = useState<TeacherSort>("attempts");
-  const [showInactive, setShowInactive] = useState(false);
-  const [courseSort, setCourseSort] = useState<{ key: CourseSort; direction: "asc" | "desc" }>({ key: "attempts", direction: "desc" });
+  const [teacherSort, setTeacherSort] = useSessionStorageState<TeacherSort>(
+    "institution-analytics-teacher-sort",
+    "attempts",
+    (value): value is TeacherSort =>
+      value === "attempts" || value === "accuracy" || value === "last_active",
+  );
+  const [showInactive, setShowInactive] = useSessionStorageState(
+    "institution-analytics-show-inactive",
+    false,
+    (value): value is boolean => typeof value === "boolean",
+  );
+  const [courseSort, setCourseSort] = useSessionStorageState<{
+    key: CourseSort;
+    direction: "asc" | "desc";
+  }>(
+    "institution-analytics-course-sort",
+    { key: "attempts", direction: "desc" },
+    (value): value is { key: CourseSort; direction: "asc" | "desc" } =>
+      !!value &&
+      typeof value === "object" &&
+      ["name", "students", "published", "pending_review", "attempts", "accuracy"].includes(
+        String((value as { key?: unknown }).key),
+      ) &&
+      ((value as { direction?: unknown }).direction === "asc" ||
+        (value as { direction?: unknown }).direction === "desc"),
+  );
   const [teacherDrilldown, setTeacherDrilldown] = useState<{ id: string; name: string } | null>(null);
   const [courseDrilldown, setCourseDrilldown] = useState<AcademicCourse | null>(null);
   const [pendingOpen, setPendingOpen] = useState(false);

@@ -1,12 +1,18 @@
 # RAG for the AI quiz generator — engineering assessment
 
+> **Historical assessment; RAG is not implemented.** Its description of the
+> then-current 60,000-character truncation and Gemini-first routing is
+> superseded. See `docs/current-ai-document-workflow.md` for current one-call
+> topic analysis, selected-range grounding, provider routing, and retry behavior.
+
 **Purpose:** a focused, unbiased engineering analysis of adopting **RAG
 (Retrieval-Augmented Generation)** in this project — the architecture it would
 take *in our stack*, and honest **pros & cons**, especially evaluated against the
 **large-document gap** in quiz generation (chapters truncated to ~24 pages today).
 
 **Audience:** engineering + manager.
-**Status:** analysis for decision — nothing built.
+**Status:** historical analysis; RAG remains unbuilt, while the large-document
+gap described below was addressed by a different architecture.
 **Companion doc:** `docs/ai-quiz-generation-large-docs-decision.md` (the 3-option
 decision brief). This doc goes deep on the RAG option specifically.
 
@@ -117,7 +123,7 @@ limit :k;                                                      -- e.g. top 6
 | Vector store | **pgvector in Supabase** | Already Postgres; **no new service**; same tenant/RLS model |
 | Embeddings | **Gemini `text-embedding-004`** (768-dim) | Existing key; cheap |
 | Chunking | **reuse `quiz_extraction._chunk_text`** | Already written & tested |
-| Generation | existing **Gemini → DeepSeek** + prompts | Unchanged |
+| Generation | historical Gemini-first router + prompts | This described the router when the assessment was written; current text stages are DeepSeek-first |
 | Orchestration | **plain Python** (no LangChain/LangGraph) | Simpler; frameworks are overkill for single-step RAG |
 
 ---
