@@ -794,6 +794,16 @@
   box-shadow: 0 0 0 4px rgba(35, 117, 72, 0.11);
 }
 
+.login-redesign .login-input-wrap input:-webkit-autofill,
+.login-redesign .login-input-wrap input:-webkit-autofill:hover,
+.login-redesign .login-input-wrap input:-webkit-autofill:focus {
+  border-color: #cfddd4;
+  -webkit-text-fill-color: var(--login-ink);
+  box-shadow: 0 0 0 1000px #fff inset;
+  caret-color: var(--login-ink);
+  transition: background-color 9999s ease-out 0s;
+}
+
 .login-redesign .login-password-toggle {
   position: absolute;
   right: 8px;
@@ -934,7 +944,7 @@
   .login-redesign .login-story-footer > span { display: none; }
 }
 
-@media (max-width: 760px) {
+@media (max-width: 900px) {
   .login-page.login-redesign {
     position: fixed;
     top: var(--login-viewport-offset, 0px);
@@ -961,18 +971,18 @@
     min-height: 0;
     overflow-y: auto;
     overscroll-behavior: contain;
-    padding: max(26px, env(safe-area-inset-top)) 22px max(22px, env(safe-area-inset-bottom));
+    padding: max(24px, env(safe-area-inset-top)) 24px max(20px, env(safe-area-inset-bottom));
     scroll-padding-block: 24px 140px;
     -webkit-overflow-scrolling: touch;
   }
   .login-redesign .login-auth-card {
-    width: min(440px, 100%);
+    width: min(480px, 100%);
     margin: 0 auto;
   }
   .login-redesign .login-mobile-brand {
     display: inline-flex;
-    margin-bottom: clamp(34px, 8vh, 58px);
-    padding: 9px 13px;
+    margin-bottom: clamp(26px, 5vh, 38px);
+    padding: 8px 12px;
     border: 1px solid rgba(35, 117, 72, 0.13);
     border-radius: 11px;
     background: #fff;
@@ -991,7 +1001,65 @@
   .login-redesign .login-register a { white-space: normal; }
 }
 
-@media (max-width: 760px) and (max-height: 700px) {
+@media (max-width: 600px) {
+  .login-redesign .login-auth-scroll {
+    padding-inline: 20px;
+  }
+  .login-redesign .login-mobile-brand {
+    margin-bottom: 24px;
+    padding: 7px 11px;
+  }
+  .login-redesign .login-mobile-brand img {
+    width: auto;
+    height: 25px;
+  }
+  .login-redesign .login-mobile-brand > span > span {
+    font-size: 8px;
+    letter-spacing: 0.18em;
+  }
+  .login-redesign .login-auth-header {
+    margin-bottom: 22px;
+  }
+  .login-redesign .login-auth-header h2 {
+    font-size: 33px;
+  }
+  .login-redesign .login-auth-header > p:last-child {
+    margin-top: 7px;
+    font-size: 13px;
+  }
+  .login-redesign .login-control {
+    margin-bottom: 14px;
+  }
+  .login-redesign .login-control label {
+    margin-bottom: 6px;
+  }
+  .login-redesign .login-input-wrap input,
+  .login-redesign .login-primary {
+    height: 50px;
+    min-height: 50px;
+  }
+  .login-redesign .btn-google {
+    min-height: 50px;
+  }
+  .login-redesign .login-password-help {
+    margin: -3px 0 17px;
+    font-size: 11px;
+    text-align: left;
+  }
+  .login-redesign .login-divider {
+    margin: 17px 0;
+  }
+  .login-redesign .login-register {
+    margin-top: 20px;
+    padding: 14px 0;
+  }
+  .login-redesign .login-legal {
+    margin-top: 15px;
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+}
+
+@media (max-width: 900px) and (max-height: 700px) {
   .login-redesign .login-mobile-brand {
     margin-bottom: 24px;
     transform: scale(0.9);
