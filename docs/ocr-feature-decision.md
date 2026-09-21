@@ -1,5 +1,11 @@
 # OCR for scanned documents — research & decision brief
 
+> **Phase 2 research; not implemented.** Current Phase 1 behavior has no OCR
+> library: typed PDF/DOCX text is processed through the DeepSeek-first text
+> router, scans/images in Extract Quiz use Gemini vision, and embedded-image
+> puzzle/diagram generation is deferred. See
+> `docs/current-ai-document-workflow.md`.
+
 **Feature branch:** `ocr-pavyaa`
 **Status:** Research complete · key decisions made · **not yet built** (OCR engine choice still open)
 **Date:** 10-Sep-2026
@@ -34,7 +40,7 @@ The platform already has "smart routing" for the **Extract quiz** feature
 Upload
   ├─ Typed PDF / DOCX (has a real text layer)
   │     → pull text for free (pdfplumber / python-docx)
-  │     → Gemini text (with DeepSeek fallback) structures the questions
+  │     → DeepSeek text (with Gemini fallback) structures the questions
   │
   └─ Scanned PDF / image (little/no text layer)
         → Gemini VISION reads the image AND structures the questions (one call)

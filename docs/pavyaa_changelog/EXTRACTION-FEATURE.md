@@ -1,5 +1,10 @@
 # Quiz Extraction Feature — `extraction-pavyaa` branch
 
+> **Historical branch handoff.** The feature remains, but current routing is:
+> typed PDF/DOCX → local text extraction → DeepSeek first with Gemini fallback;
+> scan/image → Gemini vision. For current behavior use
+> `docs/current-ai-document-workflow.md`.
+
 **Author:** (pavyaa)  ·  **Branch:** `extraction-pavyaa`  ·  **Status:** built + tested locally
 
 A handoff doc so anyone can understand, run, and extend what this branch adds.
@@ -10,7 +15,7 @@ publish flows are untouched.
 
 ## 1. What this branch adds (in one paragraph)
 A teacher can **upload an existing quiz document** — a typed PDF, a scanned image,
-or a DOCX — and **Gemini extracts the questions, options, and correct answers**
+or a DOCX — and the configured text/vision provider extracts the questions, options, and correct answers
 into a **draft** quiz set (status `pending_review`) under a chosen **subject +
 chapter**. It then flows through the **existing** teacher review → publish
 pipeline, so students only ever see teacher-approved questions. Includes chapter
@@ -32,7 +37,7 @@ POST /api/v1/quiz-sets/extract   (multipart: file, subject_id, chapter_id, force
 quiz_extraction.extract_quiz()
         │  • authorise: teacher owns the subject (teacher_has_subject)
         │  • validate: chapter belongs to that subject + tenant
-        │  • PDF/image → Gemini VISION (bytes inline, no OCR); DOCX → text → Gemini/DeepSeek fallback
+        │  • typed PDF/DOCX → local text → DeepSeek/Gemini fallback; scan/image → Gemini VISION (no OCR)
         │  • validate each question (skip malformed), compute confidence
         │  • persist: quiz_set(draft) → variant → questions(source='extracted',
         │             review_status='pending_review', chapter_id, confidence_score,
@@ -50,7 +55,7 @@ redirect → /dashboard/teacher/review/{quiz_set_id}  (EXISTING review screen)
 | File | Purpose |
 |---|---|
 | `backend/app/api/extraction.py` | The `POST /api/v1/quiz-sets/extract` endpoint (own router, teacher-only, multipart; accepts images which the shared `/documents` upload does not). Handles file hashing + duplicate `409`. |
-| `backend/app/services/quiz_extraction.py` | Orchestrator `extract_quiz(...)`. Mirrors `generation.py`'s persistence + rollback. Vision for PDF/images, text for DOCX. Records an `ai_extraction_jobs` row. |
+| `backend/app/services/quiz_extraction.py` | Orchestrator `extract_quiz(...)`. Mirrors `generation.py`'s persistence + rollback. Local text path for typed PDF/DOCX; Gemini vision for scans/images. Records an `ai_extraction_jobs` row. |
 | `backend/app/services/extraction_prompts.py` | The verbatim-extraction prompt + output contract. Handles answers marked inline / "Answer: C" / an end-of-doc answer key, plus PYQ/year tags. Objective question types only. |
 
 ### Modified files
@@ -73,11 +78,9 @@ POST /api/v1/quiz-sets/extract        (teacher only, multipart/form-data)
 ```
 
 ### Key implementation notes
-- **AI model:** `GEMINI_MODEL` is used for vision + text extraction (code default
-  `gemini-3.5-flash` as of 2026-09-15, per `backend/app/lib/config.py` — was
-  `gemini-2.5-flash` when this doc was originally written; check `config.py` for
-  the current value before relying on this figure). No OCR dependency — Gemini
-  reads PDFs/images natively.
+- **AI routing:** typed extraction follows `TYPED_QUIZ_EXTRACTION_PROVIDER`
+  (DeepSeek by default) with `AI_FALLBACK_PROVIDER` (Gemini by default). Scanned
+  PDFs/images use `GEMINI_MODEL` vision. No OCR dependency is installed.
 - **Accuracy guarantee = the review gate.** Extraction is never trusted blindly: questions land as `pending_review`; the teacher reviews/edits before publish. Per-question `confidence_score` is stored (low = scrutinise).
 - **Mapping guarantee:** the chapter is validated to belong to the subject + tenant; the resolved `chapter_id` is written to the quiz set, **every** question, and the source document → clean `Subject → Chapter → Questions`.
 - **Duplicate guard is a *soft warning*, not a block** — multiple different quizzes per chapter are still allowed; only the exact same file re-upload is flagged.

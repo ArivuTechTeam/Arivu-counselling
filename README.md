@@ -30,3 +30,8 @@ Environment templates:
 Deployment and security details are documented in `docs/deploy-runbook.md` and
 `docs/api-security-hardening.md`. The collection, disclosure, processor and
 deletion map is in `docs/personal-data-audit.md`.
+
+Start with `docs/README.md` for the current documentation map. In particular,
+`docs/current-ai-document-workflow.md` describes DeepSeek-first text routing,
+Gemini vision/fallback, durable retry/checkpoint behavior, and current cost
+controls; older decision briefs and dated changelogs are historical.

@@ -1,5 +1,10 @@
 # Quiz Generation Direction
 
+> **Historical direction note.** Topic hierarchy, faculty-selected per-topic
+> counts, grounded source ranges, durable jobs, and stage-aware provider routing
+> have since been implemented. See `docs/current-ai-document-workflow.md` for
+> current behavior.
+
 **Status:** working direction note  
 **Date:** August 6, 2026  
 **Purpose:** explain where the quiz-generation system should go next, why the current model is limited, and why we should avoid adding LangChain or LangGraph right now.

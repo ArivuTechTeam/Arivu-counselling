@@ -1,12 +1,18 @@
 # Chunked quiz generation — BUILD PLAN (for approval)
 
+> **Superseded build plan.** Do not implement this document as written. The
+> shipped architecture uses a durable one-call topic analyzer by default,
+> checkpoint-aware retry, selected-range generation, and only retains persisted
+> chunk MAP/REDUCE as a compatibility path. See
+> `docs/chunked-generation-architecture.md`.
+
 **This is the plan to approve before any coding.** It finalises the decisions from
 discussion and lays out exactly what will be built, in what order.
 
 **Companion:** `docs/chunked-generation-architecture.md` (the "why/how", incl. the
 4-layer boundary-safety design). This doc is the "what we build".
 
-**Status:** awaiting approval. **No code will be written until you say go.**
+**Status:** historical pre-implementation plan.
 
 ---
 

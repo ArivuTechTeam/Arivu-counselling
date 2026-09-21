@@ -1,7 +1,8 @@
 # LLM prompt catalogue
 
-Every prompt the platform sends to an LLM, extracted **verbatim** from the live
-builder functions (`backend/app/services/*_prompts.py`, `topics.py`, `tutor.py`).
+Catalogue of the platform's principal prompt contracts. Long compatibility
+prompts and newer validation prompts are summarized rather than duplicated; the
+live builder functions under `backend/app/services/` are authoritative.
 
 Dynamic values are shown filled with an example (all 5 question types, cognitive
 level `mixed`, difficulty `medium`, 20 questions). The document text is shown as a
@@ -287,7 +288,32 @@ Extract every objective question from the attached document. It may be a scanned
 
 ---
 
-## 5. Topic extraction (`topics.py`)
+## 5. Topic analysis (`single_call_document_outline.py`)
+
+The Generate Quiz wizard does not use the older flat `topics.py` prompt below.
+It sends one bounded representation of every PDF page (or DOCX source section)
+and requests a two-level hierarchy:
+
+```text
+Organize the supplied teaching material into a universal two-level hierarchy.
+Groups are navigation labels only. Topics inside each group are the items a
+faculty member can select for quiz generation. Determine the number of groups
+and topics from the actual material: a short focused document may have only one
+or two topics, while a broad textbook should have many. Do not enforce a
+minimum. A contents page and headings are optional hints, never the sole
+authority. Use only the supplied material. Return no more than 30 selectable
+topics overall.
+```
+
+The response schema contains `document_title`, `groups`, `group_name`, and topic
+objects with `topic_name`, `covered_concepts`, `source_ranges`, and
+`evidence_locations`. Local code bounds and validates the locations and retrieves
+the actual evidence excerpts. The prompt never asks the provider to return
+source prose.
+
+### Legacy flat topic endpoint (`topics.py`)
+
+The older endpoint prompt remains in the code for compatibility:
 
 **SYSTEM:**
 ```
@@ -338,21 +364,25 @@ EXISTING SHORT NOTE: Depreciation spreads an asset's cost across the periods it 
 
 ---
 
-## 7. Large-document map-reduce generation (`generation_chunking.py` / `master_blueprint_synthesizer.py` / `map_reduce_prompts.py`)
+## 7. Map-reduce compatibility path (`generation_chunking.py` / `master_blueprint_synthesizer.py` / `map_reduce_prompts.py`)
 
-**Not catalogued verbatim in this document (gap, noted 2026-09-15).** Documents
-whose extracted text exceeds `CHUNKING_TRIGGER_CHARS` (default 100,000 chars)
-skip the single-call prompts in §1/§2 above and instead run a resumable,
-chunked background job: a "document profile" pass, then per-chunk MAP calls,
-then a REDUCE/synthesis call, via `complete_json_large()` (see the Model
-routing note above). The prompt bodies live in `map_reduce_prompts.py` and
-`master_blueprint_synthesizer.py` (188 lines each as of 2026-09-15) and were
-not re-extracted verbatim for this pass — treat those files, plus
-`docs/chunked-generation-architecture.md` (design intent) and
-`docs/ai-quiz-generation-large-docs-decision.md`, as the source of truth for
-this path until someone extracts the prompts here the way §1–§6 do.
+This is not selected automatically just because a document exceeds
+`CHUNKING_TRIGGER_CHARS`. The current `/analyze` endpoint enables the local
+outline/one-call path and disables costly multi-call fallback. The persisted
+profile → MAP → REDUCE implementation remains for explicit compatibility use.
+It follows `TOPIC_ANALYSIS_PROVIDER`, saves successful MAP chunks, blocks topic
+selection on partial coverage, and reduces only after every chunk succeeds.
+Read the live prompt builders and `docs/chunked-generation-architecture.md`.
+
+## 8. Question verification
+
+After generation, the verifier receives the candidate question plus bounded
+source evidence and returns a small structured decision. It uses
+`QUESTION_VERIFICATION_PROVIDER` (DeepSeek by default) with controlled fallback.
+Unsupported or weakly grounded questions remain subject to the mandatory faculty
+review gate; verification never publishes questions automatically.
 
 ---
 
-_Generated from the live prompt-builder functions. If a prompt changes in code,
-regenerate this file so it stays the single source of truth._
+_Keep this catalogue aligned with the live builders. The code, not copied prompt
+text in this file, is the final source of truth._
