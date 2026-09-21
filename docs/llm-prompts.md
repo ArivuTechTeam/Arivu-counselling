@@ -10,41 +10,32 @@ with `responseMimeType: application/json`.
 
 ## Model routing
 
-> Verified 2026-09-15 against `backend/app/lib/config.py` and
-> `backend/app/services/llm/`. `GEMINI_MODEL` (code default `gemini-3.5-flash`,
-> Railway-overridable) is the **full** Gemini tier and is what every text/JSON
-> feature below actually calls — there is currently **no separate cheap tier in
-> the live call path**, despite `GEMINI_BLUEPRINT_MODEL` (default
-> `gemini-3.5-flash-lite`) existing as a setting; see the last bullet.
+> Updated 2026-09-21 against `backend/app/lib/config.py` and
+> `backend/app/services/llm/`. Routing is stage-aware and environment controlled.
 
-- **Text / JSON features (items 1, 2, 3, 5, 6 below)** → `complete_with_fallback`
-  / `complete_json_with_fallback`: **Gemini `GEMINI_MODEL`** (temp 0.3, full
-  tier) → fallback **DeepSeek `deepseek-chat`** (temp 0.3).
+- **Topic analysis, quiz generation, regeneration, typed quiz extraction, and
+  question verification** → **DeepSeek `deepseek-flash` first**, with thinking
+  disabled, then the configured `AI_FALLBACK_PROVIDER` (Gemini by default).
+- **AI Tutor** retains the router's compatibility default (Gemini first) because
+  it is outside the generation/extraction migration.
 - **Extraction – vision path only** → `gemini_json_multimodal`: **Gemini
   `GEMINI_MODEL`** vision, temp 0.1, thinking disabled, `maxOutputTokens`, **no
   fallback** (this call explicitly defaults to the full model, not a cheap
   tier — see the docstring in `services/llm/structured.py`).
-- **Large-document map-reduce generation** (documents over
-  `CHUNKING_TRIGGER_CHARS`; see §7 below) → `complete_json_large`: **Gemini
-  `GEMINI_MODEL`** (thinking disabled, high output cap) → fallback **DeepSeek**
-  (raised output cap).
-- A schema-constrained `gemini_json()` helper defaulting to
-  `GEMINI_BLUEPRINT_MODEL` (the cheap Flash-Lite tier) exists in
-  `services/llm/structured.py` but, confirmed by `grep` on 2026-09-15, has **no
-  callers anywhere in the codebase** — blueprint generation, topic extraction,
-  and the AI tutor all run on the full `GEMINI_MODEL` tier via
-  `complete_json_with_fallback`, not this helper. Setting `GEMINI_BLUEPRINT_MODEL`
-  in Railway currently has no effect until a call site is wired to `gemini_json()`.
+- **Large-document map-reduce compatibility path** also follows
+  `TOPIC_ANALYSIS_PROVIDER`, with provider-specific output caps and truncation
+  detection.
+- Invalid JSON and provider/network errors both trigger the controlled fallback.
 
 | # | Feature | File | Providers |
 |---|---|---|---|
-| 1 | Quiz generation (single-call) | `generation.py` / `quiz_prompts.py` | Gemini (`GEMINI_MODEL`) → DeepSeek |
-| 2 | Blueprint generation (wizard) | `blueprint.py` / `blueprint_prompts.py` | Gemini (`GEMINI_MODEL`) → DeepSeek |
-| 3 | Regenerate one question | `review.py` / `quiz_prompts.py` | Gemini (`GEMINI_MODEL`) → DeepSeek |
-| 4 | Quiz extraction | `quiz_extraction.py` / `extraction_prompts.py` | text: Gemini→DeepSeek · scan: Gemini vision (both `GEMINI_MODEL`) |
-| 5 | Topic extraction | `topics.py` | Gemini (`GEMINI_MODEL`) → DeepSeek |
-| 6 | AI Tutor explanations | `tutor.py` | Gemini (`GEMINI_MODEL`) → DeepSeek |
-| 7 | Large-document map-reduce generation | `generation_chunking.py` / `master_blueprint_synthesizer.py` / `map_reduce_prompts.py` | Gemini (`GEMINI_MODEL`) → DeepSeek, not individually catalogued below (see §7) |
+| 1 | Quiz generation (single-call) | `generation.py` / `quiz_prompts.py` | DeepSeek → Gemini |
+| 2 | Blueprint generation (wizard) | `blueprint.py` / `blueprint_prompts.py` | DeepSeek → Gemini |
+| 3 | Regenerate one question | `review.py` / `quiz_prompts.py` | DeepSeek → Gemini |
+| 4 | Quiz extraction | `quiz_extraction.py` / `extraction_prompts.py` | typed text: DeepSeek→Gemini · scan/image: Gemini vision |
+| 5 | Topic analysis | `single_call_document_outline.py` | DeepSeek → Gemini |
+| 6 | AI Tutor explanations | `tutor.py` | Gemini → DeepSeek (compatibility default) |
+| 7 | Large-document map-reduce compatibility path | `generation_chunking.py` / `master_blueprint_synthesizer.py` / `map_reduce_prompts.py` | DeepSeek → Gemini |
 
 ---
 

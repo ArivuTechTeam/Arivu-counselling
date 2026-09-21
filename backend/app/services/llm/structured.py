@@ -19,10 +19,10 @@ import time
 import httpx
 
 from app.lib.config import get_settings
-from app.services.llm import complete_with_fallback
+import app.services.llm as llm_router
 from app.services.llm.base import LLMError
 from app.services.llm.gemini_http import post_gemini
-from app.services.ai_call_logging import log_ai_call
+from app.services.ai_call_logging import ai_provider_attempt, log_ai_call
 
 
 def gemini_json(
@@ -110,17 +110,41 @@ def gemini_json(
 
 
 def complete_json_with_fallback(
-    system_prompt: str, user_prompt: str
+    system_prompt: str,
+    user_prompt: str,
+    *,
+    preferred_provider: str | None = None,
+    schema: dict | None = None,
 ) -> tuple[dict, str]:
-    """Return a parsed JSON object plus the successful provider name."""
-    raw, provider = complete_with_fallback(system_prompt, user_prompt)
-    try:
-        parsed = json.loads(raw)
-    except json.JSONDecodeError as exc:
-        raise LLMError(f"{provider} returned invalid JSON.") from exc
-    if not isinstance(parsed, dict):
-        raise LLMError(f"{provider} returned a non-object JSON value.")
-    return parsed, provider
+    """Return structured JSON, falling back on invalid/empty provider output too.
+
+    Cross-provider fallback used to happen only for HTTP failures. Parsing now
+    occurs inside the provider loop so malformed JSON from the primary can safely
+    move to the configured fallback. A supplied schema is included in the prompt;
+    Pydantic/local validators remain authoritative for polymorphic question data.
+    """
+    if schema is not None:
+        system_prompt = (
+            system_prompt
+            + "\n\nReturn one JSON object matching this JSON Schema exactly:\n"
+            + json.dumps(schema, separators=(",", ":"), ensure_ascii=False)
+        )
+    failures: list[str] = []
+    for index, provider in enumerate(llm_router.get_providers(preferred_provider)):
+        try:
+            with ai_provider_attempt(was_fallback=index > 0):
+                raw = provider.complete(system_prompt, user_prompt)
+            parsed = json.loads(raw)
+            if not isinstance(parsed, dict):
+                raise LLMError(
+                    f"{provider.name} returned a non-object JSON value."
+                )
+            return parsed, provider.name
+        except json.JSONDecodeError:
+            failures.append(f"{provider.name} returned invalid JSON")
+        except LLMError as exc:
+            failures.append(f"{provider.name}: {exc}")
+    raise LLMError("All LLM providers failed → " + " | ".join(failures))
 
 
 def _gemini_json_large(
@@ -186,6 +210,13 @@ def _deepseek_json_large(
         ],
         "temperature": 0.2,
         "response_format": {"type": "json_object"},
+        "thinking": {
+            "type": (
+                "enabled"
+                if getattr(settings, "deepseek_thinking_enabled", False)
+                else "disabled"
+            )
+        },
         "max_tokens": max_tokens,
         "stream": False,
     }
@@ -209,14 +240,14 @@ def _deepseek_json_large(
             raw_response = None
         log_ai_call(
             provider="deepseek", model=settings.deepseek_model, request=payload,
-            response=raw_response, was_fallback=bool(getattr(settings, "gemini_api_key", None)), started_at=started_at,
+            response=raw_response, was_fallback=False, started_at=started_at,
             error_message=f"HTTP {exc.response.status_code}",
         )
         raise LLMError(f"DeepSeek returned HTTP {exc.response.status_code}.") from exc
     except httpx.HTTPError as exc:
         log_ai_call(
             provider="deepseek", model=settings.deepseek_model, request=payload,
-            response=None, was_fallback=bool(getattr(settings, "gemini_api_key", None)), started_at=started_at,
+            response=None, was_fallback=False, started_at=started_at,
             error_message=type(exc).__name__,
         )
         raise LLMError("DeepSeek request failed.") from exc
@@ -224,7 +255,7 @@ def _deepseek_json_large(
     data = resp.json()
     log_ai_call(
         provider="deepseek", model=settings.deepseek_model, request=payload,
-        response=data, was_fallback=bool(getattr(settings, "gemini_api_key", None)), started_at=started_at,
+        response=data, was_fallback=False, started_at=started_at,
     )
     choice = (data.get("choices") or [{}])[0]
     if choice.get("finish_reason") == "length":
@@ -242,41 +273,47 @@ def _deepseek_json_large(
     return parsed
 
 
-def complete_json_large(system_prompt: str, user_prompt: str) -> tuple[dict, str]:
+def complete_json_large(
+    system_prompt: str,
+    user_prompt: str,
+    *,
+    preferred_provider: str | None = None,
+) -> tuple[dict, str]:
     """JSON call for LARGE outputs (the Map-Reduce MAP/REDUCE steps).
 
-    Gemini primary (full model, thinking off, high output cap) with DeepSeek
-    fallback (raised cap). Unlike `complete_json_with_fallback`, both legs are
-    tuned so a big verbatim JSON response isn't silently truncated, and a
-    truncation is reported as a clear error rather than an opaque parse failure.
+    Use the requested stage provider first, then the configured fallback. Both
+    legs are tuned so a big verbatim JSON response isn't silently truncated,
+    and truncation is reported clearly rather than as an opaque parse failure.
     """
     settings = get_settings()
     failures: list[str] = []
-    if settings.gemini_api_key:
+    preferred = preferred_provider or "gemini"
+    fallback = getattr(settings, "ai_fallback_provider", "gemini")
+    order = list(dict.fromkeys([preferred, fallback, "deepseek", "gemini"]))
+    for index, provider in enumerate(order):
         try:
-            return (
-                _gemini_json_large(
-                    system_prompt,
-                    user_prompt,
-                    model=settings.gemini_model,
-                    max_output_tokens=settings.generation_map_max_output_tokens,
-                ),
-                "gemini",
-            )
+            with ai_provider_attempt(was_fallback=index > 0):
+                if provider == "deepseek" and settings.deepseek_api_key:
+                    return (
+                        _deepseek_json_large(
+                            system_prompt,
+                            user_prompt,
+                            max_tokens=settings.deepseek_max_output_tokens,
+                        ),
+                        "deepseek",
+                    )
+                if provider == "gemini" and settings.gemini_api_key:
+                    return (
+                        _gemini_json_large(
+                            system_prompt,
+                            user_prompt,
+                            model=settings.gemini_model,
+                            max_output_tokens=settings.generation_map_max_output_tokens,
+                        ),
+                        "gemini",
+                    )
         except LLMError as exc:
-            failures.append(f"gemini: {exc}")
-    if settings.deepseek_api_key:
-        try:
-            return (
-                _deepseek_json_large(
-                    system_prompt,
-                    user_prompt,
-                    max_tokens=settings.deepseek_max_output_tokens,
-                ),
-                "deepseek",
-            )
-        except LLMError as exc:
-            failures.append(f"deepseek: {exc}")
+            failures.append(f"{provider}: {exc}")
     if not failures:
         raise LLMError(
             "No LLM provider configured — set GEMINI_API_KEY or DEEPSEEK_API_KEY."

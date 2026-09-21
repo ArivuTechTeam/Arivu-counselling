@@ -68,11 +68,12 @@ def _usage(provider: str, response: dict | None) -> tuple[int | None, int | None
             _integer(usage.get("cachedContentTokenCount")),
             _integer(usage.get("thoughtsTokenCount")),
         )
+    completion_details = usage.get("completion_tokens_details") or {}
     return (
         _integer(usage.get("prompt_tokens")),
         _integer(usage.get("completion_tokens")),
         _integer(usage.get("prompt_cache_hit_tokens")),
-        None,
+        _integer(completion_details.get("reasoning_tokens")),
     )
 
 

@@ -248,7 +248,13 @@ def _generate_with_exact_mix(
     with ai_call_context(
         "blueprint_generation", tenant_id=tenant_id, document_id=document_id
     ):
-        data, provider = complete_json_with_fallback(system, user)
+        data, provider = complete_json_with_fallback(
+            system,
+            user,
+            preferred_provider=getattr(
+                get_settings(), "quiz_generation_provider", "deepseek"
+            ),
+        )
     try:
         return (
             _validated_generated_quiz(
@@ -286,7 +292,11 @@ def _generate_with_exact_mix(
             "blueprint_generation", tenant_id=tenant_id, document_id=document_id
         ):
             corrected, corrected_provider = complete_json_with_fallback(
-                corrective_system, user
+                corrective_system,
+                user,
+                preferred_provider=getattr(
+                    get_settings(), "quiz_generation_provider", "deepseek"
+                ),
             )
         return (
             _validated_generated_quiz(
@@ -410,7 +420,7 @@ def generate_and_persist_from_material(
     selected_only = selected_only_material or per_topic
     blueprint = build_blueprint(selected, total_questions, selected_only=selected_only)
 
-    # Generate (question writer) with Gemini primary and DeepSeek fallback.
+    # Generate with the configured stage provider and controlled fallback.
     system = build_blueprint_system_prompt(
         question_types,
         cognitive_level,
@@ -439,7 +449,13 @@ def generate_and_persist_from_material(
         with ai_call_context(
             "blueprint_generation", tenant_id=tid, document_id=source_document_id
         ):
-            data, provider = complete_json_with_fallback(system, user)
+            data, provider = complete_json_with_fallback(
+                system,
+                user,
+                preferred_provider=getattr(
+                    get_settings(), "quiz_generation_provider", "deepseek"
+                ),
+            )
         try:
             quiz = BPQuiz.model_validate(data)
         except ValidationError as exc:
@@ -483,7 +499,11 @@ def generate_and_persist_from_material(
                     "blueprint_generation", tenant_id=tid, document_id=source_document_id
                 ):
                     corrected, corrected_provider = complete_json_with_fallback(
-                        corrective_system, user
+                        corrective_system,
+                        user,
+                        preferred_provider=getattr(
+                            get_settings(), "quiz_generation_provider", "deepseek"
+                        ),
                     )
                 try:
                     corrected_quiz = BPQuiz.model_validate(corrected)

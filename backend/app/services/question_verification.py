@@ -8,6 +8,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, ValidationError
 
+from app.lib.config import get_settings
 from app.services.llm import LLMError
 from app.services.llm.structured import complete_json_with_fallback
 from app.services.question_grounding import GroundingCheck, validate_question_batch
@@ -101,7 +102,11 @@ def verify_generated_questions(
     checks = validate_question_batch(questions, material)
     try:
         data, _provider = complete_json_with_fallback(
-            _SYSTEM, "Verify this complete batch:\n" + _verification_payload(questions)
+            _SYSTEM,
+            "Verify this complete batch:\n" + _verification_payload(questions),
+            preferred_provider=getattr(
+                get_settings(), "question_verification_provider", "deepseek"
+            ),
         )
         parsed = VerifiedBatch.model_validate(data)
         by_index = {item.index: item for item in parsed.questions}

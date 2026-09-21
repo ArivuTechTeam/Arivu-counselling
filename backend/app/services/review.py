@@ -214,7 +214,13 @@ def regenerate_question(question_id: str, tenant_id: str) -> dict:
     )
     user = build_regen_user_prompt(existing, source_material)
     with ai_call_context("question_regeneration", tenant_id=tenant_id):
-        raw, _provider = complete_with_fallback(system, user)
+        raw, _provider = complete_with_fallback(
+            system,
+            user,
+            preferred_provider=getattr(
+                get_settings(), "question_regeneration_provider", "deepseek"
+            ),
+        )
 
     quiz = GeneratedQuiz.model_validate_json(raw)
     if not quiz.questions:
@@ -241,7 +247,13 @@ def regenerate_question(question_id: str, tenant_id: str) -> dict:
             "notes, passage, page, or uploaded file."
         )
         with ai_call_context("question_regeneration", tenant_id=tenant_id):
-            corrected_raw, _provider = complete_with_fallback(corrective_system, user)
+            corrected_raw, _provider = complete_with_fallback(
+                corrective_system,
+                user,
+                preferred_provider=getattr(
+                    get_settings(), "question_regeneration_provider", "deepseek"
+                ),
+            )
         corrected_quiz = GeneratedQuiz.model_validate_json(corrected_raw)
         if not corrected_quiz.questions:
             raise LLMError("Regeneration correction returned no question.")

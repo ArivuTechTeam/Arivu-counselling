@@ -42,7 +42,7 @@ The ArivuPro Quiz Platform is a **multi-tenant SaaS web application** that lets 
 - **Frontend:** Next.js 14 (React, TypeScript, Tailwind) → deployed on **Vercel**.
 - **Backend:** FastAPI (Python) REST API → deployed on **Railway**.
 - **Data & Auth:** **Supabase** (managed PostgreSQL + Auth + Storage).
-- **AI:** **Google Gemini** as the primary LLM, with **DeepSeek** as an automatic fallback.
+- **AI:** **DeepSeek** is the primary LLM for text workflows, with **Google Gemini** as the automatic fallback and the vision provider for scanned/image documents.
 
 **Multi-tenancy** is built in from day one: every business table carries a `tenant_id`, PostgreSQL **Row-Level Security (RLS)** policies isolate each institution's data, and one shared deployment serves all institutions (no per-customer servers).
 
@@ -126,8 +126,8 @@ flowchart TD
     BE -->|"service-role key"| SB_DB[("Supabase PostgreSQL<br/>+ Row-Level Security")]
     BE -->|"admin API"| SB_AUTH
     BE -->|"private bucket"| SB_ST["Supabase Storage"]
-    BE -->|"primary"| GEM["Google Gemini API"]
-    BE -->|"fallback"| DS["DeepSeek API"]
+    BE -->|"text fallback + vision"| GEM["Google Gemini API"]
+    BE -->|"text primary"| DS["DeepSeek API"]
 ```
 
 ### 3.3 Why this shape
@@ -152,11 +152,13 @@ flowchart TD
 | Database | PostgreSQL (via Supabase) | 15/16 managed | Supabase |
 | Auth | Supabase Auth (GoTrue), JWT (ES256) | — | Supabase |
 | File storage | Supabase Storage (private bucket) | — | Supabase |
-| Primary LLM | **Google Gemini** — `GEMINI_MODEL`, code default `gemini-3.5-flash` (verified 2026-09-15 in `backend/app/lib/config.py`; was `gemini-2.5-flash` when this table was first written). Used for **all** text/JSON features (generation, blueprint, regeneration, topic extraction, AI tutor) and vision extraction — see the note in §6.3 correcting the earlier "flash-lite tier" claim | — | Google |
-| Fallback LLM | **DeepSeek** — `deepseek-chat` (OpenAI-compatible) | — | DeepSeek |
+| Primary text LLM | **DeepSeek** — `deepseek-flash` (OpenAI-compatible), thinking disabled by default. Used for topic analysis, generation, regeneration, typed extraction, and verification. | — | DeepSeek |
+| Vision + text fallback LLM | **Google Gemini** — `GEMINI_MODEL`, code default `gemini-3.5-flash`. Used for scanned/image extraction and controlled fallback. | — | Google |
 | PDF/DOCX extraction | pdfplumber, python-docx | — | — |
 
-> **Important:** the historical project specification named DeepSeek as primary and Claude as fallback, and named SQLModel as the ORM. The **deployed code uses Gemini primary + DeepSeek fallback, has no Claude integration, and does not use SQLModel** (all DB access is via the Supabase client). See §13.
+> **Important:** routing is stage-aware and configurable. DeepSeek is the default
+> text provider, Gemini remains the vision provider and text fallback, no Claude
+> integration exists, and database access uses the Supabase client rather than SQLModel.
 
 ---
 
@@ -306,25 +308,12 @@ Guards: **public** / **student** / **staff** (teacher+admin+super) / **admin** (
 **Challenge** (`/api/v1`) — `/challenges` (create), `/challenges/{token}` (hub), `/challenges/{token}/accept` (student).
 
 ### 6.3 The AI / LLM layer (the heart of the product)
-- **Two providers behind one interface** (`services/llm/`), both called via raw HTTPS (`httpx`):
-  1. **Google Gemini** (`generativelanguage.googleapis.com`) — **primary**.
-  2. **DeepSeek** (OpenAI-compatible chat completions) — **fallback**.
-- **`complete_with_fallback(system, user)`** tries providers in order and returns the first success (with the provider name); if all fail it raises a clear error. Gemini is primary when `GEMINI_API_KEY` is set; DeepSeek is used if Gemini fails and `DEEPSEEK_API_KEY` is set.
-- **Correction, verified 2026-09-15 (this document previously described "two Gemini tiers" — that is no longer accurate for the live call path):**
-  standard generation, regeneration, blueprint generation, topic extraction, AND
-  the AI tutor **all** call `complete_with_fallback()` / `complete_json_with_fallback()`,
-  which route through `GeminiProvider.complete()` — and that always uses
-  `settings.gemini_model` (code default `gemini-3.5-flash`, JSON response mode,
-  temp 0.3). There is **no live code path that uses the cheaper
-  `GEMINI_BLUEPRINT_MODEL` tier** (default `gemini-3.5-flash-lite`): a
-  schema-constrained `gemini_json()` helper defaults to it in
-  `services/llm/structured.py`, but as of 2026-09-15 nothing in the codebase
-  calls that helper (confirmed by grep). Vision extraction
-  (`gemini_json_multimodal`) also explicitly defaults to the full `gemini_model`,
-  not the lite tier, per its own docstring ("vision extraction accuracy
-  matters"). See `docs/llm-prompts.md`'s "Model routing" section for the
+- **Two providers behind one interface** (`services/llm/`), both called via raw HTTPS (`httpx`): DeepSeek is the default text provider; Gemini is the scanned/image vision provider and default text fallback.
+- **Stage-aware routing** selects a preferred provider independently for topic analysis, quiz generation, typed extraction, verification, and regeneration. Missing credentials are skipped safely.
+- **Structured fallback** covers HTTP/provider failures and malformed JSON. DeepSeek thinking is disabled by default to control cost and latency; provider name, token use, fallback status, and estimated cost are logged.
+- **Vision isolation:** raw scanned PDFs/images are sent only to Gemini multimodal. Typed PDFs and DOCX files are extracted locally and only the relevant text is sent through the text router. See `docs/llm-prompts.md`'s "Model routing" section for the
   up-to-date picture, including the large-document map-reduce path
-  (`complete_json_large`, also full `gemini_model`).
+  (`complete_json_large`, which follows the configured topic-analysis provider).
 - **No embeddings / no vector search at runtime.** (A `vector(1536)` column exists on `questions` for future dedup, but nothing populates or queries it today.)
 - **Text extraction:** `pdfplumber` (PDF) and `python-docx` (DOCX). **No OCR** — scanned/image PDFs are rejected with a clear error from `documents.py`'s standard upload path; the separate `extraction.py` quiz-extraction path instead uses Gemini vision directly on scanned PDFs/images (no OCR library either way).
 
@@ -499,7 +488,7 @@ Teacher uploads PDF/DOCX
 [4] Build system + user prompt (exact JSON contract per question type & level)
         │
         ▼
-[5] complete_with_fallback()  →  Gemini (GEMINI_MODEL, primary)  →  DeepSeek (fallback)
+[5] complete_with_fallback()  →  DeepSeek (text primary)  →  Gemini (fallback)
         │
         ▼
 [6] Validate LLM output (Pydantic), enforce per-question shape, truncate to N
@@ -711,7 +700,7 @@ This is the biggest missing block for a "real SaaS":
 | **Quiz Set / Variant** | One upload creates a *set*; a set has *variants* (by cognitive level: theory/practical/mixed); a variant links to ordered questions. |
 | **Blueprint** | A weighted generation mode where the teacher assigns topic priorities and per-type counts. |
 | **Practice session** | A frozen set of questions a student practises; one table (`practice_sessions`) powers smart quiz, daily, exam, challenge, and revision via a `mode` field. |
-| **Fallback (LLM)** | If the primary AI provider (Gemini) fails, the backend automatically retries with the secondary (DeepSeek). |
+| **Fallback (LLM)** | If a stage's preferred text provider fails or returns invalid JSON, the backend tries its configured fallback. Vision remains Gemini-only. |
 | **Findings** | Deterministic, plain-language insights on the analytics dashboards — computed by rules, not AI. |
 
 ---

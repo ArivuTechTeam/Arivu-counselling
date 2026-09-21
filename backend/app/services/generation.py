@@ -142,7 +142,7 @@ def generate_quiz(
         raise ValueError("This document has no extractable text (scanned PDF?).")
     material = _select_material(extracted)
 
-    # 3) Build prompts and call the configured Gemini primary / DeepSeek fallback.
+    # 3) Build prompts and use the configured stage provider with fallback.
     system = build_system_prompt(question_types, cognitive_level, difficulty)
     user = build_user_prompt(
         material, num_questions, question_types, cognitive_level, difficulty
@@ -150,7 +150,13 @@ def generate_quiz(
     with ai_call_context(
         "quiz_generation", tenant_id=profile.tenant_id, document_id=document_id
     ):
-        raw, provider = complete_with_fallback(system, user)
+        raw, provider = complete_with_fallback(
+            system,
+            user,
+            preferred_provider=getattr(
+                get_settings(), "quiz_generation_provider", "deepseek"
+            ),
+        )
 
     # 4) Validate the model's JSON and student-facing wording. If the provider
     # violates a presentation rule, give it one explicit rewrite opportunity;
@@ -172,7 +178,11 @@ def generate_quiz(
             "quiz_generation", tenant_id=profile.tenant_id, document_id=document_id
         ):
             corrected_raw, corrected_provider = complete_with_fallback(
-                corrective_system, user
+                corrective_system,
+                user,
+                preferred_provider=getattr(
+                    get_settings(), "quiz_generation_provider", "deepseek"
+                ),
             )
         try:
             questions = _parse_and_validate_generated_quiz(

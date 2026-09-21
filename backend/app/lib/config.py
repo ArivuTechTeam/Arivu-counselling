@@ -63,6 +63,14 @@ def _boolean(name: str, default: bool = False) -> bool:
     raise RuntimeError(f"{name} must be true or false.")
 
 
+def _provider_name(name: str, default: str) -> str:
+    """Read a supported AI provider name and reject silent misrouting."""
+    value = os.getenv(name, default).strip().lower()
+    if value not in {"deepseek", "gemini"}:
+        raise RuntimeError(f"{name} must be deepseek or gemini.")
+    return value
+
+
 def _validated_url(name: str, *, allow_local_http: bool = False) -> str:
     """Require an absolute HTTPS URL (or explicit local HTTP URL)."""
     value = _require(name).rstrip("/")
@@ -148,7 +156,13 @@ class Settings:
         self.deepseek_base_url: str = os.getenv(
             "DEEPSEEK_BASE_URL", "https://api.deepseek.com"
         )
-        self.deepseek_model: str = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
+        self.deepseek_model: str = os.getenv("DEEPSEEK_MODEL", "deepseek-flash")
+        # Extraction and generation are structured transformation tasks. Keep
+        # thinking disabled by default so hidden reasoning does not add latency
+        # or output-token cost; it remains an explicit environment override.
+        self.deepseek_thinking_enabled: bool = _boolean(
+            "DEEPSEEK_THINKING_ENABLED", False
+        )
         # Display-only cost conversion for super-admin AI API observability.
         self.usd_to_inr_rate: float = _positive_float("USD_TO_INR_RATE", 83.0)
         # DeepSeek defaults non-thinking responses to 8K output tokens, but its
@@ -158,9 +172,14 @@ class Settings:
             65536,
             _positive_int("DEEPSEEK_MAX_OUTPUT_TOKENS", 65536),
         )
+        self.deepseek_structured_max_output_tokens: int = _positive_int(
+            "DEEPSEEK_STRUCTURED_MAX_OUTPUT_TOKENS", 16384
+        )
+        self.deepseek_request_timeout_seconds: float = _positive_float(
+            "DEEPSEEK_REQUEST_TIMEOUT_SECONDS", 240.0
+        )
 
-        # Gemini (Google). If a key is set, it becomes the PRIMARY model and
-        # DeepSeek (if configured) is the fallback.
+        # Gemini (Google) remains the vision provider and default text fallback.
         self.gemini_api_key: str | None = _optional_secret("GEMINI_API_KEY")
         self.gemini_base_url: str = os.getenv(
             "GEMINI_BASE_URL", "https://generativelanguage.googleapis.com/v1beta"
@@ -179,11 +198,39 @@ class Settings:
                 "or DEEPSEEK_API_KEY."
             )
 
-        # The blueprint quiz feature (topic extraction + blueprint generation)
-        # runs on the cheapest tier by default — Flash-Lite. Swappable to a
-        # stronger Flash model via env if quality needs a bump, no code change.
-        # NOTE: gemini-2.5-flash-lite is restricted for new API projects, so we
-        # default to the current cheapest tier, gemini-3.5-flash-lite.
+        # Stage-aware routing keeps cheap text work on DeepSeek while retaining
+        # Gemini for scanned/image vision and as a controlled fallback. A missing
+        # primary credential is handled by the router, which safely uses the
+        # configured fallback instead of failing at startup.
+        self.ai_fallback_provider: str = _provider_name(
+            "AI_FALLBACK_PROVIDER", "gemini"
+        )
+        self.topic_analysis_provider: str = _provider_name(
+            "TOPIC_ANALYSIS_PROVIDER", "deepseek"
+        )
+        self.quiz_generation_provider: str = _provider_name(
+            "QUIZ_GENERATION_PROVIDER", "deepseek"
+        )
+        self.typed_quiz_extraction_provider: str = _provider_name(
+            "TYPED_QUIZ_EXTRACTION_PROVIDER", "deepseek"
+        )
+        self.question_verification_provider: str = _provider_name(
+            "QUESTION_VERIFICATION_PROVIDER", "deepseek"
+        )
+        self.question_regeneration_provider: str = _provider_name(
+            "QUESTION_REGENERATION_PROVIDER", "deepseek"
+        )
+        self.vision_extraction_provider: str = _provider_name(
+            "VISION_EXTRACTION_PROVIDER", "gemini"
+        )
+        if self.vision_extraction_provider != "gemini":
+            raise RuntimeError(
+                "VISION_EXTRACTION_PROVIDER must remain gemini until the "
+                "DeepSeek multimodal adapter is enabled."
+            )
+
+        # Retained for direct Gemini schema-constrained calls and compatibility.
+        # Stage-aware text workflows use their configured provider/model instead.
         self.gemini_blueprint_model: str = os.getenv(
             "GEMINI_BLUEPRINT_MODEL", "gemini-3.5-flash-lite"
         )

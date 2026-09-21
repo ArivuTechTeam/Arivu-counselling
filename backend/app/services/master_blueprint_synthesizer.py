@@ -382,7 +382,13 @@ class MasterBlueprintSynthesizer:
                 with ai_call_context(
                     "topic_extraction_reduce", tenant_id=tenant_id, document_id=document_id
                 ):
-                    data, _provider = complete_json_large(REDUCE_SYSTEM, user)
+                    data, _provider = complete_json_large(
+                        REDUCE_SYSTEM,
+                        user,
+                        preferred_provider=getattr(
+                            get_settings(), "topic_analysis_provider", "deepseek"
+                        ),
+                    )
                 return apply_merge_plan(topics, data)
             except (LLMError, ValidationError) as exc:
                 last_error = exc

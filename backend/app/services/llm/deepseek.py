@@ -34,6 +34,16 @@ class DeepSeekProvider(LLMProvider):
             ],
             "temperature": 0.3,  # low = more consistent, less "creative" wording
             "response_format": {"type": "json_object"},
+            "thinking": {
+                "type": (
+                    "enabled"
+                    if getattr(settings, "deepseek_thinking_enabled", False)
+                    else "disabled"
+                )
+            },
+            "max_tokens": getattr(
+                settings, "deepseek_structured_max_output_tokens", 16384
+            ),
             "stream": False,
         }
         headers = {
@@ -43,7 +53,12 @@ class DeepSeekProvider(LLMProvider):
 
         started_at = time.perf_counter()
         try:
-            resp = httpx.post(url, json=payload, headers=headers, timeout=120.0)
+            resp = httpx.post(
+                url,
+                json=payload,
+                headers=headers,
+                timeout=getattr(settings, "deepseek_request_timeout_seconds", 240.0),
+            )
             resp.raise_for_status()
         except httpx.HTTPStatusError as exc:
             try:

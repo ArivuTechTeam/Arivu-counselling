@@ -176,7 +176,13 @@ class TopicExtractionPipeline:
                         hourly_limit=get_settings().rate_limit_topic_extraction_per_hour,
                         action_label="large-document analysis",
                     )
-                data, _provider = complete_json_large(MAP_SYSTEM, user)
+                data, _provider = complete_json_large(
+                    MAP_SYSTEM,
+                    user,
+                    preferred_provider=getattr(
+                        get_settings(), "topic_analysis_provider", "deepseek"
+                    ),
+                )
                 topics = validate_map_output(data)
                 for topic in topics:
                     align_topic_name_to_source(topic, content)

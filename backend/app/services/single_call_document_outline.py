@@ -13,7 +13,7 @@ from collections.abc import Callable
 
 from app.lib.config import get_settings
 from app.services.extraction import ExtractedText
-from app.services.llm.structured import gemini_json
+from app.services.llm.structured import complete_json_with_fallback
 
 
 MAX_INPUT_CHARS = 600_000
@@ -170,7 +170,6 @@ def _analysis_document(locations: dict[int, str], marker: str) -> str:
 def _analyse_once(
     document: str, location_count: int, document_title: str, marker: str
 ) -> dict:
-    settings = get_settings()
     system_prompt = (
         "Organize the supplied teaching material into a universal two-level hierarchy. "
         "Groups are navigation labels only. Topics inside each group are the items a "
@@ -196,16 +195,26 @@ def _analyse_once(
         "topics, covered concepts, inclusive source ranges, and strongest evidence "
         "locations. Do not invent content or location numbers."
     )
-    return gemini_json(
+    settings = get_settings()
+    preferred = getattr(settings, "topic_analysis_provider", "deepseek")
+    data, provider = complete_json_with_fallback(
         system_prompt,
         user_prompt,
-        OUTLINE_SCHEMA,
-        model=settings.gemini_blueprint_model,
-        temperature=None,
-        max_output_tokens=6_000,
-        thinking_level="minimal",
-        allow_model_fallback=False,
+        preferred_provider=preferred,
+        schema=OUTLINE_SCHEMA,
     )
+    data["_provider"] = provider
+    preferred_configured = bool(
+        getattr(
+            settings,
+            f"{preferred}_api_key",
+            None,
+        )
+    )
+    data["_provider_calls"] = (
+        2 if provider != preferred and preferred_configured else 1
+    )
+    return data
 
 
 def _bounded_ranges(raw: object, location_count: int) -> list[dict[str, int]]:
@@ -382,14 +391,23 @@ def build_single_call_ai_outline(
 
     if not topics:
         raise ValueError("The one-call analysis did not return a usable topic outline.")
+    provider = str(raw.get("_provider") or "saved-or-custom")
+    settings = get_settings()
+    if provider == "deepseek":
+        model = getattr(settings, "deepseek_model", "deepseek-flash")
+    elif provider == "gemini":
+        model = getattr(settings, "gemini_model", "gemini")
+    else:
+        model = provider
     return {
         "document_title": str(raw.get("document_title") or document_title).strip(),
         "analysis_mode": "single_call_ai_outline",
         "source_topic_count": len(topics),
         "topics": topics,
         "single_call_outline": {
-            "provider_calls": 1,
-            "model": get_settings().gemini_blueprint_model,
+            "provider_calls": int(raw.get("_provider_calls") or 1),
+            "provider": provider,
+            "model": model,
             "input_characters": len(labelled),
             "source_characters": len(extracted.text),
             "source_location_count": len(locations),
