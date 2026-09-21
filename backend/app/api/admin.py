@@ -955,7 +955,7 @@ def update_user(
 def _assert_tenant_course(service, *, course_id: str, tenant_id: str) -> dict:
     course = (
         service.table("courses")
-        .select("id, name, subdomain")
+        .select("id, name")
         .eq("id", course_id)
         .eq("tenant_id", tenant_id)
         .maybe_single()

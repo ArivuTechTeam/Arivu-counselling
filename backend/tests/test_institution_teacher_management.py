@@ -5,7 +5,7 @@ import re
 import unittest
 from collections import Counter
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 from uuid import uuid4
 
 from fastapi import HTTPException
@@ -15,6 +15,7 @@ from app.api.admin import (
     TeacherCreate,
     TemporaryPasswordReset,
     TeacherUpdate,
+    _assert_tenant_course,
     _tenant_course_exists,
     _validated_subject_ids,
     delete_user,
@@ -323,6 +324,24 @@ class InstitutionTeacherManagementTests(unittest.TestCase):
         self.assertEqual(roster["count"], 1)
         self.assertEqual([student["id"] for student in roster["students"]], ["student-a"])
         self.assertEqual(roster["students"][0]["email"], "student-a@example.com")
+
+    def test_course_lookup_only_selects_columns_that_exist_on_courses(self) -> None:
+        service = MagicMock()
+        query = service.table.return_value
+        query.select.return_value = query
+        query.eq.return_value = query
+        query.maybe_single.return_value = query
+        query.execute.return_value = SimpleNamespace(
+            data={"id": "course-a", "name": "First Year"}
+        )
+
+        course = _assert_tenant_course(
+            service, course_id="course-a", tenant_id="tenant-a"
+        )
+
+        service.table.assert_called_once_with("courses")
+        query.select.assert_called_once_with("id, name")
+        self.assertEqual(course, {"id": "course-a", "name": "First Year"})
 
     def test_cross_tenant_teacher_and_course_are_not_visible(self) -> None:
         with self.assertRaises(HTTPException) as teacher_error:
