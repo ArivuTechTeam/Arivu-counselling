@@ -2,7 +2,7 @@
 -- Only service_role can access this queue/RPCs; HTTP routes enforce teacher ownership.
 begin;
 
-create table public.faculty_jobs (
+create table if not exists public.faculty_jobs (
   id uuid primary key default gen_random_uuid(),
   tenant_id uuid not null references public.tenants(id) on delete cascade,
   created_by uuid not null references public.profiles(id) on delete cascade,
@@ -24,17 +24,17 @@ create table public.faculty_jobs (
   updated_at timestamptz not null default now(),
   unique (tenant_id, created_by, request_key)
 );
-create index faculty_jobs_owner on public.faculty_jobs(tenant_id, created_by, created_at desc);
+create index if not exists faculty_jobs_owner on public.faculty_jobs(tenant_id, created_by, created_at desc);
 -- The owner composite index starts with tenant_id, so add the FK column index
 -- needed for efficient profiles(id) cascades and owner-only maintenance.
-create index faculty_jobs_created_by on public.faculty_jobs(created_by);
-create index faculty_jobs_queue on public.faculty_jobs(available_at, created_at) where status in ('queued','running');
-create index faculty_jobs_running on public.faculty_jobs(tenant_id, lease_expires_at) where status = 'running';
+create index if not exists faculty_jobs_created_by on public.faculty_jobs(created_by);
+create index if not exists faculty_jobs_queue on public.faculty_jobs(available_at, created_at) where status in ('queued','running');
+create index if not exists faculty_jobs_running on public.faculty_jobs(tenant_id, lease_expires_at) where status = 'running';
 alter table public.faculty_jobs enable row level security;
 revoke all on public.faculty_jobs from public, anon, authenticated;
 grant all on public.faculty_jobs to service_role;
 
-create function public.enqueue_faculty_job(
+create or replace function public.enqueue_faculty_job(
   p_tenant uuid, p_actor uuid, p_key uuid, p_kind text, p_request jsonb,
   p_hash text, p_limit int
 ) returns jsonb language plpgsql security invoker set search_path = '' as $$
@@ -68,7 +68,7 @@ begin
   return to_jsonb(j);
 end $$;
 
-create function public.claim_faculty_job() returns jsonb
+create or replace function public.claim_faculty_job() returns jsonb
 language plpgsql security invoker set search_path = '' as $$
 declare j public.faculty_jobs;
 begin
@@ -93,7 +93,7 @@ begin
   return to_jsonb(j);
 end $$;
 
-create function public.update_faculty_job(
+create or replace function public.update_faculty_job(
   p_id uuid,p_tenant uuid,p_actor uuid,p_token uuid,p_action text,
   p_payload jsonb default null,p_retryable boolean default false
 ) returns boolean language plpgsql security invoker set search_path = '' as $$
@@ -124,7 +124,7 @@ begin
   return true;
 end $$;
 
-create function public.finish_faculty_job(p_id uuid,p_token uuid) returns jsonb
+create or replace function public.finish_faculty_job(p_id uuid,p_token uuid) returns jsonb
 language plpgsql security invoker set search_path = '' as $$
 declare
   j public.faculty_jobs; payload jsonb; item jsonb; qid uuid; sid uuid; vid uuid;
