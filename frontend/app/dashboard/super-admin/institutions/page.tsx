@@ -23,7 +23,7 @@ import { ErrorCard } from "@/components/ui/error-card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { SkeletonList } from "@/components/ui/skeleton";
 import { useToast } from "@/components/ui/toast";
-import { AlertTriangle, Eye, EyeOff, Pencil, Sparkles, X } from "@/components/ui/icons";
+import { AlertTriangle, Copy, Eye, EyeOff, Pencil, Sparkles, X } from "@/components/ui/icons";
 import {
   InstitutionRow,
   onboardInstitution,
@@ -38,6 +38,20 @@ import { useSessionStorageState } from "@/lib/use-session-storage-state";
 
 const field =
   "h-10 w-full rounded-md border border-input bg-background px-3 text-sm shadow-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20";
+const LOGO_MAX_BYTES = 1024 * 1024;
+
+function readLogo(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => reject(new Error("Could not read the selected logo."));
+    reader.readAsDataURL(file);
+  });
+}
+
+function institutionLoginUrl(subdomain: string) {
+  return `${window.location.origin}/login/${encodeURIComponent(subdomain)}`;
+}
 
 function OnboardForm({ onDone }: { onDone: () => void | Promise<void> }) {
   const { notify } = useToast();
@@ -72,6 +86,8 @@ function OnboardForm({ onDone }: { onDone: () => void | Promise<void> }) {
   const [error, setError] = useState<string | null>(null);
   const [ok, setOk] = useState<string | null>(null);
   const [credentials, setCredentials] = useState<TemporaryCredentials | null>(null);
+  const [logo, setLogo] = useState<File | null>(null);
+  const [createdLoginUrl, setCreatedLoginUrl] = useState<string | null>(null);
 
   function generatePassword() {
     setAdminPassword(generateTemporaryPassword());
@@ -82,6 +98,7 @@ function OnboardForm({ onDone }: { onDone: () => void | Promise<void> }) {
     e.preventDefault();
     setError(null);
     setOk(null);
+    setCreatedLoginUrl(null);
     if (!name.trim() || !subdomain.trim()) {
       const message = "Institution name and subdomain are required.";
       setError(message);
@@ -97,13 +114,25 @@ function OnboardForm({ onDone }: { onDone: () => void | Promise<void> }) {
     }
     setBusy(true);
     try {
+      if (
+        logo &&
+        (!["image/png", "image/jpeg"].includes(logo.type) ||
+          logo.size > LOGO_MAX_BYTES)
+      ) {
+        throw new Error("Logo must be a PNG or JPEG image no larger than 1 MB.");
+      }
+      const logoData = logo ? await readLogo(logo) : undefined;
+      const slug = subdomain.trim().toLowerCase();
       await onboardInstitution({
         name: name.trim(),
-        subdomain: subdomain.trim().toLowerCase(),
+        subdomain: slug,
         plan_tier: plan,
         admin_full_name: adminName.trim() || undefined,
         admin_email: adminEmail.trim() || undefined,
         admin_password: adminPassword || undefined,
+        logo_data: logoData,
+        logo_content_type: logo?.type,
+        logo_filename: logo?.name,
       });
       setOk(
         `Created "${name.trim()}"${adminEmail.trim() ? ` with admin ${adminEmail.trim()}` : ""}.`,
@@ -116,12 +145,14 @@ function OnboardForm({ onDone }: { onDone: () => void | Promise<void> }) {
         });
       }
       notify(`Institution "${name.trim()}" created successfully.`, "success");
+      setCreatedLoginUrl(institutionLoginUrl(slug));
       setName("");
       setSubdomain("");
       setPlan("free");
       setAdminName("");
       setAdminEmail("");
       setAdminPassword("");
+      setLogo(null);
       await onDone();
     } catch (err) {
       const message = err instanceof Error ? err.message : "Could not onboard institution.";
@@ -182,6 +213,20 @@ function OnboardForm({ onDone }: { onDone: () => void | Promise<void> }) {
               </select>
             </label>
           </div>
+
+          <label className="flex flex-col gap-1.5 text-sm font-medium">
+            Institution logo (optional)
+            <input
+              key={logo ? `${logo.name}-${logo.size}` : "empty-logo"}
+              className={`${field} h-auto py-2`}
+              type="file"
+              accept="image/png,image/jpeg"
+              onChange={(event) => setLogo(event.target.files?.[0] ?? null)}
+            />
+            <span className="text-xs font-normal text-muted-foreground">
+              PNG or JPEG, up to 1 MB. It appears above this institution&apos;s login form.
+            </span>
+          </label>
 
           <div className="rounded-lg border border-dashed p-4">
             <p className="mb-3 text-sm font-medium text-muted-foreground">
@@ -251,6 +296,28 @@ function OnboardForm({ onDone }: { onDone: () => void | Promise<void> }) {
               {ok}
             </div>
           )}
+          {createdLoginUrl && (
+            <div className="rounded-lg border border-primary/20 bg-primary/5 p-3 text-sm">
+              <p className="font-medium">Institution login link</p>
+              <div className="mt-2 flex flex-col gap-2 sm:flex-row sm:items-center">
+                <a
+                  className="min-w-0 break-all text-primary hover:underline"
+                  href={createdLoginUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  {createdLoginUrl}
+                </a>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => navigator.clipboard.writeText(createdLoginUrl)}
+                >
+                  <Copy size={14} className="mr-1.5" /> Copy
+                </Button>
+              </div>
+            </div>
+          )}
 
           <div>
             <Button type="submit" disabled={busy}>
@@ -283,6 +350,7 @@ function EditInstitutionDialog({
   const [isActive, setIsActive] = useState(institution.is_active);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [logo, setLogo] = useState<File | null>(null);
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
@@ -293,10 +361,21 @@ function EditInstitutionDialog({
     setBusy(true);
     setError(null);
     try {
+      if (
+        logo &&
+        (!["image/png", "image/jpeg"].includes(logo.type) ||
+          logo.size > LOGO_MAX_BYTES)
+      ) {
+        throw new Error("Logo must be a PNG or JPEG image no larger than 1 MB.");
+      }
+      const logoData = logo ? await readLogo(logo) : undefined;
       await updateInstitution(institution.id, {
         name: name.trim(),
         plan_tier: plan as "free" | "starter" | "growth" | "enterprise",
         is_active: isActive,
+        logo_data: logoData,
+        logo_content_type: logo?.type,
+        logo_filename: logo?.name,
       });
       await onSaved();
       onClose();
@@ -328,6 +407,18 @@ function EditInstitutionDialog({
         <label className="flex flex-col gap-1.5 text-sm font-medium">
           Institution name
           <input className={field} value={name} onChange={(event) => setName(event.target.value)} />
+        </label>
+        <label className="flex flex-col gap-1.5 text-sm font-medium">
+          Replace institution logo
+          <input
+            className={`${field} h-auto py-2`}
+            type="file"
+            accept="image/png,image/jpeg"
+            onChange={(event) => setLogo(event.target.files?.[0] ?? null)}
+          />
+          <span className="text-xs font-normal text-muted-foreground">
+            PNG or JPEG, up to 1 MB.
+          </span>
         </label>
         <label className="flex flex-col gap-1.5 text-sm font-medium">
           Plan
@@ -450,12 +541,23 @@ export default function InstitutionsPage() {
                         </span>
                       </td>
                       <td className="px-2 py-2.5 text-right">
-                        <button
-                          onClick={() => setEditing(r)}
-                          className="inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline"
-                        >
-                          <Pencil size={13} /> Manage
-                        </button>
+                        <div className="flex items-center justify-end gap-3 whitespace-nowrap">
+                          {r.subdomain && (
+                            <Link
+                              href={`/login/${encodeURIComponent(r.subdomain)}`}
+                              target="_blank"
+                              className="text-xs font-medium text-primary hover:underline"
+                            >
+                              Login page
+                            </Link>
+                          )}
+                          <button
+                            onClick={() => setEditing(r)}
+                            className="inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline"
+                          >
+                            <Pencil size={13} /> Manage
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   ))}

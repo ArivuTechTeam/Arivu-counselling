@@ -1079,3 +1079,59 @@
     transition-duration: 0.01ms !important;
   }
 }
+
+/* Neutral multi-tenant login. Institution identity is supplied by the tenant
+   link, so this surface deliberately contains no platform-owner branding. */
+.login-page.login-redesign,
+.login-redesign .login-auth {
+  background: #fff;
+}
+
+.login-redesign .login-layout {
+  display: block;
+  min-height: 100dvh;
+}
+
+.login-redesign .login-auth-scroll {
+  padding: clamp(32px, 7vh, 72px) 24px;
+}
+
+.login-redesign .login-auth-card {
+  width: min(440px, 100%);
+}
+
+.login-redesign .login-institution-logo {
+  display: flex;
+  min-height: 80px;
+  align-items: center;
+  margin-bottom: 30px;
+}
+
+.login-redesign .login-institution-logo img {
+  display: block;
+  width: auto;
+  max-width: min(280px, 100%);
+  height: auto;
+  max-height: 80px;
+  object-fit: contain;
+  object-position: left center;
+}
+
+@media (max-width: 900px) {
+  .login-redesign .login-auth {
+    background: #fff;
+  }
+
+  .login-redesign .login-auth-scroll {
+    padding-inline: 24px;
+  }
+
+  .login-redesign .login-institution-logo {
+    min-height: 64px;
+    margin-bottom: 24px;
+  }
+
+  .login-redesign .login-institution-logo img {
+    max-height: 64px;
+  }
+}

@@ -16,9 +16,12 @@ platform analytics.
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
 from collections import Counter
 from datetime import datetime, timedelta, timezone
 from typing import Callable, Literal
+from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field
@@ -26,6 +29,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from app.lib.auth import CurrentProfile, get_current_profile
 from app.lib.api_errors import auth_provisioning_error, public_error
 from app.lib.supabase import get_service_client
+from app.lib.storage import delete_bytes, upload_bytes
 from app.services.account_deletion import erase_account_data
 from app.services.teacher_access import replace_teacher_subjects
 
@@ -35,6 +39,8 @@ AUTH_USERS_PAGE_SIZE = 1000
 POSTGREST_PAGE_SIZE = 1000
 ADMIN_DIRECTORY_PAGE_SIZE = 100
 ADMIN_QUIZ_SET_PAGE_SIZE_MAX = 100
+INSTITUTION_LOGO_MAX_BYTES = 1024 * 1024
+INSTITUTION_LOGO_TYPES = {"image/png": "png", "image/jpeg": "jpg"}
 
 
 class StrictApiResponse(BaseModel):
@@ -2259,9 +2265,14 @@ async def platform_overview(
 
 # ── Super-admin: onboard a new institution (tenant) ──────────────────────────
 class TenantCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     name: str
     subdomain: str
     plan_tier: Literal["free", "starter", "growth", "enterprise"] = "free"
+    logo_data: str | None = Field(default=None, max_length=1_500_000)
+    logo_content_type: str | None = None
+    logo_filename: str | None = Field(default=None, max_length=255)
     # Optional first institution admin created alongside the tenant.
     admin_full_name: str | None = None
     admin_email: str | None = None
@@ -2269,9 +2280,63 @@ class TenantCreate(BaseModel):
 
 
 class TenantUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     name: str | None = None
     plan_tier: Literal["free", "starter", "growth", "enterprise"] | None = None
     is_active: bool | None = None
+    logo_data: str | None = Field(default=None, max_length=1_500_000)
+    logo_content_type: str | None = None
+    logo_filename: str | None = Field(default=None, max_length=255)
+
+
+def _decode_institution_logo(
+    *,
+    logo_data: str | None,
+    content_type: str | None,
+    filename: str | None,
+) -> tuple[bytes, str, str] | None:
+    """Validate a small PNG/JPEG logo and return bytes, MIME type and extension."""
+    supplied = [logo_data, content_type, filename]
+    if not any(supplied):
+        return None
+    if not logo_data or not content_type or not filename:
+        raise HTTPException(
+            status_code=400,
+            detail="Logo file, filename, and content type are required together.",
+        )
+    if content_type not in INSTITUTION_LOGO_TYPES:
+        raise HTTPException(
+            status_code=400,
+            detail="Institution logo must be a PNG or JPEG image.",
+        )
+    payload = (
+        logo_data.split(",", 1)[1]
+        if logo_data.startswith("data:") and "," in logo_data
+        else logo_data
+    )
+    try:
+        decoded = base64.b64decode(payload, validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise HTTPException(
+            status_code=400,
+            detail="Institution logo is not valid image data.",
+        ) from exc
+    if not decoded or len(decoded) > INSTITUTION_LOGO_MAX_BYTES:
+        raise HTTPException(
+            status_code=400,
+            detail="Institution logo must be no larger than 1 MB.",
+        )
+    is_png = decoded.startswith(b"\x89PNG\r\n\x1a\n")
+    is_jpeg = decoded.startswith(b"\xff\xd8\xff")
+    if (content_type == "image/png" and not is_png) or (
+        content_type == "image/jpeg" and not is_jpeg
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="Institution logo content does not match its file type.",
+        )
+    return decoded, content_type, INSTITUTION_LOGO_TYPES[content_type]
 
 
 @router.post("/platform/tenants", response_model=CreatedResult)
@@ -2281,6 +2346,11 @@ def onboard_institution(
     """Super-admin onboards a new institution (Stage 1 of the workflow)."""
     _require_super(profile)
     service = get_service_client()
+    logo = _decode_institution_logo(
+        logo_data=body.logo_data,
+        content_type=body.logo_content_type,
+        filename=body.logo_filename,
+    )
 
     name = body.name.strip()
     subdomain = body.subdomain.strip().lower()
@@ -2298,10 +2368,14 @@ def onboard_institution(
         )
     if body.admin_password:
         _validate_temporary_password(body.admin_password)
-    if not all(c.isalnum() or c == "-" for c in subdomain):
+    if (
+        not all(c.isalnum() or c == "-" for c in subdomain)
+        or not subdomain[0].isalnum()
+        or not subdomain[-1].isalnum()
+    ):
         raise HTTPException(
             status_code=400,
-            detail="Subdomain may only contain letters, numbers, and hyphens.",
+            detail="Subdomain must use letters, numbers, and internal hyphens only.",
         )
     taken = (
         service.table("tenants").select("id").eq("subdomain", subdomain).execute().data
@@ -2331,6 +2405,42 @@ def onboard_institution(
             exception=exc,
         ) from exc
     tenant_id = created.data[0]["id"]
+    logo_path: str | None = None
+
+    if logo is not None:
+        logo_bytes, logo_content_type, logo_extension = logo
+        logo_path = f"tenant-logos/{tenant_id}/{uuid4().hex}.{logo_extension}"
+        try:
+            upload_bytes(logo_path, logo_bytes, logo_content_type)
+            logo_update = (
+                service.table("tenants")
+                .update({"logo_url": logo_path})
+                .eq("id", tenant_id)
+                .execute()
+            )
+            if not logo_update.data:
+                raise RuntimeError("Tenant logo path was not persisted.")
+        except Exception as exc:  # noqa: BLE001
+            if logo_path:
+                try:
+                    delete_bytes(logo_path)
+                except Exception:  # noqa: BLE001
+                    pass
+            try:
+                _rollback_tenant(service, tenant_id)
+            except Exception as rollback_exc:  # noqa: BLE001
+                raise public_error(
+                    500,
+                    "Institution setup requires operator review.",
+                    operation="roll back institution logo setup",
+                    exception=rollback_exc,
+                ) from exc
+            raise public_error(
+                400,
+                "We couldn't store the institution logo. Please try another image.",
+                operation="store institution logo",
+                exception=exc,
+            ) from exc
 
     if body.admin_email and body.admin_password:
         try:
@@ -2367,6 +2477,11 @@ def onboard_institution(
                 _rollback_tenant(service, tenant_id)
             except Exception as cleanup_exc:  # noqa: BLE001
                 rollback_error = rollback_error or cleanup_exc
+            if logo_path:
+                try:
+                    delete_bytes(logo_path)
+                except Exception as cleanup_exc:  # noqa: BLE001
+                    rollback_error = rollback_error or cleanup_exc
             if rollback_error is not None:
                 raise public_error(
                     500,
@@ -2390,24 +2505,47 @@ def update_institution(
 ) -> dict:
     """Update safe tenant lifecycle fields; permanent deletion is intentionally absent."""
     _require_super(profile)
-    changes = body.model_dump(exclude_none=True)
+    logo = _decode_institution_logo(
+        logo_data=body.logo_data,
+        content_type=body.logo_content_type,
+        filename=body.logo_filename,
+    )
+    changes = body.model_dump(
+        exclude_none=True,
+        exclude={"logo_data", "logo_content_type", "logo_filename"},
+    )
     if "name" in changes:
         changes["name"] = changes["name"].strip()
         if not changes["name"]:
             raise HTTPException(status_code=400, detail="Institution name is required.")
-    if not changes:
+    if not changes and logo is None:
         raise HTTPException(status_code=400, detail="Choose at least one field to update.")
 
     service = get_service_client()
     existing = (
         service.table("tenants")
-        .select("id")
+        .select("id, logo_url")
         .eq("id", tenant_id)
         .maybe_single()
         .execute()
     )
     if existing is None or not existing.data:
         raise HTTPException(status_code=404, detail="Institution not found.")
+    previous_logo_path = existing.data.get("logo_url")
+    new_logo_path: str | None = None
+    if logo is not None:
+        logo_bytes, logo_content_type, logo_extension = logo
+        new_logo_path = f"tenant-logos/{tenant_id}/{uuid4().hex}.{logo_extension}"
+        try:
+            upload_bytes(new_logo_path, logo_bytes, logo_content_type)
+        except Exception as exc:  # noqa: BLE001
+            raise public_error(
+                400,
+                "We couldn't store the institution logo. Please try another image.",
+                operation="replace institution logo",
+                exception=exc,
+            ) from exc
+        changes["logo_url"] = new_logo_path
     try:
         updated = (
             service.table("tenants")
@@ -2418,6 +2556,11 @@ def update_institution(
             or []
         )
     except Exception as exc:  # noqa: BLE001
+        if new_logo_path:
+            try:
+                delete_bytes(new_logo_path)
+            except Exception:  # noqa: BLE001
+                pass
         raise public_error(
             400,
             "We couldn't update this institution. Please try again.",
@@ -2426,6 +2569,17 @@ def update_institution(
         ) from exc
     if not updated:
         raise HTTPException(status_code=404, detail="Institution not found.")
+    if (
+        new_logo_path
+        and isinstance(previous_logo_path, str)
+        and previous_logo_path.startswith("tenant-logos/")
+    ):
+        try:
+            delete_bytes(previous_logo_path)
+        except Exception:  # noqa: BLE001
+            # The new logo is already committed; stale-file cleanup must not
+            # turn a successful settings update into a user-facing failure.
+            pass
     row = updated[0]
     return {
         "id": str(row["id"]),

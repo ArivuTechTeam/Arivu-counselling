@@ -1,11 +1,11 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 
 import { GoogleAuthButton } from "@/components/auth/google-auth-button";
-import { Brand } from "@/components/ui/brand";
+import { getInstitutionBranding, InstitutionBranding } from "@/lib/api";
 import { signInWithGoogle } from "@/lib/google-auth";
 import { safeDashboardNext } from "@/lib/safe-next";
 import { createClient } from "@/lib/supabase";
@@ -38,14 +38,9 @@ function ArrowIcon() {
   );
 }
 
-const PROOF_POINTS = [
-  { value: "1,00,000+", label: "students trained" },
-  { value: "25+", label: "college tie-ups" },
-  { value: "4.8", label: "learner rating" },
-];
-
 export default function LoginPage() {
   const router = useRouter();
+  const pathname = usePathname();
   const pageRef = useRef<HTMLDivElement>(null);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -54,6 +49,11 @@ export default function LoginPage() {
   const [notice, setNotice] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [googleLoading, setGoogleLoading] = useState(false);
+  const [branding, setBranding] = useState<InstitutionBranding | null>(null);
+  const [brandingError, setBrandingError] = useState<string | null>(null);
+  const institutionSlug = pathname.startsWith("/login/")
+    ? decodeURIComponent(pathname.slice("/login/".length).split("/")[0] ?? "")
+    : "";
 
   function requestedDestination() {
     return safeDashboardNext(
@@ -114,6 +114,25 @@ export default function LoginPage() {
     }
   }, []);
 
+  useEffect(() => {
+    let active = true;
+    setBranding(null);
+    setBrandingError(null);
+    if (!institutionSlug) return () => { active = false; };
+    getInstitutionBranding(institutionSlug)
+      .then((result) => {
+        if (active) setBranding(result);
+      })
+      .catch(() => {
+        if (active) {
+          setBrandingError(
+            "This institution login link is unavailable. You can still sign in below.",
+          );
+        }
+      });
+    return () => { active = false; };
+  }, [institutionSlug]);
+
   // Match the mobile layout to the visible viewport when the software
   // keyboard opens. This keeps the primary action reachable on iOS/Android.
   useEffect(() => {
@@ -163,55 +182,21 @@ export default function LoginPage() {
   return (
     <div className="login-page login-redesign" ref={pageRef}>
       <main className="login-layout">
-        <section className="login-story" aria-labelledby="login-story-title">
-          <span className="login-story-orbit login-story-orbit-large" aria-hidden="true" />
-          <span className="login-story-orbit login-story-orbit-small" aria-hidden="true" />
-
-          <header className="login-story-brand">
-            <span className="login-brand-surface">
-              <Brand height={32} />
-            </span>
-          </header>
-
-          <div className="login-story-content">
-            <p className="login-kicker">Assessments built around your learning</p>
-            <h1 id="login-story-title">
-              Learn with clarity.<br />
-              <span>Progress with confidence.</span>
-            </h1>
-            <p className="login-story-copy">
-              Practice and assessments grounded in your institution&apos;s course
-              material—designed for meaningful feedback, not guesswork.
-            </p>
-
-            <div className="login-proof" aria-label="ArivuPro at a glance">
-              {PROOF_POINTS.map((point) => (
-                <div className="login-proof-item" key={point.label}>
-                  <strong>{point.value}</strong>
-                  <span>{point.label}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          <footer className="login-story-footer">
-            <a href="https://www.arivupro.com" target="_blank" rel="noreferrer">
-              Explore ArivuPro Academy
-              <ArrowIcon />
-            </a>
-            <span>Learning partner for ambitious students</span>
-          </footer>
-        </section>
-
         <section className="login-auth" aria-labelledby="login-title">
           <div className="login-auth-scroll">
             <div className="login-auth-card">
-              <div className="login-mobile-brand">
-                <Brand height={30} />
-              </div>
+              {branding?.logo_url && (
+                <div className="login-institution-logo">
+                  {/* The source is a short-lived URL from the private logo bucket. */}
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img src={branding.logo_url} alt={`${branding.name} logo`} />
+                </div>
+              )}
 
               <header className="login-auth-header">
-                <p className="login-auth-kicker">ArivuPro Quiz Platform</p>
+                <p className="login-auth-kicker">
+                  {branding?.name ?? "Quiz platform"}
+                </p>
                 <h2 id="login-title">Welcome back</h2>
                 <p>Sign in to continue to your learning dashboard.</p>
               </header>
@@ -227,6 +212,12 @@ export default function LoginPage() {
                   <div className="login-message login-message-error" role="alert">
                     <span aria-hidden="true">!</span>
                     <p>{error}</p>
+                  </div>
+                )}
+                {brandingError && (
+                  <div className="login-message login-message-info" role="status">
+                    <span aria-hidden="true">i</span>
+                    <p>{brandingError}</p>
                   </div>
                 )}
 
@@ -306,7 +297,7 @@ export default function LoginPage() {
               </form>
 
               <div className="login-register">
-                <p>New to ArivuPro?</p>
+                <p>New here?</p>
                 <Link href="/signup">Create a student account <ArrowIcon /></Link>
               </div>
 

@@ -19,6 +19,7 @@ Google sign-in requires the additional provider and redirect configuration in
   super-admin account can sign in.
 - [ ] Decide the institution name, a unique lowercase subdomain slug, plan,
   first administrator's email, and a temporary password.
+- [ ] Prepare an optional institution logo as PNG or JPEG, no larger than 1 MB.
 - [ ] In Supabase **Authentication → Providers → Email**, confirm whether email
   confirmation is enabled. If enabled, verify that confirmation emails are
   delivered before inviting students. The signup screen requires students to
@@ -35,6 +36,8 @@ Google sign-in requires the additional provider and redirect configuration in
      hyphens. The current application stores this identifier but does not use
      it as a live custom domain yet.
    - **Plan** — `Free`, `Starter`, `Growth`, or `Enterprise`.
+   - **Institution logo** — optional PNG or JPEG up to 1 MB. This is stored
+     privately and displayed only through a time-limited URL.
    - **First institution admin** — enter full name, email, and temporary
      password. All three fields must be supplied together.
 4. Select **Onboard institution** once. Wait for the green success message and
@@ -50,9 +53,12 @@ Google sign-in requires the additional provider and redirect configuration in
 
    Confirm exactly one active row is returned and save its `id` for the Vercel
    step below. Do not copy the earlier local-development tenant ID.
-6. Give the institution admin the login URL, email, and temporary password over
-   a secure channel. On first login, the application requires the admin to set
-   a new password before using other backend features.
+6. Copy the generated `/login/{subdomain}` URL from the success panel (or use
+   **Login page** in the institution table). Give the institution admin that
+   URL, email, and temporary password over a secure channel. The page displays
+   the institution's logo above the neutral login form. On first login, the
+   application requires the admin to set a new password before using other
+   backend features.
 
 If administrator creation fails, the backend removes the newly created tenant
 instead of leaving a tenant without its first admin. Correct the reported error

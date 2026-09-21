@@ -27,6 +27,7 @@ from app.api import (
     academics,
     admin,
     auth_account,
+    branding,
     challenge,
     documents,
     extraction,
@@ -253,6 +254,7 @@ async def safe_unhandled_error(request: Request, _exception: Exception) -> JSONR
 # --- Routers ------------------------------------------------------------
 app.include_router(academics.router)
 app.include_router(auth_account.router)
+app.include_router(branding.router)
 app.include_router(institution_admin.router)
 app.include_router(super_admin.router)
 app.include_router(challenge.router)

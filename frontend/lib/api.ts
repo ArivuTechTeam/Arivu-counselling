@@ -1464,6 +1464,9 @@ export type OnboardInstitutionInput = {
   admin_full_name?: string;
   admin_email?: string;
   admin_password?: string;
+  logo_data?: string;
+  logo_content_type?: string;
+  logo_filename?: string;
 };
 export const onboardInstitution = (input: OnboardInstitutionInput) =>
   jsonRequest<{ created: boolean }>("/api/v1/platform/tenants", "POST", input);
@@ -1472,6 +1475,9 @@ export type InstitutionUpdateInput = {
   name?: string;
   plan_tier?: "free" | "starter" | "growth" | "enterprise";
   is_active?: boolean;
+  logo_data?: string;
+  logo_content_type?: string;
+  logo_filename?: string;
 };
 export type InstitutionDetails = {
   id: string;
@@ -1483,6 +1489,23 @@ export type InstitutionDetails = {
 };
 export const updateInstitution = (id: string, input: InstitutionUpdateInput) =>
   jsonRequest<InstitutionDetails>(`/api/v1/platform/tenants/${id}`, "PATCH", input);
+
+export type InstitutionBranding = {
+  name: string;
+  subdomain: string;
+  logo_url: string | null;
+};
+export async function getInstitutionBranding(
+  subdomain: string,
+): Promise<InstitutionBranding> {
+  const response = await apiFetch(
+    `${API_BASE}/api/v1/public/institutions/${encodeURIComponent(subdomain)}/branding`,
+  );
+  if (!response.ok) {
+    return apiError(response, "Institution login link not found.");
+  }
+  return response.json();
+}
 
 export type QuestionBankCourse = {
   course: string;
