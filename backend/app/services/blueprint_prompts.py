@@ -174,6 +174,8 @@ def build_blueprint_user_prompt(
     return (
         f"Write exactly {blueprint['total']} questions in total from the "
         "material below.\n"
+        "Never pad the requested count with repeated objectives or unsupported facts. "
+        'If the source cannot support enough distinct questions, return {"source_insufficient":true,"questions":[]} instead.\n'
         f"Allowed types (mix them): {types}.\n"
         f"Cognitive level: {cognitive_level}. Difficulty: {difficulty}.\n\n"
         f"{type_mix_block}"

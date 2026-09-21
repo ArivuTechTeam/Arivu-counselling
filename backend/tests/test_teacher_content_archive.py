@@ -7,7 +7,7 @@ from unittest.mock import patch
 from fastapi import HTTPException
 
 from app.api.documents import archive_document, list_documents
-from app.api.quiz import archive_quiz_set, list_quiz_sets
+from app.api.quiz import archive_quiz_set, list_quiz_sets, restore_quiz_set
 from app.lib.auth import CurrentProfile
 
 
@@ -81,6 +81,34 @@ def _teacher(tenant: str = "t1") -> CurrentProfile:
 
 
 class TeacherContentArchiveTests(unittest.TestCase):
+    def test_archived_list_and_restore_preserve_content_and_isolate_owners(self):
+        original = dict(id="archived", tenant_id="t1", created_by="teacher-1",
+                        title="Commerce", status="archived", published_at=None)
+        service = _Service({
+            "quiz_sets": [original.copy(), dict(original, id="active", status="published"),
+                          dict(original, id="foreign", tenant_id="other"),
+                          dict(original, id="colleague", created_by="teacher-2")],
+            "questions": [{"id": "q1", "review_status": "approved"}],
+            "quiz_attempts": [{"id": "a1", "score": 8}],
+        })
+        with patch("app.api.quiz.get_service_client", return_value=service):
+            self.assertEqual([r["id"] for r in list_quiz_sets(_teacher(), archived=True)], ["archived"])
+            for inaccessible in ("foreign", "colleague"):
+                with self.assertRaises(HTTPException) as raised:
+                    restore_quiz_set(inaccessible, _teacher())
+                self.assertEqual(raised.exception.status_code, 404)
+            with self.assertRaises(HTTPException) as raised:
+                restore_quiz_set("active", _teacher())
+            self.assertEqual(raised.exception.status_code, 409)
+            result = restore_quiz_set("archived", _teacher())
+            self.assertEqual(result["status"], "draft")
+            self.assertIsNone(result["published_at"])
+            self.assertEqual(list_quiz_sets(_teacher(), archived=True), [])
+            self.assertEqual({r["id"] for r in list_quiz_sets(_teacher())}, {"archived", "active"})
+        self.assertEqual(service.db["questions"], [{"id": "q1", "review_status": "approved"}])
+        self.assertEqual(service.db["quiz_attempts"], [{"id": "a1", "score": 8}])
+        self.assertEqual(service.db["quiz_sets"][1]["status"], "published")
+
     def test_quiz_list_returns_only_the_requested_page(self) -> None:
         service = _Service({"quiz_sets": [
             {

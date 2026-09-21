@@ -29,7 +29,8 @@ from app.lib.auth import CurrentProfile
 from app.lib.config import get_settings
 from app.lib.storage import download_bytes
 from app.lib.supabase import get_service_client
-from app.services.extraction import MIN_READABLE_PDF_TEXT_CHARS, extract_text
+from app.services.extraction import MIN_READABLE_PDF_TEXT_CHARS, extract_text, extract_text_with_pages
+from app.services.import_fidelity import inventory, question_chunks, reconcile
 from app.services.extraction_prompts import (
     EXTRACTION_SYSTEM,
     EXTRACTION_USER_FILE,
@@ -63,10 +64,52 @@ class ExtractedQuestion(GeneratedQuestion):
     confidence: float | None = Field(default=None, ge=0, le=1)
     is_pyq: bool = False
     year: str | None = None
+    source_number: str | None = None
+    verification_status: str = "needs_teacher_review"
+    verification_warnings: list[str] = Field(default_factory=list)
 
 
 class ExtractedQuiz(BaseModel):
     questions: list[ExtractedQuestion]
+
+
+def _validate_import_candidates(raw: dict) -> tuple[list[ExtractedQuestion], dict]:
+    """Account for every model candidate without claiming full source coverage."""
+    candidates = raw.get("questions") or []
+    if not isinstance(candidates, list):
+        raise LLMError("Extraction returned an invalid question list.")
+    questions: list[ExtractedQuestion] = []
+    issues: list[dict] = []
+    for index, candidate in enumerate(candidates, start=1):
+        try:
+            question = ExtractedQuestion.model_validate(candidate)
+            question.verification_status = "needs_teacher_review"
+            if not question.verification_warnings:
+                question.verification_warnings = ["Imported answer is unconfirmed; compare with the original paper before approval."]
+            question.check_shape()
+            if not question.question_text.strip():
+                raise ValueError("Question text is empty.")
+            questions.append(question)
+        except (ValidationError, ValueError) as exc:
+            reason = "Question fields are missing or invalid." if isinstance(exc, ValidationError) else str(exc)
+            issues.append({
+                "candidate_index": index,
+                "question_preview": str(candidate.get("question_text") or "")[:240] if isinstance(candidate, dict) else "",
+                "reason": reason,
+            })
+    source_inventory = raw.get("source_inventory")
+    if isinstance(source_inventory, dict):
+        invalid = {issue["candidate_index"] for issue in issues}
+        source_inventory = {**source_inventory, "items": [
+            {**item, "state": "unresolved" if item["candidate_index"] in invalid else "imported"}
+            for item in source_inventory.get("items", [])]}
+    return questions, {
+        "candidates": len(candidates), "imported": len(questions),
+        "skipped": len(issues), "issues": issues,
+        "coverage_verified": False,
+        "source_inventory": source_inventory,
+        "source_manifest": raw.get("source_manifest"),
+    }
 
 
 def _now() -> str:
@@ -98,43 +141,19 @@ def _vision_extract(
 
 
 def _chunk_text(text: str, max_chars: int) -> list[str]:
-    """Split text into <= max_chars chunks at paragraph boundaries, so we don't
-    cut a question in half. A single paragraph larger than max_chars is
-    hard-split as a last resort."""
-    chunks: list[str] = []
-    buf = ""
-    for para in text.split("\n\n"):
-        if buf and len(buf) + len(para) + 2 > max_chars:
-            chunks.append(buf)
-            buf = para
-        else:
-            buf = f"{buf}\n\n{para}" if buf else para
-    if buf:
-        chunks.append(buf)
-
-    # Break any oversized single paragraph down to the char budget.
-    bounded: list[str] = []
-    for chunk in chunks:
-        if len(chunk) <= max_chars:
-            bounded.append(chunk)
-        else:
-            for i in range(0, len(chunk), max_chars):
-                bounded.append(chunk[i : i + max_chars])
-    return bounded
+    """Keep complete question blocks together or reject an oversized block."""
+    return question_chunks(text, max_chars)
 
 
 def _merge_questions(results: list[dict]) -> list[dict]:
-    """Flatten questions from every chunk and drop duplicates (same question
-    text), which can appear if a question straddles a chunk boundary."""
-    seen: set[str] = set()
-    merged: list[dict] = []
-    for result in results:
-        for q in result.get("questions") or []:
-            key = " ".join(str(q.get("question_text", "")).lower().split())
-            if key and key not in seen:
-                seen.add(key)
-                merged.append(q)
-    return merged
+    """Preserve source occurrences in chunk order, including repeated stems.
+
+    Chunks do not overlap and we have no reliable source occurrence IDs yet.
+    Even identical content can occur in different paper sections; text equality
+    is insufficient evidence to delete an imported question. Invalid candidates
+    also pass through so validation can account for them in the import receipt.
+    """
+    return [q for result in results for q in (result.get("questions") or [])]
 
 
 def _extract_text_chunk(
@@ -164,12 +183,12 @@ def _extract_text_chunk(
 
 def _text_extract(
     text: str, *, tenant_id: str | None = None, document_id: str | None = None,
-    job_id: str | None = None,
+    job_id: str | None = None, page_spans: tuple = (),
 ) -> tuple[dict, str]:
     """Parse locally extracted text with the configured text provider and fallback.
 
     Small documents go in one call. Large ones (120-150+ pages) are split into
-    bounded chunks extracted in parallel, then merged + de-duplicated — so no
+    bounded chunks extracted in parallel, then merged in source order — so no
     single call has a huge, slow, timeout-prone output.
     """
     text = text.strip()
@@ -178,17 +197,24 @@ def _text_extract(
 
     settings = get_settings()
     chunk_chars = settings.extraction_text_chunk_chars
+    source = inventory(text)
+    for item in source["items"]:
+        pages = [span.page_number for span in page_spans
+                 if span.char_start < item["offset"] + len(item["text"]) and span.char_end > item["offset"]]
+        if pages:
+            item.update(page_start=min(pages), page_end=max(pages))
     if len(text) <= chunk_chars:
         with ai_call_context(
             "quiz_extraction", tenant_id=tenant_id, document_id=document_id, job_id=job_id
         ):
-            return complete_json_with_fallback(
+            raw, provider = complete_json_with_fallback(
                 EXTRACTION_SYSTEM,
                 build_extraction_user_text(text),
                 preferred_provider=getattr(
                     settings, "typed_quiz_extraction_provider", "deepseek"
                 ),
             )
+        return reconcile(raw, source), provider
 
     chunks = _chunk_text(text, chunk_chars)
     workers = max(1, min(settings.extraction_chunk_concurrency, len(chunks)))
@@ -206,7 +232,7 @@ def _text_extract(
 
     merged = _merge_questions([raw for raw, _ in pairs])
     provider = pairs[0][1] if pairs else "text"
-    return {"questions": merged}, f"{provider} (chunked x{len(chunks)})"
+    return reconcile({"questions": merged}, source), f"{provider} (chunked x{len(chunks)})"
 
 
 def _extract_document_content(
@@ -239,14 +265,41 @@ def _extract_document_content(
     # layer can't be read at all.
     if ext == "pdf":
         try:
-            text = extract_text(content, "pdf")
+            extracted = extract_text_with_pages(content, "pdf")
+            text = extracted.text
         except Exception:  # noqa: BLE001 - unreadable text layer -> treat as scanned
-            text = ""
-        if len(text.strip()) >= MIN_READABLE_PDF_TEXT_CHARS:
-            return _text_extract(text, tenant_id=tenant_id, document_id=document_id, job_id=job_id)
-        return _vision_extract(
-            "application/pdf", content, tenant_id=tenant_id, document_id=document_id, job_id=job_id
+            return _vision_extract(
+                "application/pdf", content, tenant_id=tenant_id,
+                document_id=document_id, job_id=job_id,
+            )
+        pages = [{"page": span.page_number,
+                  "text_characters": len(text[span.char_start:span.char_end].strip()),
+                  "has_images": span.has_images}
+                 for span in extracted.page_spans]
+        sparse = [page["page"] for page in pages if page["text_characters"] < 40]
+        image_sparse = [page["page"] for page in pages
+                        if page["has_images"] and page["text_characters"] < 40]
+        # A blank/decorative cover must not send an otherwise typed 300-page PDF
+        # through expensive vision. Route to vision when the document has no
+        # usable text layer, or when image-only pages form a meaningful mixed
+        # document segment. Image-aware question generation remains Phase 2.
+        image_ratio = len(image_sparse) / max(1, len(pages))
+        use_vision = (
+            len(text.strip()) < MIN_READABLE_PDF_TEXT_CHARS
+            or (len(image_sparse) >= 2 and image_ratio >= 0.20)
         )
+        if use_vision:
+            raw, provider = _vision_extract(
+                "application/pdf", content, tenant_id=tenant_id,
+                document_id=document_id, job_id=job_id,
+            )
+        else:
+            raw, provider = _text_extract(
+                text, tenant_id=tenant_id, document_id=document_id,
+                job_id=job_id, page_spans=extracted.page_spans,
+            )
+        return {**raw, "source_manifest": {"pages": pages, "route": "vision" if use_vision else "text",
+                "sparse_pages": sparse, "coverage_verified": False}}, provider
 
     raise ValueError(f"Unsupported file type for extraction: {ext or 'unknown'}")
 
@@ -341,15 +394,8 @@ def extract_quiz(
         )
 
         # 4) Validate per-question; skip malformed ones (teacher reviews the rest).
-        questions: list[ExtractedQuestion] = []
-        skipped = 0
-        for rq in raw.get("questions") or []:
-            try:
-                q = ExtractedQuestion.model_validate(rq)
-                q.check_shape()
-                questions.append(q)
-            except (ValidationError, ValueError):
-                skipped += 1
+        questions, import_summary = _validate_import_candidates(raw)
+        skipped = import_summary["skipped"]
         if not questions:
             raise LLMError("No valid questions could be extracted from this document.")
 
@@ -409,6 +455,11 @@ def extract_quiz(
                         "source": "extracted",
                         "review_status": "pending_review",
                         "confidence_score": q.confidence,
+                        "source_excerpt": q.source_excerpt,
+                        "source_page_start": q.source_page_start,
+                        "source_page_end": q.source_page_end,
+                        "verification_status": "needs_teacher_review",
+                        "verification_warnings": q.verification_warnings,
                         "extraction_job_id": job_id,
                         "created_by": profile.user_id,
                     }
@@ -431,7 +482,7 @@ def extract_quiz(
         service.table("ai_extraction_jobs").update(
             {
                 "status": "succeeded",
-                "raw_output": raw,
+                "raw_output": {**raw, "import_summary": import_summary},
                 "model_used": provider,
                 "overall_confidence": overall_confidence,
                 "completed_at": _now(),
@@ -445,6 +496,7 @@ def extract_quiz(
             "extraction_job_id": job_id,
             "extracted": len(stored),
             "skipped": skipped,
+            "import_summary": import_summary,
             "overall_confidence": overall_confidence,
             "questions": stored,
         }

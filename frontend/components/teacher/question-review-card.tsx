@@ -79,7 +79,7 @@ const VERIFICATION_TONE: Record<string, string> = {
 const VERIFICATION_LABEL: Record<string, string> = {
   verified: "Evidence verified",
   needs_teacher_review: "Check evidence",
-  unsupported: "Unsupported",
+  unsupported: "AI review flag",
   ambiguous: "Ambiguous",
 };
 
@@ -162,7 +162,6 @@ export function QuestionReviewCard({
   const accent = ACCENT[question.review_status] ?? "#cbd5e1";
   const isApproved = question.review_status === "approved";
   const isRejected = question.review_status === "rejected";
-  const approvalBlocked = question.verification_status === "unsupported";
   const flashClass =
     flash === "approve"
       ? "animate-approve"
@@ -267,7 +266,8 @@ export function QuestionReviewCard({
           )}
 
           {(question.source_excerpt || question.verification_status) && (
-            <div className="mt-3 rounded-lg border border-input bg-muted/25 p-3">
+            <details className="mt-3 rounded-lg border border-input bg-muted/25 p-3">
+              <summary className="cursor-pointer text-xs text-muted-foreground">Source and AI checks (optional)</summary>
               <div className="flex flex-wrap items-center gap-2">
                 <p className="text-xs font-semibold text-foreground">Source evidence</p>
                 {question.verification_status && (
@@ -308,25 +308,14 @@ export function QuestionReviewCard({
                   ))}
                 </ul>
               )}
-            </div>
-          )}
-
-          {approvalBlocked && (
-            <p className="mt-3 rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-medium text-rose-700">
-              Edit or regenerate this question before approving it.
-            </p>
+            </details>
           )}
 
           <div className="mt-3 flex flex-wrap gap-2">
             <Button
               size="sm"
               onClick={() => run("approve", () => approveQuestion(question.id))}
-              disabled={!!busy || isApproved || approvalBlocked}
-              title={
-                approvalBlocked
-                  ? "Unsupported questions must be edited or regenerated first"
-                  : undefined
-              }
+              disabled={!!busy || isApproved}
               className={
                 isApproved
                   ? "bg-emerald-600 text-white hover:bg-emerald-600 disabled:opacity-100"

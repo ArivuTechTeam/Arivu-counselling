@@ -95,8 +95,12 @@ export function DocumentLog() {
     setRetrying(item.id);
     setActionError(null);
     try {
-      const { quiz_set_id } = await reExtractDocument(item.id);
-      router.push(`/dashboard/teacher/review/${quiz_set_id}`);
+      const result = await reExtractDocument(item.id);
+      if ("background_job" in result) {
+        router.push("/dashboard/teacher/extract");
+      } else {
+        router.push(`/dashboard/teacher/review/${result.quiz_set_id}`);
+      }
     } catch (e) {
       setActionError(
         e instanceof Error ? e.message : "Extraction failed again. Please try later.",

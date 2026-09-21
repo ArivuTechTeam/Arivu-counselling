@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import logging
 from collections import Counter
+from collections.abc import Callable
 from typing import Any, Literal
 
 from pydantic import BaseModel, ValidationError
@@ -26,7 +27,7 @@ from app.services.blueprint_prompts import (
     build_blueprint_user_prompt,
 )
 from app.services.events import QUESTION_GENERATED, log_events, make_event
-from app.services.extraction import extract_text_with_pages
+from app.services.extraction import extract_text_with_pages, require_readable_generation_pages
 from app.services.llm.base import LLMError
 from app.services.llm.structured import complete_json_with_fallback
 from app.services.ai_call_logging import ai_call_context
@@ -35,6 +36,7 @@ from app.services.question_validation import (
     validate_question_presentation,
 )
 from app.services.question_verification import verify_generated_questions
+from app.services.question_repair import repair_candidates
 from app.services.source_material import render_extracted_material
 from app.services.teacher_access import teacher_has_subject
 
@@ -168,6 +170,7 @@ def _validated_generated_quiz(
     allowed_evidence_ids: set[str] | None = None,
 ) -> BPQuiz:
     """Validate shape and the teacher's exact requested type distribution."""
+    _check_source_capacity(data)
     try:
         quiz = BPQuiz.model_validate(data)
     except ValidationError as exc:
@@ -232,6 +235,11 @@ def _validated_generated_quiz(
                 "match the exact topic and question-type allocation."
             )
     return quiz
+
+
+def _check_source_capacity(data: object) -> None:
+    if isinstance(data, dict) and data.get("source_insufficient") is True:
+        raise ValueError("The selected source cannot support the requested number of distinct questions. Reduce the question count or include more source material.")
 
 
 def _generate_with_exact_mix(
@@ -334,6 +342,7 @@ def generate_blueprint_quiz(
     difficulty: str,
     profile: CurrentProfile,
     type_counts: dict[str, int] | None = None,
+    persist_result: Callable[[dict], dict] | None = None,
 ) -> dict:
     service = get_service_client()
     tid = profile.tenant_id
@@ -360,6 +369,9 @@ def generate_blueprint_quiz(
     )
     if not extracted.text.strip():
         raise ValueError("This document has no extractable text (scanned image PDF?).")
+    require_readable_generation_pages(extracted)
+    if len(extracted.text) > get_settings().generation_max_text_chars:
+        raise ValueError("This document exceeds the direct generation limit. Complete the large-document analysis first so all source content is considered.")
     material = render_extracted_material(
         extracted, max_chars=get_settings().generation_max_text_chars
     )
@@ -381,6 +393,7 @@ def generate_blueprint_quiz(
         profile=profile,
         type_counts=type_counts,
         source_document_id=document_id,
+        persist_result=persist_result,
     )
 
 
@@ -401,6 +414,7 @@ def generate_and_persist_from_material(
     selected_only_material: bool = False,
     source_document_id: str | None = None,
     evidence_catalog: dict[str, dict] | None = None,
+    persist_result: Callable[[dict], dict] | None = None,
 ) -> dict:
     """Write + persist a blueprint-driven quiz from a block of `material`.
 
@@ -456,6 +470,7 @@ def generate_and_persist_from_material(
                     get_settings(), "quiz_generation_provider", "deepseek"
                 ),
             )
+        _check_source_capacity(data)
         try:
             quiz = BPQuiz.model_validate(data)
         except ValidationError as exc:
@@ -564,6 +579,55 @@ def generate_and_persist_from_material(
         "question_verification", tenant_id=tid, document_id=source_document_id
     ):
         verification = verify_generated_questions(questions, material)
+
+    def repair_complete(repair_system: str, repair_user: str):
+        with ai_call_context(
+            "question_repair", tenant_id=tid, document_id=source_document_id
+        ):
+            return complete_json_with_fallback(
+                repair_system,
+                repair_user,
+                preferred_provider=getattr(
+                    get_settings(), "quiz_generation_provider", "deepseek"
+                ),
+            )
+
+    def repair_verify(repaired_questions, repaired_material):
+        with ai_call_context(
+            "question_verification", tenant_id=tid, document_id=source_document_id
+        ):
+            return verify_generated_questions(repaired_questions, repaired_material)
+
+    questions, verification, quality = repair_candidates(
+        questions,
+        verification,
+        material,
+        difficulty,
+        complete=repair_complete,
+        verify=repair_verify,
+        allowed_evidence_ids=set(evidence_catalog or {}) or None,
+    )
+    if evidence_catalog:
+        _bind_verified_evidence(questions, evidence_catalog)
+    blueprint["quality"] = quality
+
+    if persist_result is not None:
+        # The durable worker commits all result rows and job completion in one
+        # fenced database transaction. No partial quiz/chapter writes precede it.
+        return persist_result({
+            "title": f"{chapter_name} — {cognitive_level}",
+            "chapter_name": chapter_name,
+            "variant_type": cognitive_level,
+            "selected_topics": [topic.name.strip() for topic in selected],
+            "provider": provider,
+            "blueprint": blueprint,
+            "source": "ai_generated",
+            "questions": [
+                {**question.model_dump(), "verification_status": check.status,
+                 "verification_warnings": check.warnings}
+                for question, check in zip(questions, verification, strict=True)
+            ],
+        })
 
     # 4) Persist chapter + selected topics (exam-setter data; powers analytics).
     chapter_id = _get_or_create(
