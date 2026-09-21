@@ -76,6 +76,7 @@ class InstitutionBrandingTests(unittest.TestCase):
         service = _BrandingService(
             [
                 {
+                    "id": "00000000-0000-0000-0000-000000000010",
                     "name": "Bright Future Academy",
                     "subdomain": "bright-future",
                     "logo_url": "tenant-logos/tenant-a/logo.png",
@@ -90,6 +91,9 @@ class InstitutionBrandingTests(unittest.TestCase):
             result = institution_branding("bright-future")
 
         self.assertEqual(result["name"], "Bright Future Academy")
+        self.assertEqual(
+            result["tenant_id"], "00000000-0000-0000-0000-000000000010"
+        )
         self.assertEqual(result["logo_url"], "https://signed.example/logo")
         signer.assert_called_once_with("tenant-logos/tenant-a/logo.png", expires_in=3600)
 
@@ -97,6 +101,7 @@ class InstitutionBrandingTests(unittest.TestCase):
         service = _BrandingService(
             [
                 {
+                    "id": "00000000-0000-0000-0000-000000000011",
                     "name": "Paused Academy",
                     "subdomain": "paused",
                     "logo_url": None,

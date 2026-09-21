@@ -94,10 +94,14 @@ migration-37-student-attempt-snapshots.sql
 migration-38-repair-auth-profile-trigger.sql
 migration-39-decouple-backend-auth-provisioning.sql
 migration-40-fix-admin-auth-insert-order.sql
+migration-41-question-review-default.sql
+migration-42-api-call-logs.sql
+migration-43-faculty-background-jobs.sql
+migration-44-challenge-join-codes.sql
 ```
 
-(Filenames above verified 2026-09-17 against `migrations/`, including the
-addition of `migration-40-fix-admin-auth-insert-order.sql` — earlier drafts of
+(Filenames above verified 2026-09-21 against `migrations/`, through
+`migration-44-challenge-join-codes.sql` — earlier drafts of
 this runbook named migrations 31–34 `migration-31-chunked-document-generation.sql`,
 `migration-32-reset-chunked-generation-schema.sql`,
 `migration-33-document-archive-status.sql`, and
@@ -124,6 +128,11 @@ also send a `_backend_provisioning_intent` hint in `user_metadata`, which is
 visible at insert time and only ever skips creating a public-signup profile —
 it never assigns a role, tenant, or permission; those are still written by the
 service-role backend afterward.
+Migration 44 must be applied before deploying the friend-challenge join-code
+backend. It backfills every existing challenge, makes `(tenant_id, join_code)`
+unique, and adds the authenticated `challenge_join` rolling-hour quota. The
+application will query `challenges.join_code` immediately after deployment, so
+deploying code before this migration will break the Challenge a Friend page.
 Migrations 15–19 must be applied in order before deploying quiz extraction;
 run the duplicate checks documented in migrations 16 and 18 first.
 Migration 22 must be applied to close direct browser access to backend-owned

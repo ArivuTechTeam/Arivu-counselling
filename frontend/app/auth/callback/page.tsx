@@ -8,6 +8,7 @@ import { Brand } from "@/components/ui/brand";
 import { listPublicCourses } from "@/lib/api";
 import { PENDING_GOOGLE_COURSE_KEY } from "@/lib/google-auth";
 import { PENDING_AUTH_NEXT_KEY } from "@/lib/google-auth";
+import { PENDING_GOOGLE_TENANT_KEY } from "@/lib/google-auth";
 import { createClient } from "@/lib/supabase";
 import { PUBLIC_ENV } from "@/lib/public-env";
 import { safeDashboardNext } from "@/lib/safe-next";
@@ -22,7 +23,7 @@ export default function AuthCallbackPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const tenantId = PUBLIC_ENV.defaultTenantId;
+  const defaultTenantId = PUBLIC_ENV.defaultTenantId;
 
   const finishDestination = useCallback(() => {
     const destination = safeDashboardNext(
@@ -49,6 +50,7 @@ export default function AuthCallbackPage() {
       return;
     }
     window.sessionStorage.removeItem(PENDING_GOOGLE_COURSE_KEY);
+    window.sessionStorage.removeItem(PENDING_GOOGLE_TENANT_KEY);
     router.replace(finishDestination());
     router.refresh();
   }, [finishDestination, router]);
@@ -97,11 +99,15 @@ export default function AuthCallbackPage() {
         // tenant, and enrollments and can go straight to the dashboard.
         if (profile) {
           window.sessionStorage.removeItem(PENDING_GOOGLE_COURSE_KEY);
+          window.sessionStorage.removeItem(PENDING_GOOGLE_TENANT_KEY);
           router.replace(finishDestination());
           router.refresh();
           return;
         }
 
+        const tenantId =
+          window.sessionStorage.getItem(PENDING_GOOGLE_TENANT_KEY) ||
+          defaultTenantId;
         if (!tenantId) {
           throw new Error(
             "Institution not configured (missing NEXT_PUBLIC_DEFAULT_TENANT_ID).",
@@ -129,7 +135,7 @@ export default function AuthCallbackPage() {
     }
 
     void finishOAuth();
-  }, [completeGoogleSignup, finishDestination, router, tenantId]);
+  }, [completeGoogleSignup, defaultTenantId, finishDestination, router]);
 
   // While exchanging the code / checking for an existing profile, show only a
   // brief, low-ceremony spinner — existing users never see anything past this.

@@ -14,7 +14,8 @@ import {
 } from "@/components/ui/card";
 import { PageHeader } from "@/components/ui/page-header";
 import { Skeleton } from "@/components/ui/skeleton";
-import { closeChallenge, createChallenge } from "@/lib/api";
+import { closeChallenge, createChallenge, joinChallenge } from "@/lib/api";
+import { challengeInviteUrl, formatChallengeCode } from "@/lib/challenge-share";
 import { typeLabel } from "@/lib/format";
 import {
   studentChallengeKey,
@@ -67,6 +68,9 @@ export default function ChallengePage() {
   const [error, setError] = useState<string | null>(null);
   const [closingToken, setClosingToken] = useState<string | null>(null);
   const [copiedToken, setCopiedToken] = useState<string | null>(null);
+  const [joinCode, setJoinCode] = useState("");
+  const [joining, setJoining] = useState(false);
+  const [joinError, setJoinError] = useState<string | null>(null);
   const totalQuestions = QUESTION_TYPES.reduce(
     (total, questionType) => total + typeCounts[questionType],
     0,
@@ -79,11 +83,20 @@ export default function ChallengePage() {
     setTypeCounts((current) => ({ ...current, [questionType]: safeValue }));
   }
 
-  async function copyLink(token: string) {
+  async function copyInvite(
+    token: string,
+    code: string | null,
+    institutionSlug: string | null,
+  ) {
     setError(null);
     try {
-      const url = `${window.location.origin}/dashboard/student/challenge/${token}`;
-      await navigator.clipboard.writeText(url);
+      const url = challengeInviteUrl(window.location.origin, token, institutionSlug);
+      const displayCode = formatChallengeCode(code);
+      await navigator.clipboard.writeText(
+        displayCode
+          ? `Join my quiz challenge with code ${displayCode}\n${url}`
+          : url,
+      );
       setCopiedToken(token);
       window.setTimeout(
         () => setCopiedToken((current) => (current === token ? null : current)),
@@ -91,6 +104,20 @@ export default function ChallengePage() {
       );
     } catch {
       setError("Could not copy the link. Open the challenge and copy the address from your browser.");
+    }
+  }
+
+  async function join(event: React.FormEvent) {
+    event.preventDefault();
+    if (!joinCode.trim()) return;
+    setJoining(true);
+    setJoinError(null);
+    try {
+      const { token } = await joinChallenge(joinCode);
+      router.push(`/dashboard/student/challenge/${token}`);
+    } catch (e) {
+      setJoinError(e instanceof Error ? e.message : "Could not find that challenge.");
+      setJoining(false);
     }
   }
 
@@ -160,6 +187,53 @@ export default function ChallengePage() {
           ))}
         </div>
       </div>
+
+      <Card className="animate-rise border-primary/20 bg-primary/[0.03]">
+        <CardHeader>
+          <CardTitle>Join a friend&apos;s challenge</CardTitle>
+          <CardDescription>
+            Enter the code your friend shared. Challenges stay limited to your
+            institution and enrolled course.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <form className="flex flex-col gap-3 sm:flex-row" onSubmit={join}>
+            <label className="sr-only" htmlFor="challenge-join-code">
+              Challenge code
+            </label>
+            <input
+              id="challenge-join-code"
+              value={joinCode}
+              onChange={(event) =>
+                setJoinCode(
+                  event.target.value
+                    .toUpperCase()
+                    .replace(/[^2-9A-HJ-NP-Z-]/g, "")
+                    .slice(0, 9),
+                )
+              }
+              placeholder="Example: 7KFM-P2QX"
+              autoCapitalize="characters"
+              autoComplete="off"
+              spellCheck={false}
+              maxLength={9}
+              className={`${fieldClass} font-mono uppercase tracking-[0.18em] sm:max-w-xs`}
+            />
+            <button
+              type="submit"
+              disabled={joining || joinCode.replace(/-/g, "").length !== 8}
+              className="rounded-lg bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground shadow-sm disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {joining ? "Finding challenge…" : "Join challenge →"}
+            </button>
+          </form>
+          {joinError && (
+            <p className="mt-3 rounded-lg border border-destructive/20 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+              {joinError}
+            </p>
+          )}
+        </CardContent>
+      </Card>
 
       {/* Build form */}
       <Card className="animate-rise">
@@ -306,14 +380,25 @@ export default function ChallengePage() {
                           ? "Your game is in progress"
                           : "You have not played yet"}
                     </p>
+                    {challenge.join_code && (
+                      <p className="mt-2 font-mono text-sm font-semibold tracking-wider text-foreground">
+                        Code: {formatChallengeCode(challenge.join_code)}
+                      </p>
+                    )}
                   </div>
                   <div className="flex shrink-0 gap-2">
                     <button
                       type="button"
-                      onClick={() => void copyLink(challenge.token)}
+                      onClick={() =>
+                        void copyInvite(
+                          challenge.token,
+                          challenge.join_code,
+                          challenge.institution_slug,
+                        )
+                      }
                       className="rounded-lg border border-input px-3 py-2 text-sm font-semibold hover:bg-accent"
                     >
-                      {copiedToken === challenge.token ? "Copied" : "Copy link"}
+                      {copiedToken === challenge.token ? "Copied" : "Copy invite"}
                     </button>
                     <Link
                       href={`/dashboard/student/challenge/${challenge.token}`}

@@ -132,7 +132,7 @@ class RateLimitConfigurationTests(unittest.TestCase):
                     with self.assertRaisesRegex(RuntimeError, "positive integer"):
                         _positive_int("EXAMPLE_RATE_LIMIT", 10)
 
-    def test_all_six_settings_are_independently_configurable(self) -> None:
+    def test_all_rate_limit_settings_are_independently_configurable(self) -> None:
         environment = {
             "SUPABASE_URL": "https://example.supabase.co",
             "SUPABASE_ANON_KEY": uuid4().hex,
@@ -146,6 +146,7 @@ class RateLimitConfigurationTests(unittest.TestCase):
             "RATE_LIMIT_QUESTION_REGENERATE_PER_HOUR": "14",
             "RATE_LIMIT_QUESTION_EXPLAIN_PER_HOUR": "15",
             "RATE_LIMIT_QUIZ_EXTRACTION_PER_HOUR": "16",
+            "RATE_LIMIT_CHALLENGE_JOIN_PER_HOUR": "17",
             "STUDENT_QUIZ_ATTEMPT_LIMIT": "7",
             "CHALLENGE_EXPIRY_DAYS": "45",
             "DEEPSEEK_MAX_OUTPUT_TOKENS": "8192",
@@ -159,6 +160,7 @@ class RateLimitConfigurationTests(unittest.TestCase):
         self.assertEqual(settings.rate_limit_question_regenerate_per_hour, 14)
         self.assertEqual(settings.rate_limit_question_explain_per_hour, 15)
         self.assertEqual(settings.rate_limit_quiz_extraction_per_hour, 16)
+        self.assertEqual(settings.rate_limit_challenge_join_per_hour, 17)
         self.assertEqual(settings.student_quiz_attempt_limit, 7)
         self.assertEqual(settings.challenge_expiry_days, 45)
         self.assertEqual(settings.deepseek_max_output_tokens, 65536)

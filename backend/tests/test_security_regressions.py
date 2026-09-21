@@ -250,6 +250,18 @@ class MigrationSecurityTests(unittest.TestCase):
         self.assertIn("drop function if exists", sql)
         self.assertIn("create_challenge_with_session", sql)
 
+    def test_challenge_join_codes_are_scoped_unique_and_rate_limited(self) -> None:
+        root = Path(__file__).resolve().parents[2]
+        sql = (
+            root / "migrations/migration-44-challenge-join-codes.sql"
+        ).read_text().lower()
+        self.assertIn("add column if not exists join_code text", sql)
+        self.assertIn("alter column join_code set not null", sql)
+        self.assertIn("tenant_id, join_code", sql)
+        self.assertIn("challenge_join", sql)
+        self.assertIn("from public, anon, authenticated", sql)
+        self.assertIn("to service_role", sql)
+
     def test_student_attempt_snapshots_are_atomic_and_backend_only(self) -> None:
         root = Path(__file__).resolve().parents[2]
         sql = (

@@ -16,6 +16,7 @@ import { ErrorCard } from "@/components/ui/error-card";
 import { Skeleton, SkeletonList } from "@/components/ui/skeleton";
 import { AttemptReadiness } from "@/components/student/attempt-readiness";
 import { acceptChallenge } from "@/lib/api";
+import { challengeInviteUrl, formatChallengeCode } from "@/lib/challenge-share";
 import { typeLabel } from "@/lib/format";
 import { downloadCardImage } from "@/lib/share-card";
 import { useStudentChallenge } from "@/lib/student-queries";
@@ -39,7 +40,17 @@ export default function ChallengeHubPage({
   async function copyLink() {
     setActionError(null);
     try {
-      await navigator.clipboard.writeText(window.location.href);
+      const url = challengeInviteUrl(
+        window.location.origin,
+        token,
+        info?.institution_slug,
+      );
+      const displayCode = formatChallengeCode(info?.join_code);
+      await navigator.clipboard.writeText(
+        displayCode
+          ? `Join my quiz challenge with code ${displayCode}\n${url}`
+          : url,
+      );
       setCopied(true);
       window.setTimeout(() => setCopied(false), 1800);
     } catch {
@@ -104,8 +115,11 @@ export default function ChallengeHubPage({
     );
   }
 
-  const shareUrl = typeof window !== "undefined" ? window.location.href : "";
-  const shareText = `Can you beat me? Take my ${info.questions}-question quiz on ArivuPro:`;
+  const shareUrl = typeof window !== "undefined"
+    ? challengeInviteUrl(window.location.origin, token, info.institution_slug)
+    : "";
+  const displayCode = formatChallengeCode(info.join_code);
+  const shareText = `Can you beat me? Take my ${info.questions}-question quiz${displayCode ? ` with code ${displayCode}` : ""}:`;
   const waHref = `https://wa.me/?text=${encodeURIComponent(`${shareText} ${shareUrl}`)}`;
 
   return (
@@ -135,6 +149,24 @@ export default function ChallengeHubPage({
               {amount} {typeLabel(questionType)}
             </span>
           ))}
+        </div>
+      )}
+
+      {info.join_code && (
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-primary/20 bg-primary/5 px-4 py-3">
+          <div>
+            <p className="text-xs font-medium text-muted-foreground">Challenge code</p>
+            <p className="mt-0.5 font-mono text-xl font-bold tracking-[0.16em] text-primary">
+              {displayCode}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => void copyLink()}
+            className="rounded-lg border border-primary/20 bg-background px-4 py-2 text-sm font-semibold text-primary hover:bg-primary/5"
+          >
+            {copied ? "Invite copied" : "Copy code and link"}
+          </button>
         </div>
       )}
 

@@ -10,10 +10,12 @@ from pydantic import ValidationError
 
 from app.api.challenge import (
     CreateChallenge,
+    JoinChallenge,
     accept_challenge,
     close_challenge,
     create_challenge,
     get_challenge,
+    join_challenge,
     my_challenges,
 )
 from app.api.practice import SubmitPractice, SubmittedAnswer, get_practice, submit_practice
@@ -75,7 +77,10 @@ def challenge_tables() -> dict[str, list[dict]]:
 class ChallengeFlowTests(unittest.TestCase):
     def test_creator_friend_snapshot_grading_leaderboard_and_close(self) -> None:
         service = ChallengeService(challenge_tables())
-        settings = SimpleNamespace(challenge_expiry_days=30)
+        settings = SimpleNamespace(
+            challenge_expiry_days=30,
+            rate_limit_challenge_join_per_hour=30,
+        )
         with (
             patch("app.api.challenge.get_service_client", return_value=service),
             patch("app.api.practice.get_service_client", return_value=service),
@@ -91,7 +96,21 @@ class ChallengeFlowTests(unittest.TestCase):
             self.assertEqual(created["questions"], 5)
             self.assertEqual(created["duration_minutes"], 5)
             self.assertEqual(created["type_counts"], {"mcq_single": 5})
+            self.assertRegex(created["join_code"], r"^[2-9A-HJ-NP-Z]{8}$")
             self.assertEqual(service.tables["practice_sessions"], [])
+
+            with patch("app.api.challenge.enforce_rate_limit") as limiter:
+                joined = join_challenge(
+                    JoinChallenge(
+                        code=(
+                            f"{created['join_code'][:4]}-"
+                            f"{created['join_code'][4:]}"
+                        )
+                    ),
+                    student("u2"),
+                )
+            self.assertEqual(joined["token"], token)
+            limiter.assert_called_once()
 
             lobby = get_challenge(token, student("u1"))
             self.assertEqual(lobby["my_status"], "not_taken")
@@ -140,6 +159,20 @@ class ChallengeFlowTests(unittest.TestCase):
             with self.assertRaises(HTTPException) as wrong_course:
                 get_challenge(token, student("u3"))
             self.assertEqual(wrong_course.exception.status_code, 403)
+
+            with patch("app.api.challenge.enforce_rate_limit"):
+                with self.assertRaises(HTTPException) as wrong_course_code:
+                    join_challenge(
+                        JoinChallenge(code=created["join_code"]),
+                        student("u3"),
+                    )
+                with self.assertRaises(HTTPException) as wrong_tenant_code:
+                    join_challenge(
+                        JoinChallenge(code=created["join_code"]),
+                        student("u2", tenant_id="t2"),
+                    )
+            self.assertEqual(wrong_course_code.exception.status_code, 403)
+            self.assertEqual(wrong_tenant_code.exception.status_code, 404)
 
             listed = my_challenges(student("u1"))
             self.assertEqual(listed[0]["token"], token)

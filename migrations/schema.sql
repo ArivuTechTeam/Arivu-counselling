@@ -532,7 +532,7 @@ create table tenant_usage (
   updated_at timestamptz not null default now()
 );
 
--- One atomic rolling-hour counter per user and AI endpoint. The backend
+-- One atomic rolling-hour counter per user and protected endpoint. The backend
 -- accesses this only through consume_ai_rate_limit using the service role.
 create table ai_rate_limits (
   tenant_id uuid not null references tenants(id) on delete cascade,
@@ -543,7 +543,8 @@ create table ai_rate_limits (
     'topic_extraction',
     'question_regenerate',
     'question_explain',
-    'quiz_extraction'
+    'quiz_extraction',
+    'challenge_join'
   )),
   window_started_at timestamptz not null,
   request_count integer not null check (request_count > 0),
@@ -813,7 +814,7 @@ revoke all on function replace_teacher_subjects(uuid, uuid, uuid[])
 grant execute on function replace_teacher_subjects(uuid, uuid, uuid[])
   to service_role;
 
--- Atomically consumes one request from a user's rolling one-hour AI quota.
+-- Atomically consumes one request from a user's rolling one-hour quota.
 -- The upsert locks the counter row, so concurrent Railway workers cannot
 -- both pass after only one remaining request.
 create or replace function consume_ai_rate_limit(
@@ -844,9 +845,11 @@ begin
     'blueprint_generation',
     'topic_extraction',
     'question_regenerate',
-    'question_explain'
+    'question_explain',
+    'quiz_extraction',
+    'challenge_join'
   ) then
-    raise exception 'Unknown AI rate-limit endpoint';
+    raise exception 'Unknown rate-limit endpoint';
   end if;
 
   insert into public.ai_rate_limits as limits (
