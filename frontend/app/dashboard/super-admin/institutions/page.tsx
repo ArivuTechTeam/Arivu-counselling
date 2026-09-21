@@ -123,6 +123,7 @@ function OnboardForm({ onDone }: { onDone: () => void | Promise<void> }) {
       }
       const logoData = logo ? await readLogo(logo) : undefined;
       const slug = subdomain.trim().toLowerCase();
+      const loginUrl = institutionLoginUrl(slug);
       await onboardInstitution({
         name: name.trim(),
         subdomain: slug,
@@ -142,10 +143,11 @@ function OnboardForm({ onDone }: { onDone: () => void | Promise<void> }) {
           email: adminEmail.trim(),
           password: adminPassword,
           institution: name.trim(),
+          loginUrl,
         });
       }
       notify(`Institution "${name.trim()}" created successfully.`, "success");
-      setCreatedLoginUrl(institutionLoginUrl(slug));
+      setCreatedLoginUrl(loginUrl);
       setName("");
       setSubdomain("");
       setPlan("free");

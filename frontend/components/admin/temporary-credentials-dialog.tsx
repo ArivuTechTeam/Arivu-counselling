@@ -10,6 +10,7 @@ export type TemporaryCredentials = {
   email: string;
   password: string;
   institution: string;
+  loginUrl?: string;
 };
 
 export function TemporaryCredentialsDialog({
@@ -25,6 +26,7 @@ export function TemporaryCredentialsDialog({
   async function copyCredentials() {
     const text = [
       `Institution: ${credentials.institution}`,
+      ...(credentials.loginUrl ? [`Login link: ${credentials.loginUrl}`] : []),
       `Email: ${credentials.email}`,
       `Temporary password: ${credentials.password}`,
     ].join("\n");
@@ -68,6 +70,21 @@ export function TemporaryCredentialsDialog({
           <dt className="text-muted-foreground">Institution</dt>
           <dd className="font-medium">{credentials.institution}</dd>
         </div>
+        {credentials.loginUrl && (
+          <div className="grid grid-cols-[130px_1fr] gap-3 border-b px-4 py-3">
+            <dt className="text-muted-foreground">Login link</dt>
+            <dd className="min-w-0 break-all font-medium">
+              <a
+                href={credentials.loginUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="text-primary hover:underline"
+              >
+                {credentials.loginUrl}
+              </a>
+            </dd>
+          </div>
+        )}
         <div className="grid grid-cols-[130px_1fr] gap-3 border-b px-4 py-3">
           <dt className="text-muted-foreground">Email</dt>
           <dd className="break-all font-medium">{credentials.email}</dd>

@@ -121,13 +121,15 @@ export function AdminManager({ embedded = false }: { embedded?: boolean }) {
     setBusy(true);
     try {
       await createAdmin({ ...form, tenant_id: selectedTenant });
+      const institution = tenants.find((tenant) => tenant.id === selectedTenant);
       setNotice(`Admin ${form.email} created — they can sign in now.`);
       setCredentials({
         email: form.email,
         password: form.password,
-        institution:
-          tenants.find((tenant) => tenant.id === selectedTenant)?.name ??
-          "Institution",
+        institution: institution?.name ?? "Institution",
+        loginUrl: institution?.subdomain
+          ? `${window.location.origin}/login/${encodeURIComponent(institution.subdomain)}`
+          : undefined,
       });
       setForm((current) => ({
         full_name: "",
@@ -161,6 +163,9 @@ export function AdminManager({ embedded = false }: { embedded?: boolean }) {
         email: resetTarget.email ?? "",
         password: resetPassword,
         institution: resetTarget.institution,
+        loginUrl: resetTarget.subdomain
+          ? `${window.location.origin}/login/${encodeURIComponent(resetTarget.subdomain)}`
+          : undefined,
       });
       setNotice(
         `Temporary login reset for ${resetTarget.email ?? resetTarget.full_name}.`,

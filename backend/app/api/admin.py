@@ -112,6 +112,7 @@ class InstitutionStats(StrictApiResponse):
 class TenantOption(StrictApiResponse):
     id: str
     name: str
+    subdomain: str
 
 
 class CreatedResult(StrictApiResponse):
@@ -127,6 +128,7 @@ class InstitutionAdminOut(StrictApiResponse):
     full_name: str | None
     email: str | None
     institution: str
+    subdomain: str
 
 
 class ReviewPipelineFull(StrictApiResponse):
@@ -953,7 +955,7 @@ def update_user(
 def _assert_tenant_course(service, *, course_id: str, tenant_id: str) -> dict:
     course = (
         service.table("courses")
-        .select("id, name")
+        .select("id, name, subdomain")
         .eq("id", course_id)
         .eq("tenant_id", tenant_id)
         .maybe_single()
@@ -1265,16 +1267,18 @@ def list_admins(
     tenants = _select_all(
         service,
         "tenants",
-        "id, name",
+        "id, name, subdomain",
         configure=lambda query: query.in_("id", tenant_ids),
     )
     tname = {t["id"]: t["name"] for t in tenants}
+    tenant_subdomain = {t["id"]: t["subdomain"] for t in tenants}
     return [
         {
             "id": a["id"],
             "full_name": a["full_name"],
             "email": email_by_id.get(a["id"]),
             "institution": tname.get(a["tenant_id"], "?"),
+            "subdomain": tenant_subdomain.get(a["tenant_id"], ""),
         }
         for a in admins
     ]

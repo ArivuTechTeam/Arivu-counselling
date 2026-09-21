@@ -1639,12 +1639,13 @@ export const getApiLogsByDocument = (documentId: string) =>
   jsonRequest<ApiCallLogDocument>(`/api/v1/platform/api-logs/by-document/${documentId}`, "GET");
 
 // --- Super-admin: institution admins ---
-export type TenantOption = { id: string; name: string };
+export type TenantOption = { id: string; name: string; subdomain: string };
 export type InstitutionAdmin = {
   id: string;
   full_name: string | null;
   email: string | null;
   institution: string;
+  subdomain: string;
 };
 export type AdminCreateInput = {
   full_name: string;
