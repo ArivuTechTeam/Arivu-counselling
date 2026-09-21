@@ -40,7 +40,7 @@ const contentSecurityPolicy = [
   // granting the broader JavaScript `unsafe-eval` permission in production.
   `script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'${developmentScripts}`,
   "style-src 'self' 'unsafe-inline'",
-  "img-src 'self' data: blob:",
+  `img-src 'self' data: blob: ${supabaseUrl.origin}`,
   "font-src 'self' data:",
   `connect-src 'self' ${supabaseUrl.origin} ${websocketOrigin} ${apiUrl.origin}`,
   "object-src 'none'",
