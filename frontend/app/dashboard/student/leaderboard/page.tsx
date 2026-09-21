@@ -1,7 +1,5 @@
 "use client";
 
-import { useState } from "react";
-
 import {
   Card,
   CardContent,
@@ -14,6 +12,7 @@ import { ErrorCard } from "@/components/ui/error-card";
 import { SkeletonList } from "@/components/ui/skeleton";
 import { LeaderRow } from "@/lib/api";
 import { useStudentLeaderboard } from "@/lib/student-queries";
+import { useSessionStorageState } from "@/lib/use-session-storage-state";
 
 const MEDAL = ["#e8b923", "#9aa4ad", "#c17d4a"]; // gold / silver / bronze
 
@@ -51,7 +50,12 @@ function Row({ r }: { r: LeaderRow }) {
 }
 
 export default function LeaderboardPage() {
-  const [courseId, setCourseId] = useState<string>();
+  const [courseId, setCourseId] = useSessionStorageState<string | undefined>(
+    "student-leaderboard-course",
+    undefined,
+    (value): value is string | undefined =>
+      value === undefined || typeof value === "string",
+  );
   const { data, error, isValidating, mutate } =
     useStudentLeaderboard(courseId);
 

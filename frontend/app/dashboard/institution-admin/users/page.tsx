@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 
 import { Button } from "@/components/ui/button";
@@ -31,12 +31,14 @@ import {
   updateTeacher,
 } from "@/lib/api";
 import { useCourses, useInstitutionUsers } from "@/lib/staff-queries";
+import { useSessionStorageState } from "@/lib/use-session-storage-state";
 import {
   generateTemporaryPassword,
   validTemporaryPassword,
 } from "@/lib/temporary-password";
 
 const TEACHERS_PER_PAGE = 12;
+const TEACHER_DRAFT_STORAGE_KEY = "institution-users-teacher-draft";
 
 type TemporaryCredential = { email: string; password: string };
 type Notice = { type: "success" | "error"; message: string };
@@ -53,8 +55,17 @@ function initials(text: string): string {
 }
 
 export default function UsersPage() {
-  const [query, setQuery] = useState("");
-  const [page, setPage] = useState(1);
+  const [query, setQuery] = useSessionStorageState(
+    "institution-users-query",
+    "",
+    (value): value is string => typeof value === "string",
+  );
+  const [page, setPage] = useSessionStorageState(
+    "institution-users-page",
+    1,
+    (value): value is number =>
+      typeof value === "number" && Number.isInteger(value) && value > 0,
+  );
   const teachersQuery = useInstitutionUsers(page, query);
   const coursesQuery = useCourses();
   const directory = teachersQuery.data ?? null;
@@ -67,6 +78,7 @@ export default function UsersPage() {
     course_id: "",
     subject_ids: [] as string[],
   });
+  const [formHydrated, setFormHydrated] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [showPw, setShowPw] = useState(false);
@@ -91,6 +103,53 @@ export default function UsersPage() {
   const [resettingCredential, setResettingCredential] = useState(false);
   const [notice, setNotice] = useState<Notice | null>(null);
   const loadError = error ?? teachersQuery.error?.message ?? coursesQuery.error?.message ?? null;
+
+  useEffect(() => {
+    try {
+      const saved = window.sessionStorage.getItem(TEACHER_DRAFT_STORAGE_KEY);
+      if (saved) {
+        const parsed = JSON.parse(saved) as Record<string, unknown>;
+        setForm((current) => ({
+          ...current,
+          full_name: typeof parsed.full_name === "string" ? parsed.full_name : "",
+          email: typeof parsed.email === "string" ? parsed.email : "",
+          course_id: typeof parsed.course_id === "string" ? parsed.course_id : "",
+          subject_ids: Array.isArray(parsed.subject_ids)
+            ? parsed.subject_ids.filter(
+                (value): value is string => typeof value === "string",
+              )
+            : [],
+        }));
+      }
+    } catch {
+      // Keep the blank form when the saved draft is invalid or unavailable.
+    } finally {
+      setFormHydrated(true);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!formHydrated) return;
+    try {
+      window.sessionStorage.setItem(
+        TEACHER_DRAFT_STORAGE_KEY,
+        JSON.stringify({
+          full_name: form.full_name,
+          email: form.email,
+          course_id: form.course_id,
+          subject_ids: form.subject_ids,
+        }),
+      );
+    } catch {
+      // The form still works if browser storage is unavailable.
+    }
+  }, [
+    form.course_id,
+    form.email,
+    form.full_name,
+    form.subject_ids,
+    formHydrated,
+  ]);
 
   const selectedCourse = courses.find((course) => course.id === form.course_id);
 
