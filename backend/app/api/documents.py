@@ -62,6 +62,11 @@ class UploadResult(BaseModel):
     truncated: bool
 
 
+class ArchivedDocumentOut(BaseModel):
+    id: str
+    status: str
+
+
 class DocumentLogItem(BaseModel):
     """One row in the teacher's Document Log — a readable record of an upload
     plus the subject/chapter it was filed under (when known) and the status of
@@ -509,7 +514,7 @@ def document_log(
     return items
 
 
-@router.post("/{document_id}/archive")
+@router.post("/{document_id}/archive", response_model=ArchivedDocumentOut)
 def archive_document(
     document_id: str,
     profile: CurrentProfile = Depends(get_current_profile),

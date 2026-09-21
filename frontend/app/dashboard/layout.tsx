@@ -9,6 +9,7 @@ import { Brand } from "@/components/ui/brand";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ToastProvider } from "@/components/ui/toast";
 import { createClient } from "@/lib/supabase";
+import { safeDashboardNext } from "@/lib/safe-next";
 
 const HOME_BY_ROLE: Record<string, string> = {
   super_admin: "/dashboard/super-admin",
@@ -49,9 +50,12 @@ export default function DashboardLayout({
       if (cancelled) return;
       if (!user) {
         // No session — send them to sign in rather than rendering an empty shell.
-        const next = pathname.startsWith("/dashboard/student/challenge/")
-          ? `?next=${encodeURIComponent(pathname)}`
-          : "";
+        const destination = safeDashboardNext(
+          `${pathname}${window.location.search}`,
+        );
+        const next = destination === "/dashboard"
+          ? ""
+          : `?next=${encodeURIComponent(destination)}`;
         router.replace(`/login${next}`);
         return;
       }

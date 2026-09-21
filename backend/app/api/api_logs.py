@@ -4,14 +4,68 @@ from __future__ import annotations
 
 from datetime import datetime
 from decimal import Decimal
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel
 
 from app.lib.auth import CurrentProfile, get_current_profile
 from app.lib.supabase import get_service_client
 
 router = APIRouter(prefix="/api/v1/platform", tags=["super-admin"])
 MAX_PAGE_SIZE = 100
+
+
+class ApiCallLogSummary(BaseModel):
+    id: str
+    tenant_id: str | None = None
+    document_id: str | None = None
+    document_name: str | None = None
+    job_id: str | None = None
+    call_type: str
+    provider: Literal["gemini", "deepseek"]
+    model: str
+    was_fallback: bool
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    cached_tokens: int | None = None
+    thinking_tokens: int | None = None
+    cost_usd: float | None = None
+    cost_inr: float | None = None
+    latency_ms: int
+    status: Literal["success", "error"]
+    error_message: str | None = None
+    created_at: datetime
+
+
+class ApiCallLogDetail(ApiCallLogSummary):
+    raw_request: Any
+    raw_response: Any = None
+
+
+class ApiCallLogPage(BaseModel):
+    items: list[ApiCallLogSummary]
+    page: int
+    page_size: int
+    total: int
+
+
+class ApiCallLogTotals(BaseModel):
+    input_tokens: int
+    output_tokens: int
+    cached_tokens: int
+    thinking_tokens: int
+    cost_usd: float
+    cost_inr: float
+    call_count: int
+    call_types: list[str]
+
+
+class ApiCallLogDocument(BaseModel):
+    document_id: str
+    document_name: str | None = None
+    summary: ApiCallLogTotals
+    items: list[ApiCallLogSummary]
 
 
 def _require_super(profile: CurrentProfile) -> None:
@@ -31,7 +85,7 @@ def _summary(row: dict) -> dict:
     return row
 
 
-@router.get("/api-logs")
+@router.get("/api-logs", response_model=ApiCallLogPage)
 def list_api_logs(
     profile: CurrentProfile = Depends(get_current_profile),
     page: int = Query(1, ge=1),
@@ -66,8 +120,10 @@ def list_api_logs(
             "page": page, "page_size": page_size, "total": result.count or 0}
 
 
-@router.get("/api-logs/{log_id}")
-def get_api_log(log_id: str, profile: CurrentProfile = Depends(get_current_profile)) -> dict:
+@router.get("/api-logs/{log_id}", response_model=ApiCallLogDetail)
+def get_api_log(
+    log_id: str, profile: CurrentProfile = Depends(get_current_profile)
+) -> dict:
     _require_super(profile)
     result = get_service_client().table("api_call_logs").select(
         "*,documents(original_filename)"
@@ -77,7 +133,7 @@ def get_api_log(log_id: str, profile: CurrentProfile = Depends(get_current_profi
     return _summary(dict(result.data))
 
 
-@router.get("/api-logs/by-document/{document_id}")
+@router.get("/api-logs/by-document/{document_id}", response_model=ApiCallLogDocument)
 def api_logs_by_document(
     document_id: str, profile: CurrentProfile = Depends(get_current_profile)
 ) -> dict:

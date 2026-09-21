@@ -94,10 +94,21 @@ export function QuizAttempt({
   const loadedAttemptKey = useRef<string | null>(null);
   const answerRevision = useRef(0);
   const savedAnswerRevision = useRef(0);
+  const autosaveInFlight = useRef(false);
+  const autosaveRetryCount = useRef(0);
+  const mountedRef = useRef(true);
+  const [autosaveCycle, setAutosaveCycle] = useState(0);
   const submissionLockRef = useRef(false);
   const autoFiredRef = useRef(false);
   const answersRef = useRef(answers);
   answersRef.current = answers;
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
   const invalidateStudentCaches = useCallback(async () => {
     await Promise.all([
@@ -125,6 +136,7 @@ export function QuizAttempt({
     setCurrent(0);
     setMarked({});
     setAutosaveError(null);
+    autosaveRetryCount.current = 0;
     autoFiredRef.current = false;
     submissionLockRef.current = false;
     if (next.status === "in_progress") {
@@ -159,23 +171,44 @@ export function QuizAttempt({
 
   useEffect(() => {
     if (!state || state.status !== "in_progress") return;
-    if (answerRevision.current === savedAnswerRevision.current) return;
-    const revisionToSave = answerRevision.current;
-    const timer = window.setTimeout(() => {
+    if (answerRevision.current <= savedAnswerRevision.current) return;
+    if (autosaveInFlight.current) return;
+    const delay = autosaveRetryCount.current === 0
+      ? 600
+      : Math.min(1000 * 2 ** (autosaveRetryCount.current - 1), 5000);
+    const timer = window.setTimeout(async () => {
+      if (autosaveInFlight.current) return;
+      const revisionToSave = answerRevision.current;
+      const answersToSave = { ...answersRef.current };
       const saver = source === "practice" ? savePracticeProgress : saveAttemptProgress;
-      saver(attemptId, answers)
-        .then(() => {
-          savedAnswerRevision.current = revisionToSave;
-          setAutosaveError(null);
-        })
-        .catch(() =>
-          setAutosaveError(
-            "Progress could not be saved. Keep this page open and check your connection.",
-          ),
+      autosaveInFlight.current = true;
+      try {
+        await saver(attemptId, answersToSave);
+        savedAnswerRevision.current = Math.max(
+          savedAnswerRevision.current,
+          revisionToSave,
         );
-    }, 600);
+        autosaveRetryCount.current = 0;
+        if (savedAnswerRevision.current >= answerRevision.current) {
+          setAutosaveError(null);
+        }
+      } catch {
+        autosaveRetryCount.current += 1;
+        setAutosaveError(
+          "Progress could not be saved. Retrying automatically—keep this page open.",
+        );
+      } finally {
+        autosaveInFlight.current = false;
+        if (
+          mountedRef.current &&
+          savedAnswerRevision.current < answerRevision.current
+        ) {
+          setAutosaveCycle((cycle) => cycle + 1);
+        }
+      }
+    }, delay);
     return () => window.clearTimeout(timer);
-  }, [answers, attemptId, source, state]);
+  }, [answers, attemptId, autosaveCycle, source, state]);
 
   // The server supplies remaining_seconds. Anchor that value to performance.now()
   // so browser interval throttling and device clock changes cannot accumulate drift.
@@ -328,10 +361,12 @@ export function QuizAttempt({
           : "Plenty of time — keep your rhythm.";
 
   function setAnswer(qid: string, val: unknown) {
+    autosaveRetryCount.current = 0;
     answerRevision.current += 1;
     setAnswers((a) => ({ ...a, [qid]: val }));
   }
   function toggleMulti(qid: string, id: string) {
+    autosaveRetryCount.current = 0;
     answerRevision.current += 1;
     setAnswers((a) => {
       const cur = Array.isArray(a[qid]) ? (a[qid] as string[]) : [];
@@ -342,6 +377,7 @@ export function QuizAttempt({
     });
   }
   function clearAnswer(qid: string) {
+    autosaveRetryCount.current = 0;
     answerRevision.current += 1;
     setAnswers((a) => {
       const n = { ...a };

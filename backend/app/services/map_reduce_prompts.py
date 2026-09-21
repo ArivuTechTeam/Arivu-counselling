@@ -23,6 +23,8 @@ the model must preserve/merge them, never invent page numbers itself.
 
 from __future__ import annotations
 
+from app.services.prompt_security import UNTRUSTED_SOURCE_RULE
+
 # The one topic shape every step speaks. Kept in a single place so MAP and REDUCE
 # never drift apart.
 _TOPIC_SCHEMA = (
@@ -61,7 +63,7 @@ _IGNORE_BLOCK = (
 
 # --- PROFILE ---------------------------------------------------------------
 PROFILE_SYSTEM = (
-    "You are analysing a document to understand what it is fundamentally about, "
+    f"{UNTRUSTED_SOURCE_RULE}You are analysing a document to understand what it is fundamentally about, "
     "so that an exam can later be built ONLY from its real subject matter.\n\n"
     "Read the material and identify the core SUBJECT it teaches and its main "
     "teachable themes. Look past front matter — title, author, copyright, table "
@@ -104,7 +106,7 @@ def build_profile_user_prompt(text: str) -> str:
 
 # --- MAP -------------------------------------------------------------------
 MAP_SYSTEM = (
-    "You are an expert exam-setter extracting genuinely TEACHABLE study content "
+    f"{UNTRUSTED_SOURCE_RULE}You are an expert exam-setter extracting genuinely TEACHABLE study content "
     "from ONE section of a larger document, so exam-quality questions can be "
     "written from it later.\n\n"
     "You are told what the overall document is about — use that to judge what is "
@@ -177,7 +179,7 @@ def build_map_user_prompt(
 
 # --- REDUCE ----------------------------------------------------------------
 REDUCE_SYSTEM = (
-    "You are creating a compact semantic merge PLAN for topics extracted from "
+    f"{UNTRUSTED_SOURCE_RULE}You are creating a compact semantic merge PLAN for topics extracted from "
     "multiple OVERLAPPING sections of ONE document. The backend will apply your "
     "plan to the original verbatim material deterministically, so you must NOT "
     "repeat definitions, facts, formulas, examples, or excerpts in your output.\n\n"

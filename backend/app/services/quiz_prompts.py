@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import json
 
+from app.services.prompt_security import UNTRUSTED_SOURCE_RULE
+
 # The exact JSON contract for each supported (core-5) question type. Keeping the
 # shapes explicit here is what lets us auto-grade reliably later.
 TYPE_SPECS: dict[str, str] = {
@@ -94,7 +96,7 @@ def build_system_prompt(
         difficulty, DIFFICULTY_GUIDANCE["medium"]
     )
     return (
-        "You are an expert exam-question author. You are given source material "
+        f"{UNTRUSTED_SOURCE_RULE}You are an expert exam-question author. You are given source material "
         "extracted from a teacher-uploaded textbook, PDF, or notes on ANY "
         "subject (e.g. programming, science, mathematics, accounting, commerce, "
         "law). You generate quiz questions that help students genuinely learn "
@@ -189,7 +191,7 @@ def build_regen_system_prompt(
         difficulty, DIFFICULTY_GUIDANCE["medium"]
     )
     return (
-        "You are an expert exam-question author. You are given ONE existing quiz "
+        f"{UNTRUSTED_SOURCE_RULE}You are an expert exam-question author. You are given ONE existing quiz "
         "question. Write a DIFFERENT question of the SAME type that tests the same "
         "underlying concept - reworded, with fresh options/values where "
         "applicable - useful for a student practising that concept.\n\n"

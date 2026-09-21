@@ -222,7 +222,7 @@ Two independent channels:
 - Base URL from `NEXT_PUBLIC_API_BASE_URL`.
 - `authHeader()` reads the Supabase session and attaches `Authorization: Bearer <access_token>` — the exact JWT the backend verifies.
 - One typed helper `jsonRequest<T>()` for JSON, one `uploadDocument()` for multipart uploads.
-- All response shapes are typed TypeScript mirrors of the backend's Pydantic models. Functions are grouped by feature (documents, generation, teacher review, student attempts, practice/engagement, academics, admin, super-admin, teacher analytics).
+- Frontend response shapes are typed TypeScript contracts. New and security-sensitive backend endpoints enforce matching Pydantic response models; some legacy endpoints still return dictionaries and should be migrated incrementally when touched. Functions are grouped by feature (documents, generation, teacher review, student attempts, practice/engagement, academics, admin, super-admin, teacher analytics).
 
 **(B) Supabase directly** — `frontend/lib/supabase.ts` (anon key, RLS applies)
 - Used **only for auth**: `signInWithPassword`, student `signUp` (with `full_name` and `course_id`; legacy `tenant_id` is ignored by the hardened trigger), `getUser`/`getSession`, `signOut`, and reading the caller's own `profiles.role` for role-routing.
@@ -348,7 +348,7 @@ Guards: **public** / **student** / **staff** (teacher+admin+super) / **admin** (
 - **`account_deletion.py`** — self-service account deletion (migration 30).
 - **`attempt_timing.py`**, **`student_access.py`**, **`teacher_access.py`** — access/timing helpers used across the student and teacher routers.
 - **`quiz_extraction.py`** / **`extraction_prompts.py`** — the existing-quiz-document extraction feature (`extraction.py` router); see `docs/pavyaa_changelog/EXTRACTION-FEATURE.md`.
-- **`pyq_parser.py`** — deterministic past-year-question parser; unwired (see §12).
+- **`pyq_parser.py`** — legacy deterministic past-year-question experiment, intentionally unwired. Production extraction uses `quiz_extraction.py`; do not adopt the legacy parser without accuracy evaluation and an explicit architecture decision.
 
 ### 6.5 Auth model
 - **JWT verification** (`lib/auth.py`): reads the token header; modern Supabase tokens are **ES256**, verified against the project's public keys fetched from the JWKS endpoint (cached). Audience `authenticated` is enforced.
