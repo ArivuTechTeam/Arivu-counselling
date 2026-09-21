@@ -27,7 +27,9 @@ await db.exec(`create table quota_calls(n int); insert into quota_calls values(0
   create function public.consume_ai_rate_limit(uuid,uuid,text,int)
   returns table(allowed boolean,retry_after_seconds int,remaining int) language plpgsql as $$
   begin update public.quota_calls set n=n+1; return query select true,0,10; end $$;`);
-await db.exec(fs.readFileSync("migrations/migration-43-faculty-background-jobs.sql", "utf8"));
+const facultyMigration = fs.readFileSync("migrations/migration-43-faculty-background-jobs.sql", "utf8");
+await db.exec(facultyMigration);
+await db.exec(facultyMigration); // Safe when the earlier Pavya SQL was already applied.
 const scalar = async (sql, params=[]) => Object.values((await db.query(sql, params)).rows[0])[0];
 const uuid = () => crypto.randomUUID();
 const tenant=uuid(), actor=uuid(), subject=uuid(), course=uuid(), doc=uuid(), chapter=uuid();

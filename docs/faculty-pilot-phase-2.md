@@ -31,7 +31,11 @@ An API endpoint accepting an old synchronous request retains its old behavior. D
 This feature is **off by default**. No hosted database has been changed by this implementation.
 
 1. Ensure the existing database has the repository's migrations through 42. Take the normal staging backup/restore checkpoint.
-2. Apply `migrations/migration-43-faculty-background-jobs.sql` once to staging. This additive migration must not be enabled before it is applied. Do not run a blanket CLI reset/push against an existing database.
+2. Apply `migrations/migration-43-faculty-background-jobs.sql` to staging. It is
+   safely rerunnable when Pavya's earlier faculty-job SQL already created the
+   same table and functions; the current file refreshes those functions and adds
+   any missing indexes. Do not drop an existing `faculty_jobs` table and do not
+   run a blanket CLI reset/push against an existing database.
 3. Deploy a separate Railway worker process using `python -m app.services.faculty_worker`, with the same backend environment and code revision.
 4. Only after both the migration and worker are ready, set `FACULTY_JOBS_ENABLED=true` on the API and worker services. Until then, leave it false; the existing generation paths remain active.
 5. For local Docker validation, run:
