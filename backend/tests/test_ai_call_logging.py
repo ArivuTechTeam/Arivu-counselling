@@ -123,6 +123,7 @@ class ApiLogsEndpointTests(unittest.TestCase):
                  "was_fallback": False, "input_tokens": 1, "output_tokens": 2, "cached_tokens": 0,
                  "thinking_tokens": None, "cost_usd": "0.1", "cost_inr": "8.3", "latency_ms": 10,
                  "status": "success", "error_message": None, "created_at": "2026-09-19T00:00:00Z",
+                 "raw_request": {"contents": []}, "raw_response": {"ok": True},
                  "documents": {"original_filename": "paper.pdf"}}]
         service = type("Service", (), {"table": lambda _self, _name: _LogsQuery(rows)})()
         with patch.object(api_logs, "get_service_client", return_value=service):
@@ -137,5 +138,6 @@ class ApiLogsEndpointTests(unittest.TestCase):
                 "/api/v1/platform/api-logs/by-document/d1"
             )
         self.assertEqual(detail.status_code, 200)
+        self.assertEqual(detail.json()["raw_response"], {"ok": True})
         self.assertEqual(grouped.status_code, 200)
         self.assertEqual(grouped.json()["summary"]["call_count"], 1)

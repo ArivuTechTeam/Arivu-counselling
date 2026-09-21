@@ -16,6 +16,7 @@ from app.services.quiz_prompts import (
     STUDENT_FACING_RULES,
     TYPE_SPECS,
 )
+from app.services.prompt_security import UNTRUSTED_SOURCE_RULE
 
 GENERAL_TOPIC = "General"
 
@@ -62,7 +63,7 @@ def build_blueprint_system_prompt(
         "null/null when no page label exists. Set grounding_confidence from 0 to 1.\n"
     )
     return (
-        "You are an expert exam-question author for an exam-prep platform. You "
+        f"{UNTRUSTED_SOURCE_RULE}You are an expert exam-question author for an exam-prep platform. You "
         "are given study material from a teacher's document plus a BLUEPRINT "
         "stating how many questions to write and which topics to emphasise.\n\n"
         "COVERAGE RULE (important):\n"

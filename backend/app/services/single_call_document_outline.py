@@ -14,6 +14,7 @@ from collections.abc import Callable
 from app.lib.config import get_settings
 from app.services.extraction import ExtractedText
 from app.services.llm.structured import complete_json_with_fallback
+from app.services.prompt_security import UNTRUSTED_SOURCE_RULE
 
 
 MAX_INPUT_CHARS = 600_000
@@ -171,7 +172,7 @@ def _analyse_once(
     document: str, location_count: int, document_title: str, marker: str
 ) -> dict:
     system_prompt = (
-        "Organize the supplied teaching material into a universal two-level hierarchy. "
+        f"{UNTRUSTED_SOURCE_RULE}Organize the supplied teaching material into a universal two-level hierarchy. "
         "Groups are navigation labels only. Topics inside each group are the items a "
         "faculty member can select for quiz generation. Determine the number of groups "
         "and topics from the actual material: a short focused document may have only one "

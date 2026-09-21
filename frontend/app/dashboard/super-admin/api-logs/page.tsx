@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import useSWR from "swr";
 
 import { ErrorCard } from "@/components/ui/error-card";
+import { Dialog } from "@/components/ui/dialog";
 import { PageHeader } from "@/components/ui/page-header";
 import { Skeleton, SkeletonStats } from "@/components/ui/skeleton";
 import {
@@ -74,9 +75,14 @@ function JsonTree({ value, depth = 0 }: { value: unknown; depth?: number }) {
 function LogDetail({ id, inrPerUsd, onClose }: { id: string; inrPerUsd: number; onClose: () => void }) {
   const { data, error } = useSWR(["api-log", id], () => getApiLog(id));
   return (
-    <aside className="fixed inset-y-0 right-0 z-40 w-full max-w-2xl overflow-y-auto border-l bg-card p-5 shadow-2xl sm:p-6" aria-label="API call detail">
+    <Dialog
+      onClose={onClose}
+      ariaLabelledBy="api-call-detail-title"
+      overlayClassName="fixed inset-0 z-50 flex justify-end bg-black/30"
+      contentClassName="h-full w-full max-w-2xl overflow-y-auto border-l bg-card p-5 shadow-2xl sm:p-6"
+    >
       <div className="mb-5 flex items-start justify-between gap-4">
-        <div><p className="text-lg font-semibold">API call detail</p><p className="mt-1 text-sm text-muted-foreground">Raw provider payloads are visible only to super admins.</p></div>
+        <div><h2 id="api-call-detail-title" className="text-lg font-semibold">API call detail</h2><p className="mt-1 text-sm text-muted-foreground">Raw provider payloads are visible only to super admins.</p></div>
         <button onClick={onClose} className="rounded-lg border border-input px-3 py-1.5 text-sm hover:bg-accent">Close</button>
       </div>
       {error && <ErrorCard message={error.message} />}
@@ -89,7 +95,7 @@ function LogDetail({ id, inrPerUsd, onClose }: { id: string; inrPerUsd: number; 
         <section className="rounded-xl border p-4"><h2 className="mb-3 font-semibold">Raw request</h2><JsonTree value={data.raw_request} /></section>
         <section className="rounded-xl border p-4"><h2 className="mb-3 font-semibold">Raw response</h2><JsonTree value={data.raw_response} /></section>
       </div>}
-    </aside>
+    </Dialog>
   );
 }
 
@@ -247,6 +253,6 @@ export default function ApiLogsPage() {
       </section>;
     })}<Pagination data={data} filters={filters} setFilters={setFilters} /></div>}
     {items.length === 0 && <div className="rounded-2xl border bg-card p-10 text-center text-sm text-muted-foreground">No API calls match these filters yet.</div>}
-    {selectedId && <><div onClick={() => setSelectedId(null)} className="fixed inset-0 z-30 bg-black/30" /><LogDetail id={selectedId} inrPerUsd={inrPerUsd} onClose={() => setSelectedId(null)} /></>}
+    {selectedId && <LogDetail id={selectedId} inrPerUsd={inrPerUsd} onClose={() => setSelectedId(null)} />}
   </div>;
 }

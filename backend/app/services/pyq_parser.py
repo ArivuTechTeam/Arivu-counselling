@@ -1,4 +1,9 @@
-"""
+"""Legacy experimental parser; it is intentionally not wired into production.
+
+The supported extraction pipeline is ``quiz_extraction.py`` (DeepSeek for typed
+documents and Gemini for scanned documents). Keep this module only as a reference
+until a measured deterministic fast path is explicitly designed and tested.
+
 PYQ parser — turns a TYPED MCQ document (text extracted from a PDF/DOCX via
 pdfplumber) into structured questions. Deterministic, no AI.
 
