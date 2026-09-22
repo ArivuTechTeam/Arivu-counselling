@@ -5,7 +5,12 @@ import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { Brand } from "@/components/ui/brand";
-import { listPublicCourses } from "@/lib/api";
+import { listPublicCourses, warmBackend } from "@/lib/api";
+import {
+  dashboardDestination,
+  isDashboardRole,
+  writeDashboardBootstrap,
+} from "@/lib/dashboard-bootstrap";
 import { PENDING_GOOGLE_COURSE_KEY } from "@/lib/google-auth";
 import { PENDING_AUTH_NEXT_KEY } from "@/lib/google-auth";
 import { PENDING_GOOGLE_TENANT_KEY } from "@/lib/google-auth";
@@ -51,7 +56,13 @@ export default function AuthCallbackPage() {
     }
     window.sessionStorage.removeItem(PENDING_GOOGLE_COURSE_KEY);
     window.sessionStorage.removeItem(PENDING_GOOGLE_TENANT_KEY);
-    router.replace(finishDestination());
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
+    if (!session?.user) throw new Error("Sign-up did not create a session.");
+    writeDashboardBootstrap(session.user.id, "student", false);
+    warmBackend();
+    router.replace(dashboardDestination("student", finishDestination()));
     router.refresh();
   }, [finishDestination, router]);
 
@@ -80,16 +91,20 @@ export default function AuthCallbackPage() {
           );
         }
 
+        // exchangeCodeForSession has already authenticated and persisted the
+        // session. Reuse it locally instead of making an immediate duplicate
+        // Auth-server request; the following RLS query validates access.
         const {
-          data: { user },
-          error: userError,
-        } = await supabase.auth.getUser();
-        if (userError) throw userError;
+          data: { session },
+          error: sessionError,
+        } = await supabase.auth.getSession();
+        if (sessionError) throw sessionError;
+        const user = session?.user;
         if (!user) throw new Error("Google sign-in did not create a session.");
 
         const { data: profile, error: profileError } = await supabase
           .from("profiles")
-          .select("id")
+          .select("id,role,must_change_password")
           .eq("id", user.id)
           .maybeSingle();
         if (profileError) throw profileError;
@@ -98,9 +113,20 @@ export default function AuthCallbackPage() {
         // profile. Automatic identity linking therefore preserves their role,
         // tenant, and enrollments and can go straight to the dashboard.
         if (profile) {
+          if (!isDashboardRole(profile.role)) {
+            throw new Error("Account profile has an unsupported role.");
+          }
           window.sessionStorage.removeItem(PENDING_GOOGLE_COURSE_KEY);
           window.sessionStorage.removeItem(PENDING_GOOGLE_TENANT_KEY);
-          router.replace(finishDestination());
+          writeDashboardBootstrap(
+            user.id,
+            profile.role,
+            Boolean(profile.must_change_password),
+          );
+          warmBackend();
+          router.replace(
+            dashboardDestination(profile.role, finishDestination()),
+          );
           router.refresh();
           return;
         }

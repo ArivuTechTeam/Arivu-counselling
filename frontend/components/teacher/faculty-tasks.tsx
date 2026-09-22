@@ -35,7 +35,7 @@ export function FacultyTasks() {
     void refresh();
     return () => { stopped = true; clearTimeout(timer); window.removeEventListener("faculty-job-queued", refresh); };
   }, []);
-  if (!enabled && !error) return null;
+  if ((!enabled || jobs.length === 0) && !error) return null;
   async function cancel(id: string) {
     setCancelling(id);
     try {

@@ -5,7 +5,12 @@ import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 
 import { GoogleAuthButton } from "@/components/auth/google-auth-button";
-import { getInstitutionBranding, InstitutionBranding } from "@/lib/api";
+import { getInstitutionBranding, InstitutionBranding, warmBackend } from "@/lib/api";
+import {
+  dashboardDestination,
+  isDashboardRole,
+  writeDashboardBootstrap,
+} from "@/lib/dashboard-bootstrap";
 import { signInWithGoogle } from "@/lib/google-auth";
 import { safeDashboardNext } from "@/lib/safe-next";
 import { createClient } from "@/lib/supabase";
@@ -73,16 +78,41 @@ export default function LoginPage() {
 
     setLoading(true);
     const supabase = createClient();
-    const { error: signInError } = await supabase.auth.signInWithPassword({
+    const { data: signInData, error: signInError } = await supabase.auth.signInWithPassword({
       email,
       password,
     });
-    setLoading(false);
     if (signInError) {
+      setLoading(false);
       setError("Sign-in failed. Check your credentials and try again.");
       return;
     }
-    router.push(requestedDestination());
+    const user = signInData.user;
+    if (!user) {
+      setLoading(false);
+      setError("Sign-in did not create a session. Please try again.");
+      return;
+    }
+    warmBackend();
+    const { data: profile, error: profileError } = await supabase
+      .from("profiles")
+      .select("role,must_change_password")
+      .eq("id", user.id)
+      .single();
+    setLoading(false);
+    if (profileError || !isDashboardRole(profile?.role)) {
+      await supabase.auth.signOut({ scope: "local" });
+      setError(
+        "Your account profile could not be loaded. Please contact your administrator.",
+      );
+      return;
+    }
+    writeDashboardBootstrap(
+      user.id,
+      profile.role,
+      Boolean(profile.must_change_password),
+    );
+    router.push(dashboardDestination(profile.role, requestedDestination()));
   }
 
   async function handleGoogleSignIn() {
@@ -122,6 +152,10 @@ export default function LoginPage() {
       setNotice("Your password has been changed. Please sign in with your new password.");
     } else if (reason === "account-deleted") {
       setNotice("Your account and personal activity have been deleted.");
+    } else if (reason === "profile-unavailable") {
+      setNotice(
+        "Your account is not fully set up. Please contact your administrator.",
+      );
     }
     if (reason) {
       url.searchParams.delete("reason");
@@ -131,8 +165,14 @@ export default function LoginPage() {
 
   useEffect(() => {
     let active = true;
-    createClient().auth.getUser().then(({ data: { user } }) => {
-      if (active && user) router.replace(requestedDestination());
+    // Wake a sleeping API while the user is reading or completing the form so
+    // the first authenticated dashboard request does not pay the full cold start.
+    warmBackend();
+    // This is only a convenience redirect for an already-signed-in browser
+    // tab. Restore the local session instead of blocking on the Auth server;
+    // dashboard data and role access are still verified downstream.
+    createClient().auth.getSession().then(({ data: { session } }) => {
+      if (active && session?.user) router.replace(requestedDestination());
     });
     return () => { active = false; };
     // The intended destination is read from the current URL once on mount.
@@ -223,7 +263,7 @@ export default function LoginPage() {
                   {branding?.name ?? "Quiz platform"}
                 </p>
                 <h2 id="login-title">Welcome back</h2>
-                <p>Sign in to continue to your learning dashboard.</p>
+                <p>Sign in to continue to your dashboard.</p>
               </header>
 
               <form className="login-form" onSubmit={handleSignIn}>

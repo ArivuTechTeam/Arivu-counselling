@@ -5,16 +5,6 @@ import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import {
-  Area,
-  AreaChart,
-  CartesianGrid,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from "recharts";
-
-import {
   Card,
   CardContent,
   CardDescription,
@@ -24,7 +14,12 @@ import {
 import { StudentQuizzes } from "@/components/student/student-quizzes";
 import { ErrorCard } from "@/components/ui/error-card";
 import { Skeleton } from "@/components/ui/skeleton";
-import { useStudentAttempts, useStudentStats } from "@/lib/student-queries";
+import { DeferredAreaTrendChart } from "@/components/shared/deferred-area-trend-chart";
+import {
+  useStudentAttempts,
+  useStudentQuizzes,
+  useStudentStats,
+} from "@/lib/student-queries";
 
 const BRAND = "#15603d";
 
@@ -305,6 +300,9 @@ export function StudentDashboard() {
   const router = useRouter();
   const statsQuery = useStudentStats();
   const attemptsQuery = useStudentAttempts();
+  // Start the primary quiz-catalog request with the dashboard summaries. The
+  // StudentQuizzes child reuses this SWR entry when it mounts after stats load.
+  useStudentQuizzes();
   const stats = statsQuery.data ?? null;
   const attempts = attemptsQuery.data ?? [];
 
@@ -346,15 +344,13 @@ export function StudentDashboard() {
   const quizzesA = useCountUp(quizzes, ready);
   const bestA = useCountUp(best, ready && attempts.length > 0);
 
-  // Either summary is required for a correct dashboard; retry both together.
-  const error = statsQuery.error ?? attemptsQuery.error;
-  if (error) {
+  // The progress summary drives the hero. Attempt history is secondary and is
+  // allowed to recover in place without hiding available quizzes.
+  if (statsQuery.error) {
     return (
       <ErrorCard
-        message={error.message}
-        onRetry={() =>
-          void Promise.all([statsQuery.mutate(), attemptsQuery.mutate()])
-        }
+        message={statsQuery.error.message}
+        onRetry={() => void statsQuery.mutate()}
       />
     );
   }
@@ -521,43 +517,29 @@ export function StudentDashboard() {
         </CardHeader>
         <CardContent>
           <div className="h-56">
-            {trend.length === 0 ? (
+            {attemptsQuery.error ? (
+              <ErrorCard
+                title="Score history unavailable"
+                message={attemptsQuery.error.message}
+                onRetry={() => void attemptsQuery.mutate()}
+                className="h-full justify-center"
+              />
+            ) : !attemptsQuery.data ? (
+              <Skeleton className="h-full w-full rounded-xl" />
+            ) : trend.length === 0 ? (
               <p className="text-sm text-muted-foreground">
                 No attempts yet — take a quiz to start your trend.
               </p>
             ) : (
-              <ResponsiveContainer width="100%" height="100%">
-                <AreaChart
-                  data={trend}
-                  margin={{ top: 8, right: 12, bottom: 0, left: -18 }}
-                >
-                  <defs>
-                    <linearGradient id="scoreFill" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="0%" stopColor={BRAND} stopOpacity={0.28} />
-                      <stop offset="100%" stopColor={BRAND} stopOpacity={0} />
-                    </linearGradient>
-                  </defs>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#eee" />
-                  <XAxis dataKey="name" tick={{ fontSize: 12, fill: "#8b8b85" }} />
-                  <YAxis domain={[0, 100]} tick={{ fontSize: 12, fill: "#8b8b85" }} />
-                  <Tooltip
-                    contentStyle={{
-                      borderRadius: 12,
-                      border: "1px solid #e5e7eb",
-                      boxShadow: "0 4px 16px rgba(0,0,0,0.08)",
-                      fontSize: 12,
-                    }}
-                  />
-                  <Area
-                    type="monotone"
-                    dataKey="score"
-                    stroke={BRAND}
-                    strokeWidth={2.5}
-                    fill="url(#scoreFill)"
-                    dot={{ r: 3, fill: BRAND }}
-                  />
-                </AreaChart>
-              </ResponsiveContainer>
+              <DeferredAreaTrendChart
+                data={trend}
+                xKey="name"
+                yKey="score"
+                color={BRAND}
+                gradientId="studentScoreFill"
+                yDomain={[0, 100]}
+                showGrid
+              />
             )}
           </div>
         </CardContent>
@@ -572,7 +554,13 @@ export function StudentDashboard() {
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-3">
-          {mastery.length === 0 ? (
+          {attemptsQuery.error ? (
+            <p className="text-sm text-muted-foreground">
+              Quiz mastery will return when score history reconnects.
+            </p>
+          ) : !attemptsQuery.data ? (
+            <Skeleton className="h-24 w-full rounded-xl" />
+          ) : mastery.length === 0 ? (
             <p className="text-sm text-muted-foreground">
               Take a quiz to see how you&apos;re performing.
             </p>

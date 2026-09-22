@@ -19,6 +19,7 @@ from uuid import uuid4
 from fastapi import Depends, FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from starlette.exceptions import HTTPException as StarletteHTTPException
@@ -107,8 +108,12 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type", "X-Request-ID"],
-    expose_headers=["X-Request-ID", "Retry-After"],
+    expose_headers=["X-Request-ID", "Retry-After", "Server-Timing"],
 )
+
+# Dashboard and quiz payloads are JSON-heavy. Compress responses over 1 KiB;
+# tiny health/auth responses stay untouched to avoid unnecessary CPU work.
+app.add_middleware(GZipMiddleware, minimum_size=1024)
 
 
 @app.middleware("http")
@@ -149,13 +154,15 @@ async def trace_and_protect_api_responses(request: Request, call_next):
     if request.url.path.startswith("/api/v1/"):
         response.headers["Cache-Control"] = "no-store, private"
         response.headers["Pragma"] = "no-cache"
+    duration_ms = (time.perf_counter() - started) * 1000
+    response.headers["Server-Timing"] = f"app;dur={duration_ms:.1f}"
     logger.info(
         "Request completed request_id=%s method=%s route=%s status=%d duration_ms=%.1f",
         request_id,
         request.method,
         _safe_route_label(request),
         response.status_code,
-        (time.perf_counter() - started) * 1000,
+        duration_ms,
     )
     return response
 

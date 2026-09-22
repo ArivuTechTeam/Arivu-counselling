@@ -2,15 +2,6 @@
 
 import Link from "next/link";
 import {
-  Area,
-  AreaChart,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from "recharts";
-
-import {
   Card,
   CardContent,
   CardDescription,
@@ -29,6 +20,7 @@ import {
 import { ErrorCard } from "@/components/ui/error-card";
 import { Skeleton, SkeletonStats } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/ui/empty-state";
+import { DeferredAreaTrendChart } from "@/components/shared/deferred-area-trend-chart";
 import { usePlatformOverview } from "@/lib/staff-queries";
 
 const BRAND = "#15603d";
@@ -101,6 +93,32 @@ export default function PlatformOverviewPage() {
         ring={{ value: `${approval}%`, label: "approved", pct: ready ? s!.approval_rate : 0 }}
       />
 
+      <section className="rounded-2xl border bg-card p-4 shadow-sm" aria-label="Quick actions">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="mr-2 text-xs font-bold uppercase tracking-widest text-muted-foreground">
+            Quick actions
+          </span>
+          <Link
+            href="/dashboard/super-admin/institutions#onboard"
+            className="rounded-lg bg-primary px-3 py-2 text-sm font-semibold text-primary-foreground hover:bg-primary/90"
+          >
+            Add institution
+          </Link>
+          <Link
+            href="/dashboard/super-admin/admins"
+            className="rounded-lg border border-input px-3 py-2 text-sm font-semibold hover:bg-accent"
+          >
+            Add institution admin
+          </Link>
+          <Link
+            href="/dashboard/super-admin/ai-monitoring"
+            className="rounded-lg border border-input px-3 py-2 text-sm font-semibold hover:bg-accent"
+          >
+            Review question quality
+          </Link>
+        </div>
+      </section>
+
       {/* KPI tiles */}
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
         <MetricTile
@@ -148,30 +166,13 @@ export default function PlatformOverviewPage() {
           </CardHeader>
           <CardContent>
             <div className="h-56">
-              <ResponsiveContainer width="100%" height="100%">
-                <AreaChart
-                  data={s?.activity ?? []}
-                  margin={{ top: 8, right: 12, bottom: 0, left: -20 }}
-                >
-                  <defs>
-                    <linearGradient id="pactFill" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="0%" stopColor={BRAND} stopOpacity={0.28} />
-                      <stop offset="100%" stopColor={BRAND} stopOpacity={0} />
-                    </linearGradient>
-                  </defs>
-                  <XAxis dataKey="date" tick={{ fontSize: 11, fill: "#8b8b85" }} />
-                  <YAxis allowDecimals={false} tick={{ fontSize: 11, fill: "#8b8b85" }} />
-                  <Tooltip />
-                  <Area
-                    type="monotone"
-                    dataKey="attempts"
-                    stroke={BRAND}
-                    strokeWidth={2.5}
-                    fill="url(#pactFill)"
-                    dot={{ r: 2.5, fill: BRAND }}
-                  />
-                </AreaChart>
-              </ResponsiveContainer>
+              <DeferredAreaTrendChart
+                data={s?.activity ?? []}
+                xKey="date"
+                yKey="attempts"
+                color={BRAND}
+                gradientId="platformActivityFill"
+              />
             </div>
           </CardContent>
         </Card>

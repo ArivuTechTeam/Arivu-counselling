@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import unittest
 from unittest.mock import patch
 from uuid import uuid4
@@ -150,6 +151,10 @@ class ResponseSecurityTests(unittest.TestCase):
                 self.assertEqual(response.headers["X-Frame-Options"], "DENY")
                 self.assertIn("max-age=31536000", response.headers["Strict-Transport-Security"])
                 self.assertIn("script-src 'self'", response.headers["Content-Security-Policy"])
+                self.assertRegex(
+                    response.headers["Server-Timing"],
+                    re.compile(r"^app;dur=\d+(?:\.\d)?$"),
+                )
 
     def test_http_and_validation_errors_include_a_correlation_id(self) -> None:
         not_found = self.client.get("/route-that-does-not-exist")
@@ -178,6 +183,14 @@ class ResponseSecurityTests(unittest.TestCase):
             },
         )
         self.assertEqual(allowed.headers.get("Access-Control-Allow-Origin"), allowed_origin)
+        exposed = self.client.get(
+            "/health",
+            headers={"Origin": allowed_origin},
+        )
+        self.assertIn(
+            "Server-Timing",
+            exposed.headers.get("Access-Control-Expose-Headers", ""),
+        )
 
         denied = self.client.options(
             "/health",
