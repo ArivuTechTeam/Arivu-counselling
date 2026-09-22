@@ -13,11 +13,13 @@ from supabase_auth.errors import AuthApiError
 from app.api.admin import (
     AdminCreate,
     TenantCreate,
+    TenantOption,
     TenantUpdate,
     TemporaryPasswordReset,
     _select_all,
     _set_provisioned_profile,
     create_admin,
+    list_tenants,
     onboard_institution,
     platform_ai_monitoring,
     platform_overview,
@@ -42,8 +44,10 @@ class _Query:
         self.start = 0
         self.end = len(rows)
         self.update_values: dict | None = None
+        self.selected_columns: str | None = None
 
-    def select(self, _columns: str):
+    def select(self, columns: str):
+        self.selected_columns = columns
         return self
 
     def eq(self, column: str, value: object):
@@ -223,6 +227,31 @@ SUPER = CurrentProfile(
 
 
 class SuperAdminRegressionTests(unittest.TestCase):
+    def test_tenant_directory_selects_its_complete_response_contract(self) -> None:
+        service = _Service(
+            {
+                "tenants": [
+                    {
+                        "id": "tenant-a",
+                        "name": "Demo College",
+                        "subdomain": "demo-college",
+                    }
+                ]
+            }
+        )
+
+        with patch("app.api.admin.get_service_client", return_value=service):
+            tenants = list_tenants(profile=SUPER)
+
+        self.assertEqual(
+            service.queries[0][1].selected_columns,
+            "id, name, subdomain",
+        )
+        self.assertEqual(
+            TenantOption.model_validate(tenants[0]).subdomain,
+            "demo-college",
+        )
+
     def test_auth_provisioning_errors_are_safe_and_actionable(self) -> None:
         cases = [
             ("email_exists", 422, 409, "already exists"),
