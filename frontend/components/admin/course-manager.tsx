@@ -31,10 +31,13 @@ const PALETTE = [
   "#8b5cf6",
   "#f43f5e",
 ];
-function courseColor(id: string): string {
-  let h = 0;
-  for (const ch of id) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
-  return PALETTE[h % PALETTE.length];
+function courseColors(courses: Course[]): Map<string, string> {
+  const ordered = [...courses].sort((left, right) =>
+    left.id.localeCompare(right.id),
+  );
+  return new Map(
+    ordered.map((course, index) => [course.id, PALETTE[index % PALETTE.length]]),
+  );
 }
 function initials(name: string): string {
   return (
@@ -160,14 +163,15 @@ function Modal({
 // --- cards --------------------------------------------------------------------
 function CourseCard({
   course,
+  color,
   onOpen,
   onDelete,
 }: {
   course: Course;
+  color: string;
   onOpen: () => void;
   onDelete: () => void;
 }) {
-  const color = courseColor(course.id);
   const n = course.subjects.length;
   const levels = courseLevels(course).length;
   return (
@@ -379,6 +383,7 @@ export function CourseManager() {
     () => (courses ?? []).find((c) => c.id === openCourseId) ?? null,
     [courses, openCourseId],
   );
+  const colors = useMemo(() => courseColors(courses ?? []), [courses]);
 
   function closeModal() {
     setModal(null);
@@ -424,7 +429,7 @@ export function CourseManager() {
 
   // ---- drilled-in: levels, then subjects, of one course ----
   if (openCourse) {
-    const color = courseColor(openCourse.id);
+    const color = colors.get(openCourse.id) ?? PALETTE[0];
     const subs = openCourse.subjects;
     const levels = courseLevels(openCourse);
     const openLevel = levels.find((level) => level.id === openLevelId) ?? null;
@@ -706,6 +711,7 @@ export function CourseManager() {
             <CourseCard
               key={c.id}
               course={c}
+              color={colors.get(c.id) ?? PALETTE[0]}
               onOpen={() => {
                 setOpenCourseId(c.id);
                 setOpenLevelId(null);
