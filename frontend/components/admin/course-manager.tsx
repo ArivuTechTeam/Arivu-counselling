@@ -10,6 +10,7 @@ import {
   CourseImpact,
   Subject,
   createCourse,
+  createCourseLevel,
   createSubject,
   deleteCourse,
   deleteSubject,
@@ -57,8 +58,16 @@ type CourseLevel = {
 
 function courseLevels(course: Course): CourseLevel[] {
   const levels = new Map<string, CourseLevel>();
+  for (const level of course.levels ?? []) {
+    levels.set(level.id, {
+      id: level.id,
+      name: level.name,
+      subjects: [],
+      isCustom: !level.catalog_level_id,
+    });
+  }
   for (const subject of course.subjects) {
-    const id = subject.catalog_level_id ?? "custom";
+    const id = subject.course_level_id ?? subject.catalog_level_id ?? "legacy";
     const existing = levels.get(id);
     if (existing) {
       existing.subjects.push(subject);
@@ -345,11 +354,11 @@ export function CourseManager() {
     null,
     (value): value is string | null => value === null || typeof value === "string",
   );
-  const [modal, setModal] = useSessionStorageState<"course" | "subject" | null>(
+  const [modal, setModal] = useSessionStorageState<"course" | "level" | "subject" | null>(
     "course-manager-modal",
     null,
-    (value): value is "course" | "subject" | null =>
-      value === null || value === "course" || value === "subject",
+    (value): value is "course" | "level" | "subject" | null =>
+      value === null || value === "course" || value === "level" || value === "subject",
   );
   const [name, setName] = useSessionStorageState(
     "course-manager-name-draft",
@@ -390,8 +399,10 @@ export function CourseManager() {
     if (!v) return;
     if (modal === "course") {
       await run(() => createCourse(v));
-    } else if (modal === "subject" && openCourseId) {
-      await run(() => createSubject(openCourseId, v));
+    } else if (modal === "level" && openCourseId) {
+      await run(() => createCourseLevel(openCourseId, v));
+    } else if (modal === "subject" && openCourseId && openLevelId) {
+      await run(() => createSubject(openCourseId, openLevelId, v));
     }
     closeModal();
   }
@@ -473,18 +484,16 @@ export function CourseManager() {
                 {openLevel.subjects.length} subject{openLevel.subjects.length === 1 ? "" : "s"}
               </p>
             </div>
-            {openLevel.isCustom && (
-              <button
-                onClick={() => {
-                  setName("");
-                  setModal("subject");
-                }}
-                className="inline-flex items-center gap-1.5 rounded-xl bg-white/95 px-5 py-2.5 text-sm font-extrabold shadow-md"
-                style={{ color }}
-              >
-                + Add custom subject
-              </button>
-            )}
+            <button
+              onClick={() => {
+                setName("");
+                setModal("subject");
+              }}
+              className="inline-flex items-center gap-1.5 rounded-xl bg-white/95 px-5 py-2.5 text-sm font-extrabold shadow-md"
+              style={{ color }}
+            >
+              + Add subject
+            </button>
           </div>
 
           {error && <ErrorRow message={error} />}
@@ -502,7 +511,7 @@ export function CourseManager() {
 
           {modal === "subject" && (
             <Modal
-              title={`Add custom subject to ${openCourse.name}`}
+              title={`Add subject to ${openLevel.name}`}
               onClose={closeModal}
               footer={
                 <>
@@ -576,12 +585,12 @@ export function CourseManager() {
           <button
             onClick={() => {
               setName("");
-              setModal("subject");
+              setModal("level");
             }}
             className="inline-flex items-center gap-1.5 rounded-xl bg-white/95 px-5 py-2.5 text-sm font-extrabold shadow-md"
             style={{ color }}
           >
-            + Add custom subject
+            + Add level
           </button>
         </div>
 
@@ -590,16 +599,16 @@ export function CourseManager() {
         {subs.length === 0 ? (
           <EmptyState
             icon={<BookOpen size={22} />}
-            title="No levels or subjects yet — add catalogue subjects or create a custom subject."
+            title="No levels yet — add the first level for this course."
             action={
               <button
                 onClick={() => {
                   setName("");
-                  setModal("subject");
+                  setModal("level");
                 }}
                 className={solidBtn}
               >
-                + Add custom subject
+                + Add level
               </button>
             }
           />
@@ -616,9 +625,9 @@ export function CourseManager() {
           </div>
         )}
 
-        {modal === "subject" && (
+        {modal === "level" && (
           <Modal
-            title={`Add custom subject to ${openCourse.name}`}
+            title={`Add level to ${openCourse.name}`}
             onClose={closeModal}
             footer={
               <>
@@ -626,20 +635,20 @@ export function CourseManager() {
                   Cancel
                 </button>
                 <button className={solidBtn} onClick={submitModal} disabled={busy || !name.trim()}>
-                  {busy ? "Saving…" : "Add subject"}
+                  {busy ? "Saving…" : "Add level"}
                 </button>
               </>
             }
           >
             <label className="flex flex-col gap-1.5 text-sm font-semibold text-foreground">
-              Subject name
+              Level name
               <input
                 autoFocus
                 className={field}
                 value={name}
                 onChange={(e) => setName(e.target.value)}
                 onKeyDown={(e) => e.key === "Enter" && submitModal()}
-                placeholder="e.g. Accounting"
+                placeholder="e.g. Foundation"
               />
             </label>
           </Modal>

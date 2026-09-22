@@ -55,13 +55,20 @@ function initials(text: string): string {
   );
 }
 
-function subjectsByLevel(subjects: Subject[]): Array<[string, Subject[]]> {
-  const groups = new Map<string, Subject[]>();
+function subjectsByLevel(subjects: Subject[]): Array<[string, string, Subject[]]> {
+  const groups = new Map<string, { name: string; subjects: Subject[] }>();
   for (const subject of subjects) {
-    const level = subject.level_name?.trim() || "Custom subjects";
-    groups.set(level, [...(groups.get(level) ?? []), subject]);
+    const id = subject.course_level_id ?? subject.catalog_level_id ?? "legacy";
+    const name = subject.level_name?.trim() || "General";
+    const group = groups.get(id) ?? { name, subjects: [] };
+    group.subjects.push(subject);
+    groups.set(id, group);
   }
-  return Array.from(groups.entries());
+  return Array.from(groups.entries()).map(([id, group]) => [
+    id,
+    group.name,
+    group.subjects,
+  ]);
 }
 
 export default function UsersPage() {
@@ -167,8 +174,8 @@ export default function UsersPage() {
 
   const selectedCourse = courses.find((course) => course.id === form.course_id);
   const selectedCourseLevels = selectedCourse
-    ? subjectsByLevel(selectedCourse.subjects).map(([name, subjects]) => ({
-        id: subjects[0]?.catalog_level_id ?? "custom",
+    ? subjectsByLevel(selectedCourse.subjects).map(([id, name, subjects]) => ({
+        id,
         name,
         subjects,
       }))
@@ -775,10 +782,10 @@ export default function UsersPage() {
                         </p>
                       ) : (
                         <div className="flex flex-col gap-3">
-                          {subjectsByLevel(course.subjects).map(([level, subjects]) => (
-                            <div key={level} className="rounded-lg border border-border/70 p-2">
+                          {subjectsByLevel(course.subjects).map(([levelId, levelName, subjects]) => (
+                            <div key={levelId} className="rounded-lg border border-border/70 p-2">
                               <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-                                {level}
+                                {levelName}
                               </p>
                               {subjects.map((subject) => (
                                 <label

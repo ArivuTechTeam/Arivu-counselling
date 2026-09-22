@@ -5,26 +5,26 @@ import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { Brand } from "@/components/ui/brand";
-import { listPublicCourses, warmBackend } from "@/lib/api";
+import { listPublicCourses, PublicCourse, warmBackend } from "@/lib/api";
 import {
   dashboardDestination,
   isDashboardRole,
   writeDashboardBootstrap,
 } from "@/lib/dashboard-bootstrap";
 import { PENDING_GOOGLE_COURSE_KEY } from "@/lib/google-auth";
+import { PENDING_GOOGLE_LEVEL_KEY } from "@/lib/google-auth";
 import { PENDING_AUTH_NEXT_KEY } from "@/lib/google-auth";
 import { PENDING_GOOGLE_TENANT_KEY } from "@/lib/google-auth";
 import { createClient } from "@/lib/supabase";
 import { PUBLIC_ENV } from "@/lib/public-env";
 import { safeDashboardNext } from "@/lib/safe-next";
 
-type PublicCourse = { id: string; name: string };
-
 export default function AuthCallbackPage() {
   const router = useRouter();
   const initialized = useRef(false);
   const [courses, setCourses] = useState<PublicCourse[]>([]);
   const [courseId, setCourseId] = useState("");
+  const [courseLevelId, setCourseLevelId] = useState("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -38,13 +38,19 @@ export default function AuthCallbackPage() {
     return destination;
   }, []);
 
-  const completeGoogleSignup = useCallback(async (selectedCourseId: string) => {
+  const completeGoogleSignup = useCallback(async (
+    selectedCourseId: string,
+    selectedLevelId: string,
+  ) => {
     setSaving(true);
     setError(null);
     const supabase = createClient();
     const { error: completionError } = await supabase.rpc(
       "complete_google_signup",
-      { p_course_id: selectedCourseId },
+      {
+        p_course_id: selectedCourseId,
+        p_course_level_id: selectedLevelId,
+      },
     );
     if (completionError) {
       setError(
@@ -55,6 +61,7 @@ export default function AuthCallbackPage() {
       return;
     }
     window.sessionStorage.removeItem(PENDING_GOOGLE_COURSE_KEY);
+    window.sessionStorage.removeItem(PENDING_GOOGLE_LEVEL_KEY);
     window.sessionStorage.removeItem(PENDING_GOOGLE_TENANT_KEY);
     const {
       data: { session },
@@ -117,6 +124,7 @@ export default function AuthCallbackPage() {
             throw new Error("Account profile has an unsupported role.");
           }
           window.sessionStorage.removeItem(PENDING_GOOGLE_COURSE_KEY);
+          window.sessionStorage.removeItem(PENDING_GOOGLE_LEVEL_KEY);
           window.sessionStorage.removeItem(PENDING_GOOGLE_TENANT_KEY);
           writeDashboardBootstrap(
             user.id,
@@ -145,14 +153,24 @@ export default function AuthCallbackPage() {
         const pendingCourseId = window.sessionStorage.getItem(
           PENDING_GOOGLE_COURSE_KEY,
         );
-        if (pendingCourseId && availableCourses.some((c) => c.id === pendingCourseId)) {
-          setCourseId(pendingCourseId);
+        const pendingLevelId = window.sessionStorage.getItem(
+          PENDING_GOOGLE_LEVEL_KEY,
+        );
+        const pendingCourse = availableCourses.find((c) => c.id === pendingCourseId);
+        if (
+          pendingCourse &&
+          pendingLevelId &&
+          pendingCourse.levels.some((level) => level.id === pendingLevelId)
+        ) {
+          setCourseId(pendingCourse.id);
+          setCourseLevelId(pendingLevelId);
           setLoading(false);
-          await completeGoogleSignup(pendingCourseId);
+          await completeGoogleSignup(pendingCourse.id, pendingLevelId);
           return;
         }
 
         window.sessionStorage.removeItem(PENDING_GOOGLE_COURSE_KEY);
+        window.sessionStorage.removeItem(PENDING_GOOGLE_LEVEL_KEY);
         setLoading(false);
       } catch {
         setError("Google sign-in could not be completed. Please try again.");
@@ -193,7 +211,7 @@ export default function AuthCallbackPage() {
                 One more step
               </h1>
               <p className="mt-1.5 text-center text-sm leading-6 text-muted-foreground">
-                Pick your course to finish setting up your student account.
+                Pick your course and level to finish setting up your student account.
               </p>
             </>
           )}
@@ -205,7 +223,10 @@ export default function AuthCallbackPage() {
                 <select
                   className="mt-2 h-11 w-full rounded-lg border border-input bg-background px-3 text-sm"
                   value={courseId}
-                  onChange={(event) => setCourseId(event.target.value)}
+                  onChange={(event) => {
+                    setCourseId(event.target.value);
+                    setCourseLevelId("");
+                  }}
                   autoFocus
                 >
                   <option value="">Select your course…</option>
@@ -216,11 +237,27 @@ export default function AuthCallbackPage() {
                   ))}
                 </select>
               </label>
+              <label className="block text-sm font-medium text-foreground">
+                Level
+                <select
+                  className="mt-2 h-11 w-full rounded-lg border border-input bg-background px-3 text-sm"
+                  value={courseLevelId}
+                  onChange={(event) => setCourseLevelId(event.target.value)}
+                  disabled={!courseId}
+                >
+                  <option value="">
+                    {courseId ? "Select your level…" : "Select a course first…"}
+                  </option>
+                  {(courses.find((course) => course.id === courseId)?.levels ?? []).map((level) => (
+                    <option key={level.id} value={level.id}>{level.name}</option>
+                  ))}
+                </select>
+              </label>
               <button
                 type="button"
                 className="w-full rounded-xl bg-emerald-700 px-4 py-3 text-sm font-semibold text-white transition hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-60"
-                disabled={!courseId}
-                onClick={() => completeGoogleSignup(courseId)}
+                disabled={!courseId || !courseLevelId}
+                onClick={() => completeGoogleSignup(courseId, courseLevelId)}
               >
                 Continue to dashboard
               </button>

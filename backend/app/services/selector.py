@@ -31,10 +31,14 @@ SELECTABLE_QUESTION_TYPES = (
 
 
 def enrolled_subject_ids(service, profile: CurrentProfile) -> set[str]:
-    """Subjects of the courses this student is enrolled in."""
+    """Subjects in the student's enrolled course and operational level.
+
+    A NULL level is retained only for legacy rows and teacher compatibility; it
+    keeps the previous course-wide behavior until that enrollment is corrected.
+    """
     enrolled = (
         service.table("enrollments")
-        .select("course_id")
+        .select("course_id, course_level_id")
         .eq("profile_id", profile.user_id)
         .eq("tenant_id", profile.tenant_id)
         .execute()
@@ -46,14 +50,28 @@ def enrolled_subject_ids(service, profile: CurrentProfile) -> set[str]:
         return set()
     subs = (
         service.table("subjects")
-        .select("id")
+        .select("id, course_id, course_level_id")
         .in_("course_id", course_ids)
         .eq("tenant_id", profile.tenant_id)
         .execute()
         .data
         or []
     )
-    return {s["id"] for s in subs}
+    levels_by_course = {
+        str(enrollment["course_id"]): (
+            str(enrollment["course_level_id"])
+            if enrollment.get("course_level_id")
+            else None
+        )
+        for enrollment in enrolled
+    }
+    return {
+        str(subject["id"])
+        for subject in subs
+        if levels_by_course.get(str(subject["course_id"])) is None
+        or str(subject.get("course_level_id"))
+        == levels_by_course[str(subject["course_id"])]
+    }
 
 
 def _chapter_ids(service, subject_ids: list[str], tenant_id: str) -> list[str]:

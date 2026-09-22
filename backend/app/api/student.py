@@ -237,33 +237,13 @@ def list_quizzes(profile: CurrentProfile = Depends(get_current_profile)) -> list
     service = get_service_client()
     attempt_limit = get_settings().student_quiz_attempt_limit
 
-    # 1) Which courses is this student enrolled in?
-    enrollments = select_all(
-        service,
-        "enrollments",
-        "course_id",
-        configure=lambda query: query.eq("profile_id", profile.user_id).eq(
-            "tenant_id", profile.tenant_id
-        ),
-    )
-    course_ids = [e["course_id"] for e in enrollments]
-    if not course_ids:
-        return []  # not enrolled in anything -> no quizzes
-
-    # 2) Which subjects belong to those courses?
-    subjects = select_all_in(
-        service,
-        "subjects",
-        "id",
-        in_column="course_id",
-        values=course_ids,
-        configure=lambda query: query.eq("tenant_id", profile.tenant_id),
-    )
-    subject_ids = [s["id"] for s in subjects]
+    # Resolve subjects through the student's course + level enrollment. This is
+    # the same authorization boundary used by Smart Quiz and attempt creation.
+    subject_ids = sorted(enrolled_subject_ids(service, profile))
     if not subject_ids:
         return []
 
-    # 3) Published quizzes tagged with one of those subjects.
+    # Published quizzes tagged with one of those subjects.
     sets = select_all_in(
         service,
         "quiz_sets",

@@ -78,6 +78,19 @@ class ExamDeadlineTests(unittest.TestCase):
 
 
 class MigrationSecurityTests(unittest.TestCase):
+    def test_student_level_signup_is_validated_and_tenant_scoped(self) -> None:
+        root = Path(__file__).resolve().parents[2]
+        sql = (
+            root / "migrations/migration-47-student-level-enrollment.sql"
+        ).read_text().lower()
+
+        self.assertIn("create table if not exists public.course_levels", sql)
+        self.assertIn("course_level_id uuid", sql)
+        self.assertIn("where c.id = requested_course and l.id = requested_level", sql)
+        self.assertIn("'student'::public.user_role", sql)
+        self.assertIn("complete_google_signup(uuid, uuid)", sql)
+        self.assertIn("revoke all on table public.course_levels from public, anon, authenticated", sql)
+
     def test_backend_provisioning_bypasses_trigger_at_auth_insert_time(self) -> None:
         root = Path(__file__).resolve().parents[2]
         sql = (

@@ -32,12 +32,13 @@ await db.exec(facultyMigration);
 await db.exec(facultyMigration); // Safe when the earlier Pavya SQL was already applied.
 const scalar = async (sql, params=[]) => Object.values((await db.query(sql, params)).rows[0])[0];
 const uuid = () => crypto.randomUUID();
-const tenant=uuid(), actor=uuid(), subject=uuid(), course=uuid(), doc=uuid(), chapter=uuid();
+const tenant=uuid(), actor=uuid(), subject=uuid(), course=uuid(), level=uuid(), doc=uuid(), chapter=uuid();
 await db.query("insert into tenants(id,name,subdomain) values($1,'Pilot','pilot')",[tenant]);
 await db.query("insert into auth.users values($1)",[actor]);
 await db.query("insert into profiles(id,tenant_id,role) values($1,$2,'teacher')",[actor,tenant]);
 await db.query("insert into courses(id,tenant_id,name) values($1,$2,'Commerce')",[course,tenant]);
-await db.query("insert into subjects(id,tenant_id,course_id,name) values($1,$2,$3,'Accounts')",[subject,tenant,course]);
+await db.query("insert into course_levels(id,tenant_id,course_id,name) values($1,$2,$3,'Foundation')",[level,tenant,course]);
+await db.query("insert into subjects(id,tenant_id,course_id,course_level_id,name) values($1,$2,$3,$4,'Accounts')",[subject,tenant,course,level]);
 await db.query("insert into teacher_subjects(tenant_id,teacher_id,subject_id) values($1,$2,$3)",[tenant,actor,subject]);
 await db.query("insert into chapters(id,tenant_id,subject_id,name) values($1,$2,$3,'Basics')",[chapter,tenant,subject]);
 await db.query("insert into documents(id,tenant_id,uploaded_by,storage_path) values($1,$2,$3,'test.docx')",[doc,tenant,actor]);

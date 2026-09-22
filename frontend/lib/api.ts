@@ -1153,6 +1153,7 @@ export const getLeaderboard = (courseId?: string) =>
 export type Subject = {
   id: string;
   name: string;
+  course_level_id?: string;
   catalog_subject_id?: string;
   catalog_level_id?: string;
   level_name?: string;
@@ -1161,7 +1162,15 @@ export type Course = {
   id: string;
   name: string;
   subjects: Subject[];
+  levels?: { id: string; name: string; catalog_level_id?: string | null }[];
   student_count?: number;
+};
+
+export type PublicCourseLevel = { id: string; name: string };
+export type PublicCourse = {
+  id: string;
+  name: string;
+  levels: PublicCourseLevel[];
 };
 
 export type CatalogSubject = {
@@ -1202,7 +1211,7 @@ export const listCourses = () => jsonRequest<Course[]>("/api/v1/courses", "GET")
 /** Public (no-auth) course list for the signup dropdown. */
 export async function listPublicCourses(
   tenantId: string,
-): Promise<{ id: string; name: string }[]> {
+): Promise<PublicCourse[]> {
   const res = await apiFetch(
     `${API_BASE}/api/v1/public/courses?tenant_id=${encodeURIComponent(tenantId)}`,
   );
@@ -1215,8 +1224,18 @@ export async function listPublicCourses(
 export const createCourse = (name: string) =>
   jsonRequest<Course>("/api/v1/courses", "POST", { name });
 
-export const createSubject = (courseId: string, name: string) =>
-  jsonRequest<Subject>("/api/v1/subjects", "POST", { course_id: courseId, name });
+export const createCourseLevel = (courseId: string, name: string) =>
+  jsonRequest<{ id: string; name: string }>("/api/v1/course-levels", "POST", {
+    course_id: courseId,
+    name,
+  });
+
+export const createSubject = (courseId: string, courseLevelId: string, name: string) =>
+  jsonRequest<Subject>("/api/v1/subjects", "POST", {
+    course_id: courseId,
+    course_level_id: courseLevelId,
+    name,
+  });
 
 export const deleteCourse = (id: string) =>
   jsonRequest<{ deleted: string }>(`/api/v1/courses/${id}`, "DELETE");
