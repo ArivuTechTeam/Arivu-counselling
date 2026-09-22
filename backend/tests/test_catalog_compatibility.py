@@ -213,7 +213,7 @@ class CatalogReadAndAuthorizationTests(unittest.TestCase):
             [("subject-1", True), ("subject-2", False)],
         )
 
-    def test_institution_admin_cannot_target_another_tenant(self) -> None:
+    def test_institution_admin_cannot_access_catalogue_provisioning(self) -> None:
         profile = CurrentProfile(
             user_id="admin-a",
             tenant_id="00000000-0000-4000-8000-000000000001",
@@ -222,7 +222,7 @@ class CatalogReadAndAuthorizationTests(unittest.TestCase):
         with self.assertRaises(HTTPException) as caught:
             _catalog_tenant(
                 profile,
-                UUID("00000000-0000-4000-8000-000000000002"),
+                UUID("00000000-0000-4000-8000-000000000001"),
                 required=True,
             )
         self.assertEqual(caught.exception.status_code, 403)

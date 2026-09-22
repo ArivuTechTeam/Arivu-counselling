@@ -53,13 +53,6 @@ def _catalog_tenant(
     *,
     required: bool,
 ) -> str | None:
-    if profile.role == "institution_admin":
-        if requested_tenant_id and str(requested_tenant_id) != profile.tenant_id:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="You can only manage your own institution's offerings.",
-            )
-        return profile.tenant_id
     if profile.role == "super_admin":
         if required and requested_tenant_id is None:
             raise HTTPException(
@@ -69,7 +62,7 @@ def _catalog_tenant(
         return str(requested_tenant_id) if requested_tenant_id else None
     raise HTTPException(
         status_code=status.HTTP_403_FORBIDDEN,
-        detail="Only institution and super admins can manage catalogue offerings.",
+        detail="Only super admins can manage catalogue offerings.",
     )
 
 
