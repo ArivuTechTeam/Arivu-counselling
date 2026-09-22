@@ -5,10 +5,10 @@ import { usePathname, useRouter } from "next/navigation";
 import { SWRConfig } from "swr";
 
 import { DashboardShell } from "@/components/shared/dashboard-shell";
-import { Brand } from "@/components/ui/brand";
 import { ErrorCard } from "@/components/ui/error-card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ToastProvider } from "@/components/ui/toast";
+import { getDashboardProfile, type DashboardProfile } from "@/lib/api";
 import { createClient } from "@/lib/supabase";
 import { safeDashboardNext } from "@/lib/safe-next";
 import {
@@ -33,6 +33,9 @@ export default function DashboardLayout({
   const pathname = usePathname();
   const [role, setRole] = useState<DashboardRole | null>(null);
   const [email, setEmail] = useState("");
+  const [institution, setInstitution] = useState<
+    DashboardProfile["institution"]
+  >(null);
   const [mustChangePassword, setMustChangePassword] = useState(false);
   const [canChangePassword, setCanChangePassword] = useState(false);
   const [bootstrapError, setBootstrapError] = useState<string | null>(null);
@@ -44,17 +47,16 @@ export default function DashboardLayout({
   const [ready, setReady] = useState(false);
 
   // Resolve the logged-in user's role once per dashboard mount. The browser
-  // session is restored locally, then the RLS-protected profile row remains the
-  // authoritative source for role-based navigation.
+  // session is restored locally, then the authenticated backend loads the
+  // authoritative profile and tenant identity for role-based navigation.
   useEffect(() => {
     let cancelled = false;
     setBootstrapError(null);
     const supabase = createClient();
     // The session lives in this tab's sessionStorage. Reading it here avoids a
     // blocking Auth-server round trip on every fresh dashboard mount. This is
-    // only a UI bootstrap: the profile lookup below is still protected by RLS,
-    // and every FastAPI endpoint independently verifies the bearer token and
-    // authoritative role before returning data.
+    // only a UI bootstrap: the profile endpoint below verifies the bearer token
+    // and loads the authoritative role and tenant before returning data.
     supabase.auth.getSession().then(async ({ data: { session } }) => {
       const user = session?.user;
       if (cancelled) return;
@@ -86,13 +88,10 @@ export default function DashboardLayout({
         setReady(true);
       }
 
-      const { data, error } = await supabase
-        .from("profiles")
-        .select("role,must_change_password")
-        .eq("id", user.id)
-        .maybeSingle();
-      if (cancelled) return;
-      if (error) {
+      let data;
+      try {
+        data = await getDashboardProfile();
+      } catch {
         if (!cached) {
           setBootstrapError(
             "We couldn't load your account profile. Check your connection and try again.",
@@ -100,6 +99,7 @@ export default function DashboardLayout({
         }
         return;
       }
+      if (cancelled) return;
       if (!data || !isDashboardRole(data.role)) {
         // Logged in but no readable profile — return to sign in rather than
         // leaving the user on an indefinite dashboard loader.
@@ -113,6 +113,7 @@ export default function DashboardLayout({
       writeDashboardBootstrap(user.id, resolvedRole, passwordChangeRequired);
       setRole(resolvedRole);
       setMustChangePassword(passwordChangeRequired);
+      setInstitution(data.institution);
       setReady(true);
     });
     return () => {
@@ -140,10 +141,19 @@ export default function DashboardLayout({
     }
   }, [ready, allowedHome, pathValid, pathname, router]);
 
+  // Keep tenant context visible while preserving the existing role-based route
+  // tree. Authorization continues to use the authenticated profile above.
+  useEffect(() => {
+    if (!ready || role === "super_admin" || !institution?.subdomain) return;
+    const url = new URL(window.location.href);
+    if (url.searchParams.get("institution") === institution.subdomain) return;
+    url.searchParams.set("institution", institution.subdomain);
+    router.replace(`${url.pathname}${url.search}${url.hash}`, { scroll: false });
+  }, [institution?.subdomain, pathname, ready, role, router]);
+
   if (!sessionAvailable) {
     return (
       <main className="flex min-h-screen flex-col items-center justify-center gap-6 p-4">
-        <Brand height={40} />
         <Skeleton className="h-2 w-40 rounded-full" />
         <p className="text-sm text-muted-foreground">Loading your dashboard…</p>
       </main>
@@ -163,6 +173,7 @@ export default function DashboardLayout({
         <DashboardShell
           role={role}
           email={email}
+          institution={institution}
           mustChangePassword={mustChangePassword}
           canChangePassword={canChangePassword}
         >

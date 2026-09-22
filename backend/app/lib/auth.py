@@ -100,6 +100,9 @@ class CurrentProfile(BaseModel):
     full_name: str | None = None
     email: str | None = None
     must_change_password: bool = False
+    tenant_name: str | None = None
+    tenant_subdomain: str | None = None
+    tenant_logo_path: str | None = None
 
 
 def get_current_user(
@@ -157,7 +160,8 @@ def get_current_profile(
         client.table("profiles")
         .select(
             "id,tenant_id,role,full_name,must_change_password,"
-            "tenant:tenants!profiles_tenant_id_fkey(id,is_active)"
+            "tenant:tenants!profiles_tenant_id_fkey("
+            "id,is_active,name,subdomain,logo_url)"
         )
         .eq("id", user.user_id)
         .maybe_single()  # returns None instead of erroring if no row
@@ -174,8 +178,8 @@ def get_current_profile(
         )
 
     row = result.data
+    tenant = row.get("tenant")
     if str(row["role"]) != "super_admin":
-        tenant = row.get("tenant")
         if not isinstance(tenant, dict) or not tenant.get("is_active", False):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
@@ -185,7 +189,11 @@ def get_current_profile(
     if (
         must_change_password
         and request.url.path
-        not in {"/api/v1/auth/change-password", "/api/v1/auth/account"}
+        not in {
+            "/api/v1/auth/change-password",
+            "/api/v1/auth/account",
+            "/api/v1/me/profile",
+        }
     ):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -198,4 +206,11 @@ def get_current_profile(
         full_name=row.get("full_name"),
         email=user.email,
         must_change_password=must_change_password,
+        tenant_name=tenant.get("name") if isinstance(tenant, dict) else None,
+        tenant_subdomain=(
+            tenant.get("subdomain") if isinstance(tenant, dict) else None
+        ),
+        tenant_logo_path=(
+            tenant.get("logo_url") if isinstance(tenant, dict) else None
+        ),
     )

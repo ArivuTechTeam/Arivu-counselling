@@ -16,7 +16,7 @@ import logging
 import time
 from uuid import uuid4
 
-from fastapi import Depends, FastAPI, Request
+from fastapi import Depends, FastAPI, HTTPException, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
@@ -51,6 +51,7 @@ from app.lib.auth import (
 from app.lib.api_errors import PublicAPIError
 from app.lib.config import get_settings
 from app.lib.request_trace import request_id_for_header
+from app.lib.storage import signed_url
 from app.lib.supabase import SupabaseUnavailableError
 
 logger = logging.getLogger(__name__)
@@ -291,9 +292,16 @@ class AuthenticatedIdentityOut(BaseModel):
     authenticated: bool
 
 
+class InstitutionIdentityOut(BaseModel):
+    name: str
+    subdomain: str
+    logo_url: str | None
+
+
 class CurrentProfileOut(BaseModel):
     role: str
     must_change_password: bool
+    institution: InstitutionIdentityOut | None = None
 
 
 @app.get("/api/v1/me", tags=["auth"], response_model=AuthenticatedIdentityOut)
@@ -315,7 +323,31 @@ def read_my_profile(
     Return only the profile fields a browser may need. Internal user and tenant
     identifiers and the email claim stay inside the authorization layer.
     """
+    institution: InstitutionIdentityOut | None = None
+    if profile.role != "super_admin":
+        if not profile.tenant_name or not profile.tenant_subdomain:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Institution identity is temporarily unavailable.",
+            )
+        logo_url: str | None = None
+        if profile.tenant_logo_path:
+            try:
+                logo_url = signed_url(profile.tenant_logo_path, expires_in=3600)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "Dashboard logo URL could not be created tenant=%s error_type=%s",
+                    profile.tenant_id,
+                    type(exc).__name__,
+                )
+        institution = InstitutionIdentityOut(
+            name=profile.tenant_name,
+            subdomain=profile.tenant_subdomain,
+            logo_url=logo_url,
+        )
+
     return CurrentProfileOut(
         role=profile.role,
         must_change_password=profile.must_change_password,
+        institution=institution,
     )

@@ -2,18 +2,16 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import type { AuthError } from "@supabase/supabase-js";
 
 import { GoogleAuthButton } from "@/components/auth/google-auth-button";
-import { SplitText } from "@/components/shared/split-text";
-import { Brand } from "@/components/ui/brand";
 import {
   getInstitutionBranding,
+  InstitutionBranding,
   listPublicCourses,
   PublicCourse,
 } from "@/lib/api";
-import { initAuthFx } from "@/lib/auth-fx";
 import { signInWithGoogle } from "@/lib/google-auth";
 import { PUBLIC_ENV } from "@/lib/public-env";
 import { safeDashboardNext } from "@/lib/safe-next";
@@ -53,12 +51,6 @@ function BookIcon() {
   );
 }
 
-const TICKS = [
-  "Bangalore", "Chennai", "Coimbatore", "Live Online",
-  "25+ College Tie-ups", "5000+ Daily Learners",
-  "1 Lakh+ YouTube Subscribers", "300+ Rank Holders",
-];
-
 const SIGNUP_ERROR_MESSAGES: Record<string, string> = {
   email_address_invalid: "Enter a valid email address.",
   email_address_not_authorized:
@@ -92,7 +84,6 @@ function signupErrorMessage(error: AuthError): string {
 
 export default function SignupPage() {
   const router = useRouter();
-  const canvasRef = useRef<HTMLCanvasElement>(null);
 
   const [fullName, setFullName] = useState("");
   const [email, setEmail] = useState("");
@@ -107,7 +98,9 @@ export default function SignupPage() {
   const [googleLoading, setGoogleLoading] = useState(false);
 
   const [tenantId, setTenantId] = useState("");
+  const [branding, setBranding] = useState<InstitutionBranding | null>(null);
   const [destination, setDestination] = useState("/dashboard");
+  const [loginHref, setLoginHref] = useState("/login");
 
   useEffect(() => {
     let active = true;
@@ -116,6 +109,8 @@ export default function SignupPage() {
       .trim()
       .toLowerCase();
     setDestination(safeDashboardNext(params.get("next")));
+    setLoginHref(institutionSlug ? `/login/${encodeURIComponent(institutionSlug)}` : "/login");
+    setBranding(null);
     if (!institutionSlug) {
       setTenantId(PUBLIC_ENV.defaultTenantId);
       return () => { active = false; };
@@ -124,7 +119,10 @@ export default function SignupPage() {
     setCourses([]);
     getInstitutionBranding(institutionSlug)
       .then((branding) => {
-        if (active) setTenantId(branding.tenant_id);
+        if (active) {
+          setBranding(branding);
+          setTenantId(branding.tenant_id);
+        }
       })
       .catch(() => {
         if (active) {
@@ -214,138 +212,22 @@ export default function SignupPage() {
     }
   }
 
-  // Floating particle background (same as the sign-in page).
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    const ctx = canvas?.getContext("2d");
-    if (!canvas || !ctx) return;
-    let W = 0, H = 0, mx = -999, my = -999, raf = 0;
-    const COLORS = ["rgba(46,136,87,", "rgba(122,229,130,", "rgba(58,160,102,"];
-    const resize = () => { W = canvas.width = window.innerWidth; H = canvas.height = window.innerHeight; };
-    resize();
-    type P = { x: number; y: number; r: number; vx: number; vy: number; color: string; life: number; maxLife: number; opacity: number };
-    const make = (): P => ({
-      x: Math.random() * W, y: H + 10, r: Math.random() * 2.2 + 0.7,
-      vx: (Math.random() - 0.5) * 0.4, vy: -(Math.random() * 0.65 + 0.2),
-      color: COLORS[Math.floor(Math.random() * COLORS.length)],
-      life: Math.random() * 160, maxLife: Math.random() * 210 + 110, opacity: 0,
-    });
-    const parts: P[] = Array.from({ length: 70 }, make);
-    const onMove = (e: MouseEvent) => { mx = e.clientX; my = e.clientY; };
-    window.addEventListener("resize", resize);
-    window.addEventListener("mousemove", onMove);
-    const loop = () => {
-      ctx.clearRect(0, 0, W, H);
-      for (let i = 0; i < parts.length; i++) {
-        for (let j = i + 1; j < parts.length; j++) {
-          const dx = parts[i].x - parts[j].x, dy = parts[i].y - parts[j].y, d = Math.hypot(dx, dy);
-          if (d < 85) {
-            ctx.beginPath(); ctx.moveTo(parts[i].x, parts[i].y); ctx.lineTo(parts[j].x, parts[j].y);
-            ctx.strokeStyle = "rgba(46,136,87," + (1 - d / 85) * 0.06 + ")"; ctx.lineWidth = 0.5; ctx.stroke();
-          }
-        }
-        const p = parts[i]; p.life++;
-        if (p.life > p.maxLife) { Object.assign(p, make()); }
-        else {
-          const fi = 22, fo = 32;
-          if (p.life < fi) p.opacity = (p.life / fi) * 0.4;
-          else if (p.life > p.maxLife - fo) p.opacity = ((p.maxLife - p.life) / fo) * 0.4;
-          else p.opacity = 0.2 + Math.sin(p.life * 0.028) * 0.13;
-          const dx = p.x - mx, dy = p.y - my, d = Math.hypot(dx, dy);
-          if (d < 115 && d > 0) { const f = (115 - d) / 115; p.x += (dx / d) * f * 1.7; p.y += (dy / d) * f * 1.7; }
-          p.x += p.vx; p.y += p.vy;
-        }
-        ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2); ctx.fillStyle = p.color + p.opacity + ")"; ctx.fill();
-      }
-      raf = requestAnimationFrame(loop);
-    };
-    loop();
-    return () => {
-      cancelAnimationFrame(raf);
-      window.removeEventListener("resize", resize);
-      window.removeEventListener("mousemove", onMove);
-    };
-  }, []);
-
-  // ArivuPro entrance animations, custom cursor, magnetic buttons, counters.
-  useEffect(() => {
-    if (!window.matchMedia("(min-width: 901px)").matches) return;
-    return initAuthFx();
-  }, []);
-
   return (
-    <div className="login-page">
-      <canvas id="bgCanvas" ref={canvasRef} />
+    <div className="login-page signup-centered">
       <div className="wrap">
-        {/* LEFT — brand / marketing */}
-        <div className="left">
-          <div className="apl-ring r1" />
-          <div className="apl-ring r2" />
-          <div className="apl-ring r3" />
-          <div className="apl-ring r4" />
-          <div className="blob b1" />
-          <div className="blob b2" />
-          <div className="left-inner">
-            <div className="eyebrow">
-              <div className="eline" />
-              <span className="etxt">Learning built for every subject</span>
-            </div>
-            <h1 className="headline">
-              <SplitText text="Start your " />
-              <SplitText text="journey" em />
-              <br />
-              <SplitText text="with ArivuPro today." />
-            </h1>
-            <p className="subtext">
-              Create your account, choose your course, and learn through quizzes
-              grounded in the material your teachers provide.
-            </p>
-            <div className="stats">
-              <div className="stat">
-                <span className="stat-icon">🎓</span>
-                <div className="stat-num"><span className="counter" data-to="100" data-suffix="K+">0</span></div>
-                <div className="stat-lbl">Students Trained</div>
-                <div className="stat-bar"><div className="stat-fill" style={{ width: "92%" }} /></div>
-              </div>
-              <div className="stat">
-                <span className="stat-icon">🏆</span>
-                <div className="stat-num gold"><span className="counter" data-to="300" data-suffix="+">0</span></div>
-                <div className="stat-lbl">Learning Milestones</div>
-                <div className="stat-bar"><div className="stat-fill" style={{ width: "75%" }} /></div>
-              </div>
-              <div className="stat wide">
-                <div className="wide-left">
-                  <span className="stat-icon">📚</span>
-                  <div className="stat-num"><span className="counter" data-to="16">0</span></div>
-                  <div className="stat-lbl">Subjects Supported</div>
-                </div>
-                <div className="badges">
-                  {["Science", "Maths", "History", "Arts", "Commerce", "Technology"].map((b) => (
-                    <span className="badge" key={b}>{b}</span>
-                  ))}
-                </div>
-              </div>
-            </div>
-            <div className="ticker">
-              <div className="ticker-track">
-                {[...TICKS, ...TICKS].map((t, i) => (
-                  <div className="tick" key={i}>
-                    <span className="tick-dot" />
-                    {t}
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-        </div>
-
-        {/* RIGHT — signup card */}
         <div className="right">
           <div className="card">
             <div className="card-head">
-              <div className="card-logo">
-                <Brand height={36} />
-              </div>
+              {branding?.logo_url && (
+                <div className="card-logo signup-institution-logo">
+                  {/* The source is a short-lived URL from the private logo bucket. */}
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img src={branding.logo_url} alt={`${branding.name} logo`} />
+                </div>
+              )}
+              {branding?.name && (
+                <p className="signup-institution-name">{branding.name}</p>
+              )}
               <div className="card-title">Create your account</div>
               <div className="card-sub">Enrol &amp; get started</div>
             </div>
@@ -449,7 +331,7 @@ export default function SignupPage() {
             </form>
 
             <div className="card-foot">
-              Already have an account? <Link href="/login">Sign in</Link>
+              Already have an account? <Link href={loginHref}>Sign in</Link>
             </div>
           </div>
         </div>

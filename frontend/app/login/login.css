@@ -685,7 +685,10 @@
 
 .login-redesign .login-mobile-brand { display: none; }
 
-.login-redesign .login-auth-header { margin-bottom: 34px; }
+.login-redesign .login-auth-header {
+  margin-bottom: 34px;
+  text-align: center;
+}
 .login-redesign .login-auth-kicker {
   margin-bottom: 14px;
   color: var(--login-green);
@@ -831,7 +834,7 @@
   color: var(--login-muted);
   font-size: 11.5px;
   line-height: 1.5;
-  text-align: right;
+  text-align: center;
 }
 
 .login-redesign .login-primary {
@@ -895,12 +898,81 @@
 .login-redesign .login-register {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: center;
   gap: 20px;
   margin-top: 28px;
   padding: 18px 0;
   border-top: 1px solid var(--login-line);
   border-bottom: 1px solid var(--login-line);
+}
+
+/* The registration page uses the same calm, centered auth presentation as
+   login. The form remains left-aligned inside the centered card so labels and
+   values are easy to scan. */
+.login-page.signup-centered {
+  min-height: 100dvh;
+  background:
+    radial-gradient(circle at 50% 0%, rgba(46, 136, 87, 0.08), transparent 32%),
+    #f7fbf8;
+}
+
+.signup-centered .wrap {
+  display: block;
+  min-height: 100dvh;
+}
+
+.signup-centered .right {
+  min-height: 100dvh;
+  padding: clamp(28px, 5vh, 56px) 24px;
+}
+
+.signup-centered .card {
+  max-width: 520px;
+}
+
+.signup-centered .card-head {
+  padding: 28px 32px;
+  text-align: center;
+}
+
+.signup-centered .card-logo {
+  margin-right: auto;
+  margin-left: auto;
+}
+
+.signup-centered .signup-institution-logo {
+  display: flex;
+  width: fit-content;
+  min-height: 62px;
+  align-items: center;
+  justify-content: center;
+}
+
+.signup-centered .signup-institution-logo img {
+  display: block;
+  width: auto;
+  max-width: min(280px, 100%);
+  height: auto;
+  max-height: 62px;
+  object-fit: contain;
+}
+
+.signup-centered .signup-institution-name {
+  position: relative;
+  margin: 0 0 8px;
+  color: rgba(255, 255, 255, 0.72);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.signup-centered .card-title {
+  font-size: 26px;
+}
+
+.signup-centered .card-foot {
+  padding-bottom: 28px;
 }
 .login-redesign .login-register p {
   margin: 0;
@@ -994,11 +1066,30 @@
   .login-redesign .login-auth-header > p:last-child { font-size: 13.5px; }
   .login-redesign .login-input-wrap input { font-size: 16px; }
   .login-redesign .login-register {
-    align-items: flex-start;
-    flex-direction: column;
+    align-items: center;
+    flex-direction: row;
+    flex-wrap: wrap;
     gap: 8px;
+    text-align: center;
   }
   .login-redesign .login-register a { white-space: normal; }
+}
+
+@media (max-width: 600px) {
+  .signup-centered .right {
+    align-items: flex-start;
+    padding: 20px 14px;
+  }
+
+  .signup-centered .card {
+    border-radius: 18px;
+  }
+
+  .signup-centered .card-head,
+  .signup-centered .form-body {
+    padding-right: 22px;
+    padding-left: 22px;
+  }
 }
 
 @media (max-width: 600px) {
