@@ -157,7 +157,7 @@ def get_current_profile(
         client.table("profiles")
         .select(
             "id,tenant_id,role,full_name,must_change_password,"
-            "tenant:tenants(id,is_active)"
+            "tenant:tenants!profiles_tenant_id_fkey(id,is_active)"
         )
         .eq("id", user.user_id)
         .maybe_single()  # returns None instead of erroring if no row
