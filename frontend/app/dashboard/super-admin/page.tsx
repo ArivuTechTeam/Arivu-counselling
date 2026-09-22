@@ -2,15 +2,6 @@
 
 import Link from "next/link";
 import {
-  Area,
-  AreaChart,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from "recharts";
-
-import {
   Card,
   CardContent,
   CardDescription,
@@ -29,6 +20,7 @@ import {
 import { ErrorCard } from "@/components/ui/error-card";
 import { Skeleton, SkeletonStats } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/ui/empty-state";
+import { DeferredAreaTrendChart } from "@/components/shared/deferred-area-trend-chart";
 import { usePlatformOverview } from "@/lib/staff-queries";
 
 const BRAND = "#15603d";
@@ -148,30 +140,13 @@ export default function PlatformOverviewPage() {
           </CardHeader>
           <CardContent>
             <div className="h-56">
-              <ResponsiveContainer width="100%" height="100%">
-                <AreaChart
-                  data={s?.activity ?? []}
-                  margin={{ top: 8, right: 12, bottom: 0, left: -20 }}
-                >
-                  <defs>
-                    <linearGradient id="pactFill" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="0%" stopColor={BRAND} stopOpacity={0.28} />
-                      <stop offset="100%" stopColor={BRAND} stopOpacity={0} />
-                    </linearGradient>
-                  </defs>
-                  <XAxis dataKey="date" tick={{ fontSize: 11, fill: "#8b8b85" }} />
-                  <YAxis allowDecimals={false} tick={{ fontSize: 11, fill: "#8b8b85" }} />
-                  <Tooltip />
-                  <Area
-                    type="monotone"
-                    dataKey="attempts"
-                    stroke={BRAND}
-                    strokeWidth={2.5}
-                    fill="url(#pactFill)"
-                    dot={{ r: 2.5, fill: BRAND }}
-                  />
-                </AreaChart>
-              </ResponsiveContainer>
+              <DeferredAreaTrendChart
+                data={s?.activity ?? []}
+                xKey="date"
+                yKey="attempts"
+                color={BRAND}
+                gradientId="platformActivityFill"
+              />
             </div>
           </CardContent>
         </Card>

@@ -131,8 +131,11 @@ export default function LoginPage() {
 
   useEffect(() => {
     let active = true;
-    createClient().auth.getUser().then(({ data: { user } }) => {
-      if (active && user) router.replace(requestedDestination());
+    // This is only a convenience redirect for an already-signed-in browser
+    // tab. Restore the local session instead of blocking on the Auth server;
+    // dashboard data and role access are still verified downstream.
+    createClient().auth.getSession().then(({ data: { session } }) => {
+      if (active && session?.user) router.replace(requestedDestination());
     });
     return () => { active = false; };
     // The intended destination is read from the current URL once on mount.

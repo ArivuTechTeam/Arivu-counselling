@@ -80,11 +80,15 @@ export default function AuthCallbackPage() {
           );
         }
 
+        // exchangeCodeForSession has already authenticated and persisted the
+        // session. Reuse it locally instead of making an immediate duplicate
+        // Auth-server request; the following RLS query validates access.
         const {
-          data: { user },
-          error: userError,
-        } = await supabase.auth.getUser();
-        if (userError) throw userError;
+          data: { session },
+          error: sessionError,
+        } = await supabase.auth.getSession();
+        if (sessionError) throw sessionError;
+        const user = session?.user;
         if (!user) throw new Error("Google sign-in did not create a session.");
 
         const { data: profile, error: profileError } = await supabase

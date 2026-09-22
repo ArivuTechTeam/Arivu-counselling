@@ -5,16 +5,6 @@ import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import {
-  Area,
-  AreaChart,
-  CartesianGrid,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from "recharts";
-
-import {
   Card,
   CardContent,
   CardDescription,
@@ -24,7 +14,12 @@ import {
 import { StudentQuizzes } from "@/components/student/student-quizzes";
 import { ErrorCard } from "@/components/ui/error-card";
 import { Skeleton } from "@/components/ui/skeleton";
-import { useStudentAttempts, useStudentStats } from "@/lib/student-queries";
+import { DeferredAreaTrendChart } from "@/components/shared/deferred-area-trend-chart";
+import {
+  useStudentAttempts,
+  useStudentQuizzes,
+  useStudentStats,
+} from "@/lib/student-queries";
 
 const BRAND = "#15603d";
 
@@ -305,6 +300,9 @@ export function StudentDashboard() {
   const router = useRouter();
   const statsQuery = useStudentStats();
   const attemptsQuery = useStudentAttempts();
+  // Start the primary quiz-catalog request with the dashboard summaries. The
+  // StudentQuizzes child reuses this SWR entry when it mounts after stats load.
+  useStudentQuizzes();
   const stats = statsQuery.data ?? null;
   const attempts = attemptsQuery.data ?? [];
 
@@ -526,38 +524,15 @@ export function StudentDashboard() {
                 No attempts yet — take a quiz to start your trend.
               </p>
             ) : (
-              <ResponsiveContainer width="100%" height="100%">
-                <AreaChart
-                  data={trend}
-                  margin={{ top: 8, right: 12, bottom: 0, left: -18 }}
-                >
-                  <defs>
-                    <linearGradient id="scoreFill" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="0%" stopColor={BRAND} stopOpacity={0.28} />
-                      <stop offset="100%" stopColor={BRAND} stopOpacity={0} />
-                    </linearGradient>
-                  </defs>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#eee" />
-                  <XAxis dataKey="name" tick={{ fontSize: 12, fill: "#8b8b85" }} />
-                  <YAxis domain={[0, 100]} tick={{ fontSize: 12, fill: "#8b8b85" }} />
-                  <Tooltip
-                    contentStyle={{
-                      borderRadius: 12,
-                      border: "1px solid #e5e7eb",
-                      boxShadow: "0 4px 16px rgba(0,0,0,0.08)",
-                      fontSize: 12,
-                    }}
-                  />
-                  <Area
-                    type="monotone"
-                    dataKey="score"
-                    stroke={BRAND}
-                    strokeWidth={2.5}
-                    fill="url(#scoreFill)"
-                    dot={{ r: 3, fill: BRAND }}
-                  />
-                </AreaChart>
-              </ResponsiveContainer>
+              <DeferredAreaTrendChart
+                data={trend}
+                xKey="name"
+                yKey="score"
+                color={BRAND}
+                gradientId="studentScoreFill"
+                yDomain={[0, 100]}
+                showGrid
+              />
             )}
           </div>
         </CardContent>

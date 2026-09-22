@@ -2,8 +2,6 @@
 
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Area, AreaChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
-
 import { AtRiskStudentsCard } from "@/app/dashboard/institution-admin/_components/at-risk-students-card";
 import { CourseHealthCard } from "@/app/dashboard/institution-admin/_components/course-health-card";
 import { QuickActionsBar } from "@/app/dashboard/institution-admin/_components/quick-actions-bar";
@@ -15,6 +13,8 @@ import { QuizPerformanceModal } from "@/app/dashboard/institution-admin/quizzes/
 import { CheckIcon, GradIcon, LayersIcon, MetricTile, UsersIcon, useCountUp } from "@/components/admin/dashboard-kit";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { ErrorCard } from "@/components/ui/error-card";
+import { DeferredAreaTrendChart } from "@/components/shared/deferred-area-trend-chart";
+import { SkeletonList } from "@/components/ui/skeleton";
 import {
   AdminQuizSet,
   InstitutionAnalytics,
@@ -67,7 +67,7 @@ export function InstitutionAdminDashboard() {
   const quizzesQuery = useInstitutionQuizSets();
   const analytics = analyticsQuery.data ?? null;
   const quizzes = quizzesQuery.data ?? EMPTY_QUIZZES;
-  const error = analyticsQuery.error ?? quizzesQuery.error;
+  const analyticsError = analyticsQuery.error;
 
   const ready = analytics !== null;
   const teachers = useCountUp(analytics?.summary.teachers ?? 0, ready);
@@ -91,9 +91,9 @@ export function InstitutionAdminDashboard() {
     [quizzes],
   );
 
-  if (error)
-    return <ErrorCard message={error.message} onRetry={() => void Promise.all([analyticsQuery.mutate(), quizzesQuery.mutate()])} />;
-  if (!analytics || !quizzesQuery.data) return <DashboardSkeleton />;
+  if (analyticsError)
+    return <ErrorCard message={analyticsError.message} onRetry={() => void analyticsQuery.mutate()} />;
+  if (!analytics) return <DashboardSkeleton />;
 
   const trend = analytics.trend;
   const trendUp = trend.delta >= 0;
@@ -145,15 +145,13 @@ export function InstitutionAdminDashboard() {
         </CardHeader>
         <CardContent className="grid gap-6 lg:grid-cols-[minmax(0,2fr)_minmax(280px,1fr)]">
           <div className="h-64">
-            <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={analytics.activity} margin={{ top: 8, right: 12, bottom: 0, left: -20 }}>
-                <defs><linearGradient id="dashboardActivity" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={BRAND} stopOpacity={0.3} /><stop offset="100%" stopColor={BRAND} stopOpacity={0} /></linearGradient></defs>
-                <XAxis dataKey="date" tick={{ fontSize: 11, fill: "#7c817d" }} />
-                <YAxis allowDecimals={false} tick={{ fontSize: 11, fill: "#7c817d" }} />
-                <Tooltip />
-                <Area type="monotone" dataKey="attempts" stroke={BRAND} strokeWidth={2.5} fill="url(#dashboardActivity)" dot={{ r: 2.5, fill: BRAND }} />
-              </AreaChart>
-            </ResponsiveContainer>
+            <DeferredAreaTrendChart
+              data={analytics.activity}
+              xKey="date"
+              yKey="attempts"
+              color={BRAND}
+              gradientId="institutionActivityFill"
+            />
           </div>
           <TrendWidget trend={trend} activeStudents={analytics.summary.active_week} />
         </CardContent>
@@ -176,7 +174,14 @@ export function InstitutionAdminDashboard() {
           <button type="button" onClick={() => router.push("/dashboard/institution-admin/quizzes")} className="text-sm font-semibold text-primary hover:underline">View all quizzes →</button>
         </CardHeader>
         <CardContent>
-          {recentQuizzes.length === 0 ? <p className="rounded-xl border border-dashed p-6 text-center text-sm text-muted-foreground">New teacher quiz sets will appear here.</p> : (
+          {quizzesQuery.error ? (
+            <ErrorCard
+              message={quizzesQuery.error.message}
+              onRetry={() => void quizzesQuery.mutate()}
+            />
+          ) : !quizzesQuery.data ? (
+            <SkeletonList rows={3} />
+          ) : recentQuizzes.length === 0 ? <p className="rounded-xl border border-dashed p-6 text-center text-sm text-muted-foreground">New teacher quiz sets will appear here.</p> : (
             <div className="overflow-x-auto rounded-xl border">
               <table className="w-full min-w-[760px] text-sm">
                 <thead className="bg-secondary/40 text-left text-[11px] uppercase tracking-wider text-muted-foreground"><tr><th className="px-4 py-3 font-semibold">Quiz</th><th className="px-4 py-3 font-semibold">Status</th><th className="px-4 py-3 text-right font-semibold">Attempts</th><th className="px-4 py-3 text-right font-semibold">Accuracy</th><th className="px-4 py-3 text-right font-semibold">Review</th><th className="px-4 py-3 text-right font-semibold">Created</th><th className="px-4 py-3 text-right font-semibold">Action</th></tr></thead>
@@ -200,7 +205,7 @@ export function InstitutionAdminDashboard() {
         </CardContent>
       </Card>
 
-      {drilldown && <QuizDrilldownModal title={`${drilldown.name} quizzes`} description={`${drilldown.type === "course" ? "Course" : "Teacher"} quizzes, ordered by engagement and then lowest accuracy.`} quizzes={drilldownQuizzes} onClose={() => setDrilldown(null)} onSelect={(quiz) => { setDrilldown(null); setSelectedQuiz(quiz); }} />}
+      {drilldown && quizzesQuery.data && <QuizDrilldownModal title={`${drilldown.name} quizzes`} description={`${drilldown.type === "course" ? "Course" : "Teacher"} quizzes, ordered by engagement and then lowest accuracy.`} quizzes={drilldownQuizzes} onClose={() => setDrilldown(null)} onSelect={(quiz) => { setDrilldown(null); setSelectedQuiz(quiz); }} />}
       {atRiskOpen && <StudentPerformanceModal students={analytics.at_risk_students} initialStudent={selectedStudent} onClose={() => { setAtRiskOpen(false); setSelectedStudent(null); }} />}
       {selectedQuiz && <QuizPerformanceModal quiz={selectedQuiz} onClose={() => setSelectedQuiz(null)} />}
     </div>
