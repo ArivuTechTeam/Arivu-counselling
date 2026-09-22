@@ -193,10 +193,12 @@ function CourseCard({
 
 function SubjectCard({
   name,
+  levelName,
   color,
   onDelete,
 }: {
   name: string;
+  levelName?: string;
   color: string;
   onDelete: () => void;
 }) {
@@ -213,6 +215,9 @@ function SubjectCard({
       <div className="h-1" style={{ background: color }} />
       <div className="min-h-20 p-4 pr-14">
         <p className="break-words text-[0.97rem] font-bold text-foreground">{name}</p>
+        {levelName && (
+          <p className="mt-1 text-xs font-medium text-muted-foreground">{levelName}</p>
+        )}
       </div>
     </div>
   );
@@ -424,6 +429,7 @@ export function CourseManager() {
               <SubjectCard
                 key={sub.id}
                 name={sub.name}
+                levelName={sub.level_name}
                 color={color}
                 onDelete={() => setDel({ kind: "subject", id: sub.id, name: sub.name })}
               />

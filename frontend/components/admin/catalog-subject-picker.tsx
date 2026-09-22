@@ -21,20 +21,30 @@ export function CatalogSubjectPicker({
   tenantId,
   title = "Add from catalogue",
   cancelLabel = "Cancel",
+  confirmLabel,
+  initialSelected = [],
+  allowEmptySelection = false,
+  onSelectionComplete,
   onClose,
   onComplete,
 }: {
   tenantId?: string;
   title?: string;
   cancelLabel?: string;
+  confirmLabel?: string;
+  initialSelected?: string[];
+  allowEmptySelection?: boolean;
+  onSelectionComplete?: (subjectIds: string[]) => void | Promise<void>;
   onClose: () => void;
-  onComplete: (summary: CatalogProvisionSummary) => void | Promise<void>;
+  onComplete?: (summary: CatalogProvisionSummary) => void | Promise<void>;
 }) {
   const catalog = useSWR(
     ["course-catalog", tenantId ?? "current-tenant"],
     () => getCourseCatalog(tenantId),
   );
-  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [selected, setSelected] = useState<Set<string>>(
+    () => new Set(initialSelected),
+  );
   const [query, setQuery] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -80,13 +90,17 @@ export function CatalogSubjectPicker({
   }
 
   async function confirm() {
-    if (selected.size === 0) return;
+    if (selected.size === 0 && !allowEmptySelection) return;
     setBusy(true);
     setError(null);
     try {
+      if (onSelectionComplete) {
+        await onSelectionComplete(Array.from(selected));
+        return;
+      }
       const summary = await provisionCatalogSubjects(Array.from(selected), tenantId);
       await catalog.mutate();
-      await onComplete(summary);
+      await onComplete?.(summary);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Could not add catalogue subjects.");
     } finally {
@@ -227,8 +241,14 @@ export function CatalogSubjectPicker({
           <Button type="button" variant="outline" onClick={onClose} disabled={busy}>
             {cancelLabel}
           </Button>
-          <Button type="button" onClick={() => void confirm()} disabled={busy || selected.size === 0}>
-            {busy ? "Adding…" : `Add ${selected.size || "selected"}`}
+          <Button
+            type="button"
+            onClick={() => void confirm()}
+            disabled={busy || (!allowEmptySelection && selected.size === 0)}
+          >
+            {busy
+              ? "Saving…"
+              : confirmLabel ?? `Add ${selected.size || "selected"}`}
           </Button>
         </div>
       </div>

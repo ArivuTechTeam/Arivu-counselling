@@ -23,7 +23,7 @@ import { ErrorCard } from "@/components/ui/error-card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { SkeletonList } from "@/components/ui/skeleton";
 import { useToast } from "@/components/ui/toast";
-import { AlertTriangle, Copy, Eye, EyeOff, Pencil, Sparkles, X } from "@/components/ui/icons";
+import { AlertTriangle, BookOpen, Copy, Eye, EyeOff, Pencil, Sparkles, X } from "@/components/ui/icons";
 import {
   InstitutionRow,
   onboardInstitution,
@@ -88,14 +88,8 @@ function OnboardForm({ onDone }: { onDone: () => void | Promise<void> }) {
   const [credentials, setCredentials] = useState<TemporaryCredentials | null>(null);
   const [logo, setLogo] = useState<File | null>(null);
   const [createdLoginUrl, setCreatedLoginUrl] = useState<string | null>(null);
-  const [catalogTarget, setCatalogTarget] = useState<{
-    id: string;
-    name: string;
-  } | null>(null);
-  const [pendingCatalogTarget, setPendingCatalogTarget] = useState<{
-    id: string;
-    name: string;
-  } | null>(null);
+  const [catalogPickerOpen, setCatalogPickerOpen] = useState(false);
+  const [catalogSubjectIds, setCatalogSubjectIds] = useState<string[]>([]);
 
   function generatePassword() {
     setAdminPassword(generateTemporaryPassword());
@@ -132,7 +126,7 @@ function OnboardForm({ onDone }: { onDone: () => void | Promise<void> }) {
       const logoData = logo ? await readLogo(logo) : undefined;
       const slug = subdomain.trim().toLowerCase();
       const loginUrl = institutionLoginUrl(slug);
-      const createdInstitution = await onboardInstitution({
+      await onboardInstitution({
         name: name.trim(),
         subdomain: slug,
         plan_tier: plan,
@@ -142,14 +136,11 @@ function OnboardForm({ onDone }: { onDone: () => void | Promise<void> }) {
         logo_data: logoData,
         logo_content_type: logo?.type,
         logo_filename: logo?.name,
+        catalog_subject_ids: catalogSubjectIds,
       });
       setOk(
         `Created "${name.trim()}"${adminEmail.trim() ? ` with admin ${adminEmail.trim()}` : ""}.`,
       );
-      const nextCatalogTarget = {
-        id: createdInstitution.tenant_id,
-        name: name.trim(),
-      };
       if (adminEmail.trim() && adminPassword) {
         setCredentials({
           email: adminEmail.trim(),
@@ -157,9 +148,6 @@ function OnboardForm({ onDone }: { onDone: () => void | Promise<void> }) {
           institution: name.trim(),
           loginUrl,
         });
-        setPendingCatalogTarget(nextCatalogTarget);
-      } else {
-        setCatalogTarget(nextCatalogTarget);
       }
       notify(`Institution "${name.trim()}" created successfully.`, "success");
       setCreatedLoginUrl(loginUrl);
@@ -170,6 +158,7 @@ function OnboardForm({ onDone }: { onDone: () => void | Promise<void> }) {
       setAdminEmail("");
       setAdminPassword("");
       setLogo(null);
+      setCatalogSubjectIds([]);
       await onDone();
     } catch (err) {
       const message = err instanceof Error ? err.message : "Could not onboard institution.";
@@ -303,6 +292,32 @@ function OnboardForm({ onDone }: { onDone: () => void | Promise<void> }) {
             </p>
           </div>
 
+          <div className="rounded-lg border border-dashed p-4">
+            <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-center">
+              <div>
+                <p className="text-sm font-semibold text-foreground">
+                  Courses, levels and subjects offered (optional)
+                </p>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Select one or several courses now. The institution admin will only see the provisioned selections and can add more later.
+                </p>
+                {catalogSubjectIds.length > 0 && (
+                  <p className="mt-2 text-sm font-medium text-primary">
+                    {catalogSubjectIds.length} subject{catalogSubjectIds.length === 1 ? "" : "s"} selected
+                  </p>
+                )}
+              </div>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setCatalogPickerOpen(true)}
+              >
+                <BookOpen size={16} className="mr-2" />
+                {catalogSubjectIds.length > 0 ? "Edit selection" : "Select offerings"}
+              </Button>
+            </div>
+          </div>
+
           {error && (
             <div className="flex items-start gap-2 rounded-lg border border-destructive/20 bg-destructive/5 px-3 py-2 text-sm text-destructive">
               <AlertTriangle size={16} className="mt-0.5 shrink-0" />
@@ -347,30 +362,20 @@ function OnboardForm({ onDone }: { onDone: () => void | Promise<void> }) {
       {credentials && (
         <TemporaryCredentialsDialog
           credentials={credentials}
-          onClose={() => {
-            setCredentials(null);
-            if (pendingCatalogTarget) {
-              setCatalogTarget(pendingCatalogTarget);
-              setPendingCatalogTarget(null);
-            }
-          }}
+          onClose={() => setCredentials(null)}
         />
       )}
     </Card>
-    {catalogTarget && (
+    {catalogPickerOpen && (
       <CatalogSubjectPicker
-        tenantId={catalogTarget.id}
-        title={`Choose offerings for ${catalogTarget.name}`}
-        cancelLabel="Skip for now"
-        onClose={() => setCatalogTarget(null)}
-        onComplete={({ provisioned, collisions }) => {
-          setCatalogTarget(null);
-          notify(
-            collisions.length > 0
-              ? `Added ${provisioned} offerings. Same-name custom rows were kept separate.`
-              : `Added ${provisioned} offering${provisioned === 1 ? "" : "s"}.`,
-            "success",
-          );
+        title="Select institution offerings"
+        confirmLabel="Use this selection"
+        initialSelected={catalogSubjectIds}
+        allowEmptySelection
+        onClose={() => setCatalogPickerOpen(false)}
+        onSelectionComplete={(subjectIds) => {
+          setCatalogSubjectIds(subjectIds);
+          setCatalogPickerOpen(false);
         }}
       />
     )}

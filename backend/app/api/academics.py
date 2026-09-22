@@ -254,7 +254,7 @@ def list_courses(profile: CurrentProfile = Depends(get_current_profile)) -> list
     if course_ids:
         subjects_query = (
             service.table("subjects")
-            .select("id, name, course_id")
+            .select("id, name, course_id, catalog_subject_id")
             .eq("tenant_id", profile.tenant_id)
             .in_("course_id", course_ids)
         )
@@ -262,9 +262,48 @@ def list_courses(profile: CurrentProfile = Depends(get_current_profile)) -> list
             if not assigned:
                 return []
             subjects_query = subjects_query.in_("id", sorted(assigned))
-        for subject in subjects_query.order("name").execute().data or []:
+        subject_rows = subjects_query.order("name").execute().data or []
+        catalog_subject_ids = [
+            str(subject["catalog_subject_id"])
+            for subject in subject_rows
+            if subject.get("catalog_subject_id")
+        ]
+        catalog_subject_rows = select_all_in(
+            service,
+            "catalog_course_subjects",
+            "id, catalog_level_id",
+            in_column="id",
+            values=catalog_subject_ids,
+        )
+        level_id_by_subject = {
+            str(row["id"]): str(row["catalog_level_id"])
+            for row in catalog_subject_rows
+        }
+        catalog_level_ids = list(dict.fromkeys(level_id_by_subject.values()))
+        catalog_level_rows = select_all_in(
+            service,
+            "catalog_course_levels",
+            "id, name",
+            in_column="id",
+            values=catalog_level_ids,
+        )
+        level_name_by_id = {
+            str(row["id"]): str(row["name"]) for row in catalog_level_rows
+        }
+        for subject in subject_rows:
+            subject_payload = {"id": subject["id"], "name": subject["name"]}
+            catalog_subject_id = subject.get("catalog_subject_id")
+            if catalog_subject_id:
+                level_id = level_id_by_subject.get(str(catalog_subject_id))
+                subject_payload.update(
+                    {
+                        "catalog_subject_id": str(catalog_subject_id),
+                        "catalog_level_id": level_id,
+                        "level_name": level_name_by_id.get(level_id or ""),
+                    }
+                )
             subjects_by_course.setdefault(str(subject["course_id"]), []).append(
-                {"id": subject["id"], "name": subject["name"]}
+                subject_payload
             )
 
     student_count_by_course: dict[str, int] = {}

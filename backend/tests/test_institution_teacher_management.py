@@ -287,6 +287,23 @@ class InstitutionTeacherManagementTests(unittest.TestCase):
             ["courses", "subjects", "enrollments", "profiles"],
         )
 
+    def test_course_listing_preserves_catalog_level_for_teacher_assignment(self) -> None:
+        self.service.tables["subjects"][0]["catalog_subject_id"] = "catalog-subject-a"
+        self.service.tables["catalog_course_subjects"] = [
+            {"id": "catalog-subject-a", "catalog_level_id": "catalog-level-a"}
+        ]
+        self.service.tables["catalog_course_levels"] = [
+            {"id": "catalog-level-a", "name": "Level 1"}
+        ]
+
+        with patch("app.api.academics.get_service_client", return_value=self.service):
+            courses = list_courses(self.profile)
+
+        subject = courses[0]["subjects"][0]
+        self.assertEqual(subject["catalog_subject_id"], "catalog-subject-a")
+        self.assertEqual(subject["catalog_level_id"], "catalog-level-a")
+        self.assertEqual(subject["level_name"], "Level 1")
+
     def test_teacher_overview_reuses_content_counts_when_no_variant_exists(self) -> None:
         self.service.tables.update(
             {

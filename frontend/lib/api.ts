@@ -1150,7 +1150,13 @@ export const getLeaderboard = (courseId?: string) =>
 // Academics (courses / subjects) — for the teacher's quiz targeting
 // ---------------------------------------------------------------------------
 
-export type Subject = { id: string; name: string };
+export type Subject = {
+  id: string;
+  name: string;
+  catalog_subject_id?: string;
+  catalog_level_id?: string;
+  level_name?: string;
+};
 export type Course = {
   id: string;
   name: string;
@@ -1526,6 +1532,7 @@ export type OnboardInstitutionInput = {
   logo_data?: string;
   logo_content_type?: string;
   logo_filename?: string;
+  catalog_subject_ids?: string[];
 };
 export const onboardInstitution = (input: OnboardInstitutionInput) =>
   jsonRequest<{ created: boolean; tenant_id: string }>(
