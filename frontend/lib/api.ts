@@ -636,6 +636,19 @@ async function jsonRequest<T>(
   return res.json();
 }
 
+export type DashboardProfile = {
+  role: string;
+  must_change_password: boolean;
+  institution: {
+    name: string;
+    subdomain: string;
+    logo_url: string | null;
+  } | null;
+};
+
+export const getDashboardProfile = () =>
+  jsonRequest<DashboardProfile>("/api/v1/me/profile", "GET");
+
 async function listBoundedPages<T>(
   path: string,
   extraParams?: URLSearchParams,

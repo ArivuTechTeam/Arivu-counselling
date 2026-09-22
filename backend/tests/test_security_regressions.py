@@ -18,6 +18,7 @@ from app.api.questions import _require_teacher as require_question_teacher
 from app.api.quiz import _require_teacher as require_quiz_teacher
 from app.lib.auth import CurrentProfile, CurrentUser, get_current_profile
 from app.lib.api_errors import public_error
+from app.main import read_my_profile
 from app.services.blueprint import generate_blueprint_quiz
 from app.services.generation import generate_quiz
 from app.services.teacher_access import teacher_has_subject
@@ -528,21 +529,66 @@ class PasswordGateTests(unittest.TestCase):
             "role": "teacher",
             "full_name": "Teacher",
             "must_change_password": True,
-            "tenant": {"id": "t1", "is_active": True},
+            "tenant": {
+                "id": "t1",
+                "is_active": True,
+                "name": "Alliance University",
+                "subdomain": "alliance",
+                "logo_url": "tenant-logos/alliance.png",
+            },
         }
-        service = SimpleNamespace(
-            table=lambda _name: _ProfileQuery(row)
-        )
+        service = SimpleNamespace(table=lambda _name: _ProfileQuery(row))
         user = CurrentUser(user_id="u1", email="teacher@example.com")
         with patch("app.lib.auth.get_service_client", return_value=service):
-            request = Request({"type": "http", "method": "GET", "path": "/api/v1/documents", "headers": []})
+            request = Request(
+                {
+                    "type": "http",
+                    "method": "GET",
+                    "path": "/api/v1/documents",
+                    "headers": [],
+                }
+            )
             with self.assertRaises(HTTPException) as caught:
                 get_current_profile(request, user)
             self.assertEqual(caught.exception.status_code, 403)
 
-            change_request = Request({"type": "http", "method": "POST", "path": "/api/v1/auth/change-password", "headers": []})
+            change_request = Request(
+                {
+                    "type": "http",
+                    "method": "POST",
+                    "path": "/api/v1/auth/change-password",
+                    "headers": [],
+                }
+            )
             profile = get_current_profile(change_request, user)
             self.assertTrue(profile.must_change_password)
+
+            profile_request = Request(
+                {
+                    "type": "http",
+                    "method": "GET",
+                    "path": "/api/v1/me/profile",
+                    "headers": [],
+                }
+            )
+            profile = get_current_profile(profile_request, user)
+            self.assertEqual(profile.tenant_name, "Alliance University")
+
+    def test_dashboard_profile_returns_signed_tenant_identity(self) -> None:
+        profile = CurrentProfile(
+            user_id="u1",
+            tenant_id="t1",
+            role="institution_admin",
+            tenant_name="Alliance University",
+            tenant_subdomain="alliance",
+            tenant_logo_path="tenant-logos/alliance.png",
+        )
+        with patch("app.main.signed_url", return_value="https://signed.example/logo"):
+            result = read_my_profile(profile)
+
+        self.assertEqual(result.institution.name, "Alliance University")
+        self.assertEqual(result.institution.subdomain, "alliance")
+        self.assertEqual(result.institution.logo_url, "https://signed.example/logo")
 
 
 class PasswordPolicyTests(unittest.TestCase):

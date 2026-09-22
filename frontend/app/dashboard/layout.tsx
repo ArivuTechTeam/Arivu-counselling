@@ -8,7 +8,7 @@ import { DashboardShell } from "@/components/shared/dashboard-shell";
 import { ErrorCard } from "@/components/ui/error-card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ToastProvider } from "@/components/ui/toast";
-import { getInstitutionBranding, type InstitutionBranding } from "@/lib/api";
+import { getDashboardProfile, type DashboardProfile } from "@/lib/api";
 import { createClient } from "@/lib/supabase";
 import { safeDashboardNext } from "@/lib/safe-next";
 import {
@@ -33,7 +33,9 @@ export default function DashboardLayout({
   const pathname = usePathname();
   const [role, setRole] = useState<DashboardRole | null>(null);
   const [email, setEmail] = useState("");
-  const [institution, setInstitution] = useState<InstitutionBranding | null>(null);
+  const [institution, setInstitution] = useState<
+    DashboardProfile["institution"]
+  >(null);
   const [mustChangePassword, setMustChangePassword] = useState(false);
   const [canChangePassword, setCanChangePassword] = useState(false);
   const [bootstrapError, setBootstrapError] = useState<string | null>(null);
@@ -45,17 +47,16 @@ export default function DashboardLayout({
   const [ready, setReady] = useState(false);
 
   // Resolve the logged-in user's role once per dashboard mount. The browser
-  // session is restored locally, then the RLS-protected profile row remains the
-  // authoritative source for role-based navigation.
+  // session is restored locally, then the authenticated backend loads the
+  // authoritative profile and tenant identity for role-based navigation.
   useEffect(() => {
     let cancelled = false;
     setBootstrapError(null);
     const supabase = createClient();
     // The session lives in this tab's sessionStorage. Reading it here avoids a
     // blocking Auth-server round trip on every fresh dashboard mount. This is
-    // only a UI bootstrap: the profile lookup below is still protected by RLS,
-    // and every FastAPI endpoint independently verifies the bearer token and
-    // authoritative role before returning data.
+    // only a UI bootstrap: the profile endpoint below verifies the bearer token
+    // and loads the authoritative role and tenant before returning data.
     supabase.auth.getSession().then(async ({ data: { session } }) => {
       const user = session?.user;
       if (cancelled) return;
@@ -87,13 +88,10 @@ export default function DashboardLayout({
         setReady(true);
       }
 
-      const { data, error } = await supabase
-        .from("profiles")
-        .select("role,must_change_password,tenant_id")
-        .eq("id", user.id)
-        .maybeSingle();
-      if (cancelled) return;
-      if (error) {
+      let data;
+      try {
+        data = await getDashboardProfile();
+      } catch {
         if (!cached) {
           setBootstrapError(
             "We couldn't load your account profile. Check your connection and try again.",
@@ -101,6 +99,7 @@ export default function DashboardLayout({
         }
         return;
       }
+      if (cancelled) return;
       if (!data || !isDashboardRole(data.role)) {
         // Logged in but no readable profile — return to sign in rather than
         // leaving the user on an indefinite dashboard loader.
@@ -114,34 +113,8 @@ export default function DashboardLayout({
       writeDashboardBootstrap(user.id, resolvedRole, passwordChangeRequired);
       setRole(resolvedRole);
       setMustChangePassword(passwordChangeRequired);
+      setInstitution(data.institution);
       setReady(true);
-
-      // Tenant identity is resolved from the authenticated profile, never from
-      // a user-editable URL. Render the institution name as soon as the RLS-
-      // protected tenant row arrives, then replace its stored logo path with a
-      // short-lived browser URL from the public branding endpoint.
-      if (resolvedRole !== "super_admin" && data.tenant_id) {
-        const { data: tenant } = await supabase
-          .from("tenants")
-          .select("name,subdomain")
-          .eq("id", data.tenant_id)
-          .maybeSingle();
-        if (cancelled || !tenant?.subdomain) return;
-        const identity: InstitutionBranding = {
-          tenant_id: data.tenant_id,
-          name: tenant.name,
-          subdomain: tenant.subdomain,
-          logo_url: null,
-        };
-        setInstitution(identity);
-        try {
-          const brandedIdentity = await getInstitutionBranding(tenant.subdomain);
-          if (!cancelled) setInstitution(brandedIdentity);
-        } catch {
-          // The institution name still gives the shell a correct tenant
-          // identity when a logo is missing or its signed URL cannot be made.
-        }
-      }
     });
     return () => {
       cancelled = true;

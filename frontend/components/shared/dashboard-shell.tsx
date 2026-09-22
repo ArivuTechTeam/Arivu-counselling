@@ -28,7 +28,7 @@ import {
   X,
   Zap,
 } from "@/components/ui/icons";
-import { deleteOwnAccount, type InstitutionBranding } from "@/lib/api";
+import { deleteOwnAccount, type DashboardProfile } from "@/lib/api";
 import {
   clearDashboardBootstrap,
   HOME_BY_ROLE,
@@ -379,7 +379,7 @@ export function DashboardShell({
 }: {
   role: string | null;
   email: string;
-  institution?: InstitutionBranding | null;
+  institution?: DashboardProfile["institution"];
   mustChangePassword?: boolean;
   canChangePassword?: boolean;
   children: React.ReactNode;
