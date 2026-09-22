@@ -68,23 +68,75 @@ create unique index uq_profiles_id_tenant on profiles(id, tenant_id);
 -- STEP 4: ACADEMIC HIERARCHY (Course -> Subject -> Chapter -> Topic)
 -- ============================================================================
 
+-- Global optional catalogue. Institutions may provision these reference rows
+-- into the tenant-scoped operational courses/subjects below; free-form rows
+-- remain valid by leaving their catalogue link null.
+create table catalog_courses (
+  id uuid primary key default gen_random_uuid(),
+  code text not null unique,
+  name text not null,
+  is_active boolean not null default true,
+  display_order integer not null default 0
+);
+
+create table catalog_course_levels (
+  id uuid primary key default gen_random_uuid(),
+  catalog_course_id uuid not null references catalog_courses(id) on delete cascade,
+  name text not null,
+  is_active boolean not null default true,
+  display_order integer not null default 0,
+  unique (catalog_course_id, name)
+);
+create index idx_catalog_course_levels_course on catalog_course_levels(catalog_course_id);
+
+create table catalog_course_subjects (
+  id uuid primary key default gen_random_uuid(),
+  catalog_level_id uuid not null references catalog_course_levels(id) on delete cascade,
+  name text not null,
+  is_active boolean not null default true,
+  unique (catalog_level_id, name)
+);
+create index idx_catalog_course_subjects_level on catalog_course_subjects(catalog_level_id);
+
 create table courses (
   id uuid primary key default gen_random_uuid(),
   tenant_id uuid not null references tenants(id),
   name text not null,
+  catalog_course_id uuid references catalog_courses(id) on delete set null,
   created_at timestamptz not null default now()
 );
 create index idx_courses_tenant on courses(tenant_id);
+create index idx_courses_catalog_course on courses(catalog_course_id);
+create unique index uq_courses_tenant_freeform_name on courses(tenant_id, name)
+  where catalog_course_id is null;
+create unique index uq_courses_tenant_catalog on courses(tenant_id, catalog_course_id)
+  where catalog_course_id is not null;
 
 create table subjects (
   id uuid primary key default gen_random_uuid(),
   tenant_id uuid not null references tenants(id),
   course_id uuid not null references courses(id) on delete cascade,
-  name text not null
+  name text not null,
+  catalog_subject_id uuid references catalog_course_subjects(id) on delete set null
 );
 create index idx_subjects_tenant on subjects(tenant_id);
 create index idx_subjects_course on subjects(course_id);
+create index idx_subjects_catalog_subject on subjects(catalog_subject_id);
 create unique index uq_subjects_id_tenant on subjects(id, tenant_id);
+create unique index uq_subjects_tenant_course_freeform_name
+  on subjects(tenant_id, course_id, name) where catalog_subject_id is null;
+create unique index uq_subjects_tenant_catalog
+  on subjects(tenant_id, catalog_subject_id) where catalog_subject_id is not null;
+
+create table institution_offerings (
+  id uuid primary key default gen_random_uuid(),
+  tenant_id uuid not null references tenants(id) on delete cascade,
+  catalog_subject_id uuid not null references catalog_course_subjects(id) on delete cascade,
+  created_at timestamptz not null default now(),
+  unique (tenant_id, catalog_subject_id)
+);
+create index idx_institution_offerings_tenant on institution_offerings(tenant_id);
+create index idx_institution_offerings_subject on institution_offerings(catalog_subject_id);
 
 -- A student is enrolled in courses. Teacher course rows are retained for
 -- reporting compatibility and are derived from explicit subject assignments.
@@ -814,6 +866,89 @@ revoke all on function replace_teacher_subjects(uuid, uuid, uuid[])
 grant execute on function replace_teacher_subjects(uuid, uuid, uuid[])
   to service_role;
 
+-- Atomically materializes one active catalogue subject into a tenant's
+-- operational course/subject hierarchy. It is callable only by service_role;
+-- FastAPI performs the verified role and tenant checks before invoking it.
+create or replace function provision_catalog_subject(
+  p_tenant_id uuid,
+  p_catalog_subject_id uuid
+)
+returns table (
+  course_id uuid,
+  subject_id uuid,
+  course_name_collision boolean,
+  subject_name_collision boolean
+)
+language plpgsql
+security invoker
+set search_path = ''
+as $$
+declare
+  catalog_course public.catalog_courses%rowtype;
+  catalog_subject public.catalog_course_subjects%rowtype;
+  resolved_course_id uuid;
+  resolved_subject_id uuid;
+  has_course_collision boolean;
+  has_subject_collision boolean;
+begin
+  if not exists (select 1 from public.tenants where id = p_tenant_id) then
+    raise exception 'Tenant not found';
+  end if;
+
+  select cc.* into catalog_course
+  from public.catalog_course_subjects cs
+  join public.catalog_course_levels cl on cl.id = cs.catalog_level_id
+  join public.catalog_courses cc on cc.id = cl.catalog_course_id
+  where cs.id = p_catalog_subject_id
+    and cs.is_active = true and cl.is_active = true and cc.is_active = true;
+  if not found then raise exception 'Active catalog subject not found'; end if;
+
+  select cs.* into catalog_subject
+  from public.catalog_course_subjects cs
+  where cs.id = p_catalog_subject_id;
+
+  select exists (
+    select 1 from public.courses c
+    where c.tenant_id = p_tenant_id and c.name = catalog_course.name
+      and c.catalog_course_id is null
+  ) into has_course_collision;
+
+  insert into public.courses (tenant_id, name, catalog_course_id)
+  values (p_tenant_id, catalog_course.name, catalog_course.id)
+  on conflict (tenant_id, catalog_course_id) where catalog_course_id is not null
+  do update set catalog_course_id = excluded.catalog_course_id
+  returning id into resolved_course_id;
+
+  select exists (
+    select 1 from public.subjects s
+    where s.tenant_id = p_tenant_id and s.course_id = resolved_course_id
+      and s.name = catalog_subject.name and s.catalog_subject_id is null
+  ) into has_subject_collision;
+
+  insert into public.subjects (tenant_id, course_id, name, catalog_subject_id)
+  values (p_tenant_id, resolved_course_id, catalog_subject.name, catalog_subject.id)
+  on conflict (tenant_id, catalog_subject_id) where catalog_subject_id is not null
+  do update set catalog_subject_id = excluded.catalog_subject_id
+  returning id into resolved_subject_id;
+
+  insert into public.institution_offerings (tenant_id, catalog_subject_id)
+  values (p_tenant_id, catalog_subject.id)
+  on conflict (tenant_id, catalog_subject_id) do nothing;
+
+  if has_course_collision or has_subject_collision then
+    raise log 'Catalog provisioning kept same-name free-form rows separate (tenant %, catalog subject %, course collision %, subject collision %)',
+      p_tenant_id, p_catalog_subject_id, has_course_collision, has_subject_collision;
+  end if;
+
+  return query select resolved_course_id, resolved_subject_id,
+    has_course_collision, has_subject_collision;
+end;
+$$;
+
+revoke all on function provision_catalog_subject(uuid, uuid)
+  from public, anon, authenticated;
+grant execute on function provision_catalog_subject(uuid, uuid) to service_role;
+
 -- Atomically consumes one request from a user's rolling one-hour quota.
 -- The upsert locks the counter row, so concurrent Railway workers cannot
 -- both pass after only one remaining request.
@@ -908,15 +1043,20 @@ grant execute on function consume_ai_rate_limit(uuid, uuid, text, integer)
 
 -- ============================================================================
 -- STEP 13: ROW LEVEL SECURITY
--- plan_limits is global, non-tenant-scoped config — read-only for every
--- client via a permissive select policy; only service_role can write it.
--- Every other table below is tenant-scoped via current_tenant_id().
+-- plan_limits and the three catalog_* tables are global reference data.
+-- The catalogue is authenticated-read with super-admin-only writes;
+-- plan_limits is read-only for every client. All operational tables remain
+-- tenant-scoped via current_tenant_id().
 -- ============================================================================
 
 alter table tenants enable row level security;
 alter table profiles enable row level security;
+alter table catalog_courses enable row level security;
+alter table catalog_course_levels enable row level security;
+alter table catalog_course_subjects enable row level security;
 alter table courses enable row level security;
 alter table subjects enable row level security;
+alter table institution_offerings enable row level security;
 alter table enrollments enable row level security;
 alter table teacher_subjects enable row level security;
 alter table chapters enable row level security;
@@ -943,6 +1083,17 @@ grant select, insert, update, delete on table document_chunks to service_role;
 grant select, insert, update, delete on table quiz_generation_jobs to service_role;
 revoke all on table api_call_logs from public, anon, authenticated;
 grant select, insert, update, delete on table api_call_logs to service_role;
+revoke all on table catalog_courses, catalog_course_levels, catalog_course_subjects
+  from public, anon, authenticated;
+grant select, insert, update, delete on table
+  catalog_courses, catalog_course_levels, catalog_course_subjects
+  to authenticated;
+grant select, insert, update, delete on table
+  catalog_courses, catalog_course_levels, catalog_course_subjects
+  to service_role;
+revoke all on table institution_offerings from public, anon, authenticated;
+grant select, insert, delete on table institution_offerings to authenticated;
+grant select, insert, update, delete on table institution_offerings to service_role;
 
 -- ---------- tenants ----------
 create policy "tenant self or super admin - select" on tenants
@@ -974,6 +1125,52 @@ grant update (full_name, avatar_url) on table profiles to authenticated;
 -- the backend using the service_role key, which bypasses RLS entirely.
 
 -- ---------- academic hierarchy ----------
+create policy "authenticated read catalog courses" on catalog_courses
+  for select to authenticated using (true);
+create policy "authenticated read catalog levels" on catalog_course_levels
+  for select to authenticated using (true);
+create policy "authenticated read catalog subjects" on catalog_course_subjects
+  for select to authenticated using (true);
+
+create policy "super admins insert catalog courses" on catalog_courses
+  for insert to authenticated with check ((select is_super_admin()));
+create policy "super admins update catalog courses" on catalog_courses
+  for update to authenticated using ((select is_super_admin()))
+  with check ((select is_super_admin()));
+create policy "super admins delete catalog courses" on catalog_courses
+  for delete to authenticated using ((select is_super_admin()));
+create policy "super admins insert catalog levels" on catalog_course_levels
+  for insert to authenticated with check ((select is_super_admin()));
+create policy "super admins update catalog levels" on catalog_course_levels
+  for update to authenticated using ((select is_super_admin()))
+  with check ((select is_super_admin()));
+create policy "super admins delete catalog levels" on catalog_course_levels
+  for delete to authenticated using ((select is_super_admin()));
+create policy "super admins insert catalog subjects" on catalog_course_subjects
+  for insert to authenticated with check ((select is_super_admin()));
+create policy "super admins update catalog subjects" on catalog_course_subjects
+  for update to authenticated using ((select is_super_admin()))
+  with check ((select is_super_admin()));
+create policy "super admins delete catalog subjects" on catalog_course_subjects
+  for delete to authenticated using ((select is_super_admin()));
+
+create policy "tenant members read institution offerings" on institution_offerings
+  for select to authenticated using (
+    tenant_id = (select current_tenant_id()) or (select is_super_admin())
+  );
+create policy "institution admins insert own offerings" on institution_offerings
+  for insert to authenticated with check (
+    (tenant_id = (select current_tenant_id())
+      and (select current_role_name()) = 'institution_admin')
+    or (select is_super_admin())
+  );
+create policy "institution admins delete own offerings" on institution_offerings
+  for delete to authenticated using (
+    (tenant_id = (select current_tenant_id())
+      and (select current_role_name()) = 'institution_admin')
+    or (select is_super_admin())
+  );
+
 create policy "read own tenant hierarchy" on courses
   for select using (tenant_id = current_tenant_id() or is_super_admin());
 create policy "staff writes hierarchy" on courses
@@ -1152,11 +1349,19 @@ grant update (full_name, avatar_url) on table profiles to authenticated;
 
 revoke all on table
   tenants, courses, subjects, enrollments, teacher_subjects, chapters, topics,
+  institution_offerings,
   documents, ai_extraction_jobs, questions, quiz_sets, quiz_variants,
   document_chunks, quiz_generation_jobs,
   quiz_variant_questions, quiz_attempts, attempt_answers, ai_explanations,
   tenant_usage, plan_limits, ai_rate_limits
 from anon, authenticated;
+
+-- The catalogue is the deliberate exception to the browser-table revoke above:
+-- authenticated dashboards may read it, but mutations stay RLS-restricted.
+grant select, insert, update, delete on table
+  catalog_courses, catalog_course_levels, catalog_course_subjects
+  to authenticated;
+grant select, insert, delete on table institution_offerings to authenticated;
 
 alter default privileges in schema public
   revoke all on tables from anon, authenticated;

@@ -3,8 +3,10 @@
 import { useMemo, useState } from "react";
 import type { ReactNode } from "react";
 
+import { CatalogSubjectPicker } from "@/components/admin/catalog-subject-picker";
 import { Dialog } from "@/components/ui/dialog";
 import { AlertTriangle, BookOpen, Inbox, Trash, X } from "@/components/ui/icons";
+import { useToast } from "@/components/ui/toast";
 import {
   Course,
   CourseImpact,
@@ -263,6 +265,7 @@ function DeleteModal({
 
 // --- main ---------------------------------------------------------------------
 export function CourseManager() {
+  const { notify } = useToast();
   const coursesQuery = useCourses();
   const courses = coursesQuery.data ?? null;
   const [actionError, setActionError] = useState<string | null>(null);
@@ -286,6 +289,7 @@ export function CourseManager() {
     (value): value is string => typeof value === "string",
   );
   const [del, setDel] = useState<DeleteTarget | null>(null);
+  const [catalogOpen, setCatalogOpen] = useState(false);
 
   function refresh() {
     void coursesQuery.mutate();
@@ -473,15 +477,23 @@ export function CourseManager() {
           <h2 className="mt-1 text-2xl font-black">Courses &amp; Subjects</h2>
           <p className="mt-1 text-sm text-white/70">Course → Subject</p>
         </div>
-        <button
-          onClick={() => {
-            setName("");
-            setModal("course");
-          }}
-          className="inline-flex items-center gap-1.5 rounded-xl bg-white px-5 py-2.5 text-sm font-extrabold text-[#2E8857] shadow-[0_4px_14px_rgba(0,0,0,0.2)]"
-        >
-          + Add course
-        </button>
+        <div className="flex flex-wrap gap-2">
+          <button
+            onClick={() => setCatalogOpen(true)}
+            className="inline-flex items-center gap-1.5 rounded-xl border border-white/40 bg-white/10 px-5 py-2.5 text-sm font-extrabold text-white transition hover:bg-white/20"
+          >
+            <BookOpen size={16} /> Add from catalogue
+          </button>
+          <button
+            onClick={() => {
+              setName("");
+              setModal("course");
+            }}
+            className="inline-flex items-center gap-1.5 rounded-xl bg-white px-5 py-2.5 text-sm font-extrabold text-[#2E8857] shadow-[0_4px_14px_rgba(0,0,0,0.2)]"
+          >
+            + Add course manually
+          </button>
+        </div>
       </div>
 
       {error && <ErrorRow message={error} />}
@@ -550,6 +562,21 @@ export function CourseManager() {
       )}
       {del && (
         <DeleteModal target={del} busy={busy} onCancel={() => setDel(null)} onConfirm={confirmDelete} />
+      )}
+      {catalogOpen && (
+        <CatalogSubjectPicker
+          onClose={() => setCatalogOpen(false)}
+          onComplete={async ({ provisioned, collisions }) => {
+            await coursesQuery.mutate();
+            setCatalogOpen(false);
+            notify(
+              collisions.length > 0
+                ? `Added ${provisioned} catalogue subjects. Same-name custom rows were kept separate.`
+                : `Added ${provisioned} catalogue subject${provisioned === 1 ? "" : "s"}.`,
+              "success",
+            );
+          }}
+        />
       )}
     </div>
   );

@@ -8,6 +8,7 @@ import {
   TemporaryCredentials,
   TemporaryCredentialsDialog,
 } from "@/components/admin/temporary-credentials-dialog";
+import { CatalogSubjectPicker } from "@/components/admin/catalog-subject-picker";
 import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
 import {
@@ -87,6 +88,14 @@ function OnboardForm({ onDone }: { onDone: () => void | Promise<void> }) {
   const [credentials, setCredentials] = useState<TemporaryCredentials | null>(null);
   const [logo, setLogo] = useState<File | null>(null);
   const [createdLoginUrl, setCreatedLoginUrl] = useState<string | null>(null);
+  const [catalogTarget, setCatalogTarget] = useState<{
+    id: string;
+    name: string;
+  } | null>(null);
+  const [pendingCatalogTarget, setPendingCatalogTarget] = useState<{
+    id: string;
+    name: string;
+  } | null>(null);
 
   function generatePassword() {
     setAdminPassword(generateTemporaryPassword());
@@ -123,7 +132,7 @@ function OnboardForm({ onDone }: { onDone: () => void | Promise<void> }) {
       const logoData = logo ? await readLogo(logo) : undefined;
       const slug = subdomain.trim().toLowerCase();
       const loginUrl = institutionLoginUrl(slug);
-      await onboardInstitution({
+      const createdInstitution = await onboardInstitution({
         name: name.trim(),
         subdomain: slug,
         plan_tier: plan,
@@ -137,6 +146,10 @@ function OnboardForm({ onDone }: { onDone: () => void | Promise<void> }) {
       setOk(
         `Created "${name.trim()}"${adminEmail.trim() ? ` with admin ${adminEmail.trim()}` : ""}.`,
       );
+      const nextCatalogTarget = {
+        id: createdInstitution.tenant_id,
+        name: name.trim(),
+      };
       if (adminEmail.trim() && adminPassword) {
         setCredentials({
           email: adminEmail.trim(),
@@ -144,6 +157,9 @@ function OnboardForm({ onDone }: { onDone: () => void | Promise<void> }) {
           institution: name.trim(),
           loginUrl,
         });
+        setPendingCatalogTarget(nextCatalogTarget);
+      } else {
+        setCatalogTarget(nextCatalogTarget);
       }
       notify(`Institution "${name.trim()}" created successfully.`, "success");
       setCreatedLoginUrl(loginUrl);
@@ -165,6 +181,7 @@ function OnboardForm({ onDone }: { onDone: () => void | Promise<void> }) {
   }
 
   return (
+    <>
     <Card id="onboard" className="animate-rise scroll-mt-24">
       <CardHeader>
         <CardTitle>Onboard an institution</CardTitle>
@@ -330,10 +347,34 @@ function OnboardForm({ onDone }: { onDone: () => void | Promise<void> }) {
       {credentials && (
         <TemporaryCredentialsDialog
           credentials={credentials}
-          onClose={() => setCredentials(null)}
+          onClose={() => {
+            setCredentials(null);
+            if (pendingCatalogTarget) {
+              setCatalogTarget(pendingCatalogTarget);
+              setPendingCatalogTarget(null);
+            }
+          }}
         />
       )}
     </Card>
+    {catalogTarget && (
+      <CatalogSubjectPicker
+        tenantId={catalogTarget.id}
+        title={`Choose offerings for ${catalogTarget.name}`}
+        cancelLabel="Skip for now"
+        onClose={() => setCatalogTarget(null)}
+        onComplete={({ provisioned, collisions }) => {
+          setCatalogTarget(null);
+          notify(
+            collisions.length > 0
+              ? `Added ${provisioned} offerings. Same-name custom rows were kept separate.`
+              : `Added ${provisioned} offering${provisioned === 1 ? "" : "s"}.`,
+            "success",
+          );
+        }}
+      />
+    )}
+    </>
   );
 }
 

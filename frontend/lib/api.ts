@@ -1158,6 +1158,39 @@ export type Course = {
   student_count?: number;
 };
 
+export type CatalogSubject = {
+  id: string;
+  name: string;
+  offered: boolean;
+};
+export type CatalogLevel = {
+  id: string;
+  name: string;
+  subjects: CatalogSubject[];
+};
+export type CatalogCourse = {
+  id: string;
+  code: string;
+  name: string;
+  levels: CatalogLevel[];
+};
+
+export const getCourseCatalog = (tenantId?: string) =>
+  jsonRequest<CatalogCourse[]>(
+    `/api/v1/catalog${tenantId ? `?tenant_id=${encodeURIComponent(tenantId)}` : ""}`,
+    "GET",
+  );
+
+export const provisionCatalogSubjects = (
+  catalogSubjectIds: string[],
+  tenantId?: string,
+) =>
+  jsonRequest<{ provisioned: number; collisions: string[] }>(
+    `/api/v1/catalog/provision${tenantId ? `?tenant_id=${encodeURIComponent(tenantId)}` : ""}`,
+    "POST",
+    { catalog_subject_ids: catalogSubjectIds },
+  );
+
 export const listCourses = () => jsonRequest<Course[]>("/api/v1/courses", "GET");
 
 /** Public (no-auth) course list for the signup dropdown. */
@@ -1495,7 +1528,11 @@ export type OnboardInstitutionInput = {
   logo_filename?: string;
 };
 export const onboardInstitution = (input: OnboardInstitutionInput) =>
-  jsonRequest<{ created: boolean }>("/api/v1/platform/tenants", "POST", input);
+  jsonRequest<{ created: boolean; tenant_id: string }>(
+    "/api/v1/platform/tenants",
+    "POST",
+    input,
+  );
 
 export type InstitutionUpdateInput = {
   name?: string;

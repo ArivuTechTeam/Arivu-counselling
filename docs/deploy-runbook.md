@@ -98,10 +98,12 @@ migration-41-question-review-default.sql
 migration-42-api-call-logs.sql
 migration-43-faculty-background-jobs.sql
 migration-44-challenge-join-codes.sql
+migration-45-global-course-catalog.sql
+migration-46-seed-global-course-catalog.sql
 ```
 
-(Filenames above verified 2026-09-21 against `migrations/`, through
-`migration-44-challenge-join-codes.sql` — earlier drafts of
+(Filenames above verified 2026-09-22 against `migrations/`, through
+`migration-46-seed-global-course-catalog.sql` — earlier drafts of
 this runbook named migrations 31–34 `migration-31-chunked-document-generation.sql`,
 `migration-32-reset-chunked-generation-schema.sql`,
 `migration-33-document-archive-status.sql`, and
@@ -110,6 +112,7 @@ this runbook named migrations 31–34 `migration-31-chunked-document-generation.
 The repository does not prove which migrations are applied to a deployed
 Supabase project. Check the target project before skipping any file. Migration
 12 must be applied before deploying backend code that reads `teacher_subjects`.
+Migrations 45–46 must be applied before deploying the catalogue picker API.
 Migration 13 must be applied before deploying backend code with AI rate limits.
 Migration 37 must be applied before deploying backend code that starts student
 quiz or practice attempts; it stores the immutable question and scoring snapshot.

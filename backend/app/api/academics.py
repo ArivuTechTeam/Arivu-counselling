@@ -9,6 +9,8 @@ Academic hierarchy API (courses / subjects).
   POST   /api/v1/subjects                       — admin; create a subject.
   DELETE /api/v1/courses/{id}                    — admin; delete a course.
   DELETE /api/v1/subjects/{id}                   — admin; delete a subject.
+  GET    /api/v1/catalog                         — global catalogue + offerings.
+  POST   /api/v1/catalog/provision               — provision selected subjects.
 """
 
 from __future__ import annotations
@@ -22,6 +24,11 @@ from app.lib.auth import CurrentProfile, get_current_profile
 from app.lib.api_errors import public_error
 from app.lib.supabase import get_service_client
 from app.lib.supabase_queries import select_all, select_all_in
+from app.services.catalog import (
+    active_catalog_subject_ids,
+    catalog_tree,
+    provision_catalog_subject,
+)
 from app.services.teacher_access import (
     replace_teacher_subjects,
     teacher_subject_ids,
@@ -38,6 +45,103 @@ def _require_admin(profile: CurrentProfile) -> None:
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Only institution admins can manage courses and subjects.",
         )
+
+
+def _catalog_tenant(
+    profile: CurrentProfile,
+    requested_tenant_id: UUID | None,
+    *,
+    required: bool,
+) -> str | None:
+    if profile.role == "institution_admin":
+        if requested_tenant_id and str(requested_tenant_id) != profile.tenant_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You can only manage your own institution's offerings.",
+            )
+        return profile.tenant_id
+    if profile.role == "super_admin":
+        if required and requested_tenant_id is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="tenant_id is required for super-admin provisioning.",
+            )
+        return str(requested_tenant_id) if requested_tenant_id else None
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="Only institution and super admins can manage catalogue offerings.",
+    )
+
+
+class CatalogSubjectOut(BaseModel):
+    id: str
+    name: str
+    offered: bool
+
+
+class CatalogLevelOut(BaseModel):
+    id: str
+    name: str
+    subjects: list[CatalogSubjectOut]
+
+
+class CatalogCourseOut(BaseModel):
+    id: str
+    code: str
+    name: str
+    levels: list[CatalogLevelOut]
+
+
+class CatalogProvisionRequest(BaseModel):
+    catalog_subject_ids: list[UUID] = Field(default_factory=list, max_length=175)
+
+
+class CatalogProvisionResult(BaseModel):
+    provisioned: int
+    collisions: list[str]
+
+
+@router.get("/catalog", response_model=list[CatalogCourseOut])
+def get_catalog(
+    tenant_id: UUID | None = None,
+    profile: CurrentProfile = Depends(get_current_profile),
+) -> list[dict]:
+    target_tenant = _catalog_tenant(profile, tenant_id, required=False)
+    return catalog_tree(get_service_client(), target_tenant)
+
+
+@router.post("/catalog/provision", response_model=CatalogProvisionResult)
+def provision_catalog_offerings(
+    body: CatalogProvisionRequest,
+    tenant_id: UUID | None = None,
+    profile: CurrentProfile = Depends(get_current_profile),
+) -> CatalogProvisionResult:
+    target_tenant = _catalog_tenant(profile, tenant_id, required=True)
+    assert target_tenant is not None
+    subject_ids = list(
+        dict.fromkeys(str(subject_id) for subject_id in body.catalog_subject_ids)
+    )
+    service = get_service_client()
+    valid_ids = active_catalog_subject_ids(service, subject_ids)
+    if valid_ids != set(subject_ids):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="One or more catalogue subjects are unavailable.",
+        )
+
+    collisions: list[str] = []
+    for subject_id in subject_ids:
+        result = provision_catalog_subject(
+            service,
+            tenant_id=target_tenant,
+            catalog_subject_id=subject_id,
+        )
+        if result.course_name_collision or result.subject_name_collision:
+            collisions.append(subject_id)
+    return CatalogProvisionResult(
+        provisioned=len(subject_ids),
+        collisions=collisions,
+    )
 
 
 def _subjects_for(service, course_id: str, tenant_id: str) -> list[dict]:

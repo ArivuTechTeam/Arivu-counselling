@@ -497,7 +497,8 @@ class SuperAdminRegressionTests(unittest.TestCase):
                 SUPER,
             )
 
-        self.assertEqual(created, {"created": True})
+        self.assertTrue(created["created"])
+        self.assertEqual(created["tenant_id"], "tenants-1")
         created_tenant = next(
             row for row in service.tables["tenants"] if row["subdomain"] == "demo-college"
         )

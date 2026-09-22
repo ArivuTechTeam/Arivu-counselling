@@ -119,6 +119,10 @@ class CreatedResult(StrictApiResponse):
     created: bool
 
 
+class InstitutionCreatedResult(CreatedResult):
+    tenant_id: str
+
+
 class DeletedResult(StrictApiResponse):
     deleted: bool
 
@@ -2343,7 +2347,7 @@ def _decode_institution_logo(
     return decoded, content_type, INSTITUTION_LOGO_TYPES[content_type]
 
 
-@router.post("/platform/tenants", response_model=CreatedResult)
+@router.post("/platform/tenants", response_model=InstitutionCreatedResult)
 def onboard_institution(
     body: TenantCreate, profile: CurrentProfile = Depends(get_current_profile)
 ) -> dict:
@@ -2498,7 +2502,7 @@ def onboard_institution(
                 operation="create first institution administrator",
             ) from exc
 
-    return {"created": True}
+    return {"created": True, "tenant_id": tenant_id}
 
 
 @router.patch("/platform/tenants/{tenant_id}", response_model=TenantDetails)
