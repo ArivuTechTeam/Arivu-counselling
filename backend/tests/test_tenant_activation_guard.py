@@ -11,11 +11,13 @@ from app.lib.auth import CurrentUser, get_current_profile
 
 
 class _Query:
-    def __init__(self, rows: list[dict]) -> None:
+    def __init__(self, rows: list[dict], selections: list[str]) -> None:
         self.rows = rows
+        self.selections = selections
         self.filters: list[tuple[str, object]] = []
 
-    def select(self, _columns: str):
+    def select(self, columns: str):
+        self.selections.append(columns)
         return self
 
     def eq(self, column: str, value: object):
@@ -39,10 +41,11 @@ class _Service:
         profile_with_tenant = {**profile, "tenant": tenant}
         self.tables = {"profiles": [profile_with_tenant]}
         self.table_calls: list[str] = []
+        self.selections: list[str] = []
 
     def table(self, name: str):
         self.table_calls.append(name)
-        return _Query(self.tables[name])
+        return _Query(self.tables[name], self.selections)
 
 
 def request() -> Request:
@@ -83,6 +86,10 @@ class TenantActivationGuardTests(unittest.TestCase):
             profile = get_current_profile(request(), CurrentUser(user_id="user-a"))
         self.assertEqual(profile.tenant_id, "tenant-a")
         self.assertEqual(service.table_calls, ["profiles"])
+        self.assertIn(
+            "tenant:tenants!profiles_tenant_id_fkey(id,is_active)",
+            service.selections[0],
+        )
 
     def test_missing_institution_relation_is_blocked(self) -> None:
         service = _Service(
