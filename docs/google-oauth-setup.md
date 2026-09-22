@@ -10,14 +10,17 @@ changes are installed during container startup.
 
 Docker cannot apply SQL to the hosted Supabase database with the public/service
 API keys. Database migrations still need a PostgreSQL database connection or a
-one-time run in the Supabase SQL Editor. For Google OAuth, migration 14 must be
-applied before testing a brand-new Google account. Restarting Docker does not
-replace this database operation.
+one-time run in the Supabase SQL Editor. For Google OAuth, migrations 14 and 47
+must be applied before testing a brand-new Google account. Migration 47 replaces
+the earlier course-only completion function with atomic Course + Level
+validation. Restarting Docker does not replace these database operations.
 
 ## Required one-time configuration
 
-1. Apply `migrations/migration-14-google-oauth-onboarding.sql` to the Supabase
-   project before releasing the frontend.
+1. Apply `migrations/migration-14-google-oauth-onboarding.sql`, then
+   `migrations/migration-47-student-level-enrollment.sql`, to the Supabase
+   project before releasing the level-aware frontend. Apply all intervening
+   pending migrations in numeric order as documented in `docs/deploy-runbook.md`.
 2. In Google Cloud, create a **Web application** OAuth client.
 3. Add these **Authorized JavaScript origins** in Google Cloud:
    - `https://quiz-generator-drab-nine.vercel.app`
@@ -38,36 +41,38 @@ origin and always uses `/auth/callback`.
 
 ## New student from the signup page
 
-1. The student opens `/signup` and selects a course.
+1. The student opens the institution-specific signup link and selects a course
+   and one of that course's levels.
 2. The student clicks **Sign in with Google** and completes Google's consent
    screen.
 3. Supabase creates the Google Auth identity. The Auth trigger recognizes a
    brand-new Google user without course metadata and intentionally leaves the
    user without a profile, so the account has no application access yet.
 4. Supabase redirects to `/auth/callback`. The callback exchanges the PKCE code
-   for a session and reads the pending course selection.
-5. The callback calls `complete_google_signup(course_id)`. The database validates
-   that the course exists under an active tenant, derives `tenant_id` from that
-   course, creates a `student` profile, and creates the enrollment atomically.
+   for a session and reads the pending course and level selections.
+5. The callback calls `complete_google_signup(course_id, course_level_id)`.
+   The database validates that both belong to the same active tenant, derives
+   `tenant_id`, creates a `student` profile, and stores the Course + Level
+   enrollment atomically.
 6. The student is sent to `/dashboard`, which routes them to the student
    dashboard.
 
 The browser never chooses a role or authoritative tenant. A changed or stale
-course ID is rejected by the database.
+course or level ID is rejected by the database.
 
 ## New student from the login page
 
 1. The student clicks **Sign in with Google** and completes consent.
 2. The callback finds that the new Auth user has no profile.
-3. Because no course was chosen before login, the callback displays the active
-   course list and requires a selection.
-4. The same `complete_google_signup` database function derives the tenant and
-   creates the student profile and enrollment.
+3. Because no course and level were chosen before login, the callback displays
+   active courses, then requires a level from the selected course.
+4. The same `complete_google_signup` database function validates the pair,
+   derives the tenant, and creates the student profile and enrollment.
 5. The student is sent to the student dashboard.
 
 If the user closes the callback before selecting a course, the Auth identity
 remains unable to access application data. Signing in with Google again returns
-them to course selection.
+them to Course + Level selection.
 
 ## Existing email/password user
 

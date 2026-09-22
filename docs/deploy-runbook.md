@@ -294,7 +294,7 @@ Notes/gotchas below.
 |---|---|
 | `NEXT_PUBLIC_SUPABASE_URL` | Supabase project URL |
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | anon public key |
-| `NEXT_PUBLIC_DEFAULT_TENANT_ID` | ArivuPro tenant id (signup default) |
+| `NEXT_PUBLIC_DEFAULT_TENANT_ID` | Fallback tenant UUID for generic `/signup`; tenant-specific signup uses `?institution=<subdomain>` |
 | `NEXT_PUBLIC_API_BASE_URL` | the deployed **backend URL** from step 2 |
 
 → After it deploys, copy the **frontend URL**.
@@ -320,10 +320,14 @@ hostname changes, then restart or redeploy the backend.
 ## 5. Post-deploy smoke test (5 minutes)
 
 1. Open the frontend URL → **/login** loads.
-2. Log in as super-admin → Overview + Question Quality load.
-3. Log in as a student → Dashboard → **Smart Quiz** → take & submit → score shows.
-4. **Daily Challenge** → start → streak ticks. **Exam Simulator** → timer counts down.
-5. **Leaderboard** shows your course. **Revision** two tabs work.
+2. Log in as super-admin → Overview + Question Quality load. Open an
+   institution and confirm its Course → Level → Subject tree/counts load.
+3. Open `/login/<subdomain>` and follow student signup. Confirm institution
+   branding and tenant-only Course + Level choices, then create a disposable
+   student if the environment permits it.
+4. Log in as that student → Dashboard → **Smart Quiz** → take & submit → score shows.
+5. **Daily Challenge** → start → streak ticks. **Exam Simulator** → timer counts down.
+6. **Leaderboard** shows your course. **Revision** two tabs work.
 
 If a page 500s, check the backend logs and that all env vars are set + migrations run.
 

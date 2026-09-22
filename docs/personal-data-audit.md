@@ -1,6 +1,6 @@
 # Personal data flow and deletion audit
 
-Last reviewed: 2026-09-21
+Last reviewed: 2026-09-22
 
 This document describes application behavior visible in this repository. Hosting
 providers may additionally process IP addresses, user-agent strings, and request
@@ -10,10 +10,10 @@ metadata in infrastructure logs; verify their retention settings separately.
 
 | Entry point | Data collected | Route after collection | Destination and retention |
 |---|---|---|---|
-| Email/password signup | Full name, email, password, selected course | Browser sends the identity directly to Supabase Auth over HTTPS. Supabase's signup trigger copies full name to `profiles` and derives tenant/enrolment from the selected course. | Email, password verifier and Auth metadata in Supabase Auth; name/role/tenant in `profiles`; course membership in `enrollments`. The application database never receives a password hash or plaintext password column. |
-| Google sign-in/signup | Google-verified name, email, provider identity; selected course for a new student | Google OAuth → Supabase Auth → browser callback. The callback sends only the selected course UUID to `complete_google_signup`. | Provider identity/email in Supabase Auth; name and derived tenant/role in `profiles`; course membership in `enrollments`. |
+| Email/password signup | Full name, email, password, selected course and level | Browser sends the identity directly to Supabase Auth over HTTPS. Supabase's signup trigger copies full name to `profiles`, validates Course + Level together, and derives tenant/enrolment from that pair. | Email, password verifier and Auth metadata in Supabase Auth; name/role/tenant in `profiles`; course and level membership in `enrollments`. The application database never receives a password hash or plaintext password column. |
+| Google sign-in/signup | Google-verified name, email, provider identity; selected course and level for a new student | Google OAuth → Supabase Auth → browser callback. The callback sends the selected course and level UUIDs to `complete_google_signup`. | Provider identity/email in Supabase Auth; name and derived tenant/role in `profiles`; course and level membership in `enrollments`. |
 | Login | Email and password | Browser → Supabase Auth over HTTPS. The FastAPI backend receives only the resulting bearer access token on later API calls. | Supabase Auth validates the password. Access/refresh session material is kept in the browser tab's `sessionStorage`, not `localStorage` or application cookies. |
-| Admin-created teacher/admin | Full name, email, temporary password, tenant/course/subject assignments | Browser → FastAPI → Supabase Auth Admin API and tenant-scoped database writes. | Identity/password verifier in Supabase Auth; name/role/tenant in `profiles`; assignments in `teacher_subjects`/`enrollments`. Plaintext passwords exist only in form memory and encrypted request bodies and are never returned by an API. |
+| Admin-created teacher/admin | Full name, email, temporary password, tenant and, for teachers, Course → Level → Subject assignments | Browser → FastAPI → Supabase Auth Admin API and tenant-scoped database writes. | Identity/password verifier in Supabase Auth; name/role/tenant in `profiles`; teacher assignments in `teacher_subjects`/`enrollments`. Plaintext passwords exist only in form memory and encrypted request bodies and are never returned by an API. |
 | Password change/reset | Current and new password, or browser-generated temporary password | Browser → FastAPI → Supabase Auth over HTTPS. | Supabase Auth replaces its password verifier. The API returns only a success boolean. |
 | Document upload/extraction | File bytes, original filename, type, content hash, uploader UUID | Browser → FastAPI → private Supabase Storage and `documents`. Text is extracted in backend memory. | Original file in private Storage; random object path and document metadata in `documents`. Filename/content may itself contain personal data supplied by the uploader. |
 | AI quiz generation/topic extraction | Extracted study-document text and generation settings | FastAPI → DeepSeek first, with Gemini as the configured text fallback. | Provider receives system instructions plus a bounded document excerpt or full extraction chunk. The application stores validated questions and provider name. No account name, email, tenant ID, token, or password is added to an AI prompt. |
@@ -44,11 +44,15 @@ outside this repository and requires a vendor retention/DPA review.
   scope. They do not receive passwords, Auth metadata or session tokens.
 - Institution admins receive teacher/student names and emails needed for roster
   and account administration, restricted to their tenant.
-- Super admins receive institution-admin names/emails and platform aggregates.
+- Super admins receive institution-admin names/emails, platform aggregates, and
+  each institution's operational Course → Level → Subject offering tree/counts.
 - Opaque record UUIDs remain in responses only where the client needs them for
-  navigation, updates, deletion or drill-down. Tenant IDs, ownership pointers,
-  storage paths, content hashes, provider error bodies and Auth tokens are not
-  returned unless an explicitly public workflow requires an opaque share token.
+  navigation, registration, updates, deletion or drill-down. The public
+  institution-branding response includes a tenant UUID solely to scope its
+  Course + Level signup choices. Other tenant IDs, ownership pointers, storage
+  paths, content hashes, provider error bodies and Auth tokens are not returned
+  unless an explicitly public workflow requires registration metadata or an
+  opaque share token.
 
 Identity diagnostic endpoints return only authentication status or role/password
 change state. Question mutation endpoints use an explicit response model that

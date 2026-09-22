@@ -1,14 +1,14 @@
 # ArivuPro Quiz Platform (quiz-generator-v1) — Technical Project Document
 
-> **Purpose of this document.** A single technical reference for the ArivuPro Quiz Platform. AI/document routing, durable jobs, retry behavior, cost controls, and dashboard refresh persistence were refreshed against the feature branch on 21 September 2026. See `docs/current-ai-document-workflow.md` and `docs/dashboard-state-persistence.md` for focused current references. Dated evidence, changelogs, and original plans remain historical. Repository state does not prove Railway environment values, provider health, deployed code, or applied Supabase migrations; verify those separately.
+> **Purpose of this document.** A single technical reference for the ArivuPro Quiz Platform. AI/document routing, durable jobs, retry behavior, cost controls, dashboard refresh persistence, institution branding, and the Course → Level → Subject model were refreshed against `main` on 22 September 2026. See `docs/current-ai-document-workflow.md` and `docs/dashboard-state-persistence.md` for focused current references. Dated evidence, changelogs, and original plans remain historical. Repository state does not prove Railway environment values, provider health, deployed code, or applied Supabase migrations; verify those separately.
 
 | | |
 |---|---|
 | **Product** | ArivuPro Quiz Platform — multi-tenant AI quiz generator for coaching institutions |
 | **Repository** | `ArivuTechTeam/quiz-generator` |
-| **Document version** | 1.3 |
-| **Document date** | 7 September 2026; AI/document and refresh-persistence sections refreshed 21 September 2026 |
-| **Basis** | Current feature branch through `7774aa6` for the 21 September AI/document and UI persistence refresh; older unrelated sections retain their dated verification notes |
+| **Document version** | 1.4 |
+| **Document date** | 7 September 2026; current architecture sections refreshed 22 September 2026 |
+| **Basis** | `main` through `4129cbd`; older unrelated sections retain their dated verification notes |
 | **Status of product** | Phase 1 (functional product + multi-tenant foundation) — **live in production pilot** (production status confirmed only as of 2026-09-04/07, not re-verified in this refresh) |
 | **Audience** | Engineering, technical leadership, prospective contributors, stakeholders |
 
@@ -44,7 +44,7 @@ The ArivuPro Quiz Platform is a **multi-tenant SaaS web application** that lets 
 - **Data & Auth:** **Supabase** (managed PostgreSQL + Auth + Storage).
 - **AI:** **DeepSeek** is the primary LLM for text workflows, with **Google Gemini** as the automatic fallback and the vision provider for scanned/image documents.
 
-**Multi-tenancy** is built in from day one: every business table carries a `tenant_id`, PostgreSQL **Row-Level Security (RLS)** policies isolate each institution's data, and one shared deployment serves all institutions (no per-customer servers).
+**Multi-tenancy** is built in from day one: tenant-owned operational tables carry a `tenant_id`, PostgreSQL **Row-Level Security (RLS)** policies isolate each institution's data, and one shared deployment serves all institutions (no per-customer servers). The platform-global course catalogue and plan-limit reference data are deliberate non-tenant exceptions.
 
 **Commercial status:** the product and its multi-tenant foundation are complete and live, but **billing/subscription enforcement is intentionally not yet built** (deferred to Phase 2). The database contains inert "scaffolding" (plan tiers, prices, usage counters) that no code currently enforces. See §12 and §14.
 
@@ -62,15 +62,15 @@ The application has one authoritative profile table (`profiles`) linked 1:1 to S
 
 | Role | What they do |
 |---|---|
-| **super_admin** | Platform owner (ArivuPro). Onboards institutions (tenants), manages institution admins, sees cross-tenant analytics and AI-quality monitoring. |
-| **institution_admin** | Manages one institution: creates teachers & students, manages courses/subjects, sees institution analytics. |
+| **super_admin** | Platform owner (ArivuPro). Onboards institutions (tenants), optionally provisions global-catalogue offerings, manages institution admins, and sees cross-tenant analytics, offering scope, and AI-quality monitoring. |
+| **institution_admin** | Manages one institution: creates teachers, views self-registered students, manages manual Course → Level → Subject offerings and teacher assignments, and sees institution analytics. |
 | **teacher** | Uploads material, generates quizzes, reviews/edits/approves/publishes questions, monitors their class. |
 | **student** | Takes published quizzes, practises (smart quiz, daily challenge, exam simulator, challenges), tracks weak areas and progress. |
 
 ### 2.3 The business model (intended)
 - **Who pays:** the **institution** (a tenant), not students.
 - **How:** per-institution monthly subscription, target **₹5,000–15,000 / institution / month**.
-- **Onboarding:** super-admin onboards an institution → institution-admin creates teachers and students. Public self-signup is available for students only; the database derives the tenant from the selected course and ignores browser-supplied role and tenant metadata.
+- **Onboarding:** super-admin onboards an institution and may select one or more global-catalogue offerings → institution-admin can add manual Course → Level → Subject offerings and creates teachers with explicit subject assignments. Students self-register through tenant context and select Course + Level; the database derives the tenant from that validated pair and ignores browser-supplied role and tenant metadata.
 - ArivuPro Academy is **tenant #1** — the first pilot customer — and is *not* special-cased in code.
 
 ---
@@ -172,10 +172,10 @@ Next.js 14 **App Router**. Almost all dashboard pages are client components (`"u
 ```
 app/
 ├── login/page.tsx                       PUBLIC — sign in
-├── signup/page.tsx                      PUBLIC — student self-registration by course
+├── signup/page.tsx                      PUBLIC — tenant-aware student self-registration by course + level
 └── dashboard/
-    ├── layout.tsx                       Role-gated shell (sidebar + topbar), loading gate
-    ├── page.tsx                         Role router → per-role home
+    ├── layout.tsx                       Stable shell + cached role bootstrap and authoritative profile refresh
+    ├── page.tsx                         Inert child; layout owns the role-home redirect
     │
     ├── super-admin/
     │   ├── page.tsx                     Platform overview (KPIs, activity, institutions)
@@ -186,8 +186,9 @@ app/
     │
     ├── institution-admin/
     │   ├── page.tsx                     Institution overview
-    │   ├── users/page.tsx               Create/list/delete teachers & students
-    │   ├── courses/page.tsx             Manage courses & subjects
+    │   ├── users/page.tsx               Create/list/manage teachers and subject assignments
+    │   ├── students/page.tsx            View/manage self-registered students
+    │   ├── courses/page.tsx             Manage Course → Level → Subject hierarchy
     │   ├── quizzes/page.tsx             Browse all quiz sets
     │   └── analytics/page.tsx           Institution analytics + findings
     │
@@ -225,7 +226,7 @@ Two independent channels:
 - Frontend response shapes are typed TypeScript contracts. New and security-sensitive backend endpoints enforce matching Pydantic response models; some legacy endpoints still return dictionaries and should be migrated incrementally when touched. Functions are grouped by feature (documents, generation, teacher review, student attempts, practice/engagement, academics, admin, super-admin, teacher analytics).
 
 **(B) Supabase directly** — `frontend/lib/supabase.ts` (anon key, RLS applies)
-- Used **only for auth**: `signInWithPassword`, student `signUp` (with `full_name` and `course_id`; legacy `tenant_id` is ignored by the hardened trigger), `getUser`/`getSession`, `signOut`, and reading the caller's own `profiles.role` for role-routing.
+- Used **only for auth**: `signInWithPassword`, student `signUp` (with `full_name`, `course_id`, and `course_level_id`; legacy `tenant_id` is ignored by the hardened trigger), `getUser`/`getSession`, `signOut`, and reading the caller's own `profiles.role` for role-routing.
 - **All business data goes through the FastAPI backend**, never direct table reads.
 
 **Refresh persistence:** non-sensitive dashboard filters, selections, and drafts
@@ -236,10 +237,20 @@ confirmation state are never stored by this mechanism. See
 `docs/dashboard-state-persistence.md`.
 
 ### 5.4 Auth & session flow
-1. **Login** → `supabase.auth.signInWithPassword` → redirect to `/dashboard`.
-2. **Role router** (`dashboard/page.tsx`) → reads `profiles.role` → redirects to the correct role home; unknown/missing profile → styled error with "Back to sign in".
-3. **Shell gate** (`dashboard/layout.tsx`) → holds a branded skeleton loader until role resolves (no blank-sidebar flash); redirects to `/login` if there is no session. Forces a **change-password modal** for admin-created accounts (`must_change_password`).
-4. Authorization for data is enforced **server-side** by the backend (Bearer JWT + role checks). Frontend gating is UX only.
+1. **Login** → `supabase.auth.signInWithPassword` → one RLS-protected
+   `profiles` read → write the versioned local dashboard bootstrap → route
+   directly to that role's home.
+2. **Dashboard layout** restores the local Supabase session and cached role to
+   render the stable shell immediately when possible. It concurrently calls the
+   authenticated `/api/v1/me/profile` endpoint to refresh the authoritative
+   role, password-change state, and tenant branding. The inert
+   `dashboard/page.tsx` child performs no duplicate auth lookup.
+3. Missing sessions return to `/login`; missing/invalid profiles fail closed.
+   Role-mismatched dashboard paths redirect to the correct role home. The shell
+   forces a **change-password modal** for admin-created accounts.
+4. Authorization for data is enforced **server-side** by the backend (Bearer
+   JWT + role checks). The cached bootstrap and frontend route gating are UX
+   optimizations only.
 
 ### 5.5 Design system
 - **Tokens** in `globals.css`: HSL CSS variables, brand green primary (`#2E8857`), `--radius: 0.75rem`, full light + dark themes.
@@ -288,7 +299,7 @@ Guards: **public** / **student** / **staff** (teacher+admin+super) / **admin** (
 **System / identity (`main.py`)**
 - `GET /health` — liveness (public)
 - `GET /api/v1/me` — identity from JWT
-- `GET /api/v1/me/profile` — tenant_id + role from `profiles`
+- `GET /api/v1/me/profile` — role/password-change state plus safe institution name, slug, and signed logo URL for non-super-admin users; internal tenant/user IDs are omitted
 
 **Auth account management** (`/api/v1`, `auth_account.py`) — self-service account actions for the signed-in user (e.g. password change enforcement, account deletion); tenant/role come from `profiles`, not the request.
 
@@ -302,11 +313,11 @@ Guards: **public** / **student** / **staff** (teacher+admin+super) / **admin** (
 
 **Questions** (`/api/v1/questions`) — `PATCH /{id}`, `POST /{id}/approve`, `POST /{id}/reject`, and `POST /{id}/regenerate` are teacher-only by design; `POST /{id}/explain` is available to a teacher for their own question or to a student after that question has been graded.
 
-**Academics** (`/api/v1`) — `GET /public/courses` (**public**, feeds signup); `GET/POST /courses`, `POST /subjects`, `DELETE …` (read=staff, write=admin); `GET/PUT /teachers/{teacher_id}/subjects` (institution admin); chapters CRUD restricted to explicitly assigned teachers.
+**Academics** (`/api/v1`) — `GET /public/courses` (**public**, feeds tenant-scoped Course + Level signup); authenticated Course → Level → Subject reads and manual writes; super-admin-only global catalogue reads/provisioning; `GET/PUT /teachers/{teacher_id}/subjects` (institution admin); chapters CRUD restricted to explicitly assigned teachers.
 
-**Admin** (`/api/v1`) — user management (`/users` admin), institution onboarding & admin management (`/platform/tenants`, `/admins` super_admin), dashboards (`/admin/overview`, `/admin/analytics`, `/platform/overview`, `/platform/ai-monitoring`). Institution onboarding accepts an optional validated PNG/JPEG logo (maximum 1 MB), stores it in the private `documents` bucket, and persists only its storage path in `tenants.logo_url`. Handler functions live in `admin.py`; `institution_admin.py` and `super_admin.py` are thin, explicit path-allowlist routers that re-export a filtered subset of `admin.py`'s routes for role-scoped registration (each raises at import time if its allowlist and `admin.py`'s actual routes drift) — this two-layer split postdates this document's original write-up.
+**Admin** (`/api/v1`) — user management (`/users` admin), institution onboarding & admin management (`/platform/tenants`, `/admins` super_admin), dashboards (`/admin/overview`, `/admin/analytics`, `/platform/overview`, `/platform/ai-monitoring`), and the super-admin-protected operational offering tree (`/platform/tenants/{tenant_id}/offerings`). Institution onboarding accepts optional catalogue subject IDs and an optional validated PNG/JPEG logo (maximum 1 MB); catalogue selections atomically provision their parent courses/levels, while the logo is stored privately and only its path is persisted. Platform institution/admin responses expose offering names and counts. Handler functions live in `admin.py`; `institution_admin.py` and `super_admin.py` are thin, explicit path-allowlist routers.
 
-**Institution login branding** — each active institution receives a path-based login link at `/login/{subdomain}`. The unauthenticated, read-only endpoint `GET /api/v1/public/institutions/{subdomain}/branding` returns only the institution name, slug, and a one-hour signed logo URL. The login screen is otherwise neutral and contains no platform-owner branding. This is path-based tenancy; custom DNS domains remain separate future work.
+**Institution login/signup branding** — each active institution receives a path-based login link at `/login/{subdomain}`. Its student link opens `/signup?institution={subdomain}`. The unauthenticated, read-only endpoint `GET /api/v1/public/institutions/{subdomain}/branding` returns only the tenant ID needed to scope public course lookup, institution name, slug, and a one-hour signed logo URL. Login/signup surfaces are otherwise neutral. Authenticated non-super-admin dashboards receive the same institution identity through `/api/v1/me/profile`; the shell shows its name/logo and preserves `?institution={subdomain}` in the URL. This is path/query-based context, not custom DNS tenancy.
 
 **Teacher** (`/api/v1`) — `/teacher/class-overview`, `/teacher/class-monitor`, `/teacher/student-report/{id}` (staff).
 
@@ -330,9 +341,9 @@ Guards: **public** / **student** / **staff** (teacher+admin+super) / **admin** (
 
 ### 6.4 Services (core logic modules)
 
-> **Verified 2026-09-15:** `backend/app/services/` now has 25 modules; this
-> list originally covered 8. The 9 below are unchanged; the rest are new since
-> 7 September and are grouped separately.
+> This section highlights core services rather than duplicating the complete,
+> changing `backend/app/services/` inventory. Inspect that directory for the
+> authoritative module list.
 
 - **`generation.py`** — standard, single-call quiz generation pipeline (see §8.1).
 - **`blueprint.py`** — weighted "blueprint" generation. Two modes: the original weighted mode converts High/Med/Low topic priorities into a 3:2:1 question mix, emphasising priority topics (~70% of questions); a newer **per-topic mode** (added after 7 September — see `docs/llm-prompts.md` §2) instead takes exact per-topic, per-question-type counts from the teacher and bypasses the weight math entirely. Both modes tag each question with its topic.
@@ -355,14 +366,14 @@ Guards: **public** / **student** / **staff** (teacher+admin+super) / **admin** (
 ### 6.5 Auth model
 - **JWT verification** (`lib/auth.py`): reads the token header; modern Supabase tokens are **ES256**, verified against the project's public keys fetched from the JWKS endpoint (cached). Audience `authenticated` is enforced.
 - **Identity vs authority:** the user's `user_id`/`email` come from the token; the authoritative **`tenant_id` and `role` are read from the `profiles` table**, not from the token — so a user cannot forge their tenant or role at request time.
-- **Provisioning:** public signup always creates a student, derives the tenant from a valid course, and ignores untrusted role/tenant metadata. Teacher and admin roles are created through authenticated backend provisioning and admin-created users must change their temporary password.
-- **Database access uses the Supabase service-role key**, which **bypasses RLS**. Tenant isolation for API traffic is therefore enforced **in application code** via explicit `.eq("tenant_id", …)` filters on every query, with RLS as a defense-in-depth backstop (see §9 and §12).
+- **Provisioning:** public signup always creates a student and derives the tenant from a valid Course + Level pair. Teacher and admin roles are created through authenticated backend provisioning; institution admins choose Course → Level → Subject assignments when creating teachers, and admin-created users must change their temporary password.
+- **Database access uses the Supabase service-role key**, which **bypasses RLS**. Tenant-owned API traffic is therefore isolated **in application code** with explicit verified-tenant scope, with RLS as a defense-in-depth backstop (see §9 and §12). Global-catalogue reads and explicitly super-admin-only platform queries are the deliberate exceptions; they must remain role-gated and return only their documented platform scope.
 
 ---
 
 ## 7. Database Schema
 
-PostgreSQL on Supabase. The repository baseline is `migrations/schema.sql` plus migrations 01, 02, and 04–39 (verified 2026-09-17 — was 04–12 when this document was first written). There is no migration 03; migration 04 removed the abandoned seed-library feature. `schema.sql` includes the final Auth-provisioning behavior for fresh installs; migrations 38–39 are required for existing databases. The incremental files remain required for an existing database. Apply migrations once, in numeric order, using `docs/deploy-runbook.md`.
+PostgreSQL on Supabase. The repository baseline is `migrations/schema.sql` plus migrations 01, 02, and 04–47 (verified 2026-09-22). There is no migration 03; migration 04 removed the abandoned seed-library feature. The incremental files remain required for an existing database. Apply migrations once, in numeric order, using `docs/deploy-runbook.md`; repository presence does not prove production application state.
 
 ### 7.1 Enums
 `user_role` (super_admin, institution_admin, teacher, student) · `question_type` (mcq_single, mcq_multi, numerical, true_false, fill_blank, **descriptive**) · `question_source` (ai_generated, manual) · `review_status` (pending_review, approved, rejected, needs_edit) · `document_status` · `job_status` · `variant_type` (theory, practical, mixed) · `quiz_status` (draft, published, archived) · `attempt_status` (in_progress, submitted, graded, abandoned).
@@ -373,7 +384,7 @@ PostgreSQL on Supabase. The repository baseline is `migrations/schema.sql` plus 
 - `tenants` — one row per institution (name, subdomain, branding colors, `plan_tier`, `is_active`, `exam_config` jsonb).
 - `profiles` — 1:1 extension of `auth.users`; holds authoritative `tenant_id`, `role`, name, and `must_change_password`. **This is the single application users table.**
 
-**Academics** — `courses` → `subjects` → `chapters` → `topics` (a clean hierarchy, each cascading on delete) + `enrollments` (student course membership and derived teacher course membership) + `teacher_subjects` (the authorization source for each teacher's explicit subject access).
+**Academics** — global `catalog_courses` → `catalog_course_levels` → `catalog_course_subjects` can be provisioned through `institution_offerings` into tenant-operational `courses` → `course_levels` → `subjects` → `chapters` → `topics`. Manual operational rows remain supported. `enrollments` records a student's Course + Level; `teacher_subjects` is the authorization source for each teacher's explicit subject access.
 
 **Content & question bank**
 - `documents` — uploaded files (storage path, type, status).
@@ -404,7 +415,8 @@ PostgreSQL on Supabase. The repository baseline is `migrations/schema.sql` plus 
 erDiagram
     tenants ||--o{ profiles : has
     tenants ||--o{ courses : has
-    courses ||--o{ subjects : contains
+    courses ||--o{ course_levels : contains
+    course_levels ||--o{ subjects : contains
     subjects ||--o{ chapters : contains
     chapters ||--o{ topics : contains
     profiles ||--o{ enrollments : enrolls
@@ -428,7 +440,9 @@ erDiagram
 ```
 
 ### 7.4 The `tenant_id` fan-out
-**Every application table except the global `plan_limits` carries `tenant_id`.** This is the backbone of multi-tenancy: it lets both RLS policies and application queries scope every read/write to one institution.
+Tenant-operational tables carry `tenant_id`; global catalogue and plan-limit
+tables do not. This is the backbone of multi-tenancy: it lets both RLS policies
+and application queries scope every tenant-owned read/write to one institution.
 
 ### 7.5 Migration timeline
 | # | What it added |
@@ -477,8 +491,11 @@ erDiagram
 | 42 API-call-logs | Stores protected provider-call usage, cost, and diagnostic payloads for super-admin monitoring. |
 | 43 faculty-background-jobs | Adds the durable service-role-only faculty job queue and checkpoint RPCs. |
 | 44 challenge-join-codes | Adds/backfills tenant-scoped friendly codes and permits the rate-limited code lookup endpoint. |
+| 45 global-course-catalog | Adds the global Course → Level → Subject catalogue, tenant offering records, and idempotent catalogue-to-tenant provisioning. |
+| 46 seed-global-course-catalog | Seeds the initial global catalogue. |
+| 47 student-level-enrollment | Adds operational course levels, backfills subjects/enrolments, and validates Course + Level atomically for password and Google student signup. |
 
-> **Verified 2026-09-21:** migrations 13–44 above are recorded in this table
+> **Verified 2026-09-22:** migrations 13–47 above are recorded in this table
 > (the table originally stopped at 12).
 > `docs/deploy-runbook.md` is the authoritative source for exact filenames,
 > apply order, and cross-migration dependencies — it was corrected in the same
@@ -552,7 +569,7 @@ The institution analytics, teacher class monitor, and super-admin "Question Qual
 
 - **Two enforcement layers:**
   1. **Database RLS** — tenant tables use policies that scope rows to `current_tenant_id()`, with role-aware rules (students see only *approved* questions in *published* sets; students read only their own attempts; the `events` ledger is append-only; etc.).
-  2. **Application-level tenant filtering** — because the backend uses the **service-role key (which bypasses RLS)**, every backend query also filters by `tenant_id` explicitly. The authoritative `tenant_id`/`role` come from the DB `profiles` row, not the token, so they cannot be forged per request.
+  2. **Application-level tenant filtering** — because the backend uses the **service-role key (which bypasses RLS)**, tenant-owned operations explicitly use the verified tenant scope. The authoritative `tenant_id`/`role` come from the DB `profiles` row, not the token, so they cannot be forged per request. Global-catalogue reads and server-authorized super-admin platform queries are deliberately scoped exceptions.
 - **Auth:** Supabase JWT (ES256) verified via JWKS; audience enforced; JWKS cached.
 - **Role provisioning:** public callers cannot select elevated roles. Institution admins and super-admins provision staff through tenant-scoped backend endpoints.
 - **Teacher access:** teachers can generate content and manage chapters only for subjects present in `teacher_subjects`; tenant-consistent foreign keys reject cross-tenant assignments.
@@ -583,7 +600,7 @@ SUPABASE (dashboard-configured): Postgres + Auth + Storage — settings apply in
 ### 10.3 Environment variables
 **Frontend (browser-exposed, `NEXT_PUBLIC_*`):**
 - `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY` (RLS-safe anon key)
-- `NEXT_PUBLIC_DEFAULT_TENANT_ID` (ArivuPro tenant, signup default)
+- `NEXT_PUBLIC_DEFAULT_TENANT_ID` (fallback tenant for generic `/signup`; tenant-specific links resolve their tenant from `?institution={subdomain}`)
 - `NEXT_PUBLIC_API_BASE_URL` (backend URL — **baked at build time**, so changing it requires a redeploy)
 
 **Backend (secret):**
@@ -658,11 +675,11 @@ that target.
 Presented honestly, as a forward-deployed engineer would to a new maintainer:
 
 1. **No billing / monetization enforcement.** The DB has `plan_limits` (free/starter ₹2,999/growth ₹9,999/enterprise) and `tenant_usage`, plus `tenants.plan_tier`/`is_active` — but **no code reads or enforces any of it**. There is no payment gateway, no subscription tables, no "suspend an unpaid tenant" logic. It is currently a free, open app with billing *scaffolding* only.
-2. **RLS is a backstop, not the primary guard for API traffic.** The backend uses the service-role key (bypasses RLS); isolation depends on every query including a `tenant_id` filter. A missed filter in a future endpoint would leak cross-tenant data. Consider a shared query helper or using the RLS-respecting client for user-scoped reads.
+2. **RLS is a backstop, not the primary guard for API traffic.** The backend uses the service-role key (bypasses RLS); isolation depends on every tenant-owned operation applying verified tenant scope. A missed scope in a future endpoint could leak cross-tenant data. Consider a shared query helper or using the RLS-respecting client for user-scoped reads.
 3. **Instrumentation gaps.** Standard generation does not emit a `question.generated` event (only blueprint does), and `DOCUMENT_UPLOADED` is never emitted — so some AI-monitoring numbers undercount.
 4. **Dead/unused code.** A PYQ (past-year-questions) parser and the RLS-respecting anon DB client exist but are unwired; the `questions.embedding` vector column is unused (no dedup yet).
 5. **SMTP not configured.** Email confirmation/reset won't deliver until a provider (e.g. Brevo) is set up.
-6. **Bundle size.** The quiz-attempt/practice/class-monitor routes are heavy (~640 kB first load) because they pull in Recharts + the PDF renderer; lazy-loading these is a quick win.
+6. **Client bundle discipline.** Charting and PDF features can materially increase route bundles; remeasure the current production build before prioritizing further lazy loading rather than relying on historical bundle figures.
 
 ---
 
@@ -698,7 +715,7 @@ This is the biggest missing block for a "real SaaS":
 - Student-only public signup and the hardened `handle_new_user` trigger are deployed. Future work may add invite codes, admin approval, and explicit session revocation for stricter onboarding control.
 
 ### 14.3 Product enhancements (from scope + observed opportunities)
-- **Self-service institution onboarding** and per-institution subdomains / white-labeling.
+- **Custom-domain tenancy** beyond the current path/query-based institution context.
 - **Question dedup** using the existing `embedding` column (semantic similarity).
 - **PYQ (past-year-questions) ingestion** — the deterministic parser exists but is unwired.
 - **Adaptive difficulty** and a full **AI Tutor chat** experience.
