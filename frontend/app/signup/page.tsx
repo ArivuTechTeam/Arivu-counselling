@@ -6,9 +6,9 @@ import { useEffect, useState } from "react";
 import type { AuthError } from "@supabase/supabase-js";
 
 import { GoogleAuthButton } from "@/components/auth/google-auth-button";
-import { Brand } from "@/components/ui/brand";
 import {
   getInstitutionBranding,
+  InstitutionBranding,
   listPublicCourses,
   PublicCourse,
 } from "@/lib/api";
@@ -98,7 +98,9 @@ export default function SignupPage() {
   const [googleLoading, setGoogleLoading] = useState(false);
 
   const [tenantId, setTenantId] = useState("");
+  const [branding, setBranding] = useState<InstitutionBranding | null>(null);
   const [destination, setDestination] = useState("/dashboard");
+  const [loginHref, setLoginHref] = useState("/login");
 
   useEffect(() => {
     let active = true;
@@ -107,6 +109,8 @@ export default function SignupPage() {
       .trim()
       .toLowerCase();
     setDestination(safeDashboardNext(params.get("next")));
+    setLoginHref(institutionSlug ? `/login/${encodeURIComponent(institutionSlug)}` : "/login");
+    setBranding(null);
     if (!institutionSlug) {
       setTenantId(PUBLIC_ENV.defaultTenantId);
       return () => { active = false; };
@@ -115,7 +119,10 @@ export default function SignupPage() {
     setCourses([]);
     getInstitutionBranding(institutionSlug)
       .then((branding) => {
-        if (active) setTenantId(branding.tenant_id);
+        if (active) {
+          setBranding(branding);
+          setTenantId(branding.tenant_id);
+        }
       })
       .catch(() => {
         if (active) {
@@ -211,9 +218,16 @@ export default function SignupPage() {
         <div className="right">
           <div className="card">
             <div className="card-head">
-              <div className="card-logo">
-                <Brand height={36} />
-              </div>
+              {branding?.logo_url && (
+                <div className="card-logo signup-institution-logo">
+                  {/* The source is a short-lived URL from the private logo bucket. */}
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img src={branding.logo_url} alt={`${branding.name} logo`} />
+                </div>
+              )}
+              {branding?.name && (
+                <p className="signup-institution-name">{branding.name}</p>
+              )}
               <div className="card-title">Create your account</div>
               <div className="card-sub">Enrol &amp; get started</div>
             </div>
@@ -317,7 +331,7 @@ export default function SignupPage() {
             </form>
 
             <div className="card-foot">
-              Already have an account? <Link href="/login">Sign in</Link>
+              Already have an account? <Link href={loginHref}>Sign in</Link>
             </div>
           </div>
         </div>
