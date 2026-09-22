@@ -10,6 +10,7 @@ import { useToast } from "@/components/ui/toast";
 import {
   Course,
   CourseImpact,
+  Subject,
   createCourse,
   createSubject,
   deleteCourse,
@@ -44,6 +45,32 @@ function initials(name: string): string {
       .join("")
       .toUpperCase() || "?"
   );
+}
+
+type CourseLevel = {
+  id: string;
+  name: string;
+  subjects: Subject[];
+  isCustom: boolean;
+};
+
+function courseLevels(course: Course): CourseLevel[] {
+  const levels = new Map<string, CourseLevel>();
+  for (const subject of course.subjects) {
+    const id = subject.catalog_level_id ?? "custom";
+    const existing = levels.get(id);
+    if (existing) {
+      existing.subjects.push(subject);
+    } else {
+      levels.set(id, {
+        id,
+        name: subject.level_name?.trim() || "Custom subjects",
+        subjects: [subject],
+        isCustom: !subject.catalog_level_id,
+      });
+    }
+  }
+  return Array.from(levels.values());
 }
 
 // --- tiny UI kit --------------------------------------------------------------
@@ -142,6 +169,7 @@ function CourseCard({
 }) {
   const color = courseColor(course.id);
   const n = course.subjects.length;
+  const levels = courseLevels(course).length;
   return (
     <div className="animate-rise relative overflow-hidden rounded-[14px] border-[1.5px] border-border bg-card shadow-[0_2px_8px_rgba(16,40,28,0.04)] transition hover:-translate-y-0.5 hover:shadow-[0_8px_26px_rgba(15,23,42,0.12)]">
       <button
@@ -167,7 +195,7 @@ function CourseCard({
               {course.name}
             </p>
             <p className="text-xs text-muted-foreground">
-              {n} subject{n === 1 ? "" : "s"}
+              {levels} level{levels === 1 ? "" : "s"} · {n} subject{n === 1 ? "" : "s"}
             </p>
           </div>
         </div>
@@ -182,12 +210,41 @@ function CourseCard({
             {course.student_count ?? 0} student{course.student_count === 1 ? "" : "s"}
           </span>
           <span className="inline-flex items-center gap-1 text-[0.72rem] font-semibold text-muted-foreground">
-            View subjects <span aria-hidden="true">→</span>
+            View levels <span aria-hidden="true">→</span>
           </span>
         </div>
         </div>
       </button>
     </div>
+  );
+}
+
+function LevelCard({
+  level,
+  color,
+  onOpen,
+}: {
+  level: CourseLevel;
+  color: string;
+  onOpen: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onOpen}
+      className="animate-rise overflow-hidden rounded-[14px] border-[1.5px] border-border bg-card text-left shadow-[0_2px_8px_rgba(16,40,28,0.04)] transition hover:-translate-y-0.5 hover:shadow-[0_8px_26px_rgba(15,23,42,0.12)]"
+    >
+      <div className="h-1" style={{ background: color }} />
+      <div className="p-5">
+        <p className="text-base font-extrabold text-foreground">{level.name}</p>
+        <p className="mt-1 text-sm text-muted-foreground">
+          {level.subjects.length} subject{level.subjects.length === 1 ? "" : "s"}
+        </p>
+        <p className="mt-4 text-xs font-semibold" style={{ color }}>
+          View subjects →
+        </p>
+      </div>
+    </button>
   );
 }
 
@@ -282,6 +339,11 @@ export function CourseManager() {
     null,
     (value): value is string | null => value === null || typeof value === "string",
   );
+  const [openLevelId, setOpenLevelId] = useSessionStorageState<string | null>(
+    "course-manager-open-level",
+    null,
+    (value): value is string | null => value === null || typeof value === "string",
+  );
   const [modal, setModal] = useSessionStorageState<"course" | "subject" | null>(
     "course-manager-modal",
     null,
@@ -337,7 +399,10 @@ export function CourseManager() {
     const t = del;
     setDel(null);
     if (t.kind === "course") {
-      if (openCourseId === t.id) setOpenCourseId(null);
+      if (openCourseId === t.id) {
+        setOpenCourseId(null);
+        setOpenLevelId(null);
+      }
       await run(() => deleteCourse(t.id));
     } else {
       await run(() => deleteSubject(t.id));
@@ -357,15 +422,126 @@ export function CourseManager() {
     }
   }
 
-  // ---- drilled-in: subjects of one course ----
+  // ---- drilled-in: levels, then subjects, of one course ----
   if (openCourse) {
     const color = courseColor(openCourse.id);
     const subs = openCourse.subjects;
+    const levels = courseLevels(openCourse);
+    const openLevel = levels.find((level) => level.id === openLevelId) ?? null;
+
+    if (openLevel) {
+      return (
+        <div className="flex flex-col gap-5">
+          <div className="flex flex-wrap items-center gap-1.5 text-sm text-muted-foreground">
+            <button
+              onClick={() => {
+                setOpenCourseId(null);
+                setOpenLevelId(null);
+              }}
+              className="font-semibold text-primary hover:underline"
+            >
+              Courses
+            </button>
+            <span>›</span>
+            <button
+              onClick={() => setOpenLevelId(null)}
+              className="font-semibold text-primary hover:underline"
+            >
+              {openCourse.name}
+            </button>
+            <span>›</span>
+            <span className="font-bold text-foreground">{openLevel.name}</span>
+          </div>
+
+          <div
+            className="animate-rise flex flex-wrap items-center justify-between gap-4 rounded-[18px] p-6 text-white sm:p-7"
+            style={{
+              background: `linear-gradient(135deg, ${color}, ${color}cc)`,
+              boxShadow: `0 8px 32px ${color}44`,
+            }}
+          >
+            <div className="min-w-0">
+              <button
+                onClick={() => setOpenLevelId(null)}
+                className="text-[0.72rem] font-bold uppercase tracking-[0.1em] text-white/70 transition hover:text-white"
+              >
+                ← {openCourse.name}
+              </button>
+              <h2 className="mt-1 truncate text-xl font-black">{openLevel.name}</h2>
+              <p className="mt-1 text-sm text-white/75">
+                {openLevel.subjects.length} subject{openLevel.subjects.length === 1 ? "" : "s"}
+              </p>
+            </div>
+            {openLevel.isCustom && (
+              <button
+                onClick={() => {
+                  setName("");
+                  setModal("subject");
+                }}
+                className="inline-flex items-center gap-1.5 rounded-xl bg-white/95 px-5 py-2.5 text-sm font-extrabold shadow-md"
+                style={{ color }}
+              >
+                + Add custom subject
+              </button>
+            )}
+          </div>
+
+          {error && <ErrorRow message={error} />}
+
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-[repeat(auto-fill,minmax(280px,320px))]">
+            {openLevel.subjects.map((sub) => (
+              <SubjectCard
+                key={sub.id}
+                name={sub.name}
+                color={color}
+                onDelete={() => setDel({ kind: "subject", id: sub.id, name: sub.name })}
+              />
+            ))}
+          </div>
+
+          {modal === "subject" && (
+            <Modal
+              title={`Add custom subject to ${openCourse.name}`}
+              onClose={closeModal}
+              footer={
+                <>
+                  <button className={ghostBtn} onClick={closeModal} disabled={busy}>
+                    Cancel
+                  </button>
+                  <button className={solidBtn} onClick={submitModal} disabled={busy || !name.trim()}>
+                    {busy ? "Saving…" : "Add subject"}
+                  </button>
+                </>
+              }
+            >
+              <label className="flex flex-col gap-1.5 text-sm font-semibold text-foreground">
+                Subject name
+                <input
+                  autoFocus
+                  className={field}
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && submitModal()}
+                  placeholder="e.g. Accounting"
+                />
+              </label>
+            </Modal>
+          )}
+          {del && (
+            <DeleteModal target={del} busy={busy} onCancel={() => setDel(null)} onConfirm={confirmDelete} />
+          )}
+        </div>
+      );
+    }
+
     return (
       <div className="flex flex-col gap-5">
         <div className="flex items-center gap-1.5 text-sm text-muted-foreground">
           <button
-            onClick={() => setOpenCourseId(null)}
+            onClick={() => {
+              setOpenCourseId(null);
+              setOpenLevelId(null);
+            }}
             className="font-semibold text-primary hover:underline"
           >
             Courses
@@ -383,14 +559,17 @@ export function CourseManager() {
         >
           <div className="min-w-0">
             <button
-              onClick={() => setOpenCourseId(null)}
+              onClick={() => {
+                setOpenCourseId(null);
+                setOpenLevelId(null);
+              }}
               className="text-[0.72rem] font-bold uppercase tracking-[0.1em] text-white/70 transition hover:text-white"
             >
               ← Courses
             </button>
             <h2 className="mt-1 truncate text-xl font-black">{openCourse.name}</h2>
             <p className="mt-1 text-sm text-white/75">
-              {subs.length} subject{subs.length === 1 ? "" : "s"}
+              {levels.length} level{levels.length === 1 ? "" : "s"} · {subs.length} subject{subs.length === 1 ? "" : "s"}
             </p>
           </div>
           <button
@@ -401,7 +580,7 @@ export function CourseManager() {
             className="inline-flex items-center gap-1.5 rounded-xl bg-white/95 px-5 py-2.5 text-sm font-extrabold shadow-md"
             style={{ color }}
           >
-            + Add subject
+            + Add custom subject
           </button>
         </div>
 
@@ -410,7 +589,7 @@ export function CourseManager() {
         {subs.length === 0 ? (
           <EmptyState
             icon={<BookOpen size={22} />}
-            title="No subjects yet — add the first subject for this course."
+            title="No levels or subjects yet — add catalogue subjects or create a custom subject."
             action={
               <button
                 onClick={() => {
@@ -419,19 +598,18 @@ export function CourseManager() {
                 }}
                 className={solidBtn}
               >
-                + Add subject
+                + Add custom subject
               </button>
             }
           />
         ) : (
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-[repeat(auto-fill,minmax(280px,320px))]">
-            {subs.map((sub) => (
-              <SubjectCard
-                key={sub.id}
-                name={sub.name}
-                levelName={sub.level_name}
+            {levels.map((level) => (
+              <LevelCard
+                key={level.id}
+                level={level}
                 color={color}
-                onDelete={() => setDel({ kind: "subject", id: sub.id, name: sub.name })}
+                onOpen={() => setOpenLevelId(level.id)}
               />
             ))}
           </div>
@@ -439,7 +617,7 @@ export function CourseManager() {
 
         {modal === "subject" && (
           <Modal
-            title={`Add subject to ${openCourse.name}`}
+            title={`Add custom subject to ${openCourse.name}`}
             onClose={closeModal}
             footer={
               <>
@@ -481,7 +659,7 @@ export function CourseManager() {
             Hierarchical management
           </p>
           <h2 className="mt-1 text-2xl font-black">Courses &amp; Subjects</h2>
-          <p className="mt-1 text-sm text-white/70">Course → Subject</p>
+          <p className="mt-1 text-sm text-white/70">Course → Level → Subject</p>
         </div>
         <div className="flex flex-wrap gap-2">
           <button
@@ -528,7 +706,10 @@ export function CourseManager() {
             <CourseCard
               key={c.id}
               course={c}
-              onOpen={() => setOpenCourseId(c.id)}
+              onOpen={() => {
+                setOpenCourseId(c.id);
+                setOpenLevelId(null);
+              }}
               onDelete={() => void requestCourseDelete(c)}
             />
           ))}
