@@ -565,6 +565,7 @@ export default function InstitutionsPage() {
                 <thead>
                   <tr className="border-b text-left text-xs uppercase tracking-wide text-muted-foreground">
                     <th className="px-2 py-2 font-medium">Institution</th>
+                    <th className="px-2 py-2 font-medium">Courses</th>
                     <th className="px-2 py-2 text-right font-medium">Admins</th>
                     <th className="px-2 py-2 text-right font-medium">Teachers</th>
                     <th className="px-2 py-2 text-right font-medium">Students</th>
@@ -582,6 +583,19 @@ export default function InstitutionsPage() {
                           {r.name} →
                         </Link>
                         <div className="text-xs text-muted-foreground">{r.subdomain}</div>
+                      </td>
+                      <td className="px-2 py-2.5">
+                        <div className="font-medium text-foreground">
+                          {r.course_count}
+                        </div>
+                        <div
+                          className="max-w-48 truncate text-xs text-muted-foreground"
+                          title={r.courses.join(", ")}
+                        >
+                          {r.courses.length > 0
+                            ? r.courses.join(", ")
+                            : "No courses assigned"}
+                        </div>
                       </td>
                       <td className="px-2 py-2.5 text-right text-muted-foreground">{r.admins}</td>
                       <td className="px-2 py-2.5 text-right text-muted-foreground">{r.teachers}</td>

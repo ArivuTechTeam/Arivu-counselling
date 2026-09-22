@@ -18,6 +18,7 @@ _PATHS = {
     "/api/v1/platform/overview",
     "/api/v1/platform/tenants",
     "/api/v1/platform/tenants/{tenant_id}",
+    "/api/v1/platform/tenants/{tenant_id}/offerings",
     "/api/v1/platform/question-bank",
     "/api/v1/platform/ai-monitoring",
 }

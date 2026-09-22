@@ -1292,6 +1292,7 @@ export type SubjectMetrics = {
   id: string;
   name: string;
   course_name: string;
+  level_name: string;
   chapters: number;
   quizzes_total: number;
   quizzes_published: number;
@@ -1527,6 +1528,10 @@ export type InstitutionRow = {
   published: number;
   attempts: number;
   accuracy: number;
+  courses: string[];
+  course_count: number;
+  level_count: number;
+  subject_count: number;
 };
 export type ReviewPipelineFull = {
   pending_review: number;
@@ -1589,6 +1594,29 @@ export type InstitutionDetails = {
   is_active: boolean;
   created_at: string | null;
 };
+export type InstitutionOfferingSubject = {
+  id: string;
+  name: string;
+};
+export type InstitutionOfferingLevel = {
+  id: string;
+  name: string;
+  subjects: InstitutionOfferingSubject[];
+};
+export type InstitutionOfferingCourse = {
+  id: string;
+  name: string;
+  levels: InstitutionOfferingLevel[];
+};
+export type InstitutionOfferings = {
+  tenant_id: string;
+  courses: InstitutionOfferingCourse[];
+};
+export const getInstitutionOfferings = (id: string) =>
+  jsonRequest<InstitutionOfferings>(
+    `/api/v1/platform/tenants/${encodeURIComponent(id)}/offerings`,
+    "GET",
+  );
 export const updateInstitution = (id: string, input: InstitutionUpdateInput) =>
   jsonRequest<InstitutionDetails>(`/api/v1/platform/tenants/${id}`, "PATCH", input);
 
@@ -1749,6 +1777,8 @@ export type InstitutionAdmin = {
   email: string | null;
   institution: string;
   subdomain: string;
+  courses: string[];
+  course_count: number;
 };
 export type AdminCreateInput = {
   full_name: string;
