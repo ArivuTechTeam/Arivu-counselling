@@ -1227,7 +1227,7 @@ def list_tenants(
     start = (page - 1) * page_size
     return (
         service.table("tenants")
-        .select("id, name")
+        .select("id, name, subdomain")
         .order("name")
         .range(start, start + page_size - 1)
         .execute()
