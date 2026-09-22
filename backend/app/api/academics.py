@@ -762,7 +762,7 @@ def teacher_subject_metrics(
     subjects = select_all_in(
         service,
         "subjects",
-        "id, name, course_id",
+        "id, name, course_id, course_level_id",
         in_column="id",
         values=assigned,
         configure=lambda query: query.eq("tenant_id", tenant),
@@ -780,6 +780,21 @@ def teacher_subject_metrics(
             configure=lambda query: query.eq("tenant_id", tenant),
         ):
             course_name[c["id"]] = c["name"]
+
+    level_name: dict[str, str] = {}
+    level_ids = list(
+        {str(s["course_level_id"]) for s in subjects if s.get("course_level_id")}
+    )
+    if level_ids:
+        for level in select_all_in(
+            service,
+            "course_levels",
+            "id, name",
+            in_column="id",
+            values=level_ids,
+            configure=lambda query: query.eq("tenant_id", tenant),
+        ):
+            level_name[str(level["id"])] = level["name"]
 
     # Chapters → per-subject count + a chapter→subject map for the question join.
     chapter_subject: dict[str, str] = {}
@@ -904,6 +919,7 @@ def teacher_subject_metrics(
                 "id": sid,
                 "name": s["name"],
                 "course_name": course_name.get(s.get("course_id"), ""),
+                "level_name": level_name.get(str(s.get("course_level_id") or ""), ""),
                 "chapters": chapters_per_subject.get(sid, 0),
                 "quizzes_total": quizzes_total.get(sid, 0),
                 "quizzes_published": quizzes_published.get(sid, 0),

@@ -329,9 +329,19 @@ export function AdminManager({ embedded = false }: { embedded?: boolean }) {
                   <p className="text-xs text-muted-foreground">{a.email}</p>
                 </div>
                 <div className="flex shrink-0 items-center gap-3">
-                  <span className="rounded-full bg-brand-50 px-2 py-0.5 text-xs font-medium text-brand-700">
-                    {a.institution}
-                  </span>
+                  <div className="max-w-64 text-right">
+                    <span className="rounded-full bg-brand-50 px-2 py-0.5 text-xs font-medium text-brand-700">
+                      {a.institution}
+                    </span>
+                    <p
+                      className="mt-1 truncate text-xs text-muted-foreground"
+                      title={a.courses.join(", ")}
+                    >
+                      {a.course_count > 0
+                        ? `${a.course_count} course${a.course_count === 1 ? "" : "s"}: ${a.courses.join(", ")}`
+                        : "No courses assigned"}
+                    </p>
+                  </div>
                   <button
                     type="button"
                     onClick={() => openReset(a)}

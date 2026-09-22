@@ -32,6 +32,10 @@ from app.lib.supabase import get_service_client
 from app.lib.storage import delete_bytes, upload_bytes
 from app.services.account_deletion import erase_account_data
 from app.services.catalog import active_catalog_subject_ids, provision_catalog_subject
+from app.services.institution_offerings import (
+    institution_offerings_by_tenant,
+    offering_counts,
+)
 from app.services.teacher_access import replace_teacher_subjects
 
 router = APIRouter(prefix="/api/v1", tags=["admin"])
@@ -134,6 +138,8 @@ class InstitutionAdminOut(StrictApiResponse):
     email: str | None
     institution: str
     subdomain: str
+    courses: list[str]
+    course_count: int
 
 
 class ReviewPipelineFull(StrictApiResponse):
@@ -157,6 +163,10 @@ class InstitutionRow(StrictApiResponse):
     published: int
     attempts: int
     accuracy: int
+    courses: list[str]
+    course_count: int
+    level_count: int
+    subject_count: int
 
 
 class PlatformActivityPoint(StrictApiResponse):
@@ -203,6 +213,28 @@ class TenantDetails(StrictApiResponse):
     plan_tier: str
     is_active: bool
     created_at: datetime | None = None
+
+
+class OfferingSubject(StrictApiResponse):
+    id: str
+    name: str
+
+
+class OfferingLevel(StrictApiResponse):
+    id: str
+    name: str
+    subjects: list[OfferingSubject]
+
+
+class OfferingCourse(StrictApiResponse):
+    id: str
+    name: str
+    levels: list[OfferingLevel]
+
+
+class TenantOfferings(StrictApiResponse):
+    tenant_id: str
+    courses: list[OfferingCourse]
 
 
 class QuestionBankCourse(StrictApiResponse):
@@ -1277,6 +1309,7 @@ def list_admins(
     )
     tname = {t["id"]: t["name"] for t in tenants}
     tenant_subdomain = {t["id"]: t["subdomain"] for t in tenants}
+    offerings = institution_offerings_by_tenant(service, tenant_ids)
     return [
         {
             "id": a["id"],
@@ -1284,6 +1317,10 @@ def list_admins(
             "email": email_by_id.get(a["id"]),
             "institution": tname.get(a["tenant_id"], "?"),
             "subdomain": tenant_subdomain.get(a["tenant_id"], ""),
+            "courses": [
+                course["name"] for course in offerings.get(str(a["tenant_id"]), [])
+            ],
+            "course_count": len(offerings.get(str(a["tenant_id"]), [])),
         }
         for a in admins
     ]
@@ -2267,9 +2304,50 @@ async def platform_overview(
     with each institution's key numbers + health. All real data.
     """
     _require_super(profile)
-    return await asyncio.to_thread(
-        lambda: _rpc_json(get_service_client(), "platform_overview_metrics")
+
+    def load_overview() -> dict:
+        service = get_service_client()
+        overview = _rpc_json(service, "platform_overview_metrics")
+        institution_rows = overview.get("institutions_table") or []
+        tenant_ids = [str(row["id"]) for row in institution_rows]
+        offerings = institution_offerings_by_tenant(service, tenant_ids)
+        enriched_rows: list[dict] = []
+        for row in institution_rows:
+            tenant_courses = offerings.get(str(row["id"]), [])
+            enriched_rows.append(
+                {
+                    **row,
+                    "courses": [course["name"] for course in tenant_courses],
+                    **offering_counts(tenant_courses),
+                }
+            )
+        return {**overview, "institutions_table": enriched_rows}
+
+    return await asyncio.to_thread(load_overview)
+
+
+@router.get(
+    "/platform/tenants/{tenant_id}/offerings",
+    response_model=TenantOfferings,
+)
+def platform_tenant_offerings(
+    tenant_id: str,
+    profile: CurrentProfile = Depends(get_current_profile),
+) -> dict:
+    """Return an institution's operational Course -> Level -> Subject tree."""
+    _require_super(profile)
+    service = get_service_client()
+    tenant = (
+        service.table("tenants")
+        .select("id")
+        .eq("id", tenant_id)
+        .maybe_single()
+        .execute()
     )
+    if tenant is None or not tenant.data:
+        raise HTTPException(status_code=404, detail="Institution not found.")
+    offerings = institution_offerings_by_tenant(service, [tenant_id])
+    return {"tenant_id": tenant_id, "courses": offerings.get(tenant_id, [])}
 
 
 # ── Super-admin: onboard a new institution (tenant) ──────────────────────────

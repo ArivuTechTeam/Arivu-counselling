@@ -56,10 +56,14 @@ class _Service:
                     "id": "s1",
                     "name": "Accounting",
                     "course_id": "c1",
+                    "course_level_id": "l1",
                     "tenant_id": TENANT_ID,
                 }
             ],
             "courses": [{"id": "c1", "name": "CA", "tenant_id": TENANT_ID}],
+            "course_levels": [
+                {"id": "l1", "name": "Foundation", "tenant_id": TENANT_ID}
+            ],
             "chapters": [{"id": "ch1", "subject_id": "s1", "tenant_id": TENANT_ID}],
             "questions": [
                 {
@@ -130,6 +134,8 @@ class TeacherSubjectMetricsTests(unittest.TestCase):
         self.assertEqual(len(result), 1)
         metric = result[0]
         self.assertEqual(metric["quizzes_total"], 1)
+        self.assertEqual(metric["course_name"], "CA")
+        self.assertEqual(metric["level_name"], "Foundation")
         self.assertEqual(metric["questions"], 2)
         self.assertEqual(metric["pending_review"], 1)
         self.assertEqual(metric["needs_edit"], 1)

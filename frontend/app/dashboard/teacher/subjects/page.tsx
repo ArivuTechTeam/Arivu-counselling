@@ -110,7 +110,8 @@ function SubjectCard({
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <span className="text-[11px] font-semibold uppercase tracking-widest text-muted-foreground">
-            {m.course_name || "Subject"}
+            {m.course_name || "Course"}
+            {m.level_name ? ` · ${m.level_name}` : ""}
           </span>
           <h3 className="truncate text-lg font-bold text-foreground">{m.name}</h3>
         </div>

@@ -6,7 +6,10 @@ import { useEffect, useRef, useState } from "react";
 
 import { Skeleton, SkeletonStats } from "@/components/ui/skeleton";
 import { ErrorCard } from "@/components/ui/error-card";
-import { useTeacherOverview } from "@/lib/staff-queries";
+import {
+  useTeacherOverview,
+  useTeacherSubjectMetrics,
+} from "@/lib/staff-queries";
 
 function useCountUp(target: number, on: boolean, ms = 900) {
   const [v, setV] = useState(0);
@@ -110,6 +113,11 @@ function MetricTile({
 
 export function TeacherStats() {
   const { data, error, mutate } = useTeacherOverview();
+  const {
+    data: assignments,
+    error: assignmentsError,
+    mutate: mutateAssignments,
+  } = useTeacherSubjectMetrics();
   const docs = data?.content.documents ?? null;
   const sets = data?.content.quiz_sets ?? null;
   const published = data?.content.published ?? null;
@@ -117,6 +125,21 @@ export function TeacherStats() {
   const ready = docs !== null && sets !== null;
   const drafts = Math.max(0, (sets ?? 0) - (published ?? 0));
   const pubPct = sets ? Math.round(((published ?? 0) / sets) * 100) : 0;
+  const assignmentGroups = React.useMemo(() => {
+    const grouped = new Map<string, Map<string, string[]>>();
+    for (const subject of assignments ?? []) {
+      const course = subject.course_name || "Course";
+      const level = subject.level_name || "Level";
+      if (!grouped.has(course)) grouped.set(course, new Map());
+      const levels = grouped.get(course)!;
+      if (!levels.has(level)) levels.set(level, []);
+      levels.get(level)!.push(subject.name);
+    }
+    return Array.from(grouped, ([course, levels]) => ({
+      course,
+      levels: Array.from(levels, ([level, subjects]) => ({ level, subjects })),
+    }));
+  }, [assignments]);
 
   const docsA = useCountUp(docs ?? 0, ready);
   const setsA = useCountUp(sets ?? 0, ready);
@@ -192,6 +215,61 @@ export function TeacherStats() {
           </div>
         </div>
       </div>
+
+      {/* Explicit assignment context: Course -> Level -> Subject. */}
+      <section className="animate-rise rounded-2xl border bg-card p-5 shadow-sm">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h2 className="text-lg font-bold text-foreground">Your teaching assignment</h2>
+            <p className="mt-1 text-sm text-muted-foreground">
+              The courses, levels and subjects assigned by your institution administrator.
+            </p>
+          </div>
+          <Link
+            href="/dashboard/teacher/subjects"
+            className="text-sm font-semibold text-primary hover:underline"
+          >
+            Open subjects →
+          </Link>
+        </div>
+        {assignmentsError ? (
+          <div className="mt-4">
+            <ErrorCard
+              message={assignmentsError.message}
+              onRetry={() => void mutateAssignments()}
+            />
+          </div>
+        ) : assignments === undefined ? (
+          <div className="mt-4 grid gap-3 sm:grid-cols-2">
+            <Skeleton className="h-24 rounded-xl" />
+            <Skeleton className="h-24 rounded-xl" />
+          </div>
+        ) : assignmentGroups.length === 0 ? (
+          <p className="mt-4 rounded-xl bg-muted/50 p-4 text-sm text-muted-foreground">
+            No subjects are assigned yet. Ask your institution administrator to assign a course, level and subject.
+          </p>
+        ) : (
+          <div className="mt-4 grid gap-3 sm:grid-cols-2">
+            {assignmentGroups.map((course) => (
+              <div key={course.course} className="rounded-xl border bg-muted/20 p-4">
+                <h3 className="font-semibold text-foreground">{course.course}</h3>
+                <div className="mt-3 flex flex-col gap-2">
+                  {course.levels.map((level) => (
+                    <div key={level.level}>
+                      <p className="text-xs font-semibold uppercase tracking-wide text-primary">
+                        {level.level}
+                      </p>
+                      <p className="mt-0.5 text-sm text-muted-foreground">
+                        {level.subjects.join(", ")}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
 
       {/* Tiles */}
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
