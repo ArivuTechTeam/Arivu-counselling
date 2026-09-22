@@ -37,9 +37,10 @@ export default function DashboardLayout({
   const [canChangePassword, setCanChangePassword] = useState(false);
   const [bootstrapError, setBootstrapError] = useState<string | null>(null);
   const [bootstrapAttempt, setBootstrapAttempt] = useState(0);
+  const [sessionAvailable, setSessionAvailable] = useState(false);
   const cacheProvider = useMemo(() => () => new Map(), []);
-  // `ready` gates the shell so we never flash a blank sidebar / "?" avatar
-  // before the role resolves.
+  // `ready` gates role-specific page content. The stable shell can render as
+  // soon as the local session is available while the profile is resolving.
   const [ready, setReady] = useState(false);
 
   // Resolve the logged-in user's role once per dashboard mount. The browser
@@ -69,6 +70,7 @@ export default function DashboardLayout({
         return;
       }
       setEmail(user.email ?? "");
+      setSessionAvailable(true);
       const providers = user.app_metadata?.providers;
       setCanChangePassword(
         Boolean(
@@ -138,20 +140,7 @@ export default function DashboardLayout({
     }
   }, [ready, allowedHome, pathValid, pathname, router]);
 
-  if (bootstrapError && !ready) {
-    return (
-      <main className="flex min-h-screen items-center justify-center p-4">
-        <ErrorCard
-          title="We couldn't open your dashboard"
-          message={bootstrapError}
-          onRetry={() => setBootstrapAttempt((attempt) => attempt + 1)}
-          className="w-full max-w-md"
-        />
-      </main>
-    );
-  }
-
-  if (!ready || !pathValid || pathname === "/dashboard") {
+  if (!sessionAvailable) {
     return (
       <main className="flex min-h-screen flex-col items-center justify-center gap-6 p-4">
         <Brand height={40} />
@@ -177,7 +166,33 @@ export default function DashboardLayout({
           mustChangePassword={mustChangePassword}
           canChangePassword={canChangePassword}
         >
-          {children}
+          {bootstrapError && !ready ? (
+            <div className="mx-auto flex min-h-[60vh] max-w-md items-center">
+              <ErrorCard
+                title="We couldn't open your dashboard"
+                message={bootstrapError}
+                onRetry={() => setBootstrapAttempt((attempt) => attempt + 1)}
+                className="w-full"
+              />
+            </div>
+          ) : ready && pathValid && pathname !== "/dashboard" ? (
+            children
+          ) : (
+            <div
+              className="mx-auto flex min-h-[60vh] w-full max-w-5xl flex-col gap-6"
+              aria-label="Loading dashboard"
+              aria-busy="true"
+            >
+              <Skeleton className="h-32 w-full rounded-2xl" />
+              <div className="grid gap-4 sm:grid-cols-3">
+                <Skeleton className="h-24 rounded-xl" />
+                <Skeleton className="h-24 rounded-xl" />
+                <Skeleton className="h-24 rounded-xl" />
+              </div>
+              <Skeleton className="h-64 w-full rounded-xl" />
+              <span className="sr-only">Loading your dashboard…</span>
+            </div>
+          )}
         </DashboardShell>
       </ToastProvider>
     </SWRConfig>

@@ -3,7 +3,7 @@
 import Image from "next/image";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { ChangePasswordModal } from "@/components/shared/change-password-modal";
 import { DevAccountSwitcher } from "@/components/shared/dev-account-switcher";
@@ -35,6 +35,7 @@ import {
   type DashboardRole,
 } from "@/lib/dashboard-bootstrap";
 import { createClient } from "@/lib/supabase";
+import { useCourses } from "@/lib/staff-queries";
 
 type IconComponent = (p: { size?: number; className?: string }) => React.JSX.Element;
 
@@ -57,8 +58,8 @@ const PRIMARY_ACTION: Record<
     href: "/dashboard/super-admin/institutions#onboard",
   },
   institution_admin: {
-    label: "Add teacher",
-    href: "/dashboard/institution-admin/users#add-teacher",
+    label: "Courses & subjects",
+    href: "/dashboard/institution-admin/courses",
   },
   teacher: {
     label: "Create quiz",
@@ -136,6 +137,12 @@ const NAV: Record<string, NavItem[]> = {
       href: "/dashboard/institution-admin/users",
       section: "Management",
       icon: Users,
+    },
+    {
+      label: "Students",
+      href: "/dashboard/institution-admin/students",
+      section: "Management",
+      icon: UserCheck,
     },
     {
       label: "Courses & subjects",
@@ -308,6 +315,41 @@ function NavRow({
   );
 }
 
+function InstitutionPrimaryAction() {
+  const { data: courses } = useCourses();
+  const setupComplete = Boolean(
+    courses?.length && courses.some((course) => course.subjects.length > 0),
+  );
+  const action = setupComplete
+    ? {
+        label: "Add teacher",
+        href: "/dashboard/institution-admin/users#add-teacher",
+      }
+    : {
+        label: "Set up courses",
+        href: "/dashboard/institution-admin/courses",
+      };
+
+  return (
+    <>
+      <Link
+        href={action.href}
+        aria-label={action.label}
+        className="inline-flex h-9 w-9 items-center justify-center rounded-lg bg-primary text-primary-foreground shadow-sm transition-colors hover:bg-primary/90 sm:hidden"
+      >
+        <Plus size={17} />
+      </Link>
+      <Link
+        href={action.href}
+        className="hidden items-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-sm font-semibold text-primary-foreground shadow-sm transition-colors hover:bg-primary/90 sm:inline-flex"
+      >
+        <Plus size={16} />
+        {action.label}
+      </Link>
+    </>
+  );
+}
+
 export function DashboardShell({
   role,
   email,
@@ -325,6 +367,8 @@ export function DashboardShell({
   const router = useRouter();
   const [menuOpen, setMenuOpen] = useState(false);
   const [navOpen, setNavOpen] = useState(false);
+  const navRef = useRef<HTMLElement>(null);
+  const navTriggerRef = useRef<HTMLButtonElement>(null);
   const [pwOpen, setPwOpen] = useState(false);
   const [pwDone, setPwDone] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
@@ -348,7 +392,64 @@ export function DashboardShell({
     if (mustChangePassword) setPwOpen(true);
   }, [mustChangePassword]);
 
+  // The progressive shell can mount before the profile role is available.
+  // Open that role's sections when it arrives instead of leaving every group
+  // collapsed from the initial role-less render.
+  useEffect(() => {
+    if (!role) return;
+    setOpenSections(
+      new Set((NAV[role] ?? []).map((item) => item.section ?? "Workspace")),
+    );
+  }, [role]);
+
   useEscapeKey(menuOpen, () => setMenuOpen(false));
+
+  const closeNav = useCallback(() => setNavOpen(false), []);
+  useEscapeKey(navOpen, closeNav);
+
+  useEffect(() => {
+    if (!navOpen) return;
+    const nav = navRef.current;
+    const navTrigger = navTriggerRef.current;
+    if (!nav) return;
+
+    const focusableSelector = [
+      "a[href]",
+      "button:not([disabled])",
+      "input:not([disabled])",
+      "[tabindex]:not([tabindex='-1'])",
+    ].join(",");
+    const getFocusable = () =>
+      Array.from(nav.querySelectorAll<HTMLElement>(focusableSelector)).filter(
+        (element) => element.getClientRects().length > 0,
+      );
+    getFocusable()[0]?.focus({ preventScroll: true });
+
+    function trapFocus(event: KeyboardEvent) {
+      if (event.key !== "Tab") return;
+      const focusable = getFocusable();
+      if (focusable.length === 0) {
+        event.preventDefault();
+        nav?.focus();
+        return;
+      }
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    }
+
+    document.addEventListener("keydown", trapFocus);
+    return () => {
+      document.removeEventListener("keydown", trapFocus);
+      navTrigger?.focus({ preventScroll: true });
+    };
+  }, [navOpen]);
 
   const items = role ? NAV[role] ?? [] : [];
   const dashboardRole = role && role in PRIMARY_ACTION
@@ -430,13 +531,21 @@ export function DashboardShell({
 
   return (
     <div className="flex h-screen overflow-hidden bg-background">
+      <a
+        href="#dashboard-main"
+        className="fixed left-3 top-3 z-[60] -translate-y-20 rounded-md bg-background px-4 py-2 font-semibold text-foreground shadow-lg transition-transform focus:translate-y-0"
+      >
+        Skip to main content
+      </a>
       {/* Backdrop — dims the page behind the mobile drawer; tapping it closes
           the drawer. Only rendered below md:, since the sidebar is always
           in-flow (not a drawer) at md: and above. */}
       {navOpen && (
-        <div
+        <button
+          type="button"
+          aria-label="Close navigation"
           className="fixed inset-0 z-20 bg-black/40 md:hidden"
-          onClick={() => setNavOpen(false)}
+          onClick={closeNav}
         />
       )}
 
@@ -444,14 +553,20 @@ export function DashboardShell({
           never scrolls). Below md: it's a slide-in drawer (off-screen by
           default); at md: and above it's the original static in-flow rail. */}
       <aside
-        className={`fixed inset-y-0 left-0 z-30 flex w-64 shrink-0 flex-col overflow-y-auto bg-gradient-to-b from-[#2E8857] to-[#245a41] p-4 text-white transition-transform duration-300 ease-in-out md:relative md:translate-x-0 ${
-          navOpen ? "translate-x-0" : "-translate-x-full"
+        id="dashboard-navigation"
+        ref={navRef}
+        role={navOpen ? "dialog" : undefined}
+        aria-modal={navOpen ? "true" : undefined}
+        aria-label={navOpen ? "Dashboard navigation" : undefined}
+        tabIndex={navOpen ? -1 : undefined}
+        className={`fixed inset-y-0 left-0 z-30 flex w-64 shrink-0 flex-col overflow-y-auto bg-gradient-to-b from-[#2E8857] to-[#245a41] p-4 text-white transition-transform duration-300 ease-in-out md:visible md:relative md:translate-x-0 ${
+          navOpen ? "visible translate-x-0" : "invisible -translate-x-full"
         }`}
       >
         <div className="mb-4 flex w-full items-center justify-between gap-2">
           <Link
             href={homeHref}
-            onClick={() => setNavOpen(false)}
+            onClick={closeNav}
             aria-label="Go to dashboard home"
             className="flex items-center gap-2 rounded-xl bg-white px-3 py-2.5 shadow-sm transition hover:shadow-md"
           >
@@ -544,9 +659,12 @@ export function DashboardShell({
         <header className="sticky top-0 z-10 flex h-16 items-center justify-between border-b bg-card px-4 sm:px-6">
           <div className="flex items-center gap-3">
             <button
+              ref={navTriggerRef}
               onClick={() => setNavOpen(true)}
               className="rounded-md p-1.5 text-foreground hover:bg-accent md:hidden"
               aria-label="Open menu"
+              aria-controls="dashboard-navigation"
+              aria-expanded={navOpen}
             >
               <Menu size={22} />
             </button>
@@ -554,7 +672,9 @@ export function DashboardShell({
           </div>
 
           <div className="flex items-center gap-3">
-            {primaryAction && (
+            {dashboardRole === "institution_admin" ? (
+              <InstitutionPrimaryAction />
+            ) : primaryAction ? (
               <>
                 <Link
                   href={primaryAction.href}
@@ -571,7 +691,7 @@ export function DashboardShell({
                   {primaryAction.label}
                 </Link>
               </>
-            )}
+            ) : null}
             <ThemeToggle />
             {/* Dev-only account switcher — stripped from production builds */}
             <DevAccountSwitcher currentEmail={email} />
@@ -640,7 +760,7 @@ export function DashboardShell({
             </div>
           </div>
         </header>
-        <main className="flex-1 overflow-auto p-4 sm:p-6">{children}</main>
+        <main id="dashboard-main" tabIndex={-1} className="flex-1 overflow-auto p-4 outline-none sm:p-6">{children}</main>
       </div>
 
       <ChangePasswordModal

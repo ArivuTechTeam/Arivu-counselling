@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 
 import { Button } from "@/components/ui/button";
@@ -119,13 +120,29 @@ export function StudentQuizzes() {
           {!loaded ? (
             <p className="text-sm text-muted-foreground">Loading…</p>
           ) : items.length === 0 ? (
-            <p className="text-sm text-muted-foreground">
-              No quizzes available yet — check back once your teacher publishes one.
-            </p>
+            <div className="rounded-xl border border-dashed p-5">
+              <p className="font-medium text-foreground">No teacher-published quizzes yet</p>
+              <p className="mt-1 text-sm text-muted-foreground">
+                You can still build a quiz from your subjects or practise by subject now.
+              </p>
+              <div className="mt-4 flex flex-wrap gap-2">
+                <Button asChild size="sm">
+                  <Link href="/dashboard/student/smart-quiz">Start a Smart Quiz</Link>
+                </Button>
+                <Button asChild size="sm" variant="outline">
+                  <Link href="/dashboard/student/subjects">Practice by subject</Link>
+                </Button>
+              </div>
+            </div>
           ) : toAttend.length === 0 ? (
-            <p className="text-sm text-muted-foreground">
-              You&apos;re all caught up — no new quizzes to take right now.
-            </p>
+            <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-dashed p-4">
+              <p className="text-sm text-muted-foreground">
+                You&apos;re all caught up — keep practising with a Smart Quiz.
+              </p>
+              <Button asChild size="sm" variant="outline">
+                <Link href="/dashboard/student/smart-quiz">Start a Smart Quiz</Link>
+              </Button>
+            </div>
           ) : (
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               {toAttend.map((i) => (

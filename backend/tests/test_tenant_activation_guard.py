@@ -36,7 +36,8 @@ class _Query:
 
 class _Service:
     def __init__(self, profile: dict, tenant: dict | None) -> None:
-        self.tables = {"profiles": [profile], "tenants": [tenant] if tenant else []}
+        profile_with_tenant = {**profile, "tenant": tenant}
+        self.tables = {"profiles": [profile_with_tenant]}
         self.table_calls: list[str] = []
 
     def table(self, name: str):
@@ -65,6 +66,7 @@ class TenantActivationGuardTests(unittest.TestCase):
                 get_current_profile(request(), CurrentUser(user_id="user-a"))
         self.assertEqual(caught.exception.status_code, 403)
         self.assertIn("inactive", caught.exception.detail.lower())
+        self.assertEqual(service.table_calls, ["profiles"])
 
     def test_active_institution_is_allowed(self) -> None:
         service = _Service(
@@ -80,6 +82,24 @@ class TenantActivationGuardTests(unittest.TestCase):
         with patch("app.lib.auth.get_service_client", return_value=service):
             profile = get_current_profile(request(), CurrentUser(user_id="user-a"))
         self.assertEqual(profile.tenant_id, "tenant-a")
+        self.assertEqual(service.table_calls, ["profiles"])
+
+    def test_missing_institution_relation_is_blocked(self) -> None:
+        service = _Service(
+            {
+                "id": "user-a",
+                "tenant_id": "tenant-a",
+                "role": "student",
+                "full_name": "Student",
+                "must_change_password": False,
+            },
+            None,
+        )
+        with patch("app.lib.auth.get_service_client", return_value=service):
+            with self.assertRaises(HTTPException) as caught:
+                get_current_profile(request(), CurrentUser(user_id="user-a"))
+        self.assertEqual(caught.exception.status_code, 403)
+        self.assertEqual(service.table_calls, ["profiles"])
 
     def test_super_admin_can_reactivate_an_institution(self) -> None:
         service = _Service(

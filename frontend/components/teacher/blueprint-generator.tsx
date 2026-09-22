@@ -88,7 +88,7 @@ function InlineError({ message }: { message: string }) {
 }
 
 function StepBar({ step }: { step: number }) {
-  const steps = ["Generate", "Topics", "Review"];
+  const steps = ["Source", "Topics", "Review"];
   return (
     <div className="flex flex-wrap items-center gap-2">
       {steps.map((label, i) => {
@@ -146,6 +146,7 @@ export function BlueprintGenerator() {
   const [uploadError, setUploadError] = useState<string | null>(null);
 
   const courses = coursesQuery.data ?? [];
+  const hasAssignedSubjects = courses.some((course) => course.subjects.length > 0);
   const [subjectId, setSubjectId] = useState("");
   const [chapterName, setChapterName] = useState("");
   const [chapters, setChapters] = useState<Chapter[]>([]);
@@ -862,6 +863,7 @@ export function BlueprintGenerator() {
               Subject
               <select
                 className={fieldClass}
+                disabled={coursesQuery.data !== undefined && !hasAssignedSubjects}
                 value={subjectId}
                 onChange={(e) => {
                   setSubjectId(e.target.value);
@@ -880,6 +882,11 @@ export function BlueprintGenerator() {
                   </optgroup>
                 ))}
               </select>
+              {coursesQuery.data !== undefined && !hasAssignedSubjects && !coursesQuery.error && (
+                <span className="text-xs font-normal text-amber-700">
+                  No subjects are assigned to you yet. Ask your institution administrator to assign one before creating a quiz.
+                </span>
+              )}
             </label>
 
             <label className="flex flex-col gap-1.5 text-sm font-medium">
