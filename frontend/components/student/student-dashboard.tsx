@@ -180,8 +180,8 @@ const FEATURES: {
   },
   {
     href: "/dashboard/student/subjects",
-    title: "Subjects",
-    desc: "Browse by chapter",
+    title: "Take Quiz",
+    desc: "Browse quizzes by subject",
     chip: "bg-brand-500/10 text-brand-600",
     icon: <GridIcon />,
   },

@@ -515,11 +515,10 @@ class PasswordGateTests(unittest.TestCase):
             "role": "teacher",
             "full_name": "Teacher",
             "must_change_password": True,
+            "tenant": {"id": "t1", "is_active": True},
         }
         service = SimpleNamespace(
-            table=lambda name: _ProfileQuery(
-                row if name == "profiles" else {"id": "t1", "is_active": True}
-            )
+            table=lambda _name: _ProfileQuery(row)
         )
         user = CurrentUser(user_id="u1", email="teacher@example.com")
         with patch("app.lib.auth.get_service_client", return_value=service):

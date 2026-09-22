@@ -155,7 +155,10 @@ def get_current_profile(
     client = get_service_client()
     result = (
         client.table("profiles")
-        .select("id,tenant_id,role,full_name,must_change_password")
+        .select(
+            "id,tenant_id,role,full_name,must_change_password,"
+            "tenant:tenants(id,is_active)"
+        )
         .eq("id", user.user_id)
         .maybe_single()  # returns None instead of erroring if no row
         .execute()
@@ -172,14 +175,8 @@ def get_current_profile(
 
     row = result.data
     if str(row["role"]) != "super_admin":
-        tenant = (
-            client.table("tenants")
-            .select("id,is_active")
-            .eq("id", row["tenant_id"])
-            .maybe_single()
-            .execute()
-        )
-        if tenant is None or not tenant.data or not tenant.data.get("is_active", False):
+        tenant = row.get("tenant")
+        if not isinstance(tenant, dict) or not tenant.get("is_active", False):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="This institution is inactive. Contact the platform administrator.",

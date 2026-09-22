@@ -76,6 +76,7 @@ export function QuizExtractor() {
   const { notify } = useToast();
   const coursesQuery = useCourses();
   const courses = coursesQuery.data ?? [];
+  const hasAssignedSubjects = courses.some((course) => course.subjects.length > 0);
   const [subjectId, setSubjectId] = useState("");
 
   const [chapters, setChapters] = useState<Chapter[]>([]);
@@ -222,7 +223,7 @@ export function QuizExtractor() {
               setChapterSel("");
               setNewChapterName("");
             }}
-            disabled={busy}
+            disabled={busy || (coursesQuery.data !== undefined && !hasAssignedSubjects)}
           >
             <option value="">Select a subject…</option>
             {courses.map((c) => (
@@ -235,6 +236,11 @@ export function QuizExtractor() {
               </optgroup>
             ))}
           </select>
+          {coursesQuery.data !== undefined && !hasAssignedSubjects && !coursesQuery.error && (
+            <p className="text-xs text-amber-700">
+              No subjects are assigned to you yet. Ask your institution administrator to assign one before importing a quiz.
+            </p>
+          )}
         </div>
 
         {/* Chapter (required) — pick one or add a new one under this subject */}

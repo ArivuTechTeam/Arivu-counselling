@@ -4,7 +4,6 @@ import { useState } from "react";
 import Link from "next/link";
 import { useSWRConfig } from "swr";
 
-import { AdminManager } from "@/components/admin/admin-manager";
 import {
   TemporaryCredentials,
   TemporaryCredentialsDialog,
@@ -585,9 +584,6 @@ export default function InstitutionsPage() {
           )}
         </CardContent>
       </Card>
-
-      {/* Manage institution admins */}
-      <AdminManager embedded />
 
       {editing && (
         <EditInstitutionDialog

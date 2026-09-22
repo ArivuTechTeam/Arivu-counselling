@@ -136,7 +136,11 @@ export function InstitutionAdminDashboard() {
         <MetricTile label="Active this week" value={activeStudents} gradient="from-card to-teal-50/70" chip="bg-teal-500/10 text-teal-600" icon={<UsersIcon />} delay={200} />
       </div>
 
-      <QuickActionsBar />
+      <QuickActionsBar
+        courseCount={analytics.summary.courses}
+        subjectCount={analytics.summary.subjects}
+        teacherCount={analytics.summary.teachers}
+      />
 
       <Card>
         <CardHeader>
