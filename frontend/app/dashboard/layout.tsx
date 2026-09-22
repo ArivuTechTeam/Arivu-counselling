@@ -5,10 +5,10 @@ import { usePathname, useRouter } from "next/navigation";
 import { SWRConfig } from "swr";
 
 import { DashboardShell } from "@/components/shared/dashboard-shell";
-import { Brand } from "@/components/ui/brand";
 import { ErrorCard } from "@/components/ui/error-card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ToastProvider } from "@/components/ui/toast";
+import { getInstitutionBranding, type InstitutionBranding } from "@/lib/api";
 import { createClient } from "@/lib/supabase";
 import { safeDashboardNext } from "@/lib/safe-next";
 import {
@@ -33,6 +33,7 @@ export default function DashboardLayout({
   const pathname = usePathname();
   const [role, setRole] = useState<DashboardRole | null>(null);
   const [email, setEmail] = useState("");
+  const [institution, setInstitution] = useState<InstitutionBranding | null>(null);
   const [mustChangePassword, setMustChangePassword] = useState(false);
   const [canChangePassword, setCanChangePassword] = useState(false);
   const [bootstrapError, setBootstrapError] = useState<string | null>(null);
@@ -88,7 +89,7 @@ export default function DashboardLayout({
 
       const { data, error } = await supabase
         .from("profiles")
-        .select("role,must_change_password")
+        .select("role,must_change_password,tenant_id")
         .eq("id", user.id)
         .maybeSingle();
       if (cancelled) return;
@@ -114,6 +115,33 @@ export default function DashboardLayout({
       setRole(resolvedRole);
       setMustChangePassword(passwordChangeRequired);
       setReady(true);
+
+      // Tenant identity is resolved from the authenticated profile, never from
+      // a user-editable URL. Render the institution name as soon as the RLS-
+      // protected tenant row arrives, then replace its stored logo path with a
+      // short-lived browser URL from the public branding endpoint.
+      if (resolvedRole !== "super_admin" && data.tenant_id) {
+        const { data: tenant } = await supabase
+          .from("tenants")
+          .select("name,subdomain")
+          .eq("id", data.tenant_id)
+          .maybeSingle();
+        if (cancelled || !tenant?.subdomain) return;
+        const identity: InstitutionBranding = {
+          tenant_id: data.tenant_id,
+          name: tenant.name,
+          subdomain: tenant.subdomain,
+          logo_url: null,
+        };
+        setInstitution(identity);
+        try {
+          const brandedIdentity = await getInstitutionBranding(tenant.subdomain);
+          if (!cancelled) setInstitution(brandedIdentity);
+        } catch {
+          // The institution name still gives the shell a correct tenant
+          // identity when a logo is missing or its signed URL cannot be made.
+        }
+      }
     });
     return () => {
       cancelled = true;
@@ -140,10 +168,19 @@ export default function DashboardLayout({
     }
   }, [ready, allowedHome, pathValid, pathname, router]);
 
+  // Keep tenant context visible while preserving the existing role-based route
+  // tree. Authorization continues to use the authenticated profile above.
+  useEffect(() => {
+    if (!ready || role === "super_admin" || !institution?.subdomain) return;
+    const url = new URL(window.location.href);
+    if (url.searchParams.get("institution") === institution.subdomain) return;
+    url.searchParams.set("institution", institution.subdomain);
+    router.replace(`${url.pathname}${url.search}${url.hash}`, { scroll: false });
+  }, [institution?.subdomain, pathname, ready, role, router]);
+
   if (!sessionAvailable) {
     return (
       <main className="flex min-h-screen flex-col items-center justify-center gap-6 p-4">
-        <Brand height={40} />
         <Skeleton className="h-2 w-40 rounded-full" />
         <p className="text-sm text-muted-foreground">Loading your dashboard…</p>
       </main>
@@ -163,6 +200,7 @@ export default function DashboardLayout({
         <DashboardShell
           role={role}
           email={email}
+          institution={institution}
           mustChangePassword={mustChangePassword}
           canChangePassword={canChangePassword}
         >

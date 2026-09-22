@@ -28,7 +28,7 @@ import {
   X,
   Zap,
 } from "@/components/ui/icons";
-import { deleteOwnAccount } from "@/lib/api";
+import { deleteOwnAccount, type InstitutionBranding } from "@/lib/api";
 import {
   clearDashboardBootstrap,
   HOME_BY_ROLE,
@@ -372,12 +372,14 @@ function InstitutionPrimaryAction() {
 export function DashboardShell({
   role,
   email,
+  institution = null,
   mustChangePassword = false,
   canChangePassword = true,
   children,
 }: {
   role: string | null;
   email: string;
+  institution?: InstitutionBranding | null;
   mustChangePassword?: boolean;
   canChangePassword?: boolean;
   children: React.ReactNode;
@@ -404,6 +406,11 @@ export function DashboardShell({
       ),
   );
   const initial = (email?.[0] ?? "?").toUpperCase();
+  const tenantRole =
+    role === "institution_admin" || role === "teacher" || role === "student";
+  const tenantLogin = institution?.subdomain
+    ? `/login/${encodeURIComponent(institution.subdomain)}`
+    : "/login";
 
   // First-login security prompt: admin-created accounts still hold a temp
   // password the admin set — nudge them to replace it.
@@ -508,7 +515,7 @@ export function DashboardShell({
     const supabase = createClient();
     clearDashboardBootstrap();
     await supabase.auth.signOut({ scope: "local" });
-    router.replace("/login");
+    router.replace(tenantLogin);
   }
 
   async function deleteAccount() {
@@ -530,7 +537,7 @@ export function DashboardShell({
       await createClient().auth.signOut({ scope: "local" });
     } finally {
       clearDashboardBootstrap();
-      router.replace("/login?reason=account-deleted");
+      router.replace(`${tenantLogin}?reason=account-deleted`);
     }
   }
 
@@ -586,24 +593,47 @@ export function DashboardShell({
           <Link
             href={homeHref}
             onClick={closeNav}
-            aria-label="Go to dashboard home"
-            className="flex items-center gap-2 rounded-xl bg-white px-3 py-2.5 shadow-sm transition hover:shadow-md"
+            aria-label={`Go to ${institution?.name ?? "dashboard"} home`}
+            className="flex min-w-0 flex-1 items-center justify-center gap-2 rounded-xl bg-white px-3 py-2.5 shadow-sm transition hover:shadow-md"
           >
-            <Image
-              src="/arivu-logo.png"
-              alt="ArivuPro Academy"
-              width={134}
-              height={26}
-              className="h-[26px] w-auto shrink-0"
-            />
-            <span className="flex shrink-0 flex-col leading-none">
-              <span className="text-[13px] font-extrabold tracking-tight text-[#2E8857]">
-                Quiz
+            {tenantRole ? (
+              <span className="flex min-w-0 flex-col items-center gap-1.5 text-center">
+                {institution?.logo_url ? (
+                  <>
+                    {/* The source is a short-lived URL from the private logo bucket. */}
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={institution.logo_url}
+                      alt={`${institution.name} logo`}
+                      className="max-h-9 max-w-[180px] object-contain"
+                    />
+                  </>
+                ) : (
+                  <Building2 size={25} className="text-[#2E8857]" aria-hidden="true" />
+                )}
+                <span className="max-w-[190px] truncate text-xs font-bold text-[#245a41]">
+                  {institution?.name ?? "Institution"}
+                </span>
               </span>
-              <span className="mt-0.5 text-[8px] font-bold uppercase tracking-[0.16em] text-[#245a41]/70">
-                Platform
-              </span>
-            </span>
+            ) : (
+              <>
+                <Image
+                  src="/arivu-logo.png"
+                  alt="ArivuPro Academy"
+                  width={134}
+                  height={26}
+                  className="h-[26px] w-auto shrink-0"
+                />
+                <span className="flex shrink-0 flex-col leading-none">
+                  <span className="text-[13px] font-extrabold tracking-tight text-[#2E8857]">
+                    Quiz
+                  </span>
+                  <span className="mt-0.5 text-[8px] font-bold uppercase tracking-[0.16em] text-[#245a41]/70">
+                    Platform
+                  </span>
+                </span>
+              </>
+            )}
           </Link>
           <button
             onClick={() => setNavOpen(false)}
@@ -687,7 +717,14 @@ export function DashboardShell({
             >
               <Menu size={22} />
             </button>
-            <h1 className="text-lg font-semibold">{title}</h1>
+            <div className="min-w-0">
+              <h1 className="text-lg font-semibold">{title}</h1>
+              {tenantRole && institution?.name && (
+                <p className="max-w-[44vw] truncate text-xs text-muted-foreground sm:max-w-none">
+                  {institution.name}
+                </p>
+              )}
+            </div>
           </div>
 
           <div className="flex items-center gap-3">
