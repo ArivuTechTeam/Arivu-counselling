@@ -6,17 +6,19 @@ import { SWRConfig } from "swr";
 
 import { DashboardShell } from "@/components/shared/dashboard-shell";
 import { Brand } from "@/components/ui/brand";
+import { ErrorCard } from "@/components/ui/error-card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ToastProvider } from "@/components/ui/toast";
 import { createClient } from "@/lib/supabase";
 import { safeDashboardNext } from "@/lib/safe-next";
-
-const HOME_BY_ROLE: Record<string, string> = {
-  super_admin: "/dashboard/super-admin",
-  institution_admin: "/dashboard/institution-admin",
-  teacher: "/dashboard/teacher",
-  student: "/dashboard/student",
-};
+import {
+  clearDashboardBootstrap,
+  HOME_BY_ROLE,
+  isDashboardRole,
+  readDashboardBootstrap,
+  writeDashboardBootstrap,
+  type DashboardRole,
+} from "@/lib/dashboard-bootstrap";
 
 /**
  * Wraps every /dashboard/* page in the ArivuPro shell (sidebar + topbar).
@@ -29,10 +31,12 @@ export default function DashboardLayout({
 }) {
   const router = useRouter();
   const pathname = usePathname();
-  const [role, setRole] = useState<string | null>(null);
+  const [role, setRole] = useState<DashboardRole | null>(null);
   const [email, setEmail] = useState("");
   const [mustChangePassword, setMustChangePassword] = useState(false);
   const [canChangePassword, setCanChangePassword] = useState(false);
+  const [bootstrapError, setBootstrapError] = useState<string | null>(null);
+  const [bootstrapAttempt, setBootstrapAttempt] = useState(0);
   const cacheProvider = useMemo(() => () => new Map(), []);
   // `ready` gates the shell so we never flash a blank sidebar / "?" avatar
   // before the role resolves.
@@ -43,6 +47,7 @@ export default function DashboardLayout({
   // authoritative source for role-based navigation.
   useEffect(() => {
     let cancelled = false;
+    setBootstrapError(null);
     const supabase = createClient();
     // The session lives in this tab's sessionStorage. Reading it here avoids a
     // blocking Auth-server round trip on every fresh dashboard mount. This is
@@ -64,7 +69,6 @@ export default function DashboardLayout({
         return;
       }
       setEmail(user.email ?? "");
-      setMustChangePassword(Boolean(user.user_metadata?.must_change_password));
       const providers = user.app_metadata?.providers;
       setCanChangePassword(
         Boolean(
@@ -73,32 +77,48 @@ export default function DashboardLayout({
             user.app_metadata?.provider === "email",
         ),
       );
-      const { data } = await supabase
+      const cached = readDashboardBootstrap(user.id);
+      if (cached) {
+        setRole(cached.role);
+        setMustChangePassword(cached.mustChangePassword);
+        setReady(true);
+      }
+
+      const { data, error } = await supabase
         .from("profiles")
-        .select("role")
+        .select("role,must_change_password")
         .eq("id", user.id)
-        .single();
+        .maybeSingle();
       if (cancelled) return;
-      if (!data) {
+      if (error) {
+        if (!cached) {
+          setBootstrapError(
+            "We couldn't load your account profile. Check your connection and try again.",
+          );
+        }
+        return;
+      }
+      if (!data || !isDashboardRole(data.role)) {
         // Logged in but no readable profile — return to sign in rather than
         // leaving the user on an indefinite dashboard loader.
-        router.replace("/login");
+        clearDashboardBootstrap();
+        await supabase.auth.signOut({ scope: "local" });
+        router.replace("/login?reason=profile-unavailable");
         return;
       }
-      const resolvedRole = (data.role as string) ?? "";
-      if (!HOME_BY_ROLE[resolvedRole]) {
-        router.replace("/login");
-        return;
-      }
+      const resolvedRole = data.role;
+      const passwordChangeRequired = Boolean(data.must_change_password);
+      writeDashboardBootstrap(user.id, resolvedRole, passwordChangeRequired);
       setRole(resolvedRole);
+      setMustChangePassword(passwordChangeRequired);
       setReady(true);
     });
     return () => {
       cancelled = true;
     };
-    // Deliberately runs once per mount — role doesn't change mid-session.
+    // A retry remounts only this bootstrap operation.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [bootstrapAttempt]);
 
   // Cheap, local-only guard: keeps the URL in sync with the resolved role
   // (e.g. a student who navigates to a teacher route gets sent home) on every
@@ -117,6 +137,19 @@ export default function DashboardLayout({
       router.replace(allowedHome);
     }
   }, [ready, allowedHome, pathValid, pathname, router]);
+
+  if (bootstrapError && !ready) {
+    return (
+      <main className="flex min-h-screen items-center justify-center p-4">
+        <ErrorCard
+          title="We couldn't open your dashboard"
+          message={bootstrapError}
+          onRetry={() => setBootstrapAttempt((attempt) => attempt + 1)}
+          className="w-full max-w-md"
+        />
+      </main>
+    );
+  }
 
   if (!ready || !pathValid || pathname === "/dashboard") {
     return (

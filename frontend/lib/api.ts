@@ -19,6 +19,24 @@ const DOCUMENT_UPLOAD_TIMEOUT_MS = 15 * 60_000;
 // Includes the default 240-second vision call plus upload/database processing.
 const QUIZ_EXTRACTION_TIMEOUT_MS = 5 * 60_000;
 
+/**
+ * Start a sleeping API service while authentication/profile work is already in
+ * flight. This is deliberately best-effort: sign-in must never fail because a
+ * liveness request failed, and the real authenticated request still reports
+ * any backend error normally.
+ */
+export function warmBackend(): void {
+  const controller = new AbortController();
+  const timer = window.setTimeout(() => controller.abort(), 8_000);
+  void fetch(`${API_BASE}/health`, {
+    method: "GET",
+    cache: "no-store",
+    signal: controller.signal,
+  })
+    .catch(() => undefined)
+    .finally(() => window.clearTimeout(timer));
+}
+
 export type ApiErrorCode =
   | "network_error"
   | "request_timeout"

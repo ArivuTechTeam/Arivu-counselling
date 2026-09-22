@@ -29,6 +29,11 @@ import {
   Zap,
 } from "@/components/ui/icons";
 import { deleteOwnAccount } from "@/lib/api";
+import {
+  clearDashboardBootstrap,
+  HOME_BY_ROLE,
+  type DashboardRole,
+} from "@/lib/dashboard-bootstrap";
 import { createClient } from "@/lib/supabase";
 
 type IconComponent = (p: { size?: number; className?: string }) => React.JSX.Element;
@@ -41,6 +46,28 @@ type NavItem = {
   soon?: boolean;
   section?: string;
   icon: IconComponent;
+};
+
+const PRIMARY_ACTION: Record<
+  DashboardRole,
+  { label: string; href: string }
+> = {
+  super_admin: {
+    label: "Add institution",
+    href: "/dashboard/super-admin/institutions#onboard",
+  },
+  institution_admin: {
+    label: "Add teacher",
+    href: "/dashboard/institution-admin/users#add-teacher",
+  },
+  teacher: {
+    label: "Create quiz",
+    href: "/dashboard/teacher/generate",
+  },
+  student: {
+    label: "Take quiz",
+    href: "/dashboard/student/subjects",
+  },
 };
 
 // Role-based sidebar. Items with `href` are real (built). Items with `soon`
@@ -61,13 +88,13 @@ const NAV: Record<string, NavItem[]> = {
       icon: BookOpen,
     },
     {
-      label: "Generate quiz",
+      label: "Create from material",
       href: "/dashboard/teacher/generate",
       section: "Content",
       icon: Plus,
     },
     {
-      label: "Extract quiz",
+      label: "Import existing quiz",
       href: "/dashboard/teacher/extract",
       section: "Content",
       icon: Sparkles,
@@ -149,7 +176,7 @@ const NAV: Record<string, NavItem[]> = {
       icon: Users,
     },
     {
-      label: "Question Bank",
+      label: "Question coverage",
       href: "/dashboard/super-admin/courses",
       section: "Monitoring",
       icon: BookOpen,
@@ -217,6 +244,12 @@ const NAV: Record<string, NavItem[]> = {
       section: "Progress",
       icon: BarChart3,
     },
+    {
+      label: "Weak areas",
+      href: "/dashboard/student/weak-areas",
+      section: "Progress",
+      icon: RefreshCw,
+    },
   ],
 };
 
@@ -262,6 +295,7 @@ function NavRow({
     <Link
       href={item.href}
       onClick={onNavigate}
+      aria-current={active ? "page" : undefined}
       className={`flex items-center gap-2 rounded-lg px-2.5 py-2 text-sm transition-colors ${
         active
           ? "bg-white/[0.16] font-semibold text-white shadow-glow"
@@ -317,12 +351,29 @@ export function DashboardShell({
   useEscapeKey(menuOpen, () => setMenuOpen(false));
 
   const items = role ? NAV[role] ?? [] : [];
+  const dashboardRole = role && role in PRIMARY_ACTION
+    ? (role as DashboardRole)
+    : null;
+  const primaryAction = dashboardRole ? PRIMARY_ACTION[dashboardRole] : null;
+  const homeHref = dashboardRole ? HOME_BY_ROLE[dashboardRole] : "/dashboard";
+  const navPathname = pathname.startsWith("/dashboard/student/attempt/") ||
+    pathname.startsWith("/dashboard/student/practice/")
+    ? "/dashboard/student/subjects"
+    : pathname.startsWith("/dashboard/teacher/performance/")
+      ? "/dashboard/teacher/published-quizzes"
+      : pathname;
   // Pick the most specific matching nav item (longest href), so a parent like
   // "Overview" isn't highlighted while you're on a child route like "/users".
   const active = items
-    .filter((i) => i.href && (pathname === i.href || pathname.startsWith(i.href + "/")))
+    .filter((i) => i.href && (navPathname === i.href || navPathname.startsWith(i.href + "/")))
     .sort((a, b) => (b.href?.length ?? 0) - (a.href?.length ?? 0))[0];
-  const title = active?.label ?? "Dashboard";
+  const title = pathname.startsWith("/dashboard/student/attempt/")
+    ? "Quiz attempt"
+    : pathname.startsWith("/dashboard/student/practice/")
+      ? "Quiz session"
+      : pathname.startsWith("/dashboard/teacher/performance/")
+        ? "Quiz performance"
+        : active?.label ?? "Dashboard";
 
   function toggleSection(section: string) {
     setOpenSections((prev) => {
@@ -335,6 +386,7 @@ export function DashboardShell({
 
   async function signOut() {
     const supabase = createClient();
+    clearDashboardBootstrap();
     await supabase.auth.signOut({ scope: "local" });
     router.replace("/login");
   }
@@ -357,6 +409,7 @@ export function DashboardShell({
     try {
       await createClient().auth.signOut({ scope: "local" });
     } finally {
+      clearDashboardBootstrap();
       router.replace("/login?reason=account-deleted");
     }
   }
@@ -396,7 +449,12 @@ export function DashboardShell({
         }`}
       >
         <div className="mb-4 flex w-full items-center justify-between gap-2">
-          <div className="flex items-center gap-2 rounded-xl bg-white px-3 py-2.5 shadow-sm">
+          <Link
+            href={homeHref}
+            onClick={() => setNavOpen(false)}
+            aria-label="Go to dashboard home"
+            className="flex items-center gap-2 rounded-xl bg-white px-3 py-2.5 shadow-sm transition hover:shadow-md"
+          >
             <Image
               src="/arivu-logo.png"
               alt="ArivuPro Academy"
@@ -412,7 +470,7 @@ export function DashboardShell({
                 Platform
               </span>
             </span>
-          </div>
+          </Link>
           <button
             onClick={() => setNavOpen(false)}
             className="shrink-0 rounded-md p-1 text-white/80 hover:bg-white/10 md:hidden"
@@ -496,6 +554,24 @@ export function DashboardShell({
           </div>
 
           <div className="flex items-center gap-3">
+            {primaryAction && (
+              <>
+                <Link
+                  href={primaryAction.href}
+                  aria-label={primaryAction.label}
+                  className="inline-flex h-9 w-9 items-center justify-center rounded-lg bg-primary text-primary-foreground shadow-sm transition-colors hover:bg-primary/90 sm:hidden"
+                >
+                  <Plus size={17} />
+                </Link>
+                <Link
+                  href={primaryAction.href}
+                  className="hidden items-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-sm font-semibold text-primary-foreground shadow-sm transition-colors hover:bg-primary/90 sm:inline-flex"
+                >
+                  <Plus size={16} />
+                  {primaryAction.label}
+                </Link>
+              </>
+            )}
             <ThemeToggle />
             {/* Dev-only account switcher — stripped from production builds */}
             <DevAccountSwitcher currentEmail={email} />
@@ -504,6 +580,7 @@ export function DashboardShell({
             <div className="relative">
             <button
               onClick={() => setMenuOpen((o) => !o)}
+              aria-expanded={menuOpen}
               className="flex items-center gap-2 rounded-full py-1 pl-1 pr-2 transition-colors hover:bg-accent"
               aria-label="Account menu"
             >
@@ -578,6 +655,7 @@ export function DashboardShell({
           // dashboard shows empty/error data — send them to sign in fresh.
           if (mustChangePassword) {
             try {
+              clearDashboardBootstrap();
               await createClient().auth.signOut({ scope: "local" });
             } finally {
               router.replace("/login?reason=password-changed");

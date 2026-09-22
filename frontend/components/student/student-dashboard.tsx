@@ -344,15 +344,13 @@ export function StudentDashboard() {
   const quizzesA = useCountUp(quizzes, ready);
   const bestA = useCountUp(best, ready && attempts.length > 0);
 
-  // Either summary is required for a correct dashboard; retry both together.
-  const error = statsQuery.error ?? attemptsQuery.error;
-  if (error) {
+  // The progress summary drives the hero. Attempt history is secondary and is
+  // allowed to recover in place without hiding available quizzes.
+  if (statsQuery.error) {
     return (
       <ErrorCard
-        message={error.message}
-        onRetry={() =>
-          void Promise.all([statsQuery.mutate(), attemptsQuery.mutate()])
-        }
+        message={statsQuery.error.message}
+        onRetry={() => void statsQuery.mutate()}
       />
     );
   }
@@ -519,7 +517,16 @@ export function StudentDashboard() {
         </CardHeader>
         <CardContent>
           <div className="h-56">
-            {trend.length === 0 ? (
+            {attemptsQuery.error ? (
+              <ErrorCard
+                title="Score history unavailable"
+                message={attemptsQuery.error.message}
+                onRetry={() => void attemptsQuery.mutate()}
+                className="h-full justify-center"
+              />
+            ) : !attemptsQuery.data ? (
+              <Skeleton className="h-full w-full rounded-xl" />
+            ) : trend.length === 0 ? (
               <p className="text-sm text-muted-foreground">
                 No attempts yet — take a quiz to start your trend.
               </p>
@@ -547,7 +554,13 @@ export function StudentDashboard() {
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-3">
-          {mastery.length === 0 ? (
+          {attemptsQuery.error ? (
+            <p className="text-sm text-muted-foreground">
+              Quiz mastery will return when score history reconnects.
+            </p>
+          ) : !attemptsQuery.data ? (
+            <Skeleton className="h-24 w-full rounded-xl" />
+          ) : mastery.length === 0 ? (
             <p className="text-sm text-muted-foreground">
               Take a quiz to see how you&apos;re performing.
             </p>

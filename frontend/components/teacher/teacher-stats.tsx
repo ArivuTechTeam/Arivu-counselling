@@ -152,12 +152,28 @@ export function TeacherStats() {
             <p className="mt-2 text-sm text-white/80">
               {pubA} published · {draftsA} in draft.
             </p>
-            <Link
-              href="/dashboard/teacher/generate"
-              className="mt-4 inline-flex items-center gap-1 rounded-md bg-white/15 px-4 py-2 text-sm font-medium text-white backdrop-blur transition-colors hover:bg-white/25"
-            >
-              Create quiz →
-            </Link>
+            <div className="mt-4 flex flex-wrap gap-2">
+              <Link
+                href="/dashboard/teacher/generate"
+                className="inline-flex items-center gap-1 rounded-md bg-white px-4 py-2 text-sm font-semibold text-[#15603d] transition-colors hover:bg-white/90"
+              >
+                Create from material →
+              </Link>
+              <Link
+                href="/dashboard/teacher/extract"
+                className="inline-flex items-center gap-1 rounded-md bg-white/15 px-4 py-2 text-sm font-medium text-white backdrop-blur transition-colors hover:bg-white/25"
+              >
+                Import existing quiz
+              </Link>
+              {drafts > 0 && (
+                <Link
+                  href="/dashboard/teacher/review"
+                  className="inline-flex items-center gap-1 rounded-md bg-white/15 px-4 py-2 text-sm font-medium text-white backdrop-blur transition-colors hover:bg-white/25"
+                >
+                  Review {drafts} {drafts === 1 ? "draft" : "drafts"}
+                </Link>
+              )}
+            </div>
           </div>
 
           {/* published ring */}

@@ -166,7 +166,7 @@ function OnboardForm({ onDone }: { onDone: () => void | Promise<void> }) {
   }
 
   return (
-    <Card className="animate-rise">
+    <Card id="onboard" className="animate-rise scroll-mt-24">
       <CardHeader>
         <CardTitle>Onboard an institution</CardTitle>
         <CardDescription>
@@ -477,11 +477,27 @@ export default function InstitutionsPage() {
       <PageHeader
         title="Institutions"
         description="Onboard and monitor every institution on the platform."
+        actions={
+          <div className="flex items-center gap-2">
+            <Link
+              href="#institution-directory"
+              className="rounded-lg border border-input bg-card px-3 py-2 text-sm font-medium hover:bg-accent"
+            >
+              View directory
+            </Link>
+            <Link
+              href="#onboard"
+              className="rounded-lg bg-primary px-3 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
+            >
+              Add institution
+            </Link>
+          </div>
+        }
       />
 
       <OnboardForm onDone={load} />
 
-      <Card className="animate-rise">
+      <Card id="institution-directory" className="animate-rise scroll-mt-24">
         <CardHeader>
           <CardTitle>All institutions</CardTitle>
           <CardDescription>

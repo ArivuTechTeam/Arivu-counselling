@@ -93,6 +93,32 @@ export default function PlatformOverviewPage() {
         ring={{ value: `${approval}%`, label: "approved", pct: ready ? s!.approval_rate : 0 }}
       />
 
+      <section className="rounded-2xl border bg-card p-4 shadow-sm" aria-label="Quick actions">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="mr-2 text-xs font-bold uppercase tracking-widest text-muted-foreground">
+            Quick actions
+          </span>
+          <Link
+            href="/dashboard/super-admin/institutions#onboard"
+            className="rounded-lg bg-primary px-3 py-2 text-sm font-semibold text-primary-foreground hover:bg-primary/90"
+          >
+            Add institution
+          </Link>
+          <Link
+            href="/dashboard/super-admin/admins"
+            className="rounded-lg border border-input px-3 py-2 text-sm font-semibold hover:bg-accent"
+          >
+            Add institution admin
+          </Link>
+          <Link
+            href="/dashboard/super-admin/ai-monitoring"
+            className="rounded-lg border border-input px-3 py-2 text-sm font-semibold hover:bg-accent"
+          >
+            Review question quality
+          </Link>
+        </div>
+      </section>
+
       {/* KPI tiles */}
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
         <MetricTile

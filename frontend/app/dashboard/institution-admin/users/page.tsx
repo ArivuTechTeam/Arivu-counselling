@@ -403,9 +403,25 @@ export default function UsersPage() {
       <PageHeader
         title="Teachers"
         description="Add teachers, assign their subjects, and view course student rosters."
+        actions={
+          <div className="flex items-center gap-2">
+            <Link
+              href="#teacher-directory"
+              className="rounded-lg border border-input bg-card px-3 py-2 text-sm font-medium hover:bg-accent"
+            >
+              View teachers
+            </Link>
+            <Link
+              href="#add-teacher"
+              className="rounded-lg bg-primary px-3 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
+            >
+              Add teacher
+            </Link>
+          </div>
+        }
       />
 
-      <Card className="animate-rise">
+      <Card id="add-teacher" className="animate-rise scroll-mt-24">
         <CardHeader>
           <CardTitle>Add teacher</CardTitle>
           <CardDescription>
@@ -498,7 +514,7 @@ export default function UsersPage() {
         </CardContent>
       </Card>
 
-      <section className="flex flex-col gap-4" aria-labelledby="teacher-list-title">
+      <section id="teacher-directory" className="flex scroll-mt-24 flex-col gap-4" aria-labelledby="teacher-list-title">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
           <div>
             <h2 id="teacher-list-title" className="text-xl font-bold text-foreground">

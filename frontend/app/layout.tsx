@@ -1,15 +1,15 @@
 import type { Metadata } from "next";
-import { Inter } from "next/font/google";
+import localFont from "next/font/local";
 import "./globals.css";
 import { cn } from "@/lib/utils";
 import { ThemeProvider } from "@/components/shared/theme-provider";
 
-// Inter is the ArivuPro reference typeface — its heavy weights drive the type
-// hierarchy. Exposed as `--font-sans`, which the Tailwind config reads.
-const inter = Inter({
-  subsets: ["latin"],
-  weight: ["400", "500", "600", "700", "800", "900"],
+// The bundled variable font covers the complete UI weight range without a
+// Google Fonts build-time request or six separate font files on first load.
+const sans = localFont({
+  src: "./fonts/GeistVF.woff",
   variable: "--font-sans",
+  display: "swap",
 });
 
 export const metadata: Metadata = {
@@ -23,7 +23,7 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" className={cn(inter.variable)} suppressHydrationWarning>
+    <html lang="en" className={cn(sans.variable)} suppressHydrationWarning>
       <head>
         {/* Apply the saved theme before paint to avoid a flash of light. */}
         <script
