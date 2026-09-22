@@ -876,7 +876,7 @@ export function BlueprintGenerator() {
                   <optgroup key={c.id} label={c.name}>
                     {c.subjects.map((s) => (
                       <option key={s.id} value={s.id}>
-                        {s.name}
+                        {s.level_name ? `${s.level_name} — ${s.name}` : s.name}
                       </option>
                     ))}
                   </optgroup>

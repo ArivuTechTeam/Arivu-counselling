@@ -98,10 +98,13 @@ migration-41-question-review-default.sql
 migration-42-api-call-logs.sql
 migration-43-faculty-background-jobs.sql
 migration-44-challenge-join-codes.sql
+migration-45-global-course-catalog.sql
+migration-46-seed-global-course-catalog.sql
+migration-47-student-level-enrollment.sql
 ```
 
-(Filenames above verified 2026-09-21 against `migrations/`, through
-`migration-44-challenge-join-codes.sql` — earlier drafts of
+(Filenames above verified 2026-09-22 against `migrations/`, through
+`migration-47-student-level-enrollment.sql` — earlier drafts of
 this runbook named migrations 31–34 `migration-31-chunked-document-generation.sql`,
 `migration-32-reset-chunked-generation-schema.sql`,
 `migration-33-document-archive-status.sql`, and
@@ -110,6 +113,7 @@ this runbook named migrations 31–34 `migration-31-chunked-document-generation.
 The repository does not prove which migrations are applied to a deployed
 Supabase project. Check the target project before skipping any file. Migration
 12 must be applied before deploying backend code that reads `teacher_subjects`.
+Migrations 45–46 must be applied before deploying the catalogue picker API.
 Migration 13 must be applied before deploying backend code with AI rate limits.
 Migration 37 must be applied before deploying backend code that starts student
 quiz or practice attempts; it stores the immutable question and scoring snapshot.
@@ -164,9 +168,12 @@ generated-question reads and writes use its provenance and verification columns.
 Migration 36 must be applied before deploying the scalable super-admin dashboard;
 the platform overview, question bank, and AI-monitoring endpoints call its
 service-role-only aggregate functions.
+Migration 47 must be applied before deploying level-aware student signup. It
+materializes operational course levels, backfills existing subjects, and makes
+new password and Google signups validate Course + Level atomically.
 
 For a fresh database, `migrations/schema.sql` already includes the final effects
-of migrations 31, 33, 34, 35, 37, 39, and 40 (verified 2026-09-17 by grepping
+of migrations 31, 33, 34, 35, 37, 39, 40, and 47 (verified 2026-09-22 by grepping
 `schema.sql` for each migration's distinguishing columns/functions — e.g.
 `question_snapshot` from migration 37, and the `_backend_provisioning_intent`/
 `provisioned_by_backend` trigger logic from migrations 39–40). The incremental

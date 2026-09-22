@@ -9,6 +9,8 @@ Academic hierarchy API (courses / subjects).
   POST   /api/v1/subjects                       — admin; create a subject.
   DELETE /api/v1/courses/{id}                    — admin; delete a course.
   DELETE /api/v1/subjects/{id}                   — admin; delete a subject.
+  GET    /api/v1/catalog                         — global catalogue + offerings.
+  POST   /api/v1/catalog/provision               — provision selected subjects.
 """
 
 from __future__ import annotations
@@ -22,6 +24,11 @@ from app.lib.auth import CurrentProfile, get_current_profile
 from app.lib.api_errors import public_error
 from app.lib.supabase import get_service_client
 from app.lib.supabase_queries import select_all, select_all_in
+from app.services.catalog import (
+    active_catalog_subject_ids,
+    catalog_tree,
+    provision_catalog_subject,
+)
 from app.services.teacher_access import (
     replace_teacher_subjects,
     teacher_subject_ids,
@@ -40,10 +47,100 @@ def _require_admin(profile: CurrentProfile) -> None:
         )
 
 
+def _catalog_tenant(
+    profile: CurrentProfile,
+    requested_tenant_id: UUID | None,
+    *,
+    required: bool,
+) -> str | None:
+    if profile.role == "super_admin":
+        if required and requested_tenant_id is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="tenant_id is required for super-admin provisioning.",
+            )
+        return str(requested_tenant_id) if requested_tenant_id else None
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="Only super admins can manage catalogue offerings.",
+    )
+
+
+class CatalogSubjectOut(BaseModel):
+    id: str
+    name: str
+    offered: bool
+
+
+class CatalogLevelOut(BaseModel):
+    id: str
+    name: str
+    subjects: list[CatalogSubjectOut]
+
+
+class CatalogCourseOut(BaseModel):
+    id: str
+    code: str
+    name: str
+    levels: list[CatalogLevelOut]
+
+
+class CatalogProvisionRequest(BaseModel):
+    catalog_subject_ids: list[UUID] = Field(default_factory=list, max_length=175)
+
+
+class CatalogProvisionResult(BaseModel):
+    provisioned: int
+    collisions: list[str]
+
+
+@router.get("/catalog", response_model=list[CatalogCourseOut])
+def get_catalog(
+    tenant_id: UUID | None = None,
+    profile: CurrentProfile = Depends(get_current_profile),
+) -> list[dict]:
+    target_tenant = _catalog_tenant(profile, tenant_id, required=False)
+    return catalog_tree(get_service_client(), target_tenant)
+
+
+@router.post("/catalog/provision", response_model=CatalogProvisionResult)
+def provision_catalog_offerings(
+    body: CatalogProvisionRequest,
+    tenant_id: UUID | None = None,
+    profile: CurrentProfile = Depends(get_current_profile),
+) -> CatalogProvisionResult:
+    target_tenant = _catalog_tenant(profile, tenant_id, required=True)
+    assert target_tenant is not None
+    subject_ids = list(
+        dict.fromkeys(str(subject_id) for subject_id in body.catalog_subject_ids)
+    )
+    service = get_service_client()
+    valid_ids = active_catalog_subject_ids(service, subject_ids)
+    if valid_ids != set(subject_ids):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="One or more catalogue subjects are unavailable.",
+        )
+
+    collisions: list[str] = []
+    for subject_id in subject_ids:
+        result = provision_catalog_subject(
+            service,
+            tenant_id=target_tenant,
+            catalog_subject_id=subject_id,
+        )
+        if result.course_name_collision or result.subject_name_collision:
+            collisions.append(subject_id)
+    return CatalogProvisionResult(
+        provisioned=len(subject_ids),
+        collisions=collisions,
+    )
+
+
 def _subjects_for(service, course_id: str, tenant_id: str) -> list[dict]:
     return (
         service.table("subjects")
-        .select("id, name")
+        .select("id, name, course_level_id")
         .eq("course_id", course_id)
         .eq("tenant_id", tenant_id)
         .order("name")
@@ -100,7 +197,7 @@ def _chapter_named(
 
 @router.get("/public/courses")
 def public_courses(tenant_id: UUID) -> list[dict]:
-    """Public course names for signup using a non-guessable tenant UUID.
+    """Active tenant courses and levels used by the self-signup form.
 
     Course names and IDs are intentionally public registration metadata; no
     student, staff, assessment, or analytics data is exposed here.
@@ -120,7 +217,32 @@ def public_courses(tenant_id: UUID) -> list[dict]:
         .data
         or []
     )
-    return [{"id": r["id"], "name": r["name"]} for r in rows]
+    course_ids = [str(row["id"]) for row in rows]
+    levels = select_all_in(
+        service,
+        "course_levels",
+        "id, course_id, name",
+        in_column="course_id",
+        values=course_ids,
+        configure=lambda query: query.eq("tenant_id", str(tenant_id)).eq(
+            "is_active", True
+        ),
+        order_column="name",
+    )
+    levels_by_course: dict[str, list[dict]] = {}
+    for level in levels:
+        levels_by_course.setdefault(str(level["course_id"]), []).append(
+            {"id": str(level["id"]), "name": level["name"]}
+        )
+    return [
+        {
+            "id": str(row["id"]),
+            "name": row["name"],
+            "levels": levels_by_course.get(str(row["id"]), []),
+        }
+        for row in rows
+        if levels_by_course.get(str(row["id"]))
+    ]
 
 
 @router.get("/courses")
@@ -146,11 +268,33 @@ def list_courses(profile: CurrentProfile = Depends(get_current_profile)) -> list
         else None
     )
     course_ids = [str(course["id"]) for course in courses]
+    level_rows = select_all_in(
+        service,
+        "course_levels",
+        "id, course_id, name, catalog_level_id",
+        in_column="course_id",
+        values=course_ids,
+        configure=lambda query: query.eq("tenant_id", profile.tenant_id),
+        order_column="name",
+    )
+    levels_by_course: dict[str, list[dict]] = {}
+    for level in level_rows:
+        levels_by_course.setdefault(str(level["course_id"]), []).append(
+            {
+                "id": str(level["id"]),
+                "name": level["name"],
+                "catalog_level_id": (
+                    str(level["catalog_level_id"])
+                    if level.get("catalog_level_id")
+                    else None
+                ),
+            }
+        )
     subjects_by_course: dict[str, list[dict]] = {}
     if course_ids:
         subjects_query = (
             service.table("subjects")
-            .select("id, name, course_id")
+            .select("id, name, course_id, course_level_id, catalog_subject_id")
             .eq("tenant_id", profile.tenant_id)
             .in_("course_id", course_ids)
         )
@@ -158,9 +302,25 @@ def list_courses(profile: CurrentProfile = Depends(get_current_profile)) -> list
             if not assigned:
                 return []
             subjects_query = subjects_query.in_("id", sorted(assigned))
-        for subject in subjects_query.order("name").execute().data or []:
+        subject_rows = subjects_query.order("name").execute().data or []
+        level_by_id = {str(row["id"]): row for row in level_rows}
+        for subject in subject_rows:
+            level_id = str(subject.get("course_level_id") or "")
+            level = level_by_id.get(level_id, {})
+            subject_payload = {
+                "id": subject["id"],
+                "name": subject["name"],
+                "course_level_id": level_id or None,
+                "level_name": level.get("name"),
+            }
+            if subject.get("catalog_subject_id"):
+                subject_payload["catalog_subject_id"] = str(
+                    subject["catalog_subject_id"]
+                )
+            if level.get("catalog_level_id"):
+                subject_payload["catalog_level_id"] = str(level["catalog_level_id"])
             subjects_by_course.setdefault(str(subject["course_id"]), []).append(
-                {"id": subject["id"], "name": subject["name"]}
+                subject_payload
             )
 
     student_count_by_course: dict[str, int] = {}
@@ -205,6 +365,7 @@ def list_courses(profile: CurrentProfile = Depends(get_current_profile)) -> list
         if assigned is not None and not subjects:
             continue
         course["subjects"] = subjects
+        course["levels"] = levels_by_course.get(str(course["id"]), [])
         if profile.role == "institution_admin":
             course["student_count"] = student_count_by_course.get(str(course["id"]), 0)
         visible_courses.append(course)
@@ -217,7 +378,61 @@ class CourseCreate(BaseModel):
 
 class SubjectCreate(BaseModel):
     course_id: str
+    course_level_id: str
     name: str
+
+
+class CourseLevelCreate(BaseModel):
+    course_id: str
+    name: str
+
+
+@router.post("/course-levels")
+def create_course_level(
+    body: CourseLevelCreate,
+    profile: CurrentProfile = Depends(get_current_profile),
+) -> dict:
+    _require_admin(profile)
+    name = body.name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Level name is required.")
+    service = get_service_client()
+    course = (
+        service.table("courses")
+        .select("id")
+        .eq("id", body.course_id)
+        .eq("tenant_id", profile.tenant_id)
+        .maybe_single()
+        .execute()
+    )
+    if course is None or not course.data:
+        raise HTTPException(status_code=404, detail="Course not found.")
+    existing = (
+        service.table("course_levels")
+        .select("id, name")
+        .eq("tenant_id", profile.tenant_id)
+        .eq("course_id", body.course_id)
+        .ilike("name", name)
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    if existing:
+        return existing[0]
+    inserted = (
+        service.table("course_levels")
+        .insert(
+            {
+                "tenant_id": profile.tenant_id,
+                "course_id": body.course_id,
+                "name": name,
+            }
+        )
+        .execute()
+        .data[0]
+    )
+    return {"id": inserted["id"], "name": inserted["name"]}
 
 
 @router.post("/courses")
@@ -269,6 +484,17 @@ def create_subject(
     )
     if course is None or not course.data:
         raise HTTPException(status_code=404, detail="Course not found.")
+    level = (
+        service.table("course_levels")
+        .select("id")
+        .eq("id", body.course_level_id)
+        .eq("course_id", body.course_id)
+        .eq("tenant_id", profile.tenant_id)
+        .maybe_single()
+        .execute()
+    )
+    if level is None or not level.data:
+        raise HTTPException(status_code=400, detail="Level does not belong to this course.")
     # Reuse an existing subject of the same name in this course.
     existing = _subject_named(service, profile.tenant_id, body.course_id, name)
     if existing:
@@ -280,13 +506,18 @@ def create_subject(
                 {
                     "tenant_id": profile.tenant_id,
                     "course_id": body.course_id,
+                    "course_level_id": body.course_level_id,
                     "name": name,
                 }
             )
             .execute()
             .data[0]
         )
-        return {"id": inserted["id"], "name": inserted["name"]}
+        return {
+            "id": inserted["id"],
+            "name": inserted["name"],
+            "course_level_id": body.course_level_id,
+        }
     except Exception:  # noqa: BLE001 - recover a concurrent get-or-create race
         existing = _subject_named(service, profile.tenant_id, body.course_id, name)
         if not existing:

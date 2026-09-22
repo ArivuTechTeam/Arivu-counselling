@@ -12,6 +12,7 @@ import os
 from app.lib.supabase import get_service_client
 
 COURSE_NAME = "CA Foundation"
+LEVEL_NAME = "Foundation"
 SUBJECTS = ["Accounting", "Business Mathematics", "Business Economics"]
 STUDENT_EMAIL = os.getenv("SEED_STUDENT_EMAIL", "").strip()
 if not STUDENT_EMAIL:
@@ -42,7 +43,25 @@ else:
     ).data[0]["id"]
     print(f"created course: {COURSE_NAME} = {course_id}")
 
-# 2) Subjects under the course (idempotent by name)
+# 2) Operational level (idempotent by name within the course)
+existing_level = (
+    service.table("course_levels")
+    .select("id")
+    .eq("tenant_id", tenant_id)
+    .eq("course_id", course_id)
+    .ilike("name", LEVEL_NAME)
+    .execute()
+).data
+if existing_level:
+    level_id = existing_level[0]["id"]
+else:
+    level_id = (
+        service.table("course_levels")
+        .insert({"tenant_id": tenant_id, "course_id": course_id, "name": LEVEL_NAME})
+        .execute()
+    ).data[0]["id"]
+
+# 3) Subjects under the level (idempotent by name)
 for name in SUBJECTS:
     found = (
         service.table("subjects")
@@ -55,11 +74,16 @@ for name in SUBJECTS:
         print(f"  subject exists: {name}")
     else:
         service.table("subjects").insert(
-            {"tenant_id": tenant_id, "course_id": course_id, "name": name}
+            {
+                "tenant_id": tenant_id,
+                "course_id": course_id,
+                "course_level_id": level_id,
+                "name": name,
+            }
         ).execute()
         print(f"  created subject: {name}")
 
-# 3) Find the test student's user id (via their profile / auth)
+# 4) Find the test student's user id (via their profile / auth)
 users = service.auth.admin.list_users()
 users = getattr(users, "users", users)
 student = next((u for u in users if getattr(u, "email", None) == STUDENT_EMAIL), None)
@@ -67,7 +91,7 @@ if not student:
     raise SystemExit("Configured seed student was not found; create it first.")
 student_id = student.id
 
-# 4) Enroll the student in the course (idempotent via unique constraint)
+# 5) Enroll the student in the course + level (idempotent via unique constraint)
 already = (
     service.table("enrollments")
     .select("id")
@@ -76,10 +100,18 @@ already = (
     .execute()
 ).data
 if already:
+    service.table("enrollments").update({"course_level_id": level_id}).eq(
+        "id", already[0]["id"]
+    ).execute()
     print(f"student already enrolled in {COURSE_NAME}")
 else:
     service.table("enrollments").insert(
-        {"tenant_id": tenant_id, "profile_id": student_id, "course_id": course_id}
+        {
+            "tenant_id": tenant_id,
+            "profile_id": student_id,
+            "course_id": course_id,
+            "course_level_id": level_id,
+        }
     ).execute()
     print(f"student enrolled in {COURSE_NAME}")
 

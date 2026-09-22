@@ -17,9 +17,13 @@ import { ErrorCard } from "@/components/ui/error-card";
 import { SkeletonCards, SkeletonList } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/ui/empty-state";
 import { BookOpen } from "@/components/ui/icons";
-import { StudentQuiz, startAttempt } from "@/lib/api";
+import { PracticeSubject, StudentQuiz, startAttempt } from "@/lib/api";
 import { variantLabel } from "@/lib/format";
-import { useStudentAttempts, useStudentQuizzes } from "@/lib/student-queries";
+import {
+  usePracticeSubjects,
+  useStudentAttempts,
+  useStudentQuizzes,
+} from "@/lib/student-queries";
 import { useSessionStorageState } from "@/lib/use-session-storage-state";
 
 type TakeItem = {
@@ -45,8 +49,11 @@ type Tree = Record<string, SubjectNode>;
 
 const NO_CHAPTER = "General";
 
-function buildTree(quizzes: StudentQuiz[]): Tree {
+function buildTree(enrolledSubjects: PracticeSubject[], quizzes: StudentQuiz[]): Tree {
   const tree: Tree = {};
+  for (const subject of enrolledSubjects) {
+    tree[subject.id] = { name: subject.name, chapters: {} };
+  }
   for (const q of quizzes) {
     const subjectId = q.subject_id || `name:${q.subject_name || "Other"}`;
     const subjectName = q.subject_name || "Other";
@@ -81,6 +88,11 @@ function buildTree(quizzes: StudentQuiz[]): Tree {
 export default function StudentSubjectsPage() {
   const router = useRouter();
   const { data: quizzes = null, error: loadError, mutate } = useStudentQuizzes();
+  const {
+    data: enrolledSubjects,
+    error: subjectsError,
+    mutate: mutateSubjects,
+  } = usePracticeSubjects();
   const [actionError, setActionError] = useState<string | null>(null);
   const [starting, setStarting] = useState<string | null>(null);
   const [active, setActive] = useSessionStorageState<string | null>(
@@ -101,7 +113,10 @@ export default function StudentSubjectsPage() {
     mutate: mutateAttempts,
   } = useStudentAttempts(active !== null && activeTab === "history");
 
-  const tree = useMemo(() => (quizzes ? buildTree(quizzes) : {}), [quizzes]);
+  const tree = useMemo(
+    () => (quizzes && enrolledSubjects ? buildTree(enrolledSubjects, quizzes) : {}),
+    [enrolledSubjects, quizzes],
+  );
   const subjects = Object.keys(tree).sort((a, b) =>
     tree[a].name.localeCompare(tree[b].name),
   );
@@ -156,7 +171,9 @@ export default function StudentSubjectsPage() {
     );
   }
 
-  const error = actionError ?? (loadError instanceof Error ? loadError.message : null);
+  const error = actionError
+    ?? (loadError instanceof Error ? loadError.message : null)
+    ?? (subjectsError instanceof Error ? subjectsError.message : null);
   if (error)
     return (
       <div className="flex flex-col gap-6">
@@ -166,7 +183,10 @@ export default function StudentSubjectsPage() {
         />
         <ErrorCard
           message={error}
-          onRetry={loadError ? () => void mutate() : undefined}
+          onRetry={loadError || subjectsError ? () => {
+            void mutate();
+            void mutateSubjects();
+          } : undefined}
         />
       </div>
     );
@@ -246,7 +266,12 @@ export default function StudentSubjectsPage() {
         </div>
 
         {activeTab === "available" ? (
-          unattempted.length === 0 ? (
+          subjectItems.length === 0 ? (
+            <EmptyState
+              title="No published quizzes yet"
+              message={`Your ${subject.name} subject is ready. Quizzes will appear here after a teacher publishes them.`}
+            />
+          ) : unattempted.length === 0 ? (
             <EmptyState
               title="You're up to date"
               message="You have attempted every published quiz in this subject. Open History to review results or use an available retake."
@@ -324,13 +349,13 @@ export default function StudentSubjectsPage() {
         description="Choose a subject to see quizzes you can take and your past results."
       />
 
-      {quizzes === null ? (
+      {quizzes === null || enrolledSubjects === undefined ? (
         <SkeletonCards />
       ) : subjects.length === 0 ? (
         <EmptyState
           icon={<BookOpen />}
-          title="No quizzes available yet"
-          message="Quizzes will appear here once your teacher publishes one for your course. In the meantime, you can practise any time with a Smart Quiz."
+          title="No subjects assigned yet"
+          message="Choose a course and level during signup, or ask your institution administrator to correct your enrollment."
           action={
             <button
               onClick={() => router.push("/dashboard/student/smart-quiz")}

@@ -25,7 +25,12 @@ class _Query:
         self.operations.append(("eq", column, value))
         return self
 
-    def order(self, column: str) -> "_Query":
+    def in_(self, column: str, values: list[object]) -> "_Query":
+        self.operations.append(("in", column, values))
+        self.rows = [row for row in self.rows if row.get(column) in values]
+        return self
+
+    def order(self, column: str, **_kwargs) -> "_Query":
         self.operations.append(("order", column))
         return self
 
@@ -34,12 +39,13 @@ class _Query:
 
 
 class _Service:
-    def __init__(self, query: _Query) -> None:
-        self.query = query
+    def __init__(self, queries: dict[str, _Query]) -> None:
+        self.queries = queries
 
     def table(self, name: str) -> _Query:
-        self.query.operations.append(("table", name))
-        return self.query
+        query = self.queries[name]
+        query.operations.append(("table", name))
+        return query
 
 
 class PublicCoursesTests(unittest.TestCase):
@@ -54,14 +60,36 @@ class PublicCoursesTests(unittest.TestCase):
                 }
             ]
         )
+        levels_query = _Query(
+            [
+                {
+                    "id": "level-1",
+                    "course_id": "course-1",
+                    "name": "Foundation",
+                    "tenant_id": str(tenant_id),
+                    "is_active": True,
+                }
+            ]
+        )
 
         with patch(
             "app.api.academics.get_service_client",
-            return_value=_Service(query),
+            return_value=_Service(
+                {"courses": query, "course_levels": levels_query}
+            ),
         ):
             result = public_courses(tenant_id)
 
-        self.assertEqual(result, [{"id": "course-1", "name": "Science"}])
+        self.assertEqual(
+            result,
+            [
+                {
+                    "id": "course-1",
+                    "name": "Science",
+                    "levels": [{"id": "level-1", "name": "Foundation"}],
+                }
+            ],
+        )
         self.assertIn(
             ("select", "id, name, tenants!inner(is_active)"),
             query.operations,

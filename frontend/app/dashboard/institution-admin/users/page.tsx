@@ -21,6 +21,7 @@ import { SkeletonList } from "@/components/ui/skeleton";
 import {
   AdminUser,
   CourseRoster,
+  Subject,
   TeacherCourse,
   createTeacher,
   deleteUser,
@@ -54,6 +55,22 @@ function initials(text: string): string {
   );
 }
 
+function subjectsByLevel(subjects: Subject[]): Array<[string, string, Subject[]]> {
+  const groups = new Map<string, { name: string; subjects: Subject[] }>();
+  for (const subject of subjects) {
+    const id = subject.course_level_id ?? subject.catalog_level_id ?? "legacy";
+    const name = subject.level_name?.trim() || "General";
+    const group = groups.get(id) ?? { name, subjects: [] };
+    group.subjects.push(subject);
+    groups.set(id, group);
+  }
+  return Array.from(groups.entries()).map(([id, group]) => [
+    id,
+    group.name,
+    group.subjects,
+  ]);
+}
+
 export default function UsersPage() {
   const [query, setQuery] = useSessionStorageState(
     "institution-users-query",
@@ -76,6 +93,7 @@ export default function UsersPage() {
     email: "",
     password: "",
     course_id: "",
+    level_id: "",
     subject_ids: [] as string[],
   });
   const [formHydrated, setFormHydrated] = useState(false);
@@ -114,6 +132,7 @@ export default function UsersPage() {
           full_name: typeof parsed.full_name === "string" ? parsed.full_name : "",
           email: typeof parsed.email === "string" ? parsed.email : "",
           course_id: typeof parsed.course_id === "string" ? parsed.course_id : "",
+          level_id: typeof parsed.level_id === "string" ? parsed.level_id : "",
           subject_ids: Array.isArray(parsed.subject_ids)
             ? parsed.subject_ids.filter(
                 (value): value is string => typeof value === "string",
@@ -137,6 +156,7 @@ export default function UsersPage() {
           full_name: form.full_name,
           email: form.email,
           course_id: form.course_id,
+          level_id: form.level_id,
           subject_ids: form.subject_ids,
         }),
       );
@@ -147,11 +167,20 @@ export default function UsersPage() {
     form.course_id,
     form.email,
     form.full_name,
+    form.level_id,
     form.subject_ids,
     formHydrated,
   ]);
 
   const selectedCourse = courses.find((course) => course.id === form.course_id);
+  const selectedCourseLevels = selectedCourse
+    ? subjectsByLevel(selectedCourse.subjects).map(([id, name, subjects]) => ({
+        id,
+        name,
+        subjects,
+      }))
+    : [];
+  const selectedLevel = selectedCourseLevels.find((level) => level.id === form.level_id);
 
   function showNotice(type: Notice["type"], message: string) {
     setNotice({ type, message });
@@ -186,7 +215,7 @@ export default function UsersPage() {
         ...current,
         [created.id]: { email: submittedEmail, password: submittedPassword },
       }));
-      setForm({ full_name: "", email: "", password: "", course_id: "", subject_ids: [] });
+      setForm({ full_name: "", email: "", password: "", course_id: "", level_id: "", subject_ids: [] });
       setPage(1);
       await teachersQuery.mutate();
       showNotice("success", "Teacher added successfully.");
@@ -438,6 +467,7 @@ export default function UsersPage() {
               onChange={(event) => setForm((current) => ({
                 ...current,
                 course_id: event.target.value,
+                level_id: "",
                 subject_ids: [],
               }))}
               className="h-10 rounded-lg border border-input bg-background px-3 text-sm outline-none focus:ring-2 focus:ring-ring"
@@ -448,15 +478,35 @@ export default function UsersPage() {
               ))}
             </select>
           </label>
+          <label className="flex flex-col gap-1.5 text-sm font-medium text-foreground">
+            Level
+            <select
+              value={form.level_id}
+              disabled={!selectedCourse || selectedCourseLevels.length === 0}
+              onChange={(event) => setForm((current) => ({
+                ...current,
+                level_id: event.target.value,
+                subject_ids: [],
+              }))}
+              className="h-10 rounded-lg border border-input bg-background px-3 text-sm outline-none focus:ring-2 focus:ring-ring disabled:opacity-60"
+            >
+              <option value="">Select a level</option>
+              {selectedCourseLevels.map((level) => (
+                <option key={level.id} value={level.id}>{level.name}</option>
+              ))}
+            </select>
+          </label>
           <fieldset className="rounded-xl border border-border p-3">
             <legend className="px-1 text-sm font-medium text-foreground">Subjects</legend>
             {!selectedCourse ? (
               <p className="text-sm text-muted-foreground">Select a course first.</p>
             ) : selectedCourse.subjects.length === 0 ? (
               <p className="text-sm text-muted-foreground">This course has no subjects yet.</p>
+            ) : !selectedLevel ? (
+              <p className="text-sm text-muted-foreground">Select a level next.</p>
             ) : (
-              <div className="flex max-h-28 flex-wrap gap-2 overflow-y-auto">
-                {selectedCourse.subjects.map((subject) => {
+              <div className="flex max-h-48 flex-wrap gap-2 overflow-y-auto">
+                {selectedLevel.subjects.map((subject) => {
                   const checked = form.subject_ids.includes(subject.id);
                   return (
                     <label key={subject.id} className={`cursor-pointer rounded-full border px-3 py-1.5 text-xs font-semibold transition ${checked ? "border-primary bg-primary/10 text-primary" : "border-border text-muted-foreground hover:border-primary/40"}`}>
@@ -503,7 +553,7 @@ export default function UsersPage() {
             </Button>
           </div>
           <p className="text-xs text-muted-foreground sm:col-span-2">Use at least 12 characters with uppercase, lowercase, and a number.</p>
-          <Button disabled={busy || !form.full_name.trim() || !form.email.trim() || !validTemporaryPassword(form.password) || !form.course_id || form.subject_ids.length === 0} onClick={add}>
+          <Button disabled={busy || !form.full_name.trim() || !form.email.trim() || !validTemporaryPassword(form.password) || !form.course_id || !form.level_id || form.subject_ids.length === 0} onClick={add}>
             {busy ? "Adding…" : "Add teacher"}
           </Button>
           {loadError && (
@@ -731,20 +781,27 @@ export default function UsersPage() {
                           No subjects in this course.
                         </p>
                       ) : (
-                        <div className="flex flex-col gap-1">
-                          {course.subjects.map((subject) => (
-                            <label
-                              key={subject.id}
-                              className="flex cursor-pointer items-center gap-2.5 rounded-lg px-2 py-1.5 hover:bg-accent"
-                            >
-                              <input
-                                type="checkbox"
-                                checked={assignedSubjects.has(subject.id)}
-                                onChange={() => toggleSubject(subject.id)}
-                                className="h-4 w-4 rounded border-input accent-primary"
-                              />
-                              <span className="text-sm text-foreground">{subject.name}</span>
-                            </label>
+                        <div className="flex flex-col gap-3">
+                          {subjectsByLevel(course.subjects).map(([levelId, levelName, subjects]) => (
+                            <div key={levelId} className="rounded-lg border border-border/70 p-2">
+                              <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                                {levelName}
+                              </p>
+                              {subjects.map((subject) => (
+                                <label
+                                  key={subject.id}
+                                  className="flex cursor-pointer items-center gap-2.5 rounded-lg px-2 py-1.5 hover:bg-accent"
+                                >
+                                  <input
+                                    type="checkbox"
+                                    checked={assignedSubjects.has(subject.id)}
+                                    onChange={() => toggleSubject(subject.id)}
+                                    className="h-4 w-4 rounded border-input accent-primary"
+                                  />
+                                  <span className="text-sm text-foreground">{subject.name}</span>
+                                </label>
+                              ))}
+                            </div>
                           ))}
                         </div>
                       )}

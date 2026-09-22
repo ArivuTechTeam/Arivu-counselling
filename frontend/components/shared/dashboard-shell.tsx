@@ -316,11 +316,30 @@ function NavRow({
 }
 
 function InstitutionPrimaryAction() {
-  const { data: courses } = useCourses();
+  const { data: courses, error } = useCourses();
+  if (courses === undefined && !error) {
+    return (
+      <>
+        <span
+          aria-hidden="true"
+          className="h-9 w-9 animate-pulse rounded-lg bg-muted sm:hidden"
+        />
+        <span
+          aria-hidden="true"
+          className="hidden h-9 w-28 animate-pulse rounded-lg bg-muted sm:inline-block"
+        />
+      </>
+    );
+  }
   const setupComplete = Boolean(
     courses?.length && courses.some((course) => course.subjects.length > 0),
   );
-  const action = setupComplete
+  const action = error
+    ? {
+        label: "Manage courses",
+        href: "/dashboard/institution-admin/courses",
+      }
+    : setupComplete
     ? {
         label: "Add teacher",
         href: "/dashboard/institution-admin/users#add-teacher",

@@ -21,7 +21,7 @@ import binascii
 from collections import Counter
 from datetime import datetime, timedelta, timezone
 from typing import Callable, Literal
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field
@@ -31,6 +31,7 @@ from app.lib.api_errors import auth_provisioning_error, public_error
 from app.lib.supabase import get_service_client
 from app.lib.storage import delete_bytes, upload_bytes
 from app.services.account_deletion import erase_account_data
+from app.services.catalog import active_catalog_subject_ids, provision_catalog_subject
 from app.services.teacher_access import replace_teacher_subjects
 
 router = APIRouter(prefix="/api/v1", tags=["admin"])
@@ -117,6 +118,10 @@ class TenantOption(StrictApiResponse):
 
 class CreatedResult(StrictApiResponse):
     created: bool
+
+
+class InstitutionCreatedResult(CreatedResult):
+    tenant_id: str
 
 
 class DeletedResult(StrictApiResponse):
@@ -2281,6 +2286,7 @@ class TenantCreate(BaseModel):
     admin_full_name: str | None = None
     admin_email: str | None = None
     admin_password: str | None = Field(default=None, min_length=12, max_length=128)
+    catalog_subject_ids: list[UUID] = Field(default_factory=list, max_length=175)
 
 
 class TenantUpdate(BaseModel):
@@ -2343,13 +2349,21 @@ def _decode_institution_logo(
     return decoded, content_type, INSTITUTION_LOGO_TYPES[content_type]
 
 
-@router.post("/platform/tenants", response_model=CreatedResult)
+@router.post("/platform/tenants", response_model=InstitutionCreatedResult)
 def onboard_institution(
     body: TenantCreate, profile: CurrentProfile = Depends(get_current_profile)
 ) -> dict:
     """Super-admin onboards a new institution (Stage 1 of the workflow)."""
     _require_super(profile)
     service = get_service_client()
+    catalog_subject_ids = list(dict.fromkeys(map(str, body.catalog_subject_ids)))
+    if catalog_subject_ids:
+        active_subject_ids = active_catalog_subject_ids(service, catalog_subject_ids)
+        if active_subject_ids != set(catalog_subject_ids):
+            raise HTTPException(
+                status_code=400,
+                detail="One or more selected course offerings are no longer available.",
+            )
     logo = _decode_institution_logo(
         logo_data=body.logo_data,
         content_type=body.logo_content_type,
@@ -2446,6 +2460,7 @@ def onboard_institution(
                 exception=exc,
             ) from exc
 
+    provisioned_user_id: str | None = None
     if body.admin_email and body.admin_password:
         try:
             u = service.auth.admin.create_user(
@@ -2470,6 +2485,7 @@ def onboard_institution(
                 role="institution_admin",
                 full_name=body.admin_full_name or "",
             )
+            provisioned_user_id = str(u.user.id)
         except Exception as exc:  # noqa: BLE001
             rollback_error = None
             if "u" in locals() and u.user:
@@ -2498,7 +2514,45 @@ def onboard_institution(
                 operation="create first institution administrator",
             ) from exc
 
-    return {"created": True}
+    if catalog_subject_ids:
+        try:
+            for catalog_subject_id in catalog_subject_ids:
+                provision_catalog_subject(
+                    service,
+                    tenant_id=str(tenant_id),
+                    catalog_subject_id=catalog_subject_id,
+                )
+        except Exception as exc:  # noqa: BLE001
+            rollback_error = None
+            if provisioned_user_id:
+                try:
+                    _rollback_provisioned_user(service, provisioned_user_id)
+                except Exception as cleanup_exc:  # noqa: BLE001
+                    rollback_error = cleanup_exc
+            try:
+                _rollback_tenant(service, tenant_id)
+            except Exception as cleanup_exc:  # noqa: BLE001
+                rollback_error = rollback_error or cleanup_exc
+            if logo_path:
+                try:
+                    delete_bytes(logo_path)
+                except Exception as cleanup_exc:  # noqa: BLE001
+                    rollback_error = rollback_error or cleanup_exc
+            if rollback_error is not None:
+                raise public_error(
+                    500,
+                    "Institution setup could not be completed cleanly. The tenant has been disabled for operator review.",
+                    operation="roll back institution course setup",
+                    exception=rollback_error,
+                ) from exc
+            raise public_error(
+                400,
+                "The institution was not created because its course offerings could not be saved.",
+                operation="provision institution course offerings",
+                exception=exc,
+            ) from exc
+
+    return {"created": True, "tenant_id": tenant_id}
 
 
 @router.patch("/platform/tenants/{tenant_id}", response_model=TenantDetails)

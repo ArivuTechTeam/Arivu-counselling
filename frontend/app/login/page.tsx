@@ -127,6 +127,7 @@ export default function LoginPage() {
       // the callback page before the profile is created.
       await signInWithGoogle(
         undefined,
+        undefined,
         requestedDestination(),
         branding?.tenant_id,
       );

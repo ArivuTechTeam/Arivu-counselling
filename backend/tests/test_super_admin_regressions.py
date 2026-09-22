@@ -497,7 +497,8 @@ class SuperAdminRegressionTests(unittest.TestCase):
                 SUPER,
             )
 
-        self.assertEqual(created, {"created": True})
+        self.assertTrue(created["created"])
+        self.assertEqual(created["tenant_id"], "tenants-1")
         created_tenant = next(
             row for row in service.tables["tenants"] if row["subdomain"] == "demo-college"
         )
@@ -512,6 +513,81 @@ class SuperAdminRegressionTests(unittest.TestCase):
         payload = service.created_auth_payloads[-1]
         self.assertTrue(payload["user_metadata"]["_backend_provisioning_intent"])
         self.assertTrue(payload["app_metadata"]["provisioned_by_backend"])
+
+    def test_onboard_institution_provisions_selected_catalog_offerings(self) -> None:
+        service = _ProvisionService()
+        subject_ids = [
+            "11111111-1111-4111-8111-111111111111",
+            "22222222-2222-4222-8222-222222222222",
+        ]
+        with (
+            patch("app.api.admin.get_service_client", return_value=service),
+            patch(
+                "app.api.admin.active_catalog_subject_ids",
+                return_value=set(subject_ids),
+            ),
+            patch("app.api.admin.provision_catalog_subject") as provision,
+        ):
+            created = onboard_institution(
+                TenantCreate(
+                    name="Catalog College",
+                    subdomain="catalog-college",
+                    admin_full_name="First Admin",
+                    admin_email="catalog@example.com",
+                    admin_password=temporary_password(),
+                    catalog_subject_ids=subject_ids,
+                ),
+                SUPER,
+            )
+
+        self.assertTrue(created["created"])
+        self.assertEqual(provision.call_count, 2)
+        self.assertEqual(
+            [call.kwargs["catalog_subject_id"] for call in provision.call_args_list],
+            subject_ids,
+        )
+        self.assertTrue(
+            all(
+                call.kwargs["tenant_id"] == created["tenant_id"]
+                for call in provision.call_args_list
+            )
+        )
+
+    def test_onboard_institution_rolls_back_when_catalog_provisioning_fails(self) -> None:
+        service = _ProvisionService()
+        subject_id = "11111111-1111-4111-8111-111111111111"
+        with (
+            patch("app.api.admin.get_service_client", return_value=service),
+            patch(
+                "app.api.admin.active_catalog_subject_ids",
+                return_value={subject_id},
+            ),
+            patch(
+                "app.api.admin.provision_catalog_subject",
+                side_effect=RuntimeError("catalog unavailable"),
+            ),
+        ):
+            with self.assertRaises(HTTPException) as error:
+                onboard_institution(
+                    TenantCreate(
+                        name="Rollback College",
+                        subdomain="rollback-college",
+                        admin_full_name="First Admin",
+                        admin_email="rollback@example.com",
+                        admin_password=temporary_password(),
+                        catalog_subject_ids=[subject_id],
+                    ),
+                    SUPER,
+                )
+
+        self.assertEqual(error.exception.status_code, 400)
+        self.assertFalse(
+            any(
+                row["subdomain"] == "rollback-college"
+                for row in service.tables["tenants"]
+            )
+        )
+        self.assertFalse(service.auth_users)
 
     def test_super_admin_can_reset_institution_admin_temporary_password(self) -> None:
         service = _ProvisionService()

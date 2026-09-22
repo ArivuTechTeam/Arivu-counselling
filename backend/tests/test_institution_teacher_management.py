@@ -164,8 +164,12 @@ class _Service:
                 {"tenant_id": "tenant-b", "teacher_id": "teacher-b", "subject_id": "subject-b"},
             ],
             "subjects": [
-                {"id": "subject-a", "tenant_id": "tenant-a", "course_id": "course-a", "name": "Mathematics"},
-                {"id": "subject-b", "tenant_id": "tenant-b", "course_id": "course-b", "name": "Physics"},
+                {"id": "subject-a", "tenant_id": "tenant-a", "course_id": "course-a", "course_level_id": "level-a", "name": "Mathematics"},
+                {"id": "subject-b", "tenant_id": "tenant-b", "course_id": "course-b", "course_level_id": "level-b", "name": "Physics"},
+            ],
+            "course_levels": [
+                {"id": "level-a", "tenant_id": "tenant-a", "course_id": "course-a", "name": "Level 1", "catalog_level_id": None},
+                {"id": "level-b", "tenant_id": "tenant-b", "course_id": "course-b", "name": "Level 1", "catalog_level_id": None},
             ],
             "courses": [
                 {"id": "course-a", "tenant_id": "tenant-a", "name": "First Year"},
@@ -260,7 +264,7 @@ class InstitutionTeacherManagementTests(unittest.TestCase):
         self.assertEqual(len(courses), 1)
         self.assertEqual(courses[0]["name"], "First Year")
         self.assertEqual(courses[0]["student_count"], 1)
-        self.assertEqual(courses[0]["subjects"], [{"id": "subject-a", "name": "Mathematics"}])
+        self.assertEqual(courses[0]["subjects"][0]["id"], "subject-a")
 
     def test_course_listing_batches_subjects_in_one_query(self) -> None:
         self.service.tables["courses"].extend(
@@ -271,8 +275,14 @@ class InstitutionTeacherManagementTests(unittest.TestCase):
         )
         self.service.tables["subjects"].extend(
             [
-                {"id": "subject-c", "tenant_id": "tenant-a", "course_id": "course-c", "name": "Tax"},
-                {"id": "subject-d", "tenant_id": "tenant-a", "course_id": "course-d", "name": "Audit"},
+                {"id": "subject-c", "tenant_id": "tenant-a", "course_id": "course-c", "course_level_id": "level-c", "name": "Tax"},
+                {"id": "subject-d", "tenant_id": "tenant-a", "course_id": "course-d", "course_level_id": "level-d", "name": "Audit"},
+            ]
+        )
+        self.service.tables["course_levels"].extend(
+            [
+                {"id": "level-c", "tenant_id": "tenant-a", "course_id": "course-c", "name": "Level 1", "catalog_level_id": None},
+                {"id": "level-d", "tenant_id": "tenant-a", "course_id": "course-d", "name": "Level 1", "catalog_level_id": None},
             ]
         )
         self.service.queries.clear()
@@ -284,8 +294,20 @@ class InstitutionTeacherManagementTests(unittest.TestCase):
         self.assertEqual(self.service.queries.count("subjects"), 1)
         self.assertEqual(
             self.service.queries,
-            ["courses", "subjects", "enrollments", "profiles"],
+            ["courses", "course_levels", "subjects", "enrollments", "profiles"],
         )
+
+    def test_course_listing_preserves_catalog_level_for_teacher_assignment(self) -> None:
+        self.service.tables["subjects"][0]["catalog_subject_id"] = "catalog-subject-a"
+        self.service.tables["course_levels"][0]["catalog_level_id"] = "catalog-level-a"
+
+        with patch("app.api.academics.get_service_client", return_value=self.service):
+            courses = list_courses(self.profile)
+
+        subject = courses[0]["subjects"][0]
+        self.assertEqual(subject["catalog_subject_id"], "catalog-subject-a")
+        self.assertEqual(subject["catalog_level_id"], "catalog-level-a")
+        self.assertEqual(subject["level_name"], "Level 1")
 
     def test_teacher_overview_reuses_content_counts_when_no_variant_exists(self) -> None:
         self.service.tables.update(

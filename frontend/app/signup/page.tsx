@@ -8,7 +8,11 @@ import type { AuthError } from "@supabase/supabase-js";
 import { GoogleAuthButton } from "@/components/auth/google-auth-button";
 import { SplitText } from "@/components/shared/split-text";
 import { Brand } from "@/components/ui/brand";
-import { getInstitutionBranding, listPublicCourses } from "@/lib/api";
+import {
+  getInstitutionBranding,
+  listPublicCourses,
+  PublicCourse,
+} from "@/lib/api";
 import { initAuthFx } from "@/lib/auth-fx";
 import { signInWithGoogle } from "@/lib/google-auth";
 import { PUBLIC_ENV } from "@/lib/public-env";
@@ -95,7 +99,8 @@ export default function SignupPage() {
   const [password, setPassword] = useState("");
   const [showPw, setShowPw] = useState(false);
   const [courseId, setCourseId] = useState("");
-  const [courses, setCourses] = useState<{ id: string; name: string }[]>([]);
+  const [courseLevelId, setCourseLevelId] = useState("");
+  const [courses, setCourses] = useState<PublicCourse[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -151,8 +156,8 @@ export default function SignupPage() {
       setError("Please fill in your name, email and password.");
       return;
     }
-    if (!courseId) {
-      setError("Please select your course.");
+    if (!courseId || !courseLevelId) {
+      setError("Please select your course and level.");
       return;
     }
     setLoading(true);
@@ -166,6 +171,7 @@ export default function SignupPage() {
           // The database derives the tenant from this course and always creates
           // a student. It ignores browser-supplied role/tenant metadata.
           course_id: courseId,
+          course_level_id: courseLevelId,
         },
       },
     });
@@ -201,7 +207,7 @@ export default function SignupPage() {
       // for it after Google sign-in when they haven't — the database
       // callback validates whichever course arrives and derives the tenant
       // before creating a student profile.
-      await signInWithGoogle(courseId, destination, tenantId);
+      await signInWithGoogle(courseId, courseLevelId, destination, tenantId);
     } catch {
       setError("Google sign-in could not start. Please try again.");
       setGoogleLoading(false);
@@ -385,10 +391,38 @@ export default function SignupPage() {
                 <label className="field-label" htmlFor="signup-course">Course <span className="req">*</span></label>
                 <div className="field-box">
                   <span className="field-icon"><BookIcon /></span>
-                  <select id="signup-course" className="field-input" value={courseId} onChange={(e) => setCourseId(e.target.value)}>
+                  <select
+                    id="signup-course"
+                    className="field-input"
+                    value={courseId}
+                    onChange={(e) => {
+                      setCourseId(e.target.value);
+                      setCourseLevelId("");
+                    }}
+                  >
                     <option value="">Select your course…</option>
                     {courses.map((c) => (
                       <option key={c.id} value={c.id}>{c.name}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              <div className="field">
+                <label className="field-label" htmlFor="signup-level">Level <span className="req">*</span></label>
+                <div className="field-box">
+                  <span className="field-icon"><BookIcon /></span>
+                  <select
+                    id="signup-level"
+                    className="field-input"
+                    value={courseLevelId}
+                    onChange={(e) => setCourseLevelId(e.target.value)}
+                    disabled={!courseId}
+                    required
+                  >
+                    <option value="">{courseId ? "Select your level…" : "Select a course first…"}</option>
+                    {(courses.find((course) => course.id === courseId)?.levels ?? []).map((level) => (
+                      <option key={level.id} value={level.id}>{level.name}</option>
                     ))}
                   </select>
                 </div>
