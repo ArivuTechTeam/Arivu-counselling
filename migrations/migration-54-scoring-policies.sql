@@ -15,8 +15,31 @@ create table if not exists public.scoring_policies (
   unique (tenant_id, name),
   unique (id, tenant_id)
 );
+-- `create table if not exists` does not add newer constraints to the table
+-- created by the earlier teammate rollout. Materialize the composite keys before
+-- any tenant-qualified foreign key references them.
+create unique index if not exists uq_profiles_id_tenant
+  on public.profiles(id, tenant_id);
+create unique index if not exists uq_scoring_policies_id_tenant
+  on public.scoring_policies(id, tenant_id);
+create unique index if not exists uq_scoring_policies_tenant_name
+  on public.scoring_policies(tenant_id, name);
 create index if not exists idx_scoring_policies_tenant
   on public.scoring_policies(tenant_id);
+
+do $$
+begin
+  if not exists (
+    select 1 from pg_constraint
+    where conname = 'scoring_policies_creator_tenant_fk'
+      and conrelid = 'public.scoring_policies'::regclass
+  ) then
+    alter table public.scoring_policies
+      add constraint scoring_policies_creator_tenant_fk
+      foreign key (created_by, tenant_id)
+      references public.profiles(id, tenant_id) on delete set null (created_by);
+  end if;
+end $$;
 
 alter table public.quiz_sets add column if not exists scoring_policy_id uuid;
 do $$
@@ -45,6 +68,7 @@ grant select, insert, update, delete on public.scoring_policies to service_role;
 drop policy if exists "read own tenant scoring policies" on public.scoring_policies;
 create policy "read own tenant scoring policies" on public.scoring_policies
   for select using (tenant_id = current_tenant_id() or is_super_admin());
+drop policy if exists "staff manage scoring policies" on public.scoring_policies;
 drop policy if exists "institution admins manage scoring policies" on public.scoring_policies;
 create policy "institution admins manage scoring policies" on public.scoring_policies
   for all using (

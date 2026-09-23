@@ -85,6 +85,30 @@ await db.exec(`
     started_at timestamptz,
     question_snapshot jsonb
   );
+  -- Earlier teammate-branch scoring and paper-profile shapes. These deliberately
+  -- omit tenant-qualified keys and make paper profiles course-wide.
+  create table public.scoring_policies (
+    id uuid primary key default gen_random_uuid(),
+    tenant_id uuid not null references public.tenants(id),
+    name text not null,
+    rules jsonb not null default '{}'::jsonb,
+    created_by uuid references public.profiles(id),
+    created_at timestamptz not null default now(),
+    unique (tenant_id, name)
+  );
+  create table public.paper_profiles (
+    id uuid primary key default gen_random_uuid(),
+    tenant_id uuid not null references public.tenants(id),
+    course_id uuid not null references public.courses(id),
+    exam_body text,
+    level text,
+    paper text,
+    assessment_year text,
+    framework text,
+    created_by uuid references public.profiles(id),
+    created_at timestamptz not null default now(),
+    unique (tenant_id, course_id)
+  );
   -- Earlier teammate-branch shape: these tables already exist but batches are
   -- course-wide and none of the foreign keys are tenant-qualified.
   create table public.batches (
@@ -125,6 +149,30 @@ await db.exec(`
     unique (tenant_id, quiz_set_id, batch_id)
   );
   create table public.practice_sessions (id uuid primary key default gen_random_uuid());
+
+  insert into public.tenants(id, name)
+  values ('00000000-0000-4000-8000-000000000001', 'Legacy tenant');
+  insert into public.courses(id, tenant_id, name)
+  values (
+    '00000000-0000-4000-8000-000000000002',
+    '00000000-0000-4000-8000-000000000001',
+    'Legacy course'
+  );
+  insert into public.course_levels(id, tenant_id, course_id, name)
+  values (
+    '00000000-0000-4000-8000-000000000003',
+    '00000000-0000-4000-8000-000000000001',
+    '00000000-0000-4000-8000-000000000002',
+    'Only level'
+  );
+  insert into public.scoring_policies(tenant_id, name)
+  values ('00000000-0000-4000-8000-000000000001', 'Legacy scoring');
+  insert into public.paper_profiles(tenant_id, course_id, exam_body)
+  values (
+    '00000000-0000-4000-8000-000000000001',
+    '00000000-0000-4000-8000-000000000002',
+    'Legacy body'
+  );
 `);
 
 for (const migration of migrations) await db.exec(migration);
@@ -142,6 +190,12 @@ for (const constraint of [
   "batch_memberships_profile_tenant_fk",
   "quiz_assignments_quiz_tenant_fk",
   "quiz_assignments_batch_tenant_fk",
+  "scoring_policies_creator_tenant_fk",
+  "quiz_sets_scoring_policy_tenant_fk",
+  "course_levels_exam_policy_tenant_fk",
+  "paper_profiles_course_tenant_fk",
+  "paper_profiles_level_scope_fk",
+  "paper_profiles_creator_tenant_fk",
 ]) {
   assert.equal(
     (await db.query("select count(*)::int as count from pg_constraint where conname=$1", [constraint])).rows[0].count,
@@ -149,6 +203,12 @@ for (const constraint of [
     `${constraint} must repair the legacy table shape`,
   );
 }
+assert.equal(
+  (await db.query(`select course_level_id::text as course_level_id
+    from public.paper_profiles where exam_body='Legacy body'`)).rows[0].course_level_id,
+  "00000000-0000-4000-8000-000000000003",
+  "legacy paper profiles must be upgraded to their sole course level",
+);
 
 const uuid = () => crypto.randomUUID();
 const t1 = uuid(), t2 = uuid(), admin = uuid(), student = uuid();

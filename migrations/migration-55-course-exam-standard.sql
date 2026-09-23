@@ -7,6 +7,11 @@
 -- negative marking, and it is only consulted when SCORING_POLICIES_ENABLED is on.
 begin;
 
+-- Defensive for databases where the older scoring-policies migration created
+-- the table before its tenant-qualified key was introduced.
+create unique index if not exists uq_scoring_policies_id_tenant
+  on public.scoring_policies(id, tenant_id);
+
 alter table public.course_levels add column if not exists exam_scoring_policy_id uuid;
 do $$
 begin
