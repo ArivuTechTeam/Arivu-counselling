@@ -3,8 +3,26 @@
 -- Browser roles remain denied; all application writes use the tenant-scoped API.
 begin;
 
+do $$
+begin
+  if to_regclass('public.course_levels') is null then
+    raise exception 'Migration 47 must be applied before migration 52: course_levels is missing';
+  end if;
+  if not exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'course_levels'
+      and column_name = 'course_id'
+  ) then
+    raise exception 'Migration 47 must be applied before migration 52: course_levels.course_id is missing';
+  end if;
+end $$;
+
 create unique index if not exists uq_courses_id_tenant
   on public.courses(id, tenant_id);
+create unique index if not exists uq_profiles_id_tenant
+  on public.profiles(id, tenant_id);
+create unique index if not exists uq_course_levels_id_tenant_course
+  on public.course_levels(id, tenant_id, course_id);
 create unique index if not exists uq_quiz_sets_id_tenant
   on public.quiz_sets(id, tenant_id);
 
@@ -35,6 +53,70 @@ create table if not exists public.batches (
   constraint batches_dates_check
     check (starts_on is null or ends_on is null or starts_on <= ends_on)
 );
+
+-- Upgrade the earlier branch shape, which created course-wide batches without
+-- course_level_id. Backfill only when a course has exactly one possible level;
+-- never guess when several levels exist.
+alter table public.batches add column if not exists course_level_id uuid;
+with single_level as (
+  select tenant_id, course_id, (array_agg(id order by id))[1] as course_level_id
+  from public.course_levels
+  group by tenant_id, course_id
+  having count(*) = 1
+)
+update public.batches batch
+set course_level_id = single_level.course_level_id
+from single_level
+where batch.tenant_id = single_level.tenant_id
+  and batch.course_id = single_level.course_id
+  and batch.course_level_id is null;
+
+do $$
+begin
+  if exists (select 1 from public.batches where course_level_id is null) then
+    raise exception using
+      message = 'Existing batches need an explicit course_level_id before migration 52 can continue',
+      hint = 'Map every remaining batch to a level, then rerun migration 52.';
+  end if;
+end $$;
+
+alter table public.batches alter column course_level_id set not null;
+create unique index if not exists uq_batches_id_tenant
+  on public.batches(id, tenant_id);
+create unique index if not exists uq_batches_tenant_level_name
+  on public.batches(tenant_id, course_level_id, name);
+-- The earlier branch allowed only one same-named batch across the whole course.
+-- Level-aware uniqueness above is the intended rule.
+alter table public.batches
+  drop constraint if exists batches_tenant_id_course_id_name_key;
+
+do $$
+begin
+  if not exists (
+    select 1 from pg_constraint where conrelid = 'public.batches'::regclass
+      and conname = 'batches_course_tenant_fk'
+  ) then
+    alter table public.batches add constraint batches_course_tenant_fk
+      foreign key (course_id, tenant_id)
+      references public.courses(id, tenant_id) on delete cascade;
+  end if;
+  if not exists (
+    select 1 from pg_constraint where conrelid = 'public.batches'::regclass
+      and conname = 'batches_level_scope_fk'
+  ) then
+    alter table public.batches add constraint batches_level_scope_fk
+      foreign key (course_level_id, tenant_id, course_id)
+      references public.course_levels(id, tenant_id, course_id) on delete cascade;
+  end if;
+  if not exists (
+    select 1 from pg_constraint where conrelid = 'public.batches'::regclass
+      and conname = 'batches_creator_tenant_fk'
+  ) then
+    alter table public.batches add constraint batches_creator_tenant_fk
+      foreign key (created_by, tenant_id)
+      references public.profiles(id, tenant_id) on delete set null (created_by);
+  end if;
+end $$;
 create index if not exists idx_batches_tenant_level
   on public.batches(tenant_id, course_id, course_level_id, status);
 
@@ -60,6 +142,25 @@ create table if not exists public.batch_memberships (
   constraint batch_memberships_dates_check
     check (valid_from is null or valid_to is null or valid_from <= valid_to)
 );
+do $$
+begin
+  if not exists (
+    select 1 from pg_constraint where conrelid = 'public.batch_memberships'::regclass
+      and conname = 'batch_memberships_batch_tenant_fk'
+  ) then
+    alter table public.batch_memberships add constraint batch_memberships_batch_tenant_fk
+      foreign key (batch_id, tenant_id)
+      references public.batches(id, tenant_id) on delete cascade;
+  end if;
+  if not exists (
+    select 1 from pg_constraint where conrelid = 'public.batch_memberships'::regclass
+      and conname = 'batch_memberships_profile_tenant_fk'
+  ) then
+    alter table public.batch_memberships add constraint batch_memberships_profile_tenant_fk
+      foreign key (profile_id, tenant_id)
+      references public.profiles(id, tenant_id) on delete cascade;
+  end if;
+end $$;
 create index if not exists idx_batch_memberships_member
   on public.batch_memberships(tenant_id, profile_id, active);
 create index if not exists idx_batch_memberships_batch
@@ -89,6 +190,33 @@ create table if not exists public.quiz_assignments (
   constraint quiz_assignments_window_check
     check (available_from is null or available_to is null or available_from <= available_to)
 );
+do $$
+begin
+  if not exists (
+    select 1 from pg_constraint where conrelid = 'public.quiz_assignments'::regclass
+      and conname = 'quiz_assignments_quiz_tenant_fk'
+  ) then
+    alter table public.quiz_assignments add constraint quiz_assignments_quiz_tenant_fk
+      foreign key (quiz_set_id, tenant_id)
+      references public.quiz_sets(id, tenant_id) on delete cascade;
+  end if;
+  if not exists (
+    select 1 from pg_constraint where conrelid = 'public.quiz_assignments'::regclass
+      and conname = 'quiz_assignments_batch_tenant_fk'
+  ) then
+    alter table public.quiz_assignments add constraint quiz_assignments_batch_tenant_fk
+      foreign key (batch_id, tenant_id)
+      references public.batches(id, tenant_id) on delete cascade;
+  end if;
+  if not exists (
+    select 1 from pg_constraint where conrelid = 'public.quiz_assignments'::regclass
+      and conname = 'quiz_assignments_creator_tenant_fk'
+  ) then
+    alter table public.quiz_assignments add constraint quiz_assignments_creator_tenant_fk
+      foreign key (created_by, tenant_id)
+      references public.profiles(id, tenant_id) on delete set null (created_by);
+  end if;
+end $$;
 create index if not exists idx_quiz_assignments_batch
   on public.quiz_assignments(tenant_id, batch_id, status);
 create index if not exists idx_quiz_assignments_quiz
@@ -111,6 +239,7 @@ grant select, insert, update, delete on table public.batches,
   public.batch_memberships, public.quiz_assignments to service_role;
 
 drop policy if exists "read own tenant batches" on public.batches;
+drop policy if exists "staff manage batches" on public.batches;
 create policy "read own tenant batches" on public.batches
   for select to authenticated
   using (tenant_id = (select public.current_tenant_id()) or (select public.is_super_admin()));
@@ -123,6 +252,8 @@ create policy "institution admins manage batches" on public.batches
               and (select public.current_role_name()) = 'institution_admin');
 
 drop policy if exists "read own membership or admin" on public.batch_memberships;
+drop policy if exists "read own membership or staff" on public.batch_memberships;
+drop policy if exists "staff manage memberships" on public.batch_memberships;
 create policy "read own membership or admin" on public.batch_memberships
   for select to authenticated
   using (tenant_id = (select public.current_tenant_id()) and
@@ -137,6 +268,7 @@ create policy "institution admins manage memberships" on public.batch_membership
               and (select public.current_role_name()) = 'institution_admin');
 
 drop policy if exists "staff read assignments" on public.quiz_assignments;
+drop policy if exists "staff manage assignments" on public.quiz_assignments;
 create policy "staff read assignments" on public.quiz_assignments
   for select to authenticated
   using (tenant_id = (select public.current_tenant_id()) and (select public.is_staff()));

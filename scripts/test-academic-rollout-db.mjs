@@ -85,11 +85,70 @@ await db.exec(`
     started_at timestamptz,
     question_snapshot jsonb
   );
+  -- Earlier teammate-branch shape: these tables already exist but batches are
+  -- course-wide and none of the foreign keys are tenant-qualified.
+  create table public.batches (
+    id uuid primary key default gen_random_uuid(),
+    tenant_id uuid not null references public.tenants(id),
+    course_id uuid not null references public.courses(id),
+    name text not null,
+    exam_session text,
+    starts_on date,
+    ends_on date,
+    status text not null default 'active',
+    created_by uuid references public.profiles(id),
+    created_at timestamptz not null default now(),
+    unique (tenant_id, course_id, name)
+  );
+  create table public.batch_memberships (
+    id uuid primary key default gen_random_uuid(),
+    tenant_id uuid not null references public.tenants(id),
+    batch_id uuid not null references public.batches(id),
+    profile_id uuid not null references public.profiles(id),
+    membership_role text not null default 'student',
+    active boolean not null default true,
+    valid_from date,
+    valid_to date,
+    created_at timestamptz not null default now(),
+    unique (tenant_id, batch_id, profile_id)
+  );
+  create table public.quiz_assignments (
+    id uuid primary key default gen_random_uuid(),
+    tenant_id uuid not null references public.tenants(id),
+    quiz_set_id uuid not null references public.quiz_sets(id),
+    batch_id uuid not null references public.batches(id),
+    available_from timestamptz,
+    available_to timestamptz,
+    status text not null default 'active',
+    created_by uuid references public.profiles(id),
+    created_at timestamptz not null default now(),
+    unique (tenant_id, quiz_set_id, batch_id)
+  );
   create table public.practice_sessions (id uuid primary key default gen_random_uuid());
 `);
 
 for (const migration of migrations) await db.exec(migration);
 for (const migration of migrations) await db.exec(migration); // rerunnable rollout
+
+assert.equal(
+  (await db.query(`select is_nullable from information_schema.columns
+    where table_schema='public' and table_name='batches' and column_name='course_level_id'`)).rows[0].is_nullable,
+  "NO",
+  "legacy batches must be upgraded to require a course level",
+);
+for (const constraint of [
+  "batches_level_scope_fk",
+  "batch_memberships_batch_tenant_fk",
+  "batch_memberships_profile_tenant_fk",
+  "quiz_assignments_quiz_tenant_fk",
+  "quiz_assignments_batch_tenant_fk",
+]) {
+  assert.equal(
+    (await db.query("select count(*)::int as count from pg_constraint where conname=$1", [constraint])).rows[0].count,
+    1,
+    `${constraint} must repair the legacy table shape`,
+  );
+}
 
 const uuid = () => crypto.randomUUID();
 const t1 = uuid(), t2 = uuid(), admin = uuid(), student = uuid();

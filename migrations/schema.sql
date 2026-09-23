@@ -123,6 +123,8 @@ create table course_levels (
   created_at timestamptz not null default now(),
   unique (id, tenant_id, course_id)
 );
+create unique index if not exists uq_course_levels_id_tenant_course
+  on course_levels(id, tenant_id, course_id);
 create index idx_course_levels_tenant_course on course_levels(tenant_id, course_id);
 create unique index uq_course_levels_tenant_catalog
   on course_levels(tenant_id, catalog_level_id) where catalog_level_id is not null;

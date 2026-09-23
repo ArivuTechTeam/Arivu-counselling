@@ -12,6 +12,9 @@ create table if not exists public.course_levels (
   created_at timestamptz not null default now(),
   unique (id, tenant_id, course_id)
 );
+-- `create table if not exists` does not repair an older table definition.
+create unique index if not exists uq_course_levels_id_tenant_course
+  on public.course_levels(id, tenant_id, course_id);
 
 create index if not exists idx_course_levels_tenant_course
   on public.course_levels(tenant_id, course_id);
