@@ -19,7 +19,7 @@ from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from postgrest.exceptions import APIError
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from app.lib.auth import CurrentProfile, get_current_profile
 from app.lib.api_errors import public_error
@@ -206,6 +206,53 @@ class StartPractice(BaseModel):
     difficulty: str | None = None
 
 
+class PracticeResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class PracticeQuestionOut(PracticeResponse):
+    id: str
+    type: str
+    question_text: str
+    options: Any = None
+    marks: float | None = None
+    suggested_seconds: int | None = None
+
+
+class PracticeSessionOut(PracticeResponse):
+    session_id: str | None = None
+    attempt_id: str
+    status: Literal["in_progress"]
+    questions: list[PracticeQuestionOut]
+    autosave_state: dict[str, Any]
+    time_limit_minutes: float | None = None
+    started_at: datetime | None = None
+    deadline_at: datetime | None = None
+    remaining_seconds: int | None = None
+
+
+class PracticeResultQuestionOut(PracticeQuestionOut):
+    correct_answer: Any
+    explanation: str | None = None
+    student_answer: Any = None
+    is_correct: bool | None = None
+    marks_awarded: float | None = None
+
+
+class PracticeResultOut(PracticeResponse):
+    attempt_id: str
+    status: Literal["graded"]
+    quiz_title: str
+    total_score: float
+    max_score: float
+    challenge_token: str | None = None
+    results: list[PracticeResultQuestionOut]
+
+
+class PracticeAutosaveOut(PracticeResponse):
+    saved: bool
+
+
 @router.get("/practice/subjects")
 def practice_subjects(
     profile: CurrentProfile = Depends(get_current_profile),
@@ -252,7 +299,7 @@ def preview_practice(
     return {"requested_count": body.count, "question_count": len(ids)}
 
 
-@router.post("/practice/sessions")
+@router.post("/practice/sessions", response_model=PracticeSessionOut)
 def start_practice(
     body: StartPractice, profile: CurrentProfile = Depends(get_current_profile)
 ) -> dict:
@@ -307,7 +354,10 @@ def start_practice(
     }
 
 
-@router.get("/practice/sessions/{session_id}")
+@router.get(
+    "/practice/sessions/{session_id}",
+    response_model=PracticeSessionOut | PracticeResultOut,
+)
 def get_practice(
     session_id: str, profile: CurrentProfile = Depends(get_current_profile)
 ) -> dict:
@@ -372,7 +422,10 @@ class AutosavePractice(BaseModel):
     answers: dict[str, Any]
 
 
-@router.patch("/practice/sessions/{session_id}/autosave")
+@router.patch(
+    "/practice/sessions/{session_id}/autosave",
+    response_model=PracticeAutosaveOut,
+)
 def autosave_practice(
     session_id: str,
     body: AutosavePractice,
@@ -400,7 +453,10 @@ def autosave_practice(
     return {"saved": True}
 
 
-@router.post("/practice/sessions/{session_id}/submit")
+@router.post(
+    "/practice/sessions/{session_id}/submit",
+    response_model=PracticeResultOut,
+)
 def submit_practice(
     session_id: str,
     body: SubmitPractice,

@@ -17,6 +17,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 
 from app.lib.auth import CurrentProfile, get_current_profile
+from app.lib.role_checks import require_teacher
 from app.lib.api_errors import public_error
 from app.lib.config import get_settings
 from app.lib.supabase import get_service_client
@@ -39,15 +40,6 @@ from app.services.student_access import student_has_graded_question
 from app.services.tutor import explain_question
 
 router = APIRouter(prefix="/api/v1/questions", tags=["questions"])
-
-def _require_teacher(profile: CurrentProfile) -> None:
-    # Teacher-only by design — see .claude/CLAUDE.md and the technical document.
-    if profile.role != "teacher":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only teachers can review questions.",
-        )
-
 
 def _assert_teacher_question(
     service, question_id: str, profile: CurrentProfile
@@ -124,7 +116,7 @@ def edit_question(
     body: QuestionEdit,
     profile: CurrentProfile = Depends(get_current_profile),
 ) -> dict:
-    _require_teacher(profile)
+    require_teacher(profile, action="review questions")
     # Only update the fields the teacher actually sent.
     updates = body.model_dump(exclude_unset=True)
     if not updates:
@@ -245,7 +237,7 @@ def approve_question(
     profile: CurrentProfile = Depends(get_current_profile),
     body: QuestionApproval | None = None,
 ) -> dict:
-    _require_teacher(profile)
+    require_teacher(profile, action="review questions")
     service = get_service_client()
     question = (
         service.table("questions")
@@ -299,7 +291,7 @@ def reject_question(
     question_id: str,
     profile: CurrentProfile = Depends(get_current_profile),
 ) -> dict:
-    _require_teacher(profile)
+    require_teacher(profile, action="review questions")
     result = _set_review_status(question_id, profile, "rejected")
     log_event(
         tenant_id=profile.tenant_id,
@@ -317,7 +309,7 @@ def regenerate(
     question_id: str,
     profile: CurrentProfile = Depends(get_current_profile),
 ) -> dict:
-    _require_teacher(profile)
+    require_teacher(profile, action="review questions")
     service = get_service_client()
     _assert_teacher_question(service, question_id, profile)
     enforce_ai_rate_limit(

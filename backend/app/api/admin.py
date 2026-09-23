@@ -27,6 +27,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.lib.auth import CurrentProfile, get_current_profile
+from app.lib.role_checks import require_institution_admin, require_super_admin
 from app.lib.api_errors import auth_provisioning_error, public_error
 from app.lib.supabase import get_service_client
 from app.lib.storage import delete_bytes, upload_bytes
@@ -341,16 +342,6 @@ def _rpc_json(service, function_name: str) -> dict:
     raise RuntimeError(f"{function_name} returned an invalid analytics payload")
 
 
-def _require_admin(profile: CurrentProfile) -> None:
-    if profile.role != "institution_admin":
-        raise HTTPException(status_code=403, detail="Institution admins only.")
-
-
-def _require_super(profile: CurrentProfile) -> None:
-    if profile.role != "super_admin":
-        raise HTTPException(status_code=403, detail="Super admins only.")
-
-
 def _count(service, table: str, tenant_id: str, **filters) -> int:
     q = service.table(table).select("id").eq("tenant_id", tenant_id)
     for k, v in filters.items():
@@ -485,7 +476,7 @@ def list_users(
     profile: CurrentProfile = Depends(get_current_profile),
 ) -> DirectoryPage:
     """Return one tenant-scoped page of institution teachers."""
-    _require_admin(profile)
+    require_institution_admin(profile)
     if page < 1 or page_size < 1 or page_size > ADMIN_DIRECTORY_PAGE_SIZE:
         raise HTTPException(
             status_code=400,
@@ -679,7 +670,7 @@ def create_user(
     body: TeacherCreate, profile: CurrentProfile = Depends(get_current_profile)
 ) -> dict:
     """Create a teacher; students join through the public signup flow."""
-    _require_admin(profile)
+    require_institution_admin(profile)
     _validate_temporary_password(body.password)
     service = get_service_client()
 
@@ -758,7 +749,7 @@ def create_user(
 def delete_user(
     user_id: str, profile: CurrentProfile = Depends(get_current_profile)
 ) -> dict:
-    _require_admin(profile)
+    require_institution_admin(profile)
     service = get_service_client()
     # Only allow deleting a teacher inside the admin's own tenant.
     target = (
@@ -826,7 +817,7 @@ def reset_teacher_temporary_password(
     profile: CurrentProfile = Depends(get_current_profile),
 ) -> TemporaryPasswordResetResult:
     """Set a browser-generated temporary password without returning it."""
-    _require_admin(profile)
+    require_institution_admin(profile)
     _validate_temporary_password(body.password)
     service = get_service_client()
     _assert_tenant_teacher(
@@ -868,7 +859,7 @@ def update_user(
     profile: CurrentProfile = Depends(get_current_profile),
 ) -> dict:
     """Update a tenant teacher's identity and subject/course assignments."""
-    _require_admin(profile)
+    require_institution_admin(profile)
     service = get_service_client()
     existing_profile = _assert_tenant_teacher(
         service, teacher_id=user_id, tenant_id=profile.tenant_id
@@ -1008,7 +999,7 @@ def list_teacher_courses(
     teacher_id: str, profile: CurrentProfile = Depends(get_current_profile)
 ) -> list[dict]:
     """Return courses derived from a teacher's explicit subject assignments."""
-    _require_admin(profile)
+    require_institution_admin(profile)
     service = get_service_client()
     _assert_tenant_teacher(
         service, teacher_id=teacher_id, tenant_id=profile.tenant_id
@@ -1110,7 +1101,7 @@ def list_course_students(
     course_id: str, profile: CurrentProfile = Depends(get_current_profile)
 ) -> dict:
     """Return the tenant-scoped student roster for one course."""
-    _require_admin(profile)
+    require_institution_admin(profile)
     service = get_service_client()
     course = _assert_tenant_course(
         service, course_id=course_id, tenant_id=profile.tenant_id
@@ -1164,7 +1155,7 @@ def get_course_impact(
     course_id: str, profile: CurrentProfile = Depends(get_current_profile)
 ) -> CourseImpact:
     """Describe everything a hard course deletion can remove or disconnect."""
-    _require_admin(profile)
+    require_institution_admin(profile)
     service = get_service_client()
     _assert_tenant_course(service, course_id=course_id, tenant_id=profile.tenant_id)
     subjects = _select_all(
@@ -1257,7 +1248,7 @@ def list_tenants(
     profile: CurrentProfile = Depends(get_current_profile),
 ) -> list[dict]:
     """Institutions (tenants) the super-admin can assign an admin to."""
-    _require_super(profile)
+    require_super_admin(profile)
     if page < 1 or page_size < 1 or page_size > ADMIN_DIRECTORY_PAGE_SIZE:
         raise HTTPException(status_code=400, detail="Invalid directory page.")
     service = get_service_client()
@@ -1280,7 +1271,7 @@ def list_admins(
     profile: CurrentProfile = Depends(get_current_profile),
 ) -> list[dict]:
     """Every institution admin across the platform, with their institution."""
-    _require_super(profile)
+    require_super_admin(profile)
     if page < 1 or page_size < 1 or page_size > ADMIN_DIRECTORY_PAGE_SIZE:
         raise HTTPException(status_code=400, detail="Invalid directory page.")
     service = get_service_client()
@@ -1331,7 +1322,7 @@ def create_admin(
     body: AdminCreate, profile: CurrentProfile = Depends(get_current_profile)
 ) -> dict:
     """Super-admin creates an institution admin (aka principal) for a tenant."""
-    _require_super(profile)
+    require_super_admin(profile)
     _validate_temporary_password(body.password)
     service = get_service_client()
 
@@ -1392,7 +1383,7 @@ def remove_admin(
     user_id: str, profile: CurrentProfile = Depends(get_current_profile)
 ) -> dict:
     """Super-admin removes an institution admin (auth user + profile)."""
-    _require_super(profile)
+    require_super_admin(profile)
     service = get_service_client()
 
     target = (
@@ -1440,7 +1431,7 @@ def reset_admin_temporary_password(
     profile: CurrentProfile = Depends(get_current_profile),
 ) -> TemporaryPasswordResetResult:
     """Replace an institution admin password without ever returning plaintext."""
-    _require_super(profile)
+    require_super_admin(profile)
     _validate_temporary_password(body.password)
     service = get_service_client()
 
@@ -1494,7 +1485,7 @@ def reset_admin_temporary_password(
 def institution_stats(
     profile: CurrentProfile = Depends(get_current_profile),
 ) -> dict:
-    _require_admin(profile)
+    require_institution_admin(profile)
     service = get_service_client()
     t = profile.tenant_id
     return {
@@ -1519,7 +1510,7 @@ async def institution_overview(
     from collections import Counter
     from datetime import date, timedelta
 
-    _require_admin(profile)
+    require_institution_admin(profile)
     t = profile.tenant_id
 
     # Fetch through the shared helper so database failures are surfaced rather
@@ -1950,7 +1941,7 @@ async def institution_analytics(
     from collections import Counter, defaultdict
     from datetime import date, datetime, timedelta
 
-    _require_admin(profile)
+    require_institution_admin(profile)
     t = profile.tenant_id
 
     data = await _gather(
@@ -2270,7 +2261,7 @@ async def institution_analytics(
 
 @router.get("/platform/stats", response_model=PlatformStatsResponse)
 def platform_stats(profile: CurrentProfile = Depends(get_current_profile)) -> dict:
-    _require_super(profile)
+    require_super_admin(profile)
     overview = _rpc_json(get_service_client(), "platform_overview_metrics")
     per_tenant = [
         {
@@ -2303,7 +2294,7 @@ async def platform_overview(
     platform accuracy, a 14-day activity trend, and a per-institution table
     with each institution's key numbers + health. All real data.
     """
-    _require_super(profile)
+    require_super_admin(profile)
 
     def load_overview() -> dict:
         service = get_service_client()
@@ -2335,7 +2326,7 @@ def platform_tenant_offerings(
     profile: CurrentProfile = Depends(get_current_profile),
 ) -> dict:
     """Return an institution's operational Course -> Level -> Subject tree."""
-    _require_super(profile)
+    require_super_admin(profile)
     service = get_service_client()
     tenant = (
         service.table("tenants")
@@ -2432,7 +2423,7 @@ def onboard_institution(
     body: TenantCreate, profile: CurrentProfile = Depends(get_current_profile)
 ) -> dict:
     """Super-admin onboards a new institution (Stage 1 of the workflow)."""
-    _require_super(profile)
+    require_super_admin(profile)
     service = get_service_client()
     catalog_subject_ids = list(dict.fromkeys(map(str, body.catalog_subject_ids)))
     if catalog_subject_ids:
@@ -2640,7 +2631,7 @@ def update_institution(
     profile: CurrentProfile = Depends(get_current_profile),
 ) -> dict:
     """Update safe tenant lifecycle fields; permanent deletion is intentionally absent."""
-    _require_super(profile)
+    require_super_admin(profile)
     logo = _decode_institution_logo(
         logo_data=body.logo_data,
         content_type=body.logo_content_type,
@@ -2733,7 +2724,7 @@ def platform_question_bank(
     profile: CurrentProfile = Depends(get_current_profile),
 ) -> dict:
     """Every question on the platform, grouped by course. Real counts only."""
-    _require_super(profile)
+    require_super_admin(profile)
     return _rpc_json(get_service_client(), "platform_question_bank_metrics")
 
 
@@ -2975,7 +2966,7 @@ def platform_ai_monitoring(
     """AI generation health across the platform: volume, quality by type, pipeline."""
     from datetime import datetime, timezone
 
-    _require_super(profile)
+    require_super_admin(profile)
     payload = _rpc_json(get_service_client(), "platform_ai_monitoring_metrics")
     payload["findings"] = _build_findings(
         total_generated=payload["total_generated"],
@@ -3032,7 +3023,7 @@ async def admin_quiz_sets(
     embedding) instead of several sequential round trips — Postgres resolves
     every join server-side in one request.
     """
-    _require_admin(profile)
+    require_institution_admin(profile)
     if page < 1 or page_size < 1 or page_size > ADMIN_QUIZ_SET_PAGE_SIZE_MAX:
         raise HTTPException(
             status_code=400,
@@ -3171,7 +3162,7 @@ async def admin_teacher_analytics(
     still counts toward the tenant-wide totals, just not toward any
     individual teacher's row).
     """
-    _require_admin(profile)
+    require_institution_admin(profile)
     tenant_id = profile.tenant_id
 
     def _fetch_teachers(client):
@@ -3332,7 +3323,7 @@ async def admin_quiz_set_detail(
     variant -> variant_questions -> questions and variant -> attempts ->
     student/answers joins server-side in one round trip.
     """
-    _require_admin(profile)
+    require_institution_admin(profile)
     tenant_id = profile.tenant_id
 
     # This summary lookup doesn't depend on anything below — and is itself

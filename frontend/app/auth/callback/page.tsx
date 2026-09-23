@@ -53,9 +53,11 @@ export default function AuthCallbackPage() {
       },
     );
     if (completionError) {
+      console.error("Google student signup completion failed", {
+        code: completionError.code ?? "unknown",
+      });
       setError(
-        completionError.message ||
-          "We couldn't finish setting up your student account. Please try again.",
+        "We couldn't finish setting up your student account. Please try again or contact your institution.",
       );
       setSaving(false);
       return;

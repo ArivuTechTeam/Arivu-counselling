@@ -11,10 +11,10 @@ from fastapi import HTTPException, UploadFile
 
 from app.api.extraction import (
     _has_expected_signature,
-    _require_teacher,
     extract_quiz_endpoint,
 )
 from app.lib.auth import CurrentProfile
+from app.lib.role_checks import require_teacher
 from app.services.extraction import ExtractedText, PageSpan
 from app.services.quiz_extraction import _extract_document_content, _merge_questions, _validate_import_candidates, extract_quiz
 
@@ -92,10 +92,10 @@ class _NoSubjectService:
 
 class ExtractionValidationTests(unittest.TestCase):
     def test_extraction_is_teacher_only(self) -> None:
-        _require_teacher(profile())
+        require_teacher(profile())
         for role in ("student", "institution_admin", "super_admin"):
             with self.subTest(role=role), self.assertRaises(HTTPException) as caught:
-                _require_teacher(profile(role))
+                require_teacher(profile(role))
             self.assertEqual(caught.exception.status_code, 403)
 
     def test_supported_file_signatures_are_checked(self) -> None:

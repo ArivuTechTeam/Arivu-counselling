@@ -610,7 +610,10 @@ SUPABASE (dashboard-configured): Postgres + Auth + Storage — settings apply in
 - `GEMINI_API_KEY` (+ optional `GEMINI_MODEL`, `GEMINI_FALLBACK_MODEL`, `GEMINI_BLUEPRINT_MODEL`, `GEMINI_BASE_URL`)
 - Stage routing: `AI_FALLBACK_PROVIDER`, `TOPIC_ANALYSIS_PROVIDER`, `QUIZ_GENERATION_PROVIDER`, `TYPED_QUIZ_EXTRACTION_PROVIDER`, `QUESTION_VERIFICATION_PROVIDER`, `QUESTION_REGENERATION_PROVIDER`, and `VISION_EXTRACTION_PROVIDER` (must remain `gemini`)
 - Large-document generation and extraction tuning (safe code defaults; see `backend/.env.example` for the full, commented list): `GENERATION_MAX_TEXT_CHARS`, `CHUNKING_TRIGGER_CHARS`, `GENERATION_CHUNK_CHARS`, `GENERATION_CHUNK_OVERLAP_CHARS`, `GENERATION_CHUNK_MIN_CHARS`, `GENERATION_CHUNK_CONCURRENCY`, `GENERATION_MAP_MAX_OUTPUT_TOKENS`, `GENERATION_LARGE_REQUEST_TIMEOUT_SECONDS`, `GENERATION_PROFILE_MAX_CHARS`, `GENERATION_CHUNK_STUCK_SECONDS`, `GEMINI_VISION_TIMEOUT_SECONDS`, `GEMINI_EXTRACTION_MAX_OUTPUT_TOKENS`, `EXTRACTION_TEXT_CHUNK_CHARS`, `EXTRACTION_CHUNK_CONCURRENCY`.
-- The six `RATE_LIMIT_*_PER_HOUR` AI rate limits, `STUDENT_QUIZ_ATTEMPT_LIMIT`, `DAILY_CHALLENGE_TIMEZONE`, `CHALLENGE_EXPIRY_DAYS` — see the "AI rate limits" section of `CLAUDE.md` for the rate-limit defaults
+- The seven `RATE_LIMIT_*_PER_HOUR` endpoint rate limits (six AI actions plus
+  friend-challenge joins), `STUDENT_QUIZ_ATTEMPT_LIMIT`,
+  `DAILY_CHALLENGE_TIMEZONE`, and `CHALLENGE_EXPIRY_DAYS` — see the "AI rate
+  limits" section of `CLAUDE.md` for defaults
 
 > Secrets live in `.env` / `.env.local` (gitignored) and in the Vercel/Railway/Supabase dashboards. Never in code.
 

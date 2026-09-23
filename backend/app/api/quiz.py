@@ -16,6 +16,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 
 from app.lib.auth import CurrentProfile, get_current_profile
+from app.lib.role_checks import require_teacher
 from app.lib.api_errors import public_error
 from app.lib.config import get_settings
 from app.lib.supabase import get_service_client
@@ -279,15 +280,6 @@ def generate_blueprint(
         ) from exc
 
 
-def _require_teacher(profile: CurrentProfile) -> None:
-    # Teacher-only by design — see .claude/CLAUDE.md and the technical document.
-    if profile.role != "teacher":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only teachers can access quiz sets.",
-        )
-
-
 # --- Large-document (chunked Map-Reduce) generation -------------------------
 # Small documents use one grounded rich extraction call. Large ones are analysed
 # in the background (chunk -> MAP -> REDUCE). Both paths expose the same verified
@@ -430,7 +422,7 @@ def get_generation_job(
 ) -> dict:
     """Poll a large-document analysis job. When ready, includes the Master
     Blueprint's topics for the teacher to select."""
-    _require_teacher(profile)
+    require_teacher(profile, action="access quiz sets")
     service = get_service_client()
     job = _owned_job(service, job_id, profile)
     job = _fail_if_stuck(service, job, profile)
@@ -470,7 +462,7 @@ def retry_generation_job(
 ) -> dict:
     """Resume a failed/partial analysis job. Idempotent: already-done chunks are
     skipped, so this fills the gaps rather than restarting from scratch."""
-    _require_teacher(profile)
+    require_teacher(profile, action="access quiz sets")
     service = get_service_client()
     job = _owned_job(service, job_id, profile)
     if job["status"] not in ("failed", "partial"):
@@ -672,7 +664,7 @@ def list_quiz_sets(
     archived: bool = False,
 ) -> list[dict]:
     """List one bounded page of the teacher's quiz sets, newest first."""
-    _require_teacher(profile)
+    require_teacher(profile, action="access quiz sets")
     if page < 1 or page_size < 1 or page_size > QUIZ_SET_PAGE_SIZE_MAX:
         raise HTTPException(
             status_code=400,
@@ -707,7 +699,7 @@ def get_quiz_set(
     profile: CurrentProfile = Depends(get_current_profile),
 ) -> dict:
     """Full quiz set with its variant(s) and each variant's ordered questions."""
-    _require_teacher(profile)
+    require_teacher(profile, action="access quiz sets")
     service = get_service_client()
     _teacher_quiz_set(service, quiz_set_id, profile)
     try:
@@ -731,7 +723,7 @@ def publish_quiz_set(
     questions with review_status 'approved' inside a published set. The backend
     uses the service-role client, so this filtering is not delegated to RLS.
     """
-    _require_teacher(profile)
+    require_teacher(profile, action="access quiz sets")
     service = get_service_client()
     _teacher_quiz_set(service, quiz_set_id, profile)
     variants = select_all(
@@ -867,7 +859,7 @@ def archive_quiz_set(
     profile: CurrentProfile = Depends(get_current_profile),
 ) -> dict:
     """Unpublish and hide a quiz while preserving attempts and analytics."""
-    _require_teacher(profile)
+    require_teacher(profile, action="access quiz sets")
     service = get_service_client()
     _teacher_quiz_set(service, quiz_set_id, profile)
     updated = (
@@ -896,7 +888,7 @@ def restore_quiz_set(
     profile: CurrentProfile = Depends(get_current_profile),
 ) -> dict:
     """Restore an owned archived quiz to draft without publishing it."""
-    _require_teacher(profile)
+    require_teacher(profile, action="access quiz sets")
     service = get_service_client()
     _teacher_quiz_set(service, quiz_set_id, profile)
     updated = (
@@ -923,7 +915,7 @@ def approve_all_questions(
     Bulk-approve only questions the grounding verifier marked as verified.
     Flagged questions remain available for an explicit individual teacher decision.
     """
-    _require_teacher(profile)
+    require_teacher(profile, action="access quiz sets")
     service = get_service_client()
     _teacher_quiz_set(service, quiz_set_id, profile)
 

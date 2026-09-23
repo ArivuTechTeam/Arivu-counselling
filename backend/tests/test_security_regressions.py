@@ -10,14 +10,11 @@ from unittest.mock import patch
 from fastapi import HTTPException
 from starlette.requests import Request
 
-from app.api.academics import _require_admin
 from app.api.auth_account import _validate_new_password
-from app.api.documents import _require_teacher as require_document_teacher
 from app.api.practice import _exam_deadline_passed
-from app.api.questions import _require_teacher as require_question_teacher
-from app.api.quiz import _require_teacher as require_quiz_teacher
 from app.lib.auth import CurrentProfile, CurrentUser, get_current_profile
 from app.lib.api_errors import public_error
+from app.lib.role_checks import require_institution_admin, require_teacher
 from app.main import read_my_profile
 from app.services.blueprint import generate_blueprint_quiz
 from app.services.generation import generate_quiz
@@ -34,7 +31,7 @@ def profile(role: str) -> CurrentProfile:
 
 class RoleGuardTests(unittest.TestCase):
     def test_teacher_content_guards_reject_other_roles(self) -> None:
-        guards = [require_document_teacher, require_question_teacher, require_quiz_teacher]
+        guards = [require_teacher]
         for guard in guards:
             guard(profile("teacher"))
             for role in ("student", "institution_admin", "super_admin"):
@@ -44,11 +41,11 @@ class RoleGuardTests(unittest.TestCase):
                     self.assertEqual(caught.exception.status_code, 403)
 
     def test_course_management_is_institution_admin_only(self) -> None:
-        _require_admin(profile("institution_admin"))
+        require_institution_admin(profile("institution_admin"))
         for role in ("student", "teacher", "super_admin"):
             with self.subTest(role=role):
                 with self.assertRaises(HTTPException) as caught:
-                    _require_admin(profile(role))
+                    require_institution_admin(profile(role))
                 self.assertEqual(caught.exception.status_code, 403)
 
 

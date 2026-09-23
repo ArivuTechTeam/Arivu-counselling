@@ -25,6 +25,7 @@ from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel
 
 from app.lib.auth import CurrentProfile, get_current_profile
+from app.lib.role_checks import require_teacher
 from app.lib.api_errors import public_error
 from app.lib.config import get_settings
 from app.lib.storage import delete_bytes, upload_bytes
@@ -58,15 +59,6 @@ def _ext_of(filename: str) -> str:
     return filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
 
 
-def _require_teacher(profile: CurrentProfile) -> None:
-    # Teacher-only by design — see CLAUDE.md.
-    if profile.role != "teacher":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only teachers can extract quizzes.",
-        )
-
-
 def _has_expected_signature(ext: str, content: bytes) -> bool:
     """Reject renamed or malformed files before storage and model processing."""
     if ext == "pdf":
@@ -95,7 +87,7 @@ async def extract_quiz_endpoint(
     background: bool = Form(False),
     request_key: str | None = Form(None),
 ) -> dict:
-    _require_teacher(profile)
+    require_teacher(profile, action="extract quizzes")
 
     filename = file.filename or "upload"
     ext = _ext_of(filename)
@@ -279,7 +271,7 @@ async def re_extract_quiz_endpoint(
     again in one click. Because nothing is re-uploaded, the duplicate-file guard
     never triggers.
     """
-    _require_teacher(profile)
+    require_teacher(profile, action="extract quizzes")
     service = get_service_client()
 
     # Own document only, tenant-scoped (service client bypasses RLS).

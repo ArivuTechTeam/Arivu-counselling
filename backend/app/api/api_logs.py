@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 from app.lib.auth import CurrentProfile, get_current_profile
+from app.lib.role_checks import require_super_admin
 from app.lib.supabase import get_service_client
 
 router = APIRouter(prefix="/api/v1/platform", tags=["super-admin"])
@@ -68,11 +69,6 @@ class ApiCallLogDocument(BaseModel):
     items: list[ApiCallLogSummary]
 
 
-def _require_super(profile: CurrentProfile) -> None:
-    if profile.role != "super_admin":
-        raise HTTPException(status_code=403, detail="Super admins only.")
-
-
 def _number(value: object) -> float | None:
     return float(value) if value is not None else None
 
@@ -98,7 +94,7 @@ def list_api_logs(
     date_from: datetime | None = None,
     date_to: datetime | None = None,
 ) -> dict:
-    _require_super(profile)
+    require_super_admin(profile)
     query = get_service_client().table("api_call_logs").select(
         "id,tenant_id,document_id,job_id,call_type,provider,model,was_fallback,"
         "input_tokens,output_tokens,cached_tokens,thinking_tokens,cost_usd,cost_inr,"
@@ -124,7 +120,7 @@ def list_api_logs(
 def get_api_log(
     log_id: str, profile: CurrentProfile = Depends(get_current_profile)
 ) -> dict:
-    _require_super(profile)
+    require_super_admin(profile)
     result = get_service_client().table("api_call_logs").select(
         "*,documents(original_filename)"
     ).eq("id", log_id).maybe_single().execute()
@@ -137,7 +133,7 @@ def get_api_log(
 def api_logs_by_document(
     document_id: str, profile: CurrentProfile = Depends(get_current_profile)
 ) -> dict:
-    _require_super(profile)
+    require_super_admin(profile)
     result = get_service_client().table("api_call_logs").select(
         "id,tenant_id,document_id,job_id,call_type,provider,model,was_fallback,"
         "input_tokens,output_tokens,cached_tokens,thinking_tokens,cost_usd,cost_inr,"

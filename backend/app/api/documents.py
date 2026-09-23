@@ -23,6 +23,7 @@ from pydantic import BaseModel
 from starlette.concurrency import run_in_threadpool
 
 from app.lib.auth import CurrentProfile, get_current_profile
+from app.lib.role_checks import require_teacher
 from app.lib.storage import download_bytes, signed_url, upload_bytes
 from app.lib.supabase import get_service_client
 from app.lib.supabase_queries import select_all, select_all_in
@@ -114,21 +115,12 @@ def _has_expected_file_signature(content: bytes, extension: str) -> bool:
     return False
 
 
-def _require_teacher(profile: CurrentProfile) -> None:
-    # Teacher-only by design — see .claude/CLAUDE.md and the technical document.
-    if profile.role != "teacher":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only teachers can upload documents.",
-        )
-
-
 @router.post("/upload", response_model=UploadResult)
 async def upload_document(
     file: UploadFile = File(...),
     profile: CurrentProfile = Depends(get_current_profile),
 ) -> UploadResult:
-    _require_teacher(profile)
+    require_teacher(profile, action="upload documents")
 
     filename = file.filename or "upload"
     ext = _ext_of(filename)
@@ -284,7 +276,7 @@ def check_duplicate(
     are all chosen). This never blocks or creates application records — the caller
     proceeds regardless; it only surfaces a warning the teacher can act on.
     """
-    _require_teacher(profile)
+    require_teacher(profile, action="upload documents")
     service = get_service_client()
 
     # Authorise: the teacher must own the target subject (same rule as generation).
@@ -366,7 +358,7 @@ def check_duplicate(
 def list_documents(
     profile: CurrentProfile = Depends(get_current_profile),
 ) -> list[DocumentOut]:
-    _require_teacher(profile)
+    require_teacher(profile, action="upload documents")
     service = get_service_client()
     rows = select_all(
         service,
@@ -397,7 +389,7 @@ def document_log(
 ) -> list[DocumentLogItem]:
     """The teacher's Document Log: their own uploads, newest first, with the
     subject/chapter each was filed under when that is recorded."""
-    _require_teacher(profile)
+    require_teacher(profile, action="upload documents")
     service = get_service_client()
 
     # Own uploads only, tenant-scoped. Both filters are required — the service
@@ -520,7 +512,7 @@ def archive_document(
     profile: CurrentProfile = Depends(get_current_profile),
 ) -> dict:
     """Hide an old upload without deleting storage or dependent quiz history."""
-    _require_teacher(profile)
+    require_teacher(profile, action="upload documents")
     service = get_service_client()
     updated = (
         service.table("documents")
@@ -546,7 +538,7 @@ def document_file_url(
     teacher can never obtain a link for another tenant's (or another teacher's)
     document. The raw storage path is never returned.
     """
-    _require_teacher(profile)
+    require_teacher(profile, action="upload documents")
     service = get_service_client()
 
     doc = (

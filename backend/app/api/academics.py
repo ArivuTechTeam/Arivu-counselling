@@ -21,6 +21,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 
 from app.lib.auth import CurrentProfile, get_current_profile
+from app.lib.role_checks import require_institution_admin, require_teacher
 from app.lib.api_errors import public_error
 from app.lib.supabase import get_service_client
 from app.lib.supabase_queries import select_all, select_all_in
@@ -37,14 +38,6 @@ from app.services.teacher_access import (
 router = APIRouter(prefix="/api/v1", tags=["academics"])
 
 STAFF_ROLES = {"teacher", "institution_admin", "super_admin"}
-
-
-def _require_admin(profile: CurrentProfile) -> None:
-    if profile.role != "institution_admin":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only institution admins can manage courses and subjects.",
-        )
 
 
 def _catalog_tenant(
@@ -392,7 +385,7 @@ def create_course_level(
     body: CourseLevelCreate,
     profile: CurrentProfile = Depends(get_current_profile),
 ) -> dict:
-    _require_admin(profile)
+    require_institution_admin(profile, action="manage courses and subjects")
     name = body.name.strip()
     if not name:
         raise HTTPException(status_code=400, detail="Level name is required.")
@@ -439,7 +432,7 @@ def create_course_level(
 def create_course(
     body: CourseCreate, profile: CurrentProfile = Depends(get_current_profile)
 ) -> dict:
-    _require_admin(profile)
+    require_institution_admin(profile, action="manage courses and subjects")
     name = body.name.strip()
     if not name:
         raise HTTPException(status_code=400, detail="Course name is required.")
@@ -469,7 +462,7 @@ def create_course(
 def create_subject(
     body: SubjectCreate, profile: CurrentProfile = Depends(get_current_profile)
 ) -> dict:
-    _require_admin(profile)
+    require_institution_admin(profile, action="manage courses and subjects")
     name = body.name.strip()
     if not name:
         raise HTTPException(status_code=400, detail="Subject name is required.")
@@ -529,7 +522,7 @@ def create_subject(
 def delete_course(
     course_id: str, profile: CurrentProfile = Depends(get_current_profile)
 ) -> dict:
-    _require_admin(profile)
+    require_institution_admin(profile, action="manage courses and subjects")
     service = get_service_client()
     try:
         deleted = service.table("courses").delete().eq("id", course_id).eq(
@@ -551,7 +544,7 @@ def delete_course(
 def delete_subject(
     subject_id: str, profile: CurrentProfile = Depends(get_current_profile)
 ) -> dict:
-    _require_admin(profile)
+    require_institution_admin(profile, action="manage courses and subjects")
     service = get_service_client()
     try:
         deleted = service.table("subjects").delete().eq("id", subject_id).eq(
@@ -599,7 +592,7 @@ def get_teacher_subjects(
     teacher_id: UUID,
     profile: CurrentProfile = Depends(get_current_profile),
 ) -> TeacherSubjectsResponse:
-    _require_admin(profile)
+    require_institution_admin(profile, action="manage courses and subjects")
     service = get_service_client()
     teacher_id_str = str(teacher_id)
     _assert_tenant_teacher(service, teacher_id_str, profile)
@@ -627,7 +620,7 @@ def set_teacher_subjects(
     profile: CurrentProfile = Depends(get_current_profile),
 ) -> TeacherSubjectsResponse:
     """Replace a teacher's assignments in one database transaction."""
-    _require_admin(profile)
+    require_institution_admin(profile, action="manage courses and subjects")
     service = get_service_client()
     teacher_id_str = str(teacher_id)
     subject_ids = list(
@@ -667,14 +660,6 @@ def set_teacher_subjects(
 
 
 # ── Chapters (teacher-managed, within the teacher's own subjects) ─────────────
-def _require_teacher(profile: CurrentProfile) -> None:
-    if profile.role != "teacher":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only teachers can manage chapters.",
-        )
-
-
 def _assert_teacher_subject(service, subject_id: str, profile: CurrentProfile) -> None:
     if subject_id not in teacher_subject_ids(service, profile):
         raise HTTPException(
@@ -689,7 +674,7 @@ def list_chapters(
 ) -> list[dict]:
     """Chapters in a subject, with how many quizzes/questions use each (for the
     teacher's management view and the Generate-Quiz dropdown)."""
-    _require_teacher(profile)
+    require_teacher(profile, action="manage chapters")
     service = get_service_client()
     _assert_teacher_subject(service, subject_id, profile)
 
@@ -751,7 +736,7 @@ def teacher_subject_metrics(
     untouched. Every query is tenant-scoped because the service client bypasses
     RLS, and the numbers are gathered in bulk (no per-subject round trips).
     """
-    _require_teacher(profile)
+    require_teacher(profile, action="manage chapters")
     service = get_service_client()
     tenant = profile.tenant_id
 
@@ -948,7 +933,7 @@ class ChapterCreate(BaseModel):
 def create_chapter(
     body: ChapterCreate, profile: CurrentProfile = Depends(get_current_profile)
 ) -> dict:
-    _require_teacher(profile)
+    require_teacher(profile, action="manage chapters")
     name = body.name.strip()
     if not name:
         raise HTTPException(status_code=400, detail="Chapter name is required.")
@@ -1003,7 +988,7 @@ def create_chapter(
 def delete_chapter(
     chapter_id: str, profile: CurrentProfile = Depends(get_current_profile)
 ) -> dict:
-    _require_teacher(profile)
+    require_teacher(profile, action="manage chapters")
     service = get_service_client()
     chap = (
         service.table("chapters")

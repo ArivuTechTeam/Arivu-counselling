@@ -254,6 +254,7 @@ explicitly in Railway so the production policy is visible and easy to edit:
 | `RATE_LIMIT_QUESTION_REGENERATE_PER_HOUR` | per-user question regenerations per rolling hour (default `10`) |
 | `RATE_LIMIT_QUESTION_EXPLAIN_PER_HOUR` | per-user question explanations per rolling hour (default `10`) |
 | `RATE_LIMIT_QUIZ_EXTRACTION_PER_HOUR` | per-user existing-quiz document extractions per rolling hour (default `10`) |
+| `RATE_LIMIT_CHALLENGE_JOIN_PER_HOUR` | per-student friend-challenge code lookups per rolling hour (default `30`) |
 | `STUDENT_QUIZ_ATTEMPT_LIMIT` | maximum starts per student for the same published quiz variant (default `2`; on Railway redeploy after changing; for local Docker run `docker compose up -d --force-recreate backend` because restarting Docker Desktop preserves the existing container environment) |
 | `DAILY_CHALLENGE_TIMEZONE` | IANA timezone used to decide each student's institution-facing Daily Challenge calendar day (default `Asia/Kolkata`) |
 | `CHALLENGE_EXPIRY_DAYS` | number of days a new friend challenge accepts new participants (default `30`; existing sessions may still resume) |
