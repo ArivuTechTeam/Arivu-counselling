@@ -106,7 +106,10 @@ export default function LeaderboardPage() {
 
       {/* Your rank banner (always visible) */}
       {data?.me && (
-        <div className="animate-rise flex items-center justify-between rounded-2xl bg-gradient-to-br from-[#1a6942] to-[#15603d] p-5 text-white shadow-lg">
+        <div
+          className="animate-rise flex items-center justify-between rounded-2xl p-5 text-white shadow-lg"
+          style={{ background: "linear-gradient(135deg, var(--tenant-sidebar-start, #1a6942), var(--tenant-primary-dark, #15603d))" }}
+        >
           <div>
             <p className="text-[11px] font-semibold uppercase tracking-widest text-white/70">
               Your rank
@@ -119,7 +122,7 @@ export default function LeaderboardPage() {
             </p>
           </div>
           <div className="text-right">
-            <p className="text-2xl font-bold text-[#9ff0a6]">{data.me.points} pts</p>
+            <p className="text-2xl font-bold" style={{ color: "var(--tenant-primary-soft, #9ff0a6)" }}>{data.me.points} pts</p>
             <p className="text-xs text-white/70">{data.me.accuracy}% accuracy</p>
           </div>
         </div>

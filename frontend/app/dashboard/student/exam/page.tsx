@@ -65,7 +65,10 @@ export default function ExamPage() {
       />
 
       {/* Exam pattern */}
-      <div className="animate-rise relative overflow-hidden rounded-2xl bg-gradient-to-br from-[#1a6942] via-[#15603d] to-[#0f4e33] p-6 text-white shadow-lg sm:p-8">
+      <div
+        className="animate-rise relative overflow-hidden rounded-2xl p-6 text-white shadow-lg sm:p-8"
+        style={{ background: "linear-gradient(135deg, var(--tenant-sidebar-start, #1a6942), var(--tenant-primary-dark, #15603d), var(--tenant-primary-deep, #0f4e33))" }}
+      >
         <div className="pointer-events-none absolute -right-10 -top-12 h-44 w-44 rounded-full bg-white/10 blur-2xl" />
         <p className="relative text-[11px] font-semibold uppercase tracking-widest text-white/70">
           Today&apos;s exam pattern
@@ -128,7 +131,7 @@ export default function ExamPage() {
             <button
               onClick={begin}
               disabled={busy || !cfg}
-              className="rounded-lg bg-gradient-to-b from-[#219256] to-[#15603d] px-6 py-3 text-sm font-bold text-white shadow-sm transition-transform hover:-translate-y-0.5 disabled:opacity-60"
+              className="rounded-lg bg-primary px-6 py-3 text-sm font-bold text-primary-foreground shadow-sm transition-transform hover:-translate-y-0.5 hover:bg-primary/90 disabled:opacity-60"
             >
               {busy
                 ? "Opening your exam…"

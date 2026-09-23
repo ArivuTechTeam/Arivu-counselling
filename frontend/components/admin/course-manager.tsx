@@ -663,7 +663,10 @@ export function CourseManager() {
   // ---- course grid ----
   return (
     <div className="flex flex-col gap-5">
-      <div className="animate-rise flex flex-wrap items-center justify-between gap-4 rounded-[18px] bg-gradient-to-br from-[#2E8857] via-[#2a7a52] to-[#245a41] p-6 text-white shadow-[0_10px_32px_rgba(15,23,42,0.18)] sm:p-7">
+      <div
+        className="animate-rise flex flex-wrap items-center justify-between gap-4 rounded-[18px] p-6 text-white shadow-[0_10px_32px_rgba(15,23,42,0.18)] sm:p-7"
+        style={{ background: "linear-gradient(135deg, var(--tenant-sidebar-start, #2E8857), var(--tenant-primary-dark, #2a7a52), var(--tenant-primary-deep, #245a41))" }}
+      >
         <div>
           <p className="text-[0.72rem] font-bold uppercase tracking-[0.1em] text-white/60">
             Hierarchical management
@@ -677,7 +680,8 @@ export function CourseManager() {
               setName("");
               setModal("course");
             }}
-            className="inline-flex items-center gap-1.5 rounded-xl bg-white px-5 py-2.5 text-sm font-extrabold text-[#2E8857] shadow-[0_4px_14px_rgba(0,0,0,0.2)]"
+            className="inline-flex items-center gap-1.5 rounded-xl bg-white px-5 py-2.5 text-sm font-extrabold shadow-[0_4px_14px_rgba(0,0,0,0.2)]"
+            style={{ color: "var(--tenant-primary-dark, #2E8857)" }}
           >
             + Add course manually
           </button>
