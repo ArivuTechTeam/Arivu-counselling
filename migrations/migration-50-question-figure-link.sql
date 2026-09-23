@@ -9,6 +9,12 @@ begin;
 
 alter table public.questions add column if not exists figure_id uuid;
 
+-- Self-heal databases where `document_figures` came from the earlier branch
+-- migration: its primary key makes this index safe, but the composite foreign
+-- key below still requires an explicit unique candidate key on (id, tenant_id).
+create unique index if not exists uq_document_figures_id_tenant
+  on public.document_figures(id, tenant_id);
+
 do $$
 begin
   if not exists (

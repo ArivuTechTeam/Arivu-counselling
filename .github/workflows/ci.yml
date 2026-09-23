@@ -27,6 +27,9 @@ jobs:
       - name: Verify quiz copying and immutable publication
         run: node scripts/test-quiz-reuse-db.mjs
 
+      - name: Verify figure migration repair and tenant isolation
+        run: node scripts/test-figure-migrations-db.mjs
+
       - name: Verify level-aware batches, scoring and commerce schema
         run: node scripts/test-academic-rollout-db.mjs
 

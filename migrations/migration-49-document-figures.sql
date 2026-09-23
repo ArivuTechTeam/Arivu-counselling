@@ -33,6 +33,11 @@ create table if not exists public.document_figures (
     references public.documents(id, tenant_id) on delete cascade,
   unique (id, tenant_id)
 );
+-- `create table if not exists` does not add constraints to a table created by
+-- an earlier branch version. Add the tenant-qualified candidate key explicitly
+-- so this migration repairs that pre-existing shape as well as fresh installs.
+create unique index if not exists uq_document_figures_id_tenant
+  on public.document_figures(id, tenant_id);
 create index if not exists idx_docfig_document on public.document_figures(document_id);
 create index if not exists idx_docfig_tenant   on public.document_figures(tenant_id);
 
