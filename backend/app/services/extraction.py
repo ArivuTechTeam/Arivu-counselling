@@ -21,6 +21,8 @@ from docx import Document
 from docx.table import Table
 from docx.text.paragraph import Paragraph
 
+from app.lib.config import get_settings
+
 
 # Keep this aligned with the existing authored-quiz extraction branch. A few
 # stray PDF metadata glyphs must not make an image-only scan look readable.
@@ -138,20 +140,9 @@ def require_readable_generation_pages(extracted: ExtractedText) -> None:
         )
 
 
-def _extract_pdf_page_text(page) -> str:
-    """Extract one PDF page while preserving common structured notation.
-
-    A slightly wider vertical tolerance keeps raised/lowered glyphs on their
-    logical line. Character-level normalization restores Unicode superscript,
-    subscript, and Symbol-font Greek glyphs without interpreting the subject.
-    """
-    raw_chars = getattr(page, "chars", None)
-    if not raw_chars:
-        try:
-            return page.extract_text(y_tolerance=8) or ""
-        except TypeError:  # small test doubles and older compatible adapters
-            return page.extract_text() or ""
-
+def _normalize_pdf_chars(raw_chars) -> list[dict]:
+    """Copy pdfplumber chars, restoring Unicode superscript/subscript and
+    Symbol-font Greek glyphs without interpreting the subject."""
     chars = [dict(char) for char in raw_chars]
     for index, char in enumerate(chars):
         text = str(char.get("text") or "")
@@ -174,8 +165,104 @@ def _extract_pdf_page_text(page) -> str:
             char["text"] = text.translate(_SUPERSCRIPT_DIGITS)
         elif adjacent and smaller and lowered:
             char["text"] = text.translate(_SUBSCRIPT_DIGITS)
+    return chars
+
+
+def _extract_pdf_page_text(page) -> str:
+    """Extract one PDF page while preserving common structured notation.
+
+    A slightly wider vertical tolerance keeps raised/lowered glyphs on their
+    logical line. Character-level normalization restores Unicode superscript,
+    subscript, and Symbol-font Greek glyphs without interpreting the subject.
+
+    When the commerce pack is enabled, detected tables are additionally recovered
+    as aligned pipe rows so financial-statement columns stay bound to their row
+    labels; this path always falls back to the plain extraction on any problem, so
+    it never degrades a normal page. With the flag off, behaviour is unchanged.
+    """
+    raw_chars = getattr(page, "chars", None)
+    if not raw_chars:
+        try:
+            return page.extract_text(y_tolerance=8) or ""
+        except TypeError:  # small test doubles and older compatible adapters
+            return page.extract_text() or ""
+
+    chars = _normalize_pdf_chars(raw_chars)
+
+    if getattr(get_settings(), "commerce_pack_enabled", False):
+        structured = _page_text_with_structured_tables(page, chars)
+        if structured is not None:
+            return structured
 
     return extract_pdf_chars(chars, y_tolerance=8) or ""
+
+
+def _char_center(char) -> tuple[float, float] | None:
+    try:
+        return (
+            (float(char["x0"]) + float(char["x1"])) / 2,
+            (float(char["top"]) + float(char["bottom"])) / 2,
+        )
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def _within(center: tuple[float, float], bbox) -> bool:
+    cx, cy = center
+    x0, top, x1, bottom = bbox
+    return x0 <= cx <= x1 and top <= cy <= bottom
+
+
+def _render_table(rows) -> str:
+    """Render a detected table as pipe-delimited rows so each value stays with its
+    row label — the same compact shape DOCX tables already use."""
+    lines: list[str] = []
+    for row in rows or []:
+        cells = [" ".join(str(cell or "").split()) for cell in row]
+        if any(cells):
+            lines.append(" | ".join(cells))
+    if not lines:
+        return ""
+    return "=== TABLE ===\n" + "\n".join(lines)
+
+
+def _page_text_with_structured_tables(page, chars: list[dict]) -> str | None:
+    """Commerce-pack PDF path: recover table columns. Returns the page text where
+    each detected table is rendered as aligned pipe rows and its raw (often
+    column-interleaved) characters are removed from the surrounding prose. Returns
+    None to signal 'fall back to the plain extraction' whenever detection is
+    unavailable, errors, or yields nothing usable, so a normal page is never
+    degraded."""
+    try:
+        finder = getattr(page, "find_tables", None)
+        if finder is None:
+            return None
+        tables = finder() or []
+        if not tables:
+            return None
+        # Only tables that actually render usable rows justify removing their
+        # characters from the prose; a detected-but-empty table must NOT swallow
+        # the numbers under it, so its region is left in the plain text instead.
+        kept = [
+            (table.bbox, rendered)
+            for table in tables
+            if (rendered := _render_table(table.extract()))
+        ]
+        if not kept:
+            return None
+        bboxes = [bbox for bbox, _ in kept]
+        prose_chars = [
+            char
+            for char in chars
+            if (center := _char_center(char)) is None
+            or not any(_within(center, bbox) for bbox in bboxes)
+        ]
+        prose = extract_pdf_chars(prose_chars, y_tolerance=8) if prose_chars else ""
+        parts = [part for part in [prose, *(text for _, text in kept)] if part and part.strip()]
+        combined = "\n\n".join(parts)
+        return combined if combined.strip() else None
+    except Exception:  # detection is best-effort; never fail a real extraction
+        return None
 
 
 def _extract_docx(content: bytes) -> str:

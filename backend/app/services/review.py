@@ -9,6 +9,8 @@ regenerate_question  — ask the LLM to rewrite one question (same type/concept)
 
 from __future__ import annotations
 
+from fastapi import HTTPException
+
 from app.lib.config import get_settings
 from app.lib.storage import download_bytes
 from app.lib.supabase import get_service_client
@@ -21,6 +23,7 @@ from app.services.quiz_prompts import build_regen_system_prompt, build_regen_use
 from app.services.question_verification import verify_generated_questions
 from app.services.question_validation import validate_question_presentation
 from app.services.source_material import render_extracted_material
+from app.services.quiz_reuse import enabled as reuse_enabled
 
 
 class RegenerationSourceError(ValueError):
@@ -32,7 +35,7 @@ def get_quiz_set_detail(quiz_set_id: str, tenant_id: str) -> dict:
 
     qs = (
         service.table("quiz_sets")
-        .select("id, title, status, created_at, published_at")
+        .select("id, title, status, created_at, published_at, document_id")
         .eq("id", quiz_set_id)
         .eq("tenant_id", tenant_id)
         .maybe_single()
@@ -56,7 +59,7 @@ def get_quiz_set_detail(quiz_set_id: str, tenant_id: str) -> dict:
     for variant in variants:
         links = (
             service.table("quiz_variant_questions")
-            .select("question_id, order_index")
+            .select("question_id, order_index, marks_override")
             .eq("variant_id", variant["id"])
             .eq("tenant_id", tenant_id)
             .order("order_index")
@@ -73,7 +76,8 @@ def get_quiz_set_detail(quiz_set_id: str, tenant_id: str) -> dict:
                     "id, type, question_text, options, correct_answer, explanation, "
                     "difficulty, marks, review_status, source_excerpt, "
                     "source_page_start, source_page_end, grounding_confidence, "
-                    "verification_status, verification_warnings, source, confidence_score, extraction_job_id"
+                    "verification_status, verification_warnings, source, confidence_score, extraction_job_id, figure_id"
+                    + (",content_version,release_locked,source_quiz_id,origin_question_id" if reuse_enabled() else "")
                 )
                 .in_("id", question_ids)
                 .eq("tenant_id", tenant_id)
@@ -84,11 +88,34 @@ def get_quiz_set_detail(quiz_set_id: str, tenant_id: str) -> dict:
             by_id = {row["id"]: row for row in rows}
             # Preserve the variant's question order.
             questions = [
-                by_id[link["question_id"]]
+                {**by_id[link["question_id"]], **({"marks": link["marks_override"]} if link.get("marks_override") is not None else {})}
                 for link in links
                 if link["question_id"] in by_id
             ]
         out_variants.append({**variant, "questions": questions})
+
+    # Attach each question's source-document figure (label + signed image URL) so
+    # the teacher can confirm/swap/remove it in review. Best-effort: a lookup
+    # problem leaves questions figure-less rather than failing the whole detail.
+    figure_ids = [
+        q["figure_id"]
+        for variant in out_variants
+        for q in variant["questions"]
+        if q.get("figure_id")
+    ]
+    if figure_ids:
+        try:
+            from app.services.document_figures import figures_for_questions
+
+            figures = figures_for_questions(
+                service, tenant_id=tenant_id, figure_ids=figure_ids
+            )
+            for variant in out_variants:
+                for q in variant["questions"]:
+                    if q.get("figure_id"):
+                        q["figure"] = figures.get(q["figure_id"])
+        except Exception:  # noqa: BLE001 - figure display is non-critical
+            pass
 
     job_ids = sorted({
         q["extraction_job_id"] for variant in out_variants for q in variant["questions"]
@@ -127,7 +154,7 @@ def _question_source_material(service, question: dict, tenant_id: str) -> str:
     )
     if not variant or not variant.data:
         raise RegenerationSourceError("Question source quiz was not found.")
-    quiz_set_id = variant.data["quiz_set_id"]
+    quiz_set_id = question.get("source_quiz_id") or variant.data["quiz_set_id"]
 
     # Large-document generation stores the consolidated source plus the exact
     # teacher selection. Re-render precisely that selection for regeneration.
@@ -209,7 +236,7 @@ def regenerate_question(question_id: str, tenant_id: str) -> dict:
         service.table("questions")
         .select(
             "id,type,question_text,options,correct_answer,explanation,difficulty,"
-            "marks,topic_id"
+            "marks,topic_id" + (",source_quiz_id,content_version" if reuse_enabled() else "")
         )
         .eq("id", question_id)
         .eq("tenant_id", tenant_id)
@@ -288,7 +315,7 @@ def regenerate_question(question_id: str, tenant_id: str) -> dict:
         verified = verify_generated_questions([new_q], source_material)[0]
 
     # Replace content, keep the same row + type, reset review state.
-    updated = (
+    update_query = (
         service.table("questions")
         .update(
             {
@@ -311,6 +338,10 @@ def regenerate_question(question_id: str, tenant_id: str) -> dict:
         )
         .eq("id", question_id)
         .eq("tenant_id", tenant_id)
-        .execute()
     )
+    if existing.get("content_version") is not None:
+        update_query = update_query.eq("content_version", existing["content_version"])
+    updated = update_query.execute()
+    if not updated.data:
+        raise HTTPException(409, "This question changed during regeneration. Reload before trying again.")
     return updated.data[0]

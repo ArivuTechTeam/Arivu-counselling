@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from typing import Literal
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
@@ -42,6 +43,8 @@ from app.services.rate_limit import (
 from app.services.review import get_quiz_set_detail
 from app.services.topics import extract_topic_details
 from app.services.topic_capacity import selectable_topic_choices
+from app.services import quiz_reuse
+from app.services.question_validation import validate_question_answer_shape
 
 router = APIRouter(prefix="/api/v1/quiz-sets", tags=["quiz"])
 
@@ -703,7 +706,11 @@ def get_quiz_set(
     service = get_service_client()
     _teacher_quiz_set(service, quiz_set_id, profile)
     try:
-        return get_quiz_set_detail(quiz_set_id, profile.tenant_id)
+        before = quiz_reuse.rpc(service, "quiz_publication_state", profile, quiz_set_id) if quiz_reuse.enabled() else {}
+        detail = get_quiz_set_detail(quiz_set_id, profile.tenant_id)
+        if before and before != quiz_reuse.rpc(service, "quiz_publication_state", profile, quiz_set_id):
+            raise HTTPException(409, "This quiz changed while loading. Refresh to see the latest version.")
+        return {**detail, **before}
     except ValueError as exc:
         raise public_error(
             404,
@@ -713,10 +720,30 @@ def get_quiz_set(
         ) from exc
 
 
+class CopyQuizRequest(BaseModel):
+    request_key: UUID
+    title: str = Field(min_length=1, max_length=200)
+
+
+class PublishQuizRequest(BaseModel):
+    publication_token: str = Field(min_length=1, max_length=64)
+
+
+@router.post("/{quiz_set_id}/duplicate", status_code=201)
+def duplicate_quiz_set(quiz_set_id: UUID, body: CopyQuizRequest,
+                       profile: CurrentProfile = Depends(get_current_profile)) -> dict:
+    require_teacher(profile, action="duplicate quizzes")
+    if not quiz_reuse.enabled():
+        raise HTTPException(503, "Quiz reuse is not enabled yet.")
+    return quiz_reuse.rpc(get_service_client(), "copy_quiz_draft", profile, str(quiz_set_id),
+                          p_key=str(body.request_key), p_title=body.title.strip())
+
+
 @router.post("/{quiz_set_id}/publish")
 def publish_quiz_set(
     quiz_set_id: str,
     profile: CurrentProfile = Depends(get_current_profile),
+    body: PublishQuizRequest | None = None,
 ) -> dict:
     """
     Publish the set. Student-facing application queries explicitly return only
@@ -726,6 +753,19 @@ def publish_quiz_set(
     require_teacher(profile, action="access quiz sets")
     service = get_service_client()
     _teacher_quiz_set(service, quiz_set_id, profile)
+    if quiz_reuse.enabled():
+        if body is None:
+            raise HTTPException(409, "Refresh the quiz before publishing.")
+        detail = get_quiz_set_detail(quiz_set_id, profile.tenant_id)
+        for variant in detail["variants"]:
+            for question in variant["questions"]:
+                if question["review_status"] == "approved":
+                    try:
+                        validate_question_answer_shape(question["type"], question.get("options"), question.get("correct_answer"))
+                    except ValueError as exc:
+                        raise HTTPException(409, "Correct the answer configuration before publishing.") from exc
+        row = quiz_reuse.rpc(service, "publish_quiz_atomic", profile, quiz_set_id, p_token=body.publication_token)
+        return {key: row.get(key) for key in ("id", "title", "status", "created_at", "published_at")}
     variants = select_all(
         service,
         "quiz_variants",
@@ -912,8 +952,14 @@ def approve_all_questions(
     profile: CurrentProfile = Depends(get_current_profile),
 ) -> dict:
     """
-    Bulk-approve only questions the grounding verifier marked as verified.
-    Flagged questions remain available for an explicit individual teacher decision.
+    Bulk-approve every structurally valid pending/needs-edit question in the
+    teacher's own quiz — INCLUDING AI-flagged ones. Teacher approval is a
+    separate fact from AI verification, so the original AI findings/warnings are
+    preserved (never cleared) and remain visible per question.
+
+    Excluded/skipped: rejected questions (untouched), questions with an invalid
+    answer structure, and any row that changed since it was read (stale revision).
+    Publication remains a separate explicit action. Returns approved/skipped counts.
     """
     require_teacher(profile, action="access quiz sets")
     service = get_service_client()
@@ -952,12 +998,14 @@ def approve_all_questions(
         service, "questions", "*", in_column="id", values=question_ids,
         configure=lambda query: query.eq("tenant_id", profile.tenant_id)
         .eq("created_by", profile.user_id)
-        .in_("review_status", ["pending_review", "needs_edit"])
-        .eq("verification_status", "verified"),
+        .in_("review_status", ["pending_review", "needs_edit"]),
     )
     approved_rows = []
     skipped = 0
     for row in eligible_rows:
+        # A released question is immutable. Keep the API-level error clear even
+        # though the database trigger also protects against accidental writes.
+        quiz_reuse.assert_editable(row)
         try:
             validate_question_answer_shape(row.get("type"), row.get("options"), row.get("correct_answer"))
         except ValueError:

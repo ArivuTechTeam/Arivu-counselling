@@ -575,7 +575,20 @@ export type QuizSetSummary = {
   published_at?: string | null;
 };
 
+/** A figure extracted from the source document (Phase 2), with a signed URL. */
+export type DocumentFigure = {
+  id: string;
+  page?: number | null;
+  label?: string | null;
+  caption?: string | null;
+  url?: string | null;
+  width?: number | null;
+  height?: number | null;
+};
+
 export type ReviewQuestion = {
+  content_version?: number | null;
+  release_locked?: boolean;
   id: string;
   type: string;
   question_text: string;
@@ -593,9 +606,15 @@ export type ReviewQuestion = {
   grounding_confidence?: number | null;
   verification_status?: string | null;
   verification_warnings?: string[];
+  figure_id?: string | null;
+  figure?: DocumentFigure | null;
 };
 
 export type QuizSetDetail = QuizSetSummary & {
+  publication_token?: string;
+  release_locked?: boolean;
+  reuse_enabled?: boolean;
+  document_id?: string | null;
   import_summaries?: (ImportSummary & { extraction_job_id: string })[];
   variants: {
     id: string;
@@ -675,8 +694,8 @@ export const restoreQuizSet = (id: string) =>
 export const getQuizSet = (id: string) =>
   jsonRequest<QuizSetDetail>(`/api/v1/quiz-sets/${id}`, "GET");
 
-export const editQuestion = (id: string, patch: QuestionPatch) =>
-  jsonRequest<ReviewQuestion>(`/api/v1/questions/${id}`, "PATCH", patch);
+export const editQuestion = (id: string, patch: QuestionPatch, expectedVersion?: number | null) =>
+  jsonRequest<ReviewQuestion>(`/api/v1/questions/${id}`, "PATCH", { ...patch, expected_version: expectedVersion });
 
 export const approveQuestion = (id: string, resolutionNote?: string) =>
   jsonRequest<ReviewQuestion>(`/api/v1/questions/${id}/approve`, "POST",
@@ -684,6 +703,28 @@ export const approveQuestion = (id: string, resolutionNote?: string) =>
 
 export const rejectQuestion = (id: string) =>
   jsonRequest<ReviewQuestion>(`/api/v1/questions/${id}/reject`, "POST");
+
+/** Attach (or, with figureId=null, remove) a source-document figure on a question. */
+export const setQuestionFigure = (id: string, figureId: string | null) =>
+  jsonRequest<ReviewQuestion>(`/api/v1/questions/${id}/figure`, "PUT", {
+    figure_id: figureId,
+  });
+
+/** The catalog of figures extracted from a source document (Phase 2). */
+export const listDocumentFigures = (documentId: string) =>
+  jsonRequest<DocumentFigure[]>(`/api/v1/documents/${documentId}/figures`, "GET");
+
+/** Fetch a question figure's PNG (auth'd with the caller's bearer token) as an
+ *  object URL. Students use this so figures render from a same-origin, per-user
+ *  authorized stream with no signed-URL expiry mid-attempt. Remember to
+ *  URL.revokeObjectURL() the result when the image unmounts. */
+export async function fetchFigureObjectUrl(figureId: string): Promise<string> {
+  const res = await apiFetch(`${API_BASE}/api/v1/figures/${figureId}`, {
+    headers: { ...(await authHeader()) },
+  });
+  if (!res.ok) throw new Error("Figure image unavailable.");
+  return URL.createObjectURL(await res.blob());
+}
 
 /** AI rewrites the question (same type/concept). Can take ~10-20s. */
 export const regenerateQuestion = (id: string) =>
@@ -721,8 +762,13 @@ export const deleteOwnAccount = () =>
     confirmation: "DELETE",
   });
 
-export const publishQuizSet = (id: string) =>
-  jsonRequest<QuizSetSummary>(`/api/v1/quiz-sets/${id}/publish`, "POST");
+export const publishQuizSet = (id: string, publicationToken?: string) =>
+  jsonRequest<QuizSetSummary>(`/api/v1/quiz-sets/${id}/publish`, "POST",
+    publicationToken ? { publication_token: publicationToken } : undefined);
+
+export const duplicateQuizSet = (id: string, title: string, requestKey: string) =>
+  jsonRequest<{ quiz_set_id: string; replayed: boolean }>(`/api/v1/quiz-sets/${id}/duplicate`, "POST",
+    { title, request_key: requestKey }, 90_000);
 
 /** Unpublish and soft-archive a quiz without deleting attempts or analytics. */
 export const archiveQuizSet = (id: string) =>
@@ -769,6 +815,8 @@ export type TakingQuestion = {
   marks?: number;
   /** A soft pacing guide. The overall attempt deadline remains authoritative. */
   suggested_seconds?: number;
+  /** Source-document figure attached to this question (Phase 2), if any. */
+  figure_id?: string | null;
 };
 
 /** A question after grading (answers revealed). */
@@ -1266,6 +1314,158 @@ export const createSubject = (courseId: string, courseLevelId: string, name: str
     course_level_id: courseLevelId,
     name,
   });
+
+// --- Batches, rostering & assignments (Phase 6.1) ---
+export type Batch = {
+  id: string;
+  course_id: string;
+  course_level_id: string;
+  name: string;
+  exam_session?: string | null;
+  status: string;
+  created_at?: string | null;
+};
+export type BatchMember = {
+  id: string;
+  profile_id: string;
+  membership_role: string;
+  active: boolean;
+  full_name?: string | null;
+  created_at?: string | null;
+};
+export type QuizAssignment = {
+  id: string;
+  batch_id: string;
+  available_from?: string | null;
+  available_to?: string | null;
+  status: string;
+  created_at?: string | null;
+};
+
+/** Public (no-auth) batch list for the signup dropdown, filtered by course. */
+export async function listPublicBatches(
+  tenantId: string,
+  courseId: string,
+  courseLevelId: string,
+): Promise<{ id: string; name: string }[]> {
+  const res = await apiFetch(
+    `${API_BASE}/api/v1/public/batches?tenant_id=${encodeURIComponent(tenantId)}&course_id=${encodeURIComponent(courseId)}&course_level_id=${encodeURIComponent(courseLevelId)}`,
+  );
+  if (!res.ok) throw new Error("We couldn't load batches. Please try again.");
+  return res.json();
+}
+
+export const listBatches = (courseId?: string, courseLevelId?: string) =>
+  jsonRequest<Batch[]>(
+    `/api/v1/batches${courseId || courseLevelId ? `?${new URLSearchParams({
+      ...(courseId ? { course_id: courseId } : {}),
+      ...(courseLevelId ? { course_level_id: courseLevelId } : {}),
+    }).toString()}` : ""}`,
+    "GET",
+  );
+
+export const createBatch = (
+  courseId: string,
+  courseLevelId: string,
+  name: string,
+  examSession?: string,
+) =>
+  jsonRequest<Batch>("/api/v1/batches", "POST", {
+    course_id: courseId,
+    course_level_id: courseLevelId,
+    name,
+    exam_session: examSession || null,
+  });
+
+export const updateBatch = (id: string, patch: { name?: string; status?: string }) =>
+  jsonRequest<Batch>(`/api/v1/batches/${id}`, "PATCH", patch);
+
+export const listBatchMembers = (id: string) =>
+  jsonRequest<BatchMember[]>(`/api/v1/batches/${id}/members`, "GET");
+
+export const listEligibleBatchStudents = (id: string) =>
+  jsonRequest<{ id: string; full_name?: string | null }[]>(
+    `/api/v1/batches/${id}/eligible-students`,
+    "GET",
+  );
+
+export const addBatchMember = (id: string, profileId: string) =>
+  jsonRequest<BatchMember>(`/api/v1/batches/${id}/members`, "POST", { profile_id: profileId });
+
+export const removeBatchMember = (id: string, profileId: string) =>
+  jsonRequest<{ deactivated: boolean }>(`/api/v1/batches/${id}/members/${profileId}`, "DELETE");
+
+export const listAssignments = (quizSetId: string) =>
+  jsonRequest<QuizAssignment[]>(`/api/v1/quiz-sets/${quizSetId}/assignments`, "GET");
+
+export const listEligibleBatches = (quizSetId: string) =>
+  jsonRequest<Batch[]>(`/api/v1/quiz-sets/${quizSetId}/eligible-batches`, "GET");
+
+export const assignToBatches = (
+  quizSetId: string,
+  batchIds: string[],
+  window?: { from?: string | null; to?: string | null },
+) =>
+  jsonRequest<{ quiz_set_id: string; audience_mode: string; assignments: QuizAssignment[] }>(
+    `/api/v1/quiz-sets/${quizSetId}/assignments`,
+    "POST",
+    { batch_ids: batchIds, available_from: window?.from ?? null, available_to: window?.to ?? null },
+  );
+
+export const withdrawAssignment = (quizSetId: string, batchId: string) =>
+  jsonRequest<{ withdrawn: boolean }>(
+    `/api/v1/quiz-sets/${quizSetId}/assignments/${batchId}`,
+    "DELETE",
+  );
+
+// --- Exam scoring standards per course level (Phase 6.2-5) ---
+export type ScoringPreset = { key: string; name: string; description: string };
+export type CourseExamStandard = {
+  course_id: string;
+  course_name: string;
+  course_level_id: string;
+  level_name: string;
+  preset_key: string | null;
+};
+
+export const listScoringPresets = () =>
+  jsonRequest<ScoringPreset[]>("/api/v1/scoring-presets", "GET");
+
+export const listExamStandards = () =>
+  jsonRequest<CourseExamStandard[]>("/api/v1/exam-standards", "GET");
+
+export const setExamStandard = (courseLevelId: string, presetKey: string | null) =>
+  jsonRequest<{ preset_key: string | null }>(
+    `/api/v1/exam-standards/${courseLevelId}`,
+    "PUT",
+    { preset_key: presetKey },
+  );
+
+// --- Commerce paper profiles per course level (Phase 6.3-D) ---
+export type PaperProfileFields = {
+  exam_body: string | null;
+  level: string | null;
+  paper: string | null;
+  assessment_year: string | null;
+  framework: string | null;
+};
+export type CoursePaperProfile = {
+  course_id: string;
+  course_name: string;
+  course_level_id: string;
+  level_name: string;
+  profile: PaperProfileFields | null;
+};
+
+export const listPaperProfiles = () =>
+  jsonRequest<CoursePaperProfile[]>("/api/v1/paper-profiles", "GET");
+
+export const setPaperProfile = (courseLevelId: string, fields: PaperProfileFields) =>
+  jsonRequest<{ profile: PaperProfileFields | null }>(
+    `/api/v1/paper-profiles/${courseLevelId}`,
+    "PUT",
+    fields,
+  );
 
 export const deleteCourse = (id: string) =>
   jsonRequest<{ deleted: string }>(`/api/v1/courses/${id}`, "DELETE");

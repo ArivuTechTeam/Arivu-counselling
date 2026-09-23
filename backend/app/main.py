@@ -27,12 +27,17 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from app.api import (
     academics,
     admin,
+    assignments,
     auth_account,
     branding,
+    batches,
     challenge,
     documents,
+    exam_standards,
     extraction,
     faculty_jobs,
+    figures,
+    paper_profiles,
     practice,
     questions,
     quiz,
@@ -242,6 +247,20 @@ async def temporary_supabase_failure(
     )
 
 
+from postgrest.exceptions import APIError as PostgrestAPIError
+from app.services.quiz_reuse import MESSAGES as QUIZ_REUSE_MESSAGES
+
+
+@app.exception_handler(PostgrestAPIError)
+async def database_conflict(request: Request, exception: PostgrestAPIError) -> JSONResponse:
+    message = QUIZ_REUSE_MESSAGES.get(exception.message)
+    if message:
+        return JSONResponse(status_code=409, content={"detail": message}, headers={"Cache-Control": "no-store"})
+    if exception.code in {"40P01", "40001"}:
+        return JSONResponse(status_code=409, content={"detail": "The quiz changed during this action. Refresh and retry."}, headers={"Cache-Control": "no-store"})
+    return await safe_unhandled_error(request, exception)
+
+
 @app.exception_handler(Exception)
 async def safe_unhandled_error(request: Request, _exception: Exception) -> JSONResponse:
     """Return a traceable message without leaking internals to the browser."""
@@ -261,14 +280,19 @@ async def safe_unhandled_error(request: Request, _exception: Exception) -> JSONR
 
 # --- Routers ------------------------------------------------------------
 app.include_router(academics.router)
+app.include_router(assignments.router)
 app.include_router(auth_account.router)
 app.include_router(branding.router)
+app.include_router(batches.router)
+app.include_router(exam_standards.router)
+app.include_router(paper_profiles.router)
 app.include_router(institution_admin.router)
 app.include_router(super_admin.router)
 app.include_router(challenge.router)
 app.include_router(documents.router)
 app.include_router(extraction.router)
 app.include_router(faculty_jobs.router)
+app.include_router(figures.router)
 app.include_router(practice.router)
 app.include_router(quiz.router)
 app.include_router(questions.router)

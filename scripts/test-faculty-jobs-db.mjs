@@ -11,7 +11,7 @@ const schema = fs.readFileSync("migrations/schema.sql", "utf8");
 await db.exec("create role anon; create role authenticated; create role service_role bypassrls; create schema auth; create table auth.users(id uuid primary key);");
 for (const type of schema.matchAll(/^create type .*?;$/gm)) await db.exec(type[0]);
 await db.exec("alter type question_source add value 'extracted';");
-for (const name of ["tenants", "profiles", "courses", "subjects", "teacher_subjects", "chapters", "topics", "documents", "ai_extraction_jobs", "questions", "quiz_sets", "quiz_variants", "quiz_variant_questions", "quiz_generation_jobs"]) {
+for (const name of ["tenants", "profiles", "catalog_courses", "catalog_course_levels", "catalog_course_subjects", "courses", "course_levels", "subjects", "teacher_subjects", "chapters", "topics", "documents", "ai_extraction_jobs", "questions", "quiz_sets", "quiz_variants", "quiz_variant_questions", "quiz_generation_jobs"]) {
   const definition = schema.match(new RegExp(`create table ${name} \\([\\s\\S]*?\\n\\);`));
   assert.ok(definition, name);
   await db.exec(definition[0].replace(/^.*embedding vector.*\r?\n/m, ""));

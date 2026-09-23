@@ -7,6 +7,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Building2 } from "@/components/ui/icons";
 import {
   getInstitutionBranding,
+  listPublicBatches,
   type InstitutionBranding,
   listPublicCourses,
   type PublicCourse,
@@ -19,6 +20,7 @@ import {
 } from "@/lib/dashboard-bootstrap";
 import { PENDING_GOOGLE_COURSE_KEY } from "@/lib/google-auth";
 import { PENDING_GOOGLE_LEVEL_KEY } from "@/lib/google-auth";
+import { PENDING_GOOGLE_BATCH_KEY } from "@/lib/google-auth";
 import { PENDING_AUTH_NEXT_KEY } from "@/lib/google-auth";
 import { PENDING_GOOGLE_TENANT_KEY } from "@/lib/google-auth";
 import { PENDING_GOOGLE_INSTITUTION_KEY } from "@/lib/google-auth";
@@ -36,6 +38,8 @@ export default function AuthCallbackPage() {
   const [courses, setCourses] = useState<PublicCourse[]>([]);
   const [courseId, setCourseId] = useState("");
   const [courseLevelId, setCourseLevelId] = useState("");
+  const [batches, setBatches] = useState<{ id: string; name: string }[]>([]);
+  const [batchId, setBatchId] = useState("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -45,6 +49,7 @@ export default function AuthCallbackPage() {
   const clearPendingGoogleSignup = useCallback(() => {
     window.sessionStorage.removeItem(PENDING_GOOGLE_COURSE_KEY);
     window.sessionStorage.removeItem(PENDING_GOOGLE_LEVEL_KEY);
+    window.sessionStorage.removeItem(PENDING_GOOGLE_BATCH_KEY);
     window.sessionStorage.removeItem(PENDING_GOOGLE_TENANT_KEY);
     window.sessionStorage.removeItem(PENDING_GOOGLE_INSTITUTION_KEY);
   }, []);
@@ -60,6 +65,7 @@ export default function AuthCallbackPage() {
   const completeGoogleSignup = useCallback(async (
     selectedCourseId: string,
     selectedLevelId: string,
+    selectedBatchId?: string,
   ) => {
     setSaving(true);
     setError(null);
@@ -69,6 +75,7 @@ export default function AuthCallbackPage() {
       {
         p_course_id: selectedCourseId,
         p_course_level_id: selectedLevelId,
+        p_batch_id: selectedBatchId || null,
       },
     );
     if (completionError) {
@@ -228,6 +235,9 @@ export default function AuthCallbackPage() {
         const pendingLevelId = window.sessionStorage.getItem(
           PENDING_GOOGLE_LEVEL_KEY,
         );
+        const pendingBatchId = window.sessionStorage.getItem(
+          PENDING_GOOGLE_BATCH_KEY,
+        );
         const pendingCourse = availableCourses.find((c) => c.id === pendingCourseId);
         if (
           pendingCourse &&
@@ -236,13 +246,31 @@ export default function AuthCallbackPage() {
         ) {
           setCourseId(pendingCourse.id);
           setCourseLevelId(pendingLevelId);
+          const availableBatches = await listPublicBatches(
+            tenantId,
+            pendingCourse.id,
+            pendingLevelId,
+          );
+          setBatches(availableBatches);
+          const pendingBatch = availableBatches.find((batch) => batch.id === pendingBatchId);
+          if (availableBatches.length === 0 || pendingBatch) {
+            setBatchId(pendingBatch?.id ?? "");
+            setLoading(false);
+            await completeGoogleSignup(
+              pendingCourse.id,
+              pendingLevelId,
+              pendingBatch?.id,
+            );
+            return;
+          }
+          setBatchId("");
           setLoading(false);
-          await completeGoogleSignup(pendingCourse.id, pendingLevelId);
           return;
         }
 
         window.sessionStorage.removeItem(PENDING_GOOGLE_COURSE_KEY);
         window.sessionStorage.removeItem(PENDING_GOOGLE_LEVEL_KEY);
+        window.sessionStorage.removeItem(PENDING_GOOGLE_BATCH_KEY);
         setLoading(false);
       } catch {
         setError("Google sign-in could not be completed. Please try again.");
@@ -335,6 +363,8 @@ export default function AuthCallbackPage() {
                   onChange={(event) => {
                     setCourseId(event.target.value);
                     setCourseLevelId("");
+                    setBatchId("");
+                    setBatches([]);
                   }}
                   autoFocus
                 >
@@ -351,7 +381,23 @@ export default function AuthCallbackPage() {
                 <select
                   className="mt-2 h-11 w-full rounded-lg border border-input bg-background px-3 text-sm"
                   value={courseLevelId}
-                  onChange={(event) => setCourseLevelId(event.target.value)}
+                  onChange={async (event) => {
+                    const selectedLevelId = event.target.value;
+                    setCourseLevelId(selectedLevelId);
+                    setBatchId("");
+                    setBatches([]);
+                    if (branding?.tenant_id && courseId && selectedLevelId) {
+                      try {
+                        setBatches(await listPublicBatches(
+                          branding.tenant_id,
+                          courseId,
+                          selectedLevelId,
+                        ));
+                      } catch {
+                        setError("We couldn't load batches. Please try again.");
+                      }
+                    }
+                  }}
                   disabled={!courseId}
                 >
                   <option value="">
@@ -362,11 +408,26 @@ export default function AuthCallbackPage() {
                   ))}
                 </select>
               </label>
+              {batches.length > 0 && (
+                <label className="block text-sm font-medium text-foreground">
+                  Batch
+                  <select
+                    className="mt-2 h-11 w-full rounded-lg border border-input bg-background px-3 text-sm"
+                    value={batchId}
+                    onChange={(event) => setBatchId(event.target.value)}
+                  >
+                    <option value="">Select your batch…</option>
+                    {batches.map((batch) => (
+                      <option key={batch.id} value={batch.id}>{batch.name}</option>
+                    ))}
+                  </select>
+                </label>
+              )}
               <button
                 type="button"
                 className="w-full rounded-xl bg-primary px-4 py-3 text-sm font-semibold text-primary-foreground transition hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-60"
-                disabled={!courseId || !courseLevelId}
-                onClick={() => completeGoogleSignup(courseId, courseLevelId)}
+                disabled={!courseId || !courseLevelId || (batches.length > 0 && !batchId)}
+                onClick={() => completeGoogleSignup(courseId, courseLevelId, batchId || undefined)}
               >
                 Continue to dashboard
               </button>

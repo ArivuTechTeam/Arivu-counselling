@@ -1,12 +1,15 @@
 "use client";
 
 import Link from "next/link";
+import { useState } from "react";
 
+import { AssignBatchesDialog } from "@/components/teacher/assign-batches-dialog";
 import { EmptyState } from "@/components/ui/empty-state";
 import { ErrorCard } from "@/components/ui/error-card";
 import { PageHeader } from "@/components/ui/page-header";
 import { SkeletonList } from "@/components/ui/skeleton";
 import { Inbox } from "@/components/ui/icons";
+import { QuestionPaperButtons } from "@/components/shared/pdf-buttons";
 import { useTeacherPublishedQuizzes } from "@/lib/staff-queries";
 
 function dateLabel(value: string | null) {
@@ -18,6 +21,7 @@ function dateLabel(value: string | null) {
 export default function PublishedQuizzesPage() {
   const { data, error, mutate } = useTeacherPublishedQuizzes();
   const quizzes = data?.quizzes ?? [];
+  const [assignQuiz, setAssignQuiz] = useState<{ id: string; title: string } | null>(null);
   return (
     <div className="mx-auto flex max-w-6xl flex-col gap-6">
       <PageHeader title="Published quizzes" description="Monitor attendance and results for every quiz your students can take." />
@@ -32,7 +36,26 @@ export default function PublishedQuizzesPage() {
                   <p className="text-lg font-semibold tracking-tight">{quiz.title}</p>
                   <p className="mt-1 text-sm text-muted-foreground">{quiz.subject} · Published {dateLabel(quiz.published_at)}</p>
                 </div>
-                <Link href={`/dashboard/teacher/performance/${quiz.id}`} className="rounded-lg border border-input px-3 py-2 text-sm font-medium hover:border-primary/50 hover:text-primary">View performance →</Link>
+                <div className="flex flex-wrap items-center gap-2">
+                  {/* Reuse the same paper generator as the review flow so a
+                      published quiz can still be printed/reused. Read-only:
+                      it only reads the approved questions, never mutates a
+                      released paper. */}
+                  <QuestionPaperButtons
+                    quizSetId={quiz.id}
+                    title={quiz.title}
+                    meta={`${quiz.subject} · Published ${dateLabel(quiz.published_at)}`}
+                    compact
+                  />
+                  <Link href={`/dashboard/teacher/performance/${quiz.id}`} className="rounded-lg border border-input px-3 py-2 text-sm font-medium hover:border-primary/50 hover:text-primary">View performance →</Link>
+                  <button
+                    type="button"
+                    onClick={() => setAssignQuiz({ id: quiz.id, title: quiz.title })}
+                    className="rounded-lg border border-input px-3 py-2 text-sm font-medium hover:border-primary/50 hover:text-primary"
+                  >
+                    Assign to batches
+                  </button>
+                </div>
               </div>
               <div className="mt-5 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
                 <Metric label="Eligible" value={quiz.eligible_students} />
@@ -46,6 +69,13 @@ export default function PublishedQuizzesPage() {
             </article>
           ))}
         </div>
+      )}
+      {assignQuiz && (
+        <AssignBatchesDialog
+          quizSetId={assignQuiz.id}
+          quizTitle={assignQuiz.title}
+          onClose={() => setAssignQuiz(null)}
+        />
       )}
     </div>
   );

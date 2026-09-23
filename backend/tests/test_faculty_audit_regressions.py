@@ -248,6 +248,10 @@ class FacultyPublishingTests(unittest.TestCase):
             with (
                 self.subTest(unresolved=unresolved),
                 patch("app.api.quiz.get_service_client", return_value=service),
+                # Exercise the legacy (non-reuse) publish path this test verifies;
+                # the reuse path enforces the same rules inside publish_quiz_atomic
+                # (SQL), covered by scripts/test-quiz-reuse-db.mjs.
+                patch("app.api.quiz.quiz_reuse.enabled", return_value=False),
                 self.assertRaises(HTTPException) as raised,
             ):
                 publish_quiz_set("set1", _teacher())
@@ -261,6 +265,9 @@ class FacultyPublishingTests(unittest.TestCase):
         with (
             patch("app.api.quiz.get_service_client", return_value=service),
             patch("app.api.quiz.log_event"),
+            # Legacy (non-reuse) publish path: marks recalculation lives in Python
+            # here; the reuse path recalculates inside publish_quiz_atomic (SQL).
+            patch("app.api.quiz.quiz_reuse.enabled", return_value=False),
         ):
             result = publish_quiz_set("set1", _teacher())
         self.assertEqual(result["status"], "published")

@@ -40,3 +40,9 @@ def require_institution_admin(
 
 def require_super_admin(profile: CurrentProfile) -> None:
     _require_role(profile, "super_admin", detail="Super admins only.")
+
+
+def require_staff(profile: CurrentProfile, *, action: str | None = None) -> None:
+    if profile.role not in {"teacher", "institution_admin", "super_admin"}:
+        detail = f"Only staff can {action}." if action else "Staff only."
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=detail)

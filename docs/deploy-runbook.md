@@ -102,13 +102,21 @@ migration-45-global-course-catalog.sql
 migration-46-seed-global-course-catalog.sql
 migration-47-student-level-enrollment.sql
 migration-48-tenant-branding-metadata.sql
+migration-49-document-figures.sql
+migration-50-question-figure-link.sql
+migration-51-safe-quiz-reuse.sql
+migration-52-batches-assignments.sql
+migration-53-signup-batch-membership.sql
+migration-54-scoring-policies.sql
+migration-55-course-exam-standard.sql
+migration-56-paper-profiles.sql
 ```
 
-(Filenames above verified 2026-09-22 against `migrations/`, through
-`migration-48-tenant-branding-metadata.sql` stores the original institution
+(Filenames above verified 2026-09-23 against `migrations/`, through migration
+56. `migration-48-tenant-branding-metadata.sql` stores the original institution
 logo filename for super-admin display, normalizes the legacy unused color
-default, and validates tenant brand colors. `migration-47-student-level-enrollment.sql` — earlier drafts of
-this runbook named migrations 31–34 `migration-31-chunked-document-generation.sql`,
+default, and validates tenant brand colors. Earlier drafts of this runbook named
+migrations 31–34 `migration-31-chunked-document-generation.sql`,
 `migration-32-reset-chunked-generation-schema.sql`,
 `migration-33-document-archive-status.sql`, and
 `migration-34-document-upload-limit-30mb.sql`, which do not exist in the repo.)
@@ -174,9 +182,19 @@ service-role-only aggregate functions.
 Migration 47 must be applied before deploying level-aware student signup. It
 materializes operational course levels, backfills existing subjects, and makes
 new password and Google signups validate Course + Level atomically.
+Migrations 49–50 add the private document-figure catalogue and tenant-safe
+question link. Migration 51 adds opt-in immutable publication and safe quiz
+duplication. Migration 52 adds level-aware batches and quiz assignments;
+migration 53 extends password and Google signup with optional, validated batch
+membership. Migration 54 adds scoring policies and atomic per-attempt policy
+snapshots. Migration 55 binds an official scoring standard to each course level,
+and migration 56 stores one commerce paper profile per course level. Apply all
+of 49–56 before enabling their matching deployment flags. Do not use the
+pre-integration `changes-pavyaa` migration numbers: they collided with the
+existing catalogue, level-enrollment, and branding migrations.
 
 For a fresh database, `migrations/schema.sql` already includes the final effects
-of migrations 31, 33, 34, 35, 37, 39, 40, and 47 (verified 2026-09-22 by grepping
+of migrations 31, 33, 34, 35, 37, 39, 40, 47, and 49–56 (verified 2026-09-23 by grepping
 `schema.sql` for each migration's distinguishing columns/functions — e.g.
 `question_snapshot` from migration 37, and the `_backend_provisioning_intent`/
 `provisioned_by_backend` trigger logic from migrations 39–40). The incremental

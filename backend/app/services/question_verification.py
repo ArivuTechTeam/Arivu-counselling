@@ -119,6 +119,37 @@ def _verification_payload(questions: list[Any], material: str = "") -> str:
     return json.dumps({"questions": rows}, ensure_ascii=False)
 
 
+def _field(question: Any, name: str):
+    return question.get(name) if isinstance(question, dict) else getattr(question, name, None)
+
+
+def _apply_numeric_checks(checks: list[GroundingCheck], questions: list[Any]) -> None:
+    """Independently recompute numerical answers (Phase 6.3-A) and route any that
+    disagree to teacher review. Gated by COMMERCE_PACK_ENABLED and only acts on
+    questions that carry a supported `calc`; everything else is untouched, so this
+    is a no-op when the pack is off (no `calc` is ever produced) — never a false
+    'verified'."""
+    if not getattr(get_settings(), "commerce_pack_enabled", False):
+        return
+    from app.services.numeric_checks import check_answer
+
+    for index, question in enumerate(questions):
+        if index >= len(checks) or checks[index].status == "unsupported":
+            continue
+        calc = _field(question, "calc")
+        q_type = _field(question, "type")
+        q_type = getattr(q_type, "value", q_type)
+        if q_type != "numerical" or not isinstance(calc, dict):
+            continue
+        answer = _field(question, "correct_answer")
+        expected = answer.get("value") if isinstance(answer, dict) else answer
+        if check_answer(calc.get("family"), calc.get("inputs") or {}, expected) == "mismatch":
+            checks[index].flag(
+                "needs_teacher_review",
+                "numeric_check_failed: an independent recompute disagrees with the stated answer.",
+            )
+
+
 def verify_generated_questions(
     questions: list[Any], material: str
 ) -> list[GroundingCheck]:
@@ -148,6 +179,7 @@ def verify_generated_questions(
                     "needs_teacher_review",
                     "Automatic grounding verification was unavailable; review manually.",
                 )
+        _apply_numeric_checks(checks, questions)
         return checks
 
     for index, check in enumerate(checks):
@@ -162,4 +194,5 @@ def verify_generated_questions(
                 if item.warnings
                 else item.status.replace("_", " ").capitalize() + ".",
             )
+    _apply_numeric_checks(checks, questions)
     return checks

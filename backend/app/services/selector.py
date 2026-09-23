@@ -15,6 +15,7 @@ from __future__ import annotations
 import random
 
 from app.lib.auth import CurrentProfile
+from app.lib.config import get_settings
 from app.lib.supabase_queries import select_all_in
 
 # Absolute ceiling on how many questions one selection scans / returns.
@@ -89,12 +90,38 @@ def _chapter_ids(service, subject_ids: list[str], tenant_id: str) -> list[str]:
     return [r["id"] for r in rows]
 
 
-def _released_practice_ids(service, question_ids: list[str], tenant_id: str) -> set[str]:
+def _accessible_published_set_ids(service, published_rows, tenant_id, profile) -> set[str]:
+    """Of these PUBLISHED quiz sets, the ones the student may practice from.
+
+    Legacy-course quizzes: all (unchanged). Assigned-batch quizzes: only those the
+    student can reach via an available batch assignment — so one batch's exam
+    items never leak into another batch's practice pool. With BATCHES_ENABLED off
+    (or no profile) this is every published set, i.e. the current behavior.
+    """
+    if not getattr(get_settings(), "batches_enabled", False) or profile is None:
+        return {row["id"] for row in published_rows}
+    from app.services.batch_access import assigned_quiz_ids
+
+    accessible_assigned = assigned_quiz_ids(
+        service, tenant_id=tenant_id, profile_id=profile.user_id
+    )
+    return {
+        row["id"]
+        for row in published_rows
+        if (row.get("audience_mode") or "legacy_course") == "legacy_course"
+        or row["id"] in accessible_assigned
+    }
+
+
+def _released_practice_ids(
+    service, question_ids: list[str], tenant_id: str, *, profile: CurrentProfile | None = None
+) -> set[str]:
     """Linked draft/archive content must not leak through self-serve practice.
 
-    Existing standalone approved bank items remain available. A quiz-linked
-    item is available only through at least one currently published quiz.
-    Separate practice/exam eligibility is a later additive schema change.
+    Existing standalone approved bank items remain available. A quiz-linked item
+    is available only through a quiz the student may access — a currently
+    published quiz, and (when batches are enabled) an assigned-batch quiz only for
+    that batch's members.
     """
     links = select_all_in(
         service, "quiz_variant_questions", "id,question_id,variant_id",
@@ -110,15 +137,23 @@ def _released_practice_ids(service, question_ids: list[str], tenant_id: str) -> 
         configure=lambda q: q.eq("tenant_id", tenant_id),
     )
     published = select_all_in(
-        service, "quiz_sets", "id", in_column="id",
+        service, "quiz_sets", "id, audience_mode", in_column="id",
         values=[row["quiz_set_id"] for row in variants],
         configure=lambda q: q.eq("tenant_id", tenant_id).eq("status", "published"),
     )
-    published_ids = {row["id"] for row in published}
-    released_variants = {row["id"] for row in variants if row["quiz_set_id"] in published_ids}
+    accessible_set_ids = _accessible_published_set_ids(service, published, tenant_id, profile)
+    released_variants = {row["id"] for row in variants if row["quiz_set_id"] in accessible_set_ids}
     return (set(question_ids) - linked_ids) | {
         row["question_id"] for row in links if row["variant_id"] in released_variants
     }
+
+
+def accessible_practice_question_ids(
+    service, question_ids: list[str], tenant_id: str, profile: CurrentProfile
+) -> set[str]:
+    """Public wrapper: the subset of `question_ids` this student may access via
+    practice rules (used to gate taking a shared challenge)."""
+    return _released_practice_ids(service, question_ids, tenant_id, profile=profile)
 
 
 def select_question_ids(
@@ -176,7 +211,7 @@ def select_question_ids(
         q = q.eq("difficulty", difficulty)
 
     rows = q.limit(_MAX_POOL).execute().data or []
-    released = _released_practice_ids(service, [r["id"] for r in rows], tenant_id)
+    released = _released_practice_ids(service, [r["id"] for r in rows], tenant_id, profile=profile)
     ids = [r["id"] for r in rows if r["id"] in released]
     random.shuffle(ids)
     return ids[:count]
@@ -218,7 +253,7 @@ def select_question_ids_by_type(
         .data
         or []
     )
-    released = _released_practice_ids(service, [row["id"] for row in rows], tenant_id)
+    released = _released_practice_ids(service, [row["id"] for row in rows], tenant_id, profile=profile)
     pools = {question_type: [] for question_type in requested_types}
     for row in rows:
         if row["id"] not in released:

@@ -9,6 +9,7 @@ import { GoogleAuthButton } from "@/components/auth/google-auth-button";
 import {
   getInstitutionBranding,
   InstitutionBranding,
+  listPublicBatches,
   listPublicCourses,
   PublicCourse,
 } from "@/lib/api";
@@ -98,6 +99,8 @@ export default function SignupPage() {
   const [courseId, setCourseId] = useState("");
   const [courseLevelId, setCourseLevelId] = useState("");
   const [courses, setCourses] = useState<PublicCourse[]>([]);
+  const [batchId, setBatchId] = useState("");
+  const [batches, setBatches] = useState<{ id: string; name: string }[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -153,6 +156,18 @@ export default function SignupPage() {
     }
   }, [tenantId]);
 
+  // A batch belongs to one exact course level. It can narrow access but cannot
+  // move a student into another level's subjects.
+  useEffect(() => {
+    setBatchId("");
+    setBatches([]);
+    if (tenantId && courseId && courseLevelId) {
+      listPublicBatches(tenantId, courseId, courseLevelId)
+        .then(setBatches)
+        .catch(() => setBatches([]));
+    }
+  }, [tenantId, courseId, courseLevelId]);
+
   async function handleSignup(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
@@ -169,6 +184,10 @@ export default function SignupPage() {
       setError("Please select your course and level.");
       return;
     }
+    if (batches.length > 0 && !batchId) {
+      setError("Please select your batch.");
+      return;
+    }
     setLoading(true);
     const supabase = createClient();
     const { data, error } = await supabase.auth.signUp({
@@ -181,6 +200,8 @@ export default function SignupPage() {
           // a student. It ignores browser-supplied role/tenant metadata.
           course_id: courseId,
           course_level_id: courseLevelId,
+          // Optional batch; the signup trigger validates it against this course.
+          ...(batchId ? { batch_id: batchId } : {}),
         },
       },
     });
@@ -222,6 +243,7 @@ export default function SignupPage() {
         destination,
         tenantId,
         institutionSlug,
+        batchId,
       );
     } catch {
       setError("Google sign-in could not start. Please try again.");
@@ -329,6 +351,21 @@ export default function SignupPage() {
                   </select>
                 </div>
               </div>
+
+              {batches.length > 0 && (
+                <div className="field">
+                  <label className="field-label" htmlFor="signup-batch">Batch <span className="req">*</span></label>
+                  <div className="field-box">
+                    <span className="field-icon"><BookIcon /></span>
+                    <select id="signup-batch" className="field-input" value={batchId} onChange={(e) => setBatchId(e.target.value)} required>
+                      <option value="">Select your batch…</option>
+                      {batches.map((b) => (
+                        <option key={b.id} value={b.id}>{b.name}</option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+              )}
 
               <button className="btn-signin" type="submit" disabled={loading || googleLoading || !tenantId}>
                 {loading ? "Creating account…" : "Create account →"}

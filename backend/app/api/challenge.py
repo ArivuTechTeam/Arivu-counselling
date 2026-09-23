@@ -611,6 +611,21 @@ def accept_challenge(
     if not is_creator and _is_expired(ch):
         raise HTTPException(status_code=410, detail="This challenge has expired.")
     _require_course_access(service, ch, profile)
+    # Batch gate: a challenge may only be taken by a student entitled to ALL of
+    # its questions, so assigned-batch exam items never leak across batches via a
+    # shared challenge link. With BATCHES_ENABLED off this is a no-op.
+    challenge_question_ids = list(dict.fromkeys(ch.get("question_ids") or []))
+    if challenge_question_ids:
+        from app.services.selector import accessible_practice_question_ids
+
+        reachable = accessible_practice_question_ids(
+            service, challenge_question_ids, profile.tenant_id, profile
+        )
+        if set(challenge_question_ids) - reachable:
+            raise HTTPException(
+                status_code=403,
+                detail="This challenge includes questions that aren't available to you.",
+            )
     questions = _challenge_questions(service, ch, profile.tenant_id)
     if len(questions) != len(ch.get("question_ids") or []):
         raise HTTPException(status_code=409, detail="This challenge is no longer available.")

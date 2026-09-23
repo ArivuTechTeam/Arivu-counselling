@@ -33,6 +33,7 @@ from app.lib.config import get_settings
 from app.lib.storage import download_bytes
 from app.lib.supabase import get_service_client
 from app.services.chunking_service import ChunkingService
+from app.services.document_figures import extract_and_store_for_document
 from app.services.document_profile import profile_document, profile_to_summary
 from app.services.extraction import ExtractedText, extract_text_with_pages, require_readable_generation_pages
 from app.services.master_blueprint_synthesizer import MasterBlueprintSynthesizer
@@ -152,6 +153,17 @@ class GenerationJobRunner:
             actor_profile = CurrentProfile(
                 user_id=job["created_by"], tenant_id=tenant_id, role="teacher"
             )
+
+            # Best-effort, flag-gated: extract captioned figures from the source
+            # PDF so generated questions can later reference a real diagram. This
+            # is a no-op unless FIGURE_ATTACH_ENABLED is on, and it must never
+            # affect the analysis outcome.
+            try:
+                extract_and_store_for_document(
+                    self._client, tenant_id=tenant_id, document_id=document_id
+                )
+            except Exception:  # noqa: BLE001
+                logger.warning("Figure extraction step failed for job %s", job_id)
 
             # Typed PDFs with a reliable index can be analysed deterministically.
             # This optional optimization is never required by the universal path.
@@ -419,6 +431,7 @@ def create_final_generation_job(
         .select("id")
         .eq("tenant_id", tenant_id)
         .eq("created_by", created_by)
+        .eq("document_id", document_id)
         .contains("params", {"kind": "final_generation", "request_key": request_key})
         .in_("status", ["queued", "running"])
         .limit(1)
@@ -502,7 +515,7 @@ def _run_final_generation(job_id: str, tenant_id: str) -> None:
             job_id, time.monotonic() - started, type(exc).__name__,
         )
         client.table("quiz_generation_jobs").update(
-            {"status": "failed", "phase": "failed", "error_message": str(exc)[:500], "updated_at": _now()}
+            {"status": "failed", "phase": "failed", "error_message": "Quiz generation could not finish. Check your source and selections, then retry. If it happens again, contact support with this task ID.", "updated_at": _now()}
         ).eq("id", job_id).eq("tenant_id", tenant_id).execute()
 
 

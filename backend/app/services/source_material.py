@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 
+from app.lib.config import get_settings
 from app.services.extraction import ExtractedText
 
 
@@ -34,6 +35,7 @@ def render_extracted_material(
     end = len(extracted.text) if max_chars is None else min(
         len(extracted.text), start + max_chars
     )
+    end = _safe_truncation_end(extracted.text, start, end)
     if not extracted.page_spans:
         return extracted.text[start:end]
 
@@ -47,6 +49,29 @@ def render_extracted_material(
         if body:
             parts.append(f"=== SOURCE PAGE {span.page_number} ===\n{body}")
     return "\n\n".join(parts).strip()
+
+
+def _safe_truncation_end(text: str, start: int, end: int) -> int:
+    """When the commerce pack is on, pull a mid-token truncation back to the last
+    whitespace so a figure like ``1,00,000`` or a table row is never split in half.
+
+    Only acts when the cut actually straddles a token (both sides non-space) and a
+    real truncation happened; otherwise the original ``end`` is returned unchanged,
+    so behaviour is byte-identical with the flag off or when the cut already lands
+    on a boundary. Never collapses a page to empty: if no whitespace precedes the
+    cut, the original ``end`` is kept."""
+    if not getattr(get_settings(), "commerce_pack_enabled", False):
+        return end
+    if end >= len(text) or end <= start:
+        return end
+    if text[end - 1].isspace() or text[end].isspace():
+        return end
+    cut = end
+    while cut > start and not text[cut - 1].isspace():
+        cut -= 1
+    while cut > start and text[cut - 1].isspace():
+        cut -= 1
+    return cut if cut > start else end
 
 
 def normalise_evidence(value: str) -> str:

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 
@@ -14,12 +14,15 @@ import { QuestionReviewCard } from "@/components/teacher/question-review-card";
 import { QuestionReviewNavigator } from "@/components/teacher/question-review-navigator";
 import { statusLabel, variantLabel } from "@/lib/format";
 import {
+  DocumentFigure,
   QuizSetDetail,
   ReviewQuestion,
   archiveQuizSet,
   approveAllQuestions,
   getQuizSet,
+  listDocumentFigures,
   publishQuizSet,
+  duplicateQuizSet,
 } from "@/lib/api";
 
 type ReviewFilter =
@@ -67,7 +70,10 @@ export default function ReviewDetailPage({ params }: { params: { id: string } })
   const router = useRouter();
   const { notify } = useToast();
   const [detail, setDetail] = useState<QuizSetDetail | null>(null);
+  const [documentFigures, setDocumentFigures] = useState<DocumentFigure[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const copyKey = useRef<string | null>(null);
+  const [copying, setCopying] = useState(false);
   const [publishing, setPublishing] = useState(false);
   const [approving, setApproving] = useState(false);
   const [archiving, setArchiving] = useState(false);
@@ -123,7 +129,29 @@ export default function ReviewDetailPage({ params }: { params: { id: string } })
     };
   }, [params.id]);
 
+  // Load the source document's figure catalog once, so each card can show its
+  // attached figure and offer swap/add. Empty (or absent document) is fine.
+  useEffect(() => {
+    const documentId = detail?.document_id;
+    if (!documentId) {
+      setDocumentFigures([]);
+      return;
+    }
+    let cancelled = false;
+    listDocumentFigures(documentId)
+      .then((figures) => {
+        if (!cancelled) setDocumentFigures(figures);
+      })
+      .catch(() => {
+        if (!cancelled) setDocumentFigures([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [detail?.document_id]);
+
   function updateQuestion(updated: ReviewQuestion) {
+    if (detail?.reuse_enabled) { load(); return; }
     setDetail((d) =>
       d
         ? {
@@ -146,12 +174,36 @@ export default function ReviewDetailPage({ params }: { params: { id: string } })
       ?.scrollIntoView({ behavior: "smooth", block: "start" });
   }
 
+  async function handleDuplicate() {
+    if (!detail || copying) return;
+    setCopying(true);
+    setError(null);
+    const storageKey = `quiz-copy-intent:${params.id}`;
+    try { copyKey.current = window.sessionStorage.getItem(storageKey); } catch { /* retry still retains the in-memory key */ }
+    copyKey.current ??= crypto.randomUUID();
+    try { window.sessionStorage.setItem(storageKey, copyKey.current); } catch { /* storage may be unavailable */ }
+    try {
+      const copied = await duplicateQuizSet(params.id, `Copy of ${detail.title}`.slice(0, 200), copyKey.current);
+      try { window.sessionStorage.removeItem(storageKey); } catch { /* copy already saved */ }
+      copyKey.current = null;
+      router.push(`/dashboard/teacher/review/${copied.quiz_set_id}`);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not duplicate the quiz. Retry to recover the same draft.");
+    } finally { setCopying(false); }
+  }
+
   async function handlePublish() {
     setError(null);
     setPublishing(true);
     try {
-      const s = await publishQuizSet(params.id);
-      setDetail((d) => (d ? { ...d, status: s.status } : d));
+      const s = await publishQuizSet(params.id, detail?.publication_token);
+      setDetail((d) => d ? {
+        ...d, status: s.status,
+        release_locked: d.reuse_enabled ? true : d.release_locked,
+        variants: d.reuse_enabled ? d.variants.map((v) => ({
+          ...v, questions: v.questions.map((q) => ({ ...q, release_locked: true })),
+        })) : d.variants,
+      } : d);
       celebrateBurst();
       notify("🎉 Quiz published — students can now see it", "success");
     } catch (e) {
@@ -172,7 +224,7 @@ export default function ReviewDetailPage({ params }: { params: { id: string } })
       notify(
         count > 0
           ? `✓ ${count} question${count === 1 ? "" : "s"} approved`
-          : "No verified questions were waiting for bulk approval. Review flagged questions individually.",
+          : "No questions were ready for bulk approval. Open any with an invalid answer format to fix them.",
         "success",
       );
     } catch (e) {
@@ -222,8 +274,7 @@ export default function ReviewDetailPage({ params }: { params: { id: string } })
   const unresolved = pending + needsEdit;
   const approvablePending = all.filter(
     (q) =>
-      (q.review_status === "pending_review" || q.review_status === "needs_edit") &&
-      q.verification_status === "verified",
+      q.review_status === "pending_review" || q.review_status === "needs_edit",
   ).length;
   const questionNumbers = Object.fromEntries(
     all.map((question, index) => [question.id, index + 1]),
@@ -287,6 +338,9 @@ export default function ReviewDetailPage({ params }: { params: { id: string } })
                 </span>
               </div>
             </div>
+            {detail.reuse_enabled && <Button variant="outline" disabled={copying} onClick={handleDuplicate}>
+              {copying ? "Copying..." : "Duplicate as draft"}
+            </Button>}
             <QuestionPaperButtons
               quizSetId={params.id}
               title={detail.title}
@@ -294,6 +348,7 @@ export default function ReviewDetailPage({ params }: { params: { id: string } })
             />
           </div>
 
+          {detail.release_locked && <p className="px-5 py-3 text-sm text-muted-foreground">This paper is protected to preserve student results. Duplicate it to edit a new draft.</p>}
           <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3 sm:px-5">
             <div className="flex max-w-full gap-2 overflow-x-auto pb-0.5" aria-label="Filter questions by review status">
               <StatusFilter
@@ -356,7 +411,7 @@ export default function ReviewDetailPage({ params }: { params: { id: string } })
               size="sm"
               variant="outline"
               onClick={handleApproveAll}
-              disabled={approving || publishing}
+              disabled={approving || publishing || detail.release_locked}
             >
               {approving ? "Approving…" : `Approve all (${approvablePending})`}
             </Button>
@@ -364,7 +419,7 @@ export default function ReviewDetailPage({ params }: { params: { id: string } })
           <Button
             size="sm"
             onClick={handlePublish}
-            disabled={publishing || detail.status === "published" || unresolved > 0}
+            disabled={publishing || copying || detail.status === "published" || detail.status === "archived" || unresolved > 0}
             title={
               unresolved > 0
                 ? `Review ${unresolved} remaining question${unresolved === 1 ? "" : "s"} before publishing`
@@ -434,7 +489,7 @@ export default function ReviewDetailPage({ params }: { params: { id: string } })
       {detail.status !== "published" && unresolved > 0 && (
         <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
           Review {unresolved} remaining question{unresolved === 1 ? "" : "s"} before
-          publishing. Approve all accepts verified questions only; review flagged questions individually.
+          publishing. Approve all approves every valid pending question, including AI-flagged ones; only invalid answer formats are skipped.
         </p>
       )}
 
@@ -468,6 +523,7 @@ export default function ReviewDetailPage({ params }: { params: { id: string } })
                       index={globalIndex}
                       question={q}
                       onChange={updateQuestion}
+                      documentFigures={documentFigures}
                     />
                   </div>
                 );

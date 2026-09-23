@@ -1485,5 +1485,846 @@ revoke all on table
 from anon, authenticated;
 
 -- ============================================================================
--- END OF SCHEMA
+-- END OF ORIGINAL V1 BASELINE (integrated feature DDL follows)
+-- ============================================================================
+
+-- ============================================================================
+-- INTEGRATED FEATURES ADDED AFTER THE ORIGINAL V1 BASELINE
+-- Kept identical to migrations 49-56 so this file remains a complete fresh
+-- install while existing databases can apply the numbered files in order.
+-- ============================================================================
+-- Migration 49 — Document figures (Phase 1 of document-figure support)
+-- Apply after migration 48. Additive and safe; no existing row is changed.
+-- Feature rollout is controlled by FIGURE_ATTACH_ENABLED at deployment level.
+begin;
+
+create unique index if not exists uq_documents_id_tenant
+  on public.documents(id, tenant_id);
+
+-- Private bucket for extracted figure PNGs. Served ONLY via short-lived signed
+-- URLs minted by the trusted backend — never public. 5 MiB/PNG ceiling.
+insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+values ('question-figures', 'question-figures', false, 5242880, array['image/png'])
+on conflict (id) do nothing;
+
+-- One row per CAPTIONED figure extracted from a source document. The catalog the
+-- (later) text-only generator reads to reference a real figure by id. Deleting
+-- the source document cascades its figures.
+create table if not exists public.document_figures (
+  id            uuid primary key default gen_random_uuid(),
+  tenant_id     uuid not null references public.tenants(id) on delete cascade,
+  document_id   uuid not null,
+  page          int,                    -- 1-based source page
+  bbox          jsonb,                  -- {x0,y0,x1,y1} in PDF points (provenance)
+  label         text,                   -- e.g. "Figure 8.1" / "Fig 3.4"
+  caption       text,                   -- full caption text
+  nearby_text   text,                   -- textual description for the catalog
+  storage_path  text not null,          -- question-figures/{tenant}/{document}/{id}.png
+  width         int,
+  height        int,
+  created_at    timestamptz not null default now(),
+  constraint document_figures_document_tenant_fk
+    foreign key (document_id, tenant_id)
+    references public.documents(id, tenant_id) on delete cascade,
+  unique (id, tenant_id)
+);
+create index if not exists idx_docfig_document on public.document_figures(document_id);
+create index if not exists idx_docfig_tenant   on public.document_figures(tenant_id);
+
+alter table public.document_figures enable row level security;
+revoke all on public.document_figures from public, anon, authenticated;
+grant select, insert, update, delete on public.document_figures to service_role;
+
+-- Staff read only their own tenant's figures. All writes happen from the trusted
+-- backend using the service_role key (which bypasses RLS), so there is no
+-- client-facing write policy — same model as ai_extraction_jobs / faculty_jobs.
+drop policy if exists "staff read own tenant figures" on public.document_figures;
+create policy "staff read own tenant figures" on public.document_figures
+  for select using (tenant_id = current_tenant_id() and is_staff());
+
+commit;
+-- Migration 50 — link a generated question to a source-document figure (Phase 2).
+--
+-- Additive + nullable. A question MAY carry one figure extracted from its source
+-- document (see migration-49). Deleting the figure only clears the link via
+-- ON DELETE SET NULL — it never deletes the question. Attachment is gated in app
+-- code by FIGURE_ATTACH_ENABLED, is best-effort (never blocks generation), and is
+-- confirmed/adjusted by the teacher in the review queue.
+begin;
+
+alter table public.questions add column if not exists figure_id uuid;
+
+do $$
+begin
+  if not exists (
+    select 1 from pg_constraint
+    where conname = 'questions_figure_tenant_fk'
+      and conrelid = 'public.questions'::regclass
+  ) then
+    alter table public.questions
+      add constraint questions_figure_tenant_fk
+      foreign key (figure_id, tenant_id)
+      references public.document_figures(id, tenant_id) on delete set null (figure_id);
+  end if;
+end $$;
+
+-- Partial index: only linked questions are worth indexing (most carry no figure).
+create index if not exists idx_questions_figure_id
+  on public.questions(figure_id) where figure_id is not null;
+
+commit;
+
+notify pgrst, 'reload schema';
+-- Migration 51 — immutable publication and safe quiz reuse.
+-- Apply after migration 50.
+-- Additive, rerunnable, service-only RPCs. No question/attempt data is deleted.
+begin;
+alter table public.questions add column if not exists content_version bigint not null default 1;
+alter table public.questions add column if not exists release_locked boolean not null default false;
+alter table public.questions add column if not exists origin_question_id uuid references public.questions(id) on delete set null;
+alter table public.questions add column if not exists source_quiz_id uuid references public.quiz_sets(id) on delete set null;
+alter table public.quiz_sets add column if not exists released_at timestamptz;
+alter table public.quiz_sets add column if not exists last_publication_token text;
+create index if not exists questions_origin_idx on public.questions(origin_question_id) where origin_question_id is not null;
+create index if not exists questions_source_quiz_idx on public.questions(source_quiz_id) where source_quiz_id is not null;
+create unique index if not exists uq_quiz_sets_id_tenant
+  on public.quiz_sets(id, tenant_id);
+
+create table if not exists public.quiz_copy_requests (
+ tenant_id uuid not null references public.tenants(id) on delete cascade,
+ actor_id uuid not null,
+ request_key uuid not null,
+ source_id uuid not null,
+ title text not null,
+ quiz_id uuid not null,
+ primary key(tenant_id,actor_id,request_key),
+ constraint quiz_copy_requests_actor_tenant_fk
+  foreign key (actor_id, tenant_id) references public.profiles(id, tenant_id) on delete cascade,
+ constraint quiz_copy_requests_source_tenant_fk
+  foreign key (source_id, tenant_id) references public.quiz_sets(id, tenant_id),
+ constraint quiz_copy_requests_quiz_tenant_fk
+  foreign key (quiz_id, tenant_id) references public.quiz_sets(id, tenant_id)
+);
+create index if not exists quiz_copy_requests_actor_idx on public.quiz_copy_requests(actor_id);
+create index if not exists quiz_copy_requests_quiz_idx on public.quiz_copy_requests(quiz_id);
+alter table public.quiz_copy_requests enable row level security;
+revoke all on public.quiz_copy_requests from public,anon,authenticated;
+grant select,insert on public.quiz_copy_requests to service_role;
+
+-- Existing quizzes remain behaviour-neutral while QUIZ_REUSE_ENABLED is off.
+-- The atomic publish RPC below sets released_at and release_locked together for
+-- quizzes published through the new workflow; no historical row is backfilled.
+
+create or replace function public.guard_released_question() returns trigger
+language plpgsql set search_path=public as $$
+#variable_conflict use_column
+begin
+ if tg_op='DELETE' then
+  if old.release_locked then raise exception 'quiz_locked' using errcode='PT409'; end if;
+  return old;
+ end if;
+ -- Author/reviewer anonymization and lineage FK cleanup remain permitted.
+ if old.release_locked and ((to_jsonb(new)-array['created_by','reviewed_by','origin_question_id','source_quiz_id','content_version'])
+   is distinct from (to_jsonb(old)-array['created_by','reviewed_by','origin_question_id','source_quiz_id','content_version'])) then
+  raise exception 'quiz_locked' using errcode='PT409';
+ end if;
+ new.content_version:=old.content_version+1;
+ return new;
+end $$;
+drop trigger if exists guard_released_question on public.questions;
+create trigger guard_released_question before update or delete on public.questions
+ for each row execute function public.guard_released_question();
+
+create or replace function public.guard_released_structure() returns trigger
+language plpgsql set search_path=public as $$
+#variable_conflict use_column
+declare ids uuid[]; s record;
+begin
+ if tg_table_name='quiz_variants' then
+  ids:=array[case when tg_op<>'INSERT' then old.quiz_set_id end,case when tg_op<>'DELETE' then new.quiz_set_id end];
+ else
+  select array_agg(quiz_set_id) into ids from public.quiz_variants
+   where id in (case when tg_op<>'INSERT' then old.variant_id end,case when tg_op<>'DELETE' then new.variant_id end);
+ end if;
+ -- Lock parents also for drafts: membership cannot change during release/copy.
+ for s in select id,released_at from public.quiz_sets where id=any(ids) order by id for update loop
+  if s.released_at is not null then raise exception 'quiz_locked' using errcode='PT409'; end if;
+ end loop;
+ if tg_op='DELETE' then return old; end if;
+ return new;
+end $$;
+drop trigger if exists guard_released_variant on public.quiz_variants;
+create trigger guard_released_variant before insert or update or delete on public.quiz_variants
+ for each row execute function public.guard_released_structure();
+drop trigger if exists guard_released_membership on public.quiz_variant_questions;
+create trigger guard_released_membership before insert or update or delete on public.quiz_variant_questions
+ for each row execute function public.guard_released_structure();
+
+create or replace function public.assert_quiz_owner(p_id uuid,p_tenant uuid,p_actor uuid) returns void
+language plpgsql security invoker set search_path=public as $$
+#variable_conflict use_column
+begin
+ if not exists(select 1 from public.quiz_sets s join public.profiles p on p.id=s.created_by
+  join public.tenants t on t.id=s.tenant_id
+  where s.id=p_id and s.tenant_id=p_tenant and s.created_by=p_actor
+   and p.tenant_id=p_tenant and p.role='teacher' and t.is_active
+   and (s.subject_id is null or exists(select 1 from public.teacher_subjects ts
+    where ts.subject_id=s.subject_id and ts.teacher_id=p_actor and ts.tenant_id=p_tenant))) then
+  raise exception 'quiz_no_access' using errcode='PT404';
+ end if;
+end $$;
+
+create or replace function public.quiz_publication_state(p_id uuid,p_tenant uuid,p_actor uuid) returns jsonb
+language plpgsql security invoker set search_path=public as $$
+#variable_conflict use_column
+declare token text; locked boolean;
+begin
+ perform public.assert_quiz_owner(p_id,p_tenant,p_actor);
+ select md5(jsonb_build_object('subject',s.subject_id,'document',s.document_id,'status',s.status,
+  'variants',coalesce((select jsonb_agg(jsonb_build_array(v.id,v.variant_type,v.time_limit_minutes) order by v.id)
+    from public.quiz_variants v where v.quiz_set_id=s.id),'[]'),
+  'items',coalesce((select jsonb_agg(jsonb_build_array(l.id,l.variant_id,l.question_id,l.order_index,l.marks_override,q.content_version) order by l.id)
+    from public.quiz_variants v join public.quiz_variant_questions l on l.variant_id=v.id
+    join public.questions q on q.id=l.question_id where v.quiz_set_id=s.id),'[]'))::text),s.released_at is not null
+ into token,locked from public.quiz_sets s where s.id=p_id;
+ return jsonb_build_object('publication_token',token,'release_locked',locked,'reuse_enabled',true);
+end $$;
+
+create or replace function public.publish_quiz_atomic(p_id uuid,p_tenant uuid,p_actor uuid,p_token text) returns jsonb
+language plpgsql security invoker set search_path=public as $$
+#variable_conflict use_column
+declare s public.quiz_sets; v record; n integer; total numeric;
+begin
+ perform public.assert_quiz_owner(p_id,p_tenant,p_actor);
+ select * into s from public.quiz_sets where id=p_id and tenant_id=p_tenant for update;
+ perform public.assert_quiz_owner(p_id,p_tenant,p_actor);
+ perform 1 from public.questions q where q.id in(select l.question_id from public.quiz_variant_questions l
+  join public.quiz_variants v on v.id=l.variant_id where v.quiz_set_id=p_id) order by q.id for update;
+ if s.status='published' and p_token is not null and s.last_publication_token=p_token then return to_jsonb(s); end if;
+ if p_token is null or p_token is distinct from (public.quiz_publication_state(p_id,p_tenant,p_actor)->>'publication_token') then
+  raise exception 'quiz_changed' using errcode='PT409';
+ end if;
+ if s.status='archived' then raise exception 'quiz_restore_first' using errcode='PT409'; end if;
+ if s.status='published' then return to_jsonb(s); end if;
+ if not exists(select 1 from public.quiz_variants where quiz_set_id=p_id) then
+  raise exception 'quiz_empty' using errcode='PT409'; end if;
+ for v in select * from public.quiz_variants where quiz_set_id=p_id order by id loop
+  if v.tenant_id<>p_tenant or exists(select 1 from public.quiz_variant_questions l join public.questions q on q.id=l.question_id
+   where l.variant_id=v.id and (l.tenant_id<>p_tenant or q.tenant_id<>p_tenant or q.created_by is distinct from p_actor
+   or q.review_status not in ('approved','rejected'))) then raise exception 'quiz_review_required' using errcode='PT409'; end if;
+  select count(*),sum(coalesce(l.marks_override,q.marks)) into n,total
+   from public.quiz_variant_questions l join public.questions q on q.id=l.question_id
+   where l.variant_id=v.id and q.review_status='approved';
+  if n=0 or total is null or exists(select 1 from public.quiz_variant_questions l join public.questions q on q.id=l.question_id
+   where l.variant_id=v.id and q.review_status='approved' and coalesce(l.marks_override,q.marks)<=0) then
+   raise exception 'quiz_empty' using errcode='PT409'; end if;
+  if s.released_at is null then update public.quiz_variants set total_marks=total where id=v.id; end if;
+ end loop;
+ update public.questions set release_locked=true where not release_locked and id in(
+  select l.question_id from public.quiz_variant_questions l join public.quiz_variants v on v.id=l.variant_id where v.quiz_set_id=p_id);
+ update public.quiz_sets set status='published',published_at=now(),released_at=coalesce(released_at,now()),last_publication_token=p_token where id=p_id returning * into s;
+ insert into public.events(tenant_id,actor_id,actor_role,event_type,subject_type,subject_id)
+  values(p_tenant,p_actor,'teacher','quiz.published','quiz_set',p_id);
+ return to_jsonb(s);
+end $$;
+
+create or replace function public.copy_quiz_draft(p_id uuid,p_tenant uuid,p_actor uuid,p_key uuid,p_title text) returns jsonb
+language plpgsql security invoker set search_path=public as $$
+#variable_conflict use_column
+declare s public.quiz_sets; prior public.quiz_copy_requests; dest uuid:=gen_random_uuid(); nv uuid; nq uuid;
+ v record; l record; q public.questions; count_items integer; payload jsonb;
+begin
+ perform public.assert_quiz_owner(p_id,p_tenant,p_actor);
+ if p_key is null or length(trim(p_title)) not between 1 and 200 then raise exception 'quiz_invalid_title' using errcode='PT400'; end if;
+ perform pg_advisory_xact_lock(hashtextextended(p_tenant::text||p_actor::text||p_key::text,47));
+ select * into prior from public.quiz_copy_requests where tenant_id=p_tenant and actor_id=p_actor and request_key=p_key;
+ if found then
+  if prior.source_id<>p_id or prior.title<>p_title then raise exception 'quiz_request_conflict' using errcode='PT409'; end if;
+  return jsonb_build_object('quiz_set_id',prior.quiz_id,'replayed',true);
+ end if;
+ select * into s from public.quiz_sets where id=p_id and tenant_id=p_tenant for update;
+ perform public.assert_quiz_owner(p_id,p_tenant,p_actor);
+ perform 1 from public.questions q where q.id in(select l.question_id from public.quiz_variant_questions l
+  join public.quiz_variants v on v.id=l.variant_id where v.quiz_set_id=p_id) order by q.id for update;
+ select count(*) into count_items from public.quiz_variant_questions l join public.quiz_variants v on v.id=l.variant_id where v.quiz_set_id=p_id;
+ if count_items not between 1 and 500 then raise exception 'quiz_copy_size' using errcode='PT400'; end if;
+ insert into public.quiz_sets(id,tenant_id,chapter_id,subject_id,document_id,title,description,status,created_by)
+  values(dest,p_tenant,s.chapter_id,s.subject_id,s.document_id,p_title,s.description,'draft',p_actor);
+ for v in select * from public.quiz_variants where quiz_set_id=p_id order by created_at,id loop
+  if v.tenant_id<>p_tenant then raise exception 'quiz_no_access' using errcode='PT404'; end if;
+  nv:=gen_random_uuid();
+  insert into public.quiz_variants(id,tenant_id,quiz_set_id,variant_type,time_limit_minutes,total_marks)
+   values(nv,p_tenant,dest,v.variant_type,v.time_limit_minutes,null);
+  for l in select * from public.quiz_variant_questions where variant_id=v.id order by order_index,id loop
+   select * into q from public.questions where id=l.question_id and tenant_id=p_tenant and created_by=p_actor;
+   if not found or l.tenant_id<>p_tenant then raise exception 'quiz_no_access' using errcode='PT404'; end if;
+   nq:=gen_random_uuid();
+   -- Copy the full installed question shape, including existing figure_id and
+   -- future additive fields. Reset identity and release state, never the source.
+   payload:=to_jsonb(q)||jsonb_build_object('id',nq,'created_at',now(),'content_version',1,'release_locked',false,
+    'origin_question_id',coalesce(q.origin_question_id,q.id),'source_quiz_id',coalesce(q.source_quiz_id,p_id));
+   insert into public.questions select (jsonb_populate_record(null::public.questions,payload)).*;
+   insert into public.quiz_variant_questions(tenant_id,variant_id,question_id,order_index,marks_override)
+    values(p_tenant,nv,nq,l.order_index,l.marks_override);
+  end loop;
+ end loop;
+ insert into public.quiz_copy_requests values(p_tenant,p_actor,p_key,p_id,p_title,dest);
+ insert into public.events(tenant_id,actor_id,actor_role,event_type,subject_type,subject_id,metadata)
+  values(p_tenant,p_actor,'teacher','quiz.duplicated','quiz_set',dest,jsonb_build_object('source_quiz_id',p_id,'question_count',count_items));
+ return jsonb_build_object('quiz_set_id',dest,'replayed',false);
+end $$;
+
+revoke all on function public.guard_released_question(),public.guard_released_structure(),
+ public.assert_quiz_owner(uuid,uuid,uuid),public.quiz_publication_state(uuid,uuid,uuid),
+ public.publish_quiz_atomic(uuid,uuid,uuid,text),public.copy_quiz_draft(uuid,uuid,uuid,uuid,text) from public,anon,authenticated;
+grant execute on function public.guard_released_question(),public.guard_released_structure(),
+ public.assert_quiz_owner(uuid,uuid,uuid),public.quiz_publication_state(uuid,uuid,uuid),
+ public.publish_quiz_atomic(uuid,uuid,uuid,text),public.copy_quiz_draft(uuid,uuid,uuid,uuid,text) to service_role;
+commit;
+notify pgrst,'reload schema';
+-- Migration 52 — Level-aware batches, memberships and quiz assignments.
+-- Apply after migrations 49-51 and the existing Course -> Level migration 47.
+-- Browser roles remain denied; all application writes use the tenant-scoped API.
+begin;
+
+create unique index if not exists uq_courses_id_tenant
+  on public.courses(id, tenant_id);
+create unique index if not exists uq_quiz_sets_id_tenant
+  on public.quiz_sets(id, tenant_id);
+
+create table if not exists public.batches (
+  id uuid primary key default gen_random_uuid(),
+  tenant_id uuid not null references public.tenants(id) on delete cascade,
+  course_id uuid not null,
+  course_level_id uuid not null,
+  name text not null,
+  exam_session text,
+  starts_on date,
+  ends_on date,
+  status text not null default 'active' check (status in ('active','archived')),
+  created_by uuid,
+  created_at timestamptz not null default now(),
+  constraint batches_course_tenant_fk
+    foreign key (course_id, tenant_id)
+    references public.courses(id, tenant_id) on delete cascade,
+  constraint batches_level_scope_fk
+    foreign key (course_level_id, tenant_id, course_id)
+    references public.course_levels(id, tenant_id, course_id) on delete cascade,
+  constraint batches_creator_tenant_fk
+    foreign key (created_by, tenant_id)
+    references public.profiles(id, tenant_id) on delete set null (created_by),
+  constraint batches_tenant_level_name_key
+    unique (tenant_id, course_level_id, name),
+  constraint batches_id_tenant_key unique (id, tenant_id),
+  constraint batches_dates_check
+    check (starts_on is null or ends_on is null or starts_on <= ends_on)
+);
+create index if not exists idx_batches_tenant_level
+  on public.batches(tenant_id, course_id, course_level_id, status);
+
+create table if not exists public.batch_memberships (
+  id uuid primary key default gen_random_uuid(),
+  tenant_id uuid not null references public.tenants(id) on delete cascade,
+  batch_id uuid not null,
+  profile_id uuid not null,
+  membership_role text not null default 'student'
+    check (membership_role in ('student','teacher')),
+  active boolean not null default true,
+  valid_from date,
+  valid_to date,
+  created_at timestamptz not null default now(),
+  constraint batch_memberships_batch_tenant_fk
+    foreign key (batch_id, tenant_id)
+    references public.batches(id, tenant_id) on delete cascade,
+  constraint batch_memberships_profile_tenant_fk
+    foreign key (profile_id, tenant_id)
+    references public.profiles(id, tenant_id) on delete cascade,
+  constraint batch_memberships_tenant_batch_profile_key
+    unique (tenant_id, batch_id, profile_id),
+  constraint batch_memberships_dates_check
+    check (valid_from is null or valid_to is null or valid_from <= valid_to)
+);
+create index if not exists idx_batch_memberships_member
+  on public.batch_memberships(tenant_id, profile_id, active);
+create index if not exists idx_batch_memberships_batch
+  on public.batch_memberships(tenant_id, batch_id);
+
+create table if not exists public.quiz_assignments (
+  id uuid primary key default gen_random_uuid(),
+  tenant_id uuid not null references public.tenants(id) on delete cascade,
+  quiz_set_id uuid not null,
+  batch_id uuid not null,
+  available_from timestamptz,
+  available_to timestamptz,
+  status text not null default 'active' check (status in ('active','withdrawn')),
+  created_by uuid,
+  created_at timestamptz not null default now(),
+  constraint quiz_assignments_quiz_tenant_fk
+    foreign key (quiz_set_id, tenant_id)
+    references public.quiz_sets(id, tenant_id) on delete cascade,
+  constraint quiz_assignments_batch_tenant_fk
+    foreign key (batch_id, tenant_id)
+    references public.batches(id, tenant_id) on delete cascade,
+  constraint quiz_assignments_creator_tenant_fk
+    foreign key (created_by, tenant_id)
+    references public.profiles(id, tenant_id) on delete set null (created_by),
+  constraint quiz_assignments_tenant_quiz_batch_key
+    unique (tenant_id, quiz_set_id, batch_id),
+  constraint quiz_assignments_window_check
+    check (available_from is null or available_to is null or available_from <= available_to)
+);
+create index if not exists idx_quiz_assignments_batch
+  on public.quiz_assignments(tenant_id, batch_id, status);
+create index if not exists idx_quiz_assignments_quiz
+  on public.quiz_assignments(tenant_id, quiz_set_id);
+
+alter table public.quiz_sets
+  add column if not exists audience_mode text not null default 'legacy_course';
+do $$ begin
+  alter table public.quiz_sets add constraint quiz_sets_audience_mode_check
+    check (audience_mode in ('legacy_course','assigned_batches'));
+exception when duplicate_object then null; end $$;
+
+alter table public.batches enable row level security;
+alter table public.batch_memberships enable row level security;
+alter table public.quiz_assignments enable row level security;
+
+revoke all on table public.batches, public.batch_memberships,
+  public.quiz_assignments from public, anon, authenticated;
+grant select, insert, update, delete on table public.batches,
+  public.batch_memberships, public.quiz_assignments to service_role;
+
+drop policy if exists "read own tenant batches" on public.batches;
+create policy "read own tenant batches" on public.batches
+  for select to authenticated
+  using (tenant_id = (select public.current_tenant_id()) or (select public.is_super_admin()));
+drop policy if exists "institution admins manage batches" on public.batches;
+create policy "institution admins manage batches" on public.batches
+  for all to authenticated
+  using (tenant_id = (select public.current_tenant_id())
+         and (select public.current_role_name()) = 'institution_admin')
+  with check (tenant_id = (select public.current_tenant_id())
+              and (select public.current_role_name()) = 'institution_admin');
+
+drop policy if exists "read own membership or admin" on public.batch_memberships;
+create policy "read own membership or admin" on public.batch_memberships
+  for select to authenticated
+  using (tenant_id = (select public.current_tenant_id()) and
+         (profile_id = (select auth.uid()) or
+          (select public.current_role_name()) = 'institution_admin'));
+drop policy if exists "institution admins manage memberships" on public.batch_memberships;
+create policy "institution admins manage memberships" on public.batch_memberships
+  for all to authenticated
+  using (tenant_id = (select public.current_tenant_id())
+         and (select public.current_role_name()) = 'institution_admin')
+  with check (tenant_id = (select public.current_tenant_id())
+              and (select public.current_role_name()) = 'institution_admin');
+
+drop policy if exists "staff read assignments" on public.quiz_assignments;
+create policy "staff read assignments" on public.quiz_assignments
+  for select to authenticated
+  using (tenant_id = (select public.current_tenant_id()) and (select public.is_staff()));
+
+commit;
+notify pgrst, 'reload schema';
+-- Migration 53 — Level-aware student signup with optional batch membership.
+-- Extends the current Course -> Level signup functions; it must not regress
+-- students to course-wide enrollment.
+begin;
+
+create or replace function public.handle_new_user()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  selected_tenant uuid;
+  requested_course uuid;
+  requested_level uuid;
+  requested_batch uuid;
+  google_oauth_signup boolean;
+begin
+  if coalesce(new.raw_user_meta_data->>'_backend_provisioning_intent', 'false') = 'true'
+     or coalesce(new.raw_app_meta_data->>'provisioned_by_backend', 'false') = 'true' then
+    return new;
+  end if;
+
+  requested_course := nullif(new.raw_user_meta_data->>'course_id', '')::uuid;
+  requested_level := nullif(new.raw_user_meta_data->>'course_level_id', '')::uuid;
+  requested_batch := nullif(new.raw_user_meta_data->>'batch_id', '')::uuid;
+  google_oauth_signup :=
+    coalesce(new.raw_app_meta_data->>'provider', '') = 'google'
+    or (coalesce(new.raw_app_meta_data->'providers', '[]'::jsonb) ? 'google');
+
+  if requested_course is null or requested_level is null then
+    if google_oauth_signup then return new; end if;
+    raise exception 'A valid course and level are required for public signup';
+  end if;
+
+  select c.tenant_id into selected_tenant
+  from public.courses c
+  join public.course_levels l
+    on l.course_id = c.id and l.tenant_id = c.tenant_id and l.is_active = true
+  join public.tenants t on t.id = c.tenant_id and t.is_active = true
+  where c.id = requested_course and l.id = requested_level;
+  if selected_tenant is null then
+    raise exception 'A valid course and level are required for public signup';
+  end if;
+
+  if requested_batch is not null and not exists (
+    select 1 from public.batches b
+    where b.id = requested_batch
+      and b.tenant_id = selected_tenant
+      and b.course_id = requested_course
+      and b.course_level_id = requested_level
+      and b.status = 'active'
+  ) then
+    raise exception 'The selected batch is not available for this course and level';
+  end if;
+
+  insert into public.profiles (id, tenant_id, role, full_name)
+  values (new.id, selected_tenant, 'student'::public.user_role,
+          new.raw_user_meta_data->>'full_name');
+  insert into public.enrollments (tenant_id, profile_id, course_id, course_level_id)
+  values (selected_tenant, new.id, requested_course, requested_level)
+  on conflict (profile_id, course_id)
+  do update set course_level_id = excluded.course_level_id;
+
+  if requested_batch is not null then
+    insert into public.batch_memberships
+      (tenant_id, batch_id, profile_id, membership_role)
+    values (selected_tenant, requested_batch, new.id, 'student')
+    on conflict (tenant_id, batch_id, profile_id)
+    do update set active = true;
+  end if;
+  return new;
+end;
+$$;
+
+alter function public.handle_new_user() owner to postgres;
+revoke all on function public.handle_new_user()
+  from public, anon, authenticated, service_role;
+grant execute on function public.handle_new_user() to supabase_auth_admin;
+
+drop function if exists public.complete_google_signup(uuid, uuid);
+
+create or replace function public.complete_google_signup(
+  p_course_id uuid,
+  p_course_level_id uuid,
+  p_batch_id uuid
+)
+returns table (
+  out_tenant_id uuid,
+  out_role public.user_role,
+  out_course_id uuid,
+  out_course_level_id uuid,
+  out_batch_id uuid
+)
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  current_user_id uuid := auth.uid();
+  user_metadata jsonb;
+  app_metadata jsonb;
+  selected_tenant uuid;
+  existing_tenant uuid;
+  existing_role public.user_role;
+begin
+  if current_user_id is null then raise exception 'Authentication is required'; end if;
+  select u.raw_user_meta_data, u.raw_app_meta_data into user_metadata, app_metadata
+  from auth.users u where u.id = current_user_id for update;
+  if not found then raise exception 'Authenticated user not found'; end if;
+  if coalesce(app_metadata->>'provider', '') <> 'google'
+     and not (coalesce(app_metadata->'providers', '[]'::jsonb) ? 'google') then
+    raise exception 'Google authentication is required';
+  end if;
+
+  select p.tenant_id, p.role into existing_tenant, existing_role
+  from public.profiles p where p.id = current_user_id;
+  if found then
+    return query select existing_tenant, existing_role,
+      null::uuid, null::uuid, null::uuid;
+    return;
+  end if;
+
+  select c.tenant_id into selected_tenant
+  from public.courses c
+  join public.course_levels l
+    on l.course_id = c.id and l.tenant_id = c.tenant_id and l.is_active = true
+  join public.tenants t on t.id = c.tenant_id and t.is_active = true
+  where c.id = p_course_id and l.id = p_course_level_id;
+  if selected_tenant is null then
+    raise exception 'A valid course and level are required for Google signup';
+  end if;
+
+  if p_batch_id is not null and not exists (
+    select 1 from public.batches b
+    where b.id = p_batch_id
+      and b.tenant_id = selected_tenant
+      and b.course_id = p_course_id
+      and b.course_level_id = p_course_level_id
+      and b.status = 'active'
+  ) then
+    raise exception 'The selected batch is not available for this course and level';
+  end if;
+
+  insert into public.profiles (id, tenant_id, role, full_name)
+  values (current_user_id, selected_tenant, 'student'::public.user_role,
+          nullif(trim(coalesce(user_metadata->>'full_name', user_metadata->>'name')), ''));
+  insert into public.enrollments (tenant_id, profile_id, course_id, course_level_id)
+  values (selected_tenant, current_user_id, p_course_id, p_course_level_id)
+  on conflict (profile_id, course_id)
+  do update set course_level_id = excluded.course_level_id;
+  if p_batch_id is not null then
+    insert into public.batch_memberships
+      (tenant_id, batch_id, profile_id, membership_role)
+    values (selected_tenant, p_batch_id, current_user_id, 'student')
+    on conflict (tenant_id, batch_id, profile_id)
+    do update set active = true;
+  end if;
+  return query select selected_tenant, 'student'::public.user_role,
+    p_course_id, p_course_level_id, p_batch_id;
+end;
+$$;
+
+revoke all on function public.complete_google_signup(uuid, uuid, uuid)
+  from public, anon;
+grant execute on function public.complete_google_signup(uuid, uuid, uuid)
+  to authenticated;
+
+commit;
+notify pgrst, 'reload schema';
+-- Migration 54 — scoring policies and atomic attempt snapshots.
+-- Apply after migration 53. Existing quizzes keep default full/zero scoring.
+begin;
+
+create table if not exists public.scoring_policies (
+  id         uuid primary key default gen_random_uuid(),
+  tenant_id  uuid not null references public.tenants(id) on delete cascade,
+  name       text not null,
+  rules      jsonb not null default '{}'::jsonb check (jsonb_typeof(rules) = 'object'),
+  created_by uuid,
+  created_at timestamptz not null default now(),
+  constraint scoring_policies_creator_tenant_fk
+    foreign key (created_by, tenant_id)
+    references public.profiles(id, tenant_id) on delete set null (created_by),
+  unique (tenant_id, name),
+  unique (id, tenant_id)
+);
+create index if not exists idx_scoring_policies_tenant
+  on public.scoring_policies(tenant_id);
+
+alter table public.quiz_sets add column if not exists scoring_policy_id uuid;
+do $$
+begin
+  if not exists (
+    select 1 from pg_constraint
+    where conname = 'quiz_sets_scoring_policy_tenant_fk'
+      and conrelid = 'public.quiz_sets'::regclass
+  ) then
+    alter table public.quiz_sets
+      add constraint quiz_sets_scoring_policy_tenant_fk
+      foreign key (scoring_policy_id, tenant_id)
+      references public.scoring_policies(id, tenant_id) on delete set null (scoring_policy_id);
+  end if;
+end $$;
+
+alter table public.quiz_attempts
+  add column if not exists scoring_policy_snapshot jsonb;
+alter table public.practice_sessions
+  add column if not exists scoring_policy_snapshot jsonb;
+
+alter table public.scoring_policies enable row level security;
+revoke all on public.scoring_policies from public, anon, authenticated;
+grant select, insert, update, delete on public.scoring_policies to service_role;
+
+drop policy if exists "read own tenant scoring policies" on public.scoring_policies;
+create policy "read own tenant scoring policies" on public.scoring_policies
+  for select using (tenant_id = current_tenant_id() or is_super_admin());
+drop policy if exists "institution admins manage scoring policies" on public.scoring_policies;
+create policy "institution admins manage scoring policies" on public.scoring_policies
+  for all using (
+    tenant_id = current_tenant_id()
+    and exists (
+      select 1 from public.profiles p
+      where p.id = auth.uid() and p.tenant_id = scoring_policies.tenant_id
+        and p.role = 'institution_admin'
+    )
+  ) with check (
+    tenant_id = current_tenant_id()
+    and exists (
+      select 1 from public.profiles p
+      where p.id = auth.uid() and p.tenant_id = scoring_policies.tenant_id
+        and p.role = 'institution_admin'
+    )
+  );
+
+-- Keep attempt-limit enforcement, the exact question paper, and the scoring
+-- rules in one transaction. The six-argument version remains during rollout so
+-- an older backend can coexist until the new deployment is healthy.
+drop function if exists public.create_limited_quiz_attempt(
+  uuid, uuid, uuid, timestamptz, integer, jsonb, jsonb
+);
+create function public.create_limited_quiz_attempt(
+  p_tenant_id uuid,
+  p_variant_id uuid,
+  p_student_id uuid,
+  p_started_at timestamptz,
+  p_max_attempts integer,
+  p_question_snapshot jsonb,
+  p_scoring_policy_snapshot jsonb
+)
+returns uuid
+language plpgsql
+security invoker
+set search_path = ''
+as $$
+declare
+  created_id uuid;
+begin
+  if p_max_attempts < 1 then
+    raise exception 'quiz_attempt_limit_invalid' using errcode = '22023';
+  end if;
+  if jsonb_typeof(p_question_snapshot) <> 'array'
+     or jsonb_array_length(p_question_snapshot) < 1 then
+    raise exception 'quiz_attempt_snapshot_invalid' using errcode = '22023';
+  end if;
+  if p_scoring_policy_snapshot is not null
+     and jsonb_typeof(p_scoring_policy_snapshot) <> 'object' then
+    raise exception 'scoring_policy_snapshot_invalid' using errcode = '22023';
+  end if;
+
+  perform pg_catalog.pg_advisory_xact_lock(
+    pg_catalog.hashtextextended(
+      p_student_id::text || ':' || p_variant_id::text,
+      0
+    )
+  );
+  if (
+    select count(*) >= p_max_attempts
+    from public.quiz_attempts attempts
+    where attempts.tenant_id = p_tenant_id
+      and attempts.student_id = p_student_id
+      and attempts.variant_id = p_variant_id
+  ) then
+    raise exception 'quiz_attempt_limit_reached' using errcode = '23514';
+  end if;
+
+  insert into public.quiz_attempts (
+    tenant_id, variant_id, student_id, status, started_at,
+    question_snapshot, scoring_policy_snapshot
+  ) values (
+    p_tenant_id, p_variant_id, p_student_id, 'in_progress', p_started_at,
+    p_question_snapshot, p_scoring_policy_snapshot
+  ) returning id into created_id;
+  return created_id;
+end;
+$$;
+
+revoke all on function public.create_limited_quiz_attempt(
+  uuid, uuid, uuid, timestamptz, integer, jsonb, jsonb
+) from public, anon, authenticated;
+grant execute on function public.create_limited_quiz_attempt(
+  uuid, uuid, uuid, timestamptz, integer, jsonb, jsonb
+) to service_role;
+
+commit;
+notify pgrst, 'reload schema';
+-- Migration 55 — Course exam scoring standard (Phase 6.2-EX)
+-- Apply after migration 54. Binds a policy to a COURSE LEVEL, because one course
+-- may have Foundation, Intermediate and Final levels with different rules.
+-- The exam simulator scores by that level's real exam standard (e.g. CA Foundation
+-- −0.25 vs CMA no negative marking) instead of a single tenant-wide value.
+-- Additive + nullable: NULL (every existing course level) = today's exam-config
+-- negative marking, and it is only consulted when SCORING_POLICIES_ENABLED is on.
+begin;
+
+alter table public.course_levels add column if not exists exam_scoring_policy_id uuid;
+do $$
+begin
+  if not exists (
+    select 1 from pg_constraint
+    where conname = 'course_levels_exam_policy_tenant_fk'
+      and conrelid = 'public.course_levels'::regclass
+  ) then
+    alter table public.course_levels
+      add constraint course_levels_exam_policy_tenant_fk
+      foreign key (exam_scoring_policy_id, tenant_id)
+      references public.scoring_policies(id, tenant_id) on delete set null (exam_scoring_policy_id);
+  end if;
+end $$;
+
+commit;
+notify pgrst, 'reload schema';
+-- Migration 56 - Paper profiles (Phase 6.3-D, commerce vertical pack)
+-- Apply after migration 55. Additive + nullable + flag-gated: a course level with
+-- no paper profile (every existing course level) generates exactly as today, and the
+-- profile is only read into the generation prompt when COMMERCE_PACK_ENABLED is
+-- on. It is the single place commerce context lives (exam body / level / paper /
+-- assessment year / accounting framework), consulted by generation (B) and the
+-- P6.2 exam standards. Backend writes via the service-role key; RLS mirrors
+-- scoring_policies (read within tenant, staff manage).
+begin;
+
+create table if not exists public.paper_profiles (
+  id              uuid primary key default gen_random_uuid(),
+  tenant_id       uuid not null references public.tenants(id) on delete cascade,
+  course_id       uuid not null,
+  course_level_id uuid not null,
+  exam_body       text,   -- e.g. ICAI, ICMAI, ICSI, ACCA, IMA
+  level           text,   -- e.g. Foundation, Intermediate, Final
+  paper           text,   -- e.g. Paper 4 - Business Economics
+  assessment_year text,   -- e.g. 2025-26 (the applicable exam period)
+  framework       text,   -- e.g. Indian GAAP, Ind AS, IFRS, US GAAP
+  created_by      uuid,
+  created_at      timestamptz not null default now(),
+  constraint paper_profiles_course_tenant_fk
+    foreign key (course_id, tenant_id)
+    references public.courses(id, tenant_id) on delete cascade,
+  constraint paper_profiles_level_scope_fk
+    foreign key (course_level_id, tenant_id, course_id)
+    references public.course_levels(id, tenant_id, course_id) on delete cascade,
+  constraint paper_profiles_creator_tenant_fk
+    foreign key (created_by, tenant_id)
+    references public.profiles(id, tenant_id) on delete set null (created_by),
+  unique (tenant_id, course_level_id)
+);
+create index if not exists idx_paper_profiles_tenant on public.paper_profiles(tenant_id);
+create index if not exists idx_paper_profiles_course on public.paper_profiles(course_id);
+create index if not exists idx_paper_profiles_level on public.paper_profiles(course_level_id);
+
+alter table public.paper_profiles enable row level security;
+revoke all on public.paper_profiles from public, anon, authenticated;
+grant select, insert, update, delete on public.paper_profiles to service_role;
+drop policy if exists "read own tenant paper profiles" on public.paper_profiles;
+create policy "read own tenant paper profiles" on public.paper_profiles
+  for select using (tenant_id = current_tenant_id() or is_super_admin());
+drop policy if exists "institution admins manage paper profiles" on public.paper_profiles;
+create policy "institution admins manage paper profiles" on public.paper_profiles
+  for all using (
+    tenant_id = current_tenant_id()
+    and exists (
+      select 1 from public.profiles p
+      where p.id = auth.uid()
+        and p.tenant_id = paper_profiles.tenant_id
+        and p.role = 'institution_admin'
+    )
+  ) with check (
+    tenant_id = current_tenant_id()
+    and exists (
+      select 1 from public.profiles p
+      where p.id = auth.uid()
+        and p.tenant_id = paper_profiles.tenant_id
+        and p.role = 'institution_admin'
+    )
+  );
+
+commit;
+notify pgrst, 'reload schema';
+
+-- ============================================================================
+-- END OF INTEGRATED FEATURES
 -- ============================================================================

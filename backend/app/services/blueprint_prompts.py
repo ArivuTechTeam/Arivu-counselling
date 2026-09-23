@@ -10,6 +10,7 @@ stay auto-gradeable.
 
 from __future__ import annotations
 
+from app.services.numeric_checks import FAMILY_INPUT_KEYS
 from app.services.quiz_prompts import (
     DIFFICULTY_GUIDANCE,
     LEVEL_GUIDANCE,
@@ -21,6 +22,43 @@ from app.services.prompt_security import UNTRUSTED_SOURCE_RULE
 GENERAL_TOPIC = "General"
 
 
+def _commerce_context_rule(context: str) -> str:
+    """Optional commerce-context instruction (Phase 6.3-B). Only ever appended when
+    the course has a paper profile, so the base prompt stays byte-identical when
+    there is no context. Pins figures to the stated assessment year / jurisdiction /
+    accounting framework so a later syllabus change never silently invalidates a
+    question."""
+    return (
+        f"COMMERCE CONTEXT: this quiz is for {context}. Where a value, rate, "
+        "threshold, slab, limit, due date, or rule depends on the assessment year, "
+        "jurisdiction, or accounting/tax framework, use the ones stated here and make "
+        "the applicable period explicit in the question. Never mix figures from a "
+        "different year or framework.\n"
+    )
+
+
+def _commerce_calc_rule() -> str:
+    """Optional numeric-verification instruction (Phase 6.3-A). Only ever appended
+    when the commerce pack is enabled, so the base prompt stays byte-identical when
+    it is off. Asks the model to attach a `calc` object to a numerical question when
+    (and only when) its answer is a standard commerce formula, letting the backend
+    recompute and verify the answer independently."""
+    families = "; ".join(
+        f'"{family}" -> inputs {{{", ".join(keys)}}}'
+        for family, keys in FAMILY_INPUT_KEYS.items()
+    )
+    return (
+        "11. OPTIONAL NUMERIC CHECK (commerce): for a 'numerical' question whose "
+        "answer is a standard commerce computation, you MAY add a \"calc\" object so "
+        "the backend can independently recompute and verify your answer. Shape: "
+        '"calc": {"family": <one of the families below>, "inputs": {<exact numbers>}}. '
+        f"Supported families and their input keys: {families}. The inputs must be the "
+        "SAME numbers stated in the question and must produce the answer you gave. "
+        "OMIT \"calc\" entirely for any question that is not numerical or does not fit "
+        "one of these exact families; never reshape a question to fit a family.\n"
+    )
+
+
 def build_blueprint_system_prompt(
     question_types: list[str],
     cognitive_level: str,
@@ -28,6 +66,8 @@ def build_blueprint_system_prompt(
     *,
     selected_only_material: bool = False,
     evidence_ids_required: bool = False,
+    commerce_calc_enabled: bool = False,
+    commerce_context: str | None = None,
 ) -> str:
     specs = "\n".join(f"- {TYPE_SPECS[t]}" for t in question_types)
     level = LEVEL_GUIDANCE.get(cognitive_level, LEVEL_GUIDANCE["mixed"])
@@ -104,6 +144,8 @@ def build_blueprint_system_prompt(
         f"{STUDENT_FACING_RULES}"
         f"DIFFICULTY STANDARD: {difficulty_guidance}\n"
         f"{evidence_rule}"
+        f"{_commerce_context_rule(commerce_context) if commerce_context else ''}"
+        f"{_commerce_calc_rule() if commerce_calc_enabled else ''}"
         "Return the JSON object now — JSON only."
     )
 

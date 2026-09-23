@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useSWRConfig } from "swr";
 
 import { StudentDownloads } from "@/components/shared/pdf-buttons";
+import { QuestionFigure } from "@/components/student/question-figure";
 import { downloadCardImage } from "@/lib/share-card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -507,6 +508,7 @@ export function QuizAttempt({
             </div>
           </div>
           <p className="mb-4 text-[15px] text-foreground">{q.question_text}</p>
+          <QuestionFigure figureId={q.figure_id} />
           <QuestionInput
             q={q}
             value={answers[q.id]}
@@ -883,6 +885,7 @@ function Results({ result }: { result: AttemptResult }) {
             </div>
           </div>
           <p className="mb-3">{q.question_text}</p>
+          <QuestionFigure figureId={q.figure_id} />
 
           <div className="flex flex-col divide-y divide-border rounded-md border bg-muted/30">
             <div className="flex flex-wrap gap-x-2 px-3 py-2">
