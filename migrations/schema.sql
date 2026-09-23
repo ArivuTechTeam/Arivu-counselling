@@ -42,7 +42,8 @@ create table tenants (
   name text not null,
   subdomain text not null unique,          -- e.g. 'arivupro' -> arivupro.platform.com
   logo_url text,
-  primary_color text default '#0EA5E9',
+  logo_filename text check (logo_filename is null or char_length(logo_filename) <= 255),
+  primary_color text not null default '#2E8857' check (primary_color ~ '^#[0-9A-Fa-f]{6}$'),
   secondary_color text default '#1E293B',
   plan_tier text not null default 'free',  -- fk-like reference to plan_limits.plan_tier
   is_active boolean not null default true,

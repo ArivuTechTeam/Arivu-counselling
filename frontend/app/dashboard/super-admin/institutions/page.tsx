@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useSWRConfig } from "swr";
 
@@ -36,6 +36,11 @@ import {
 } from "@/lib/temporary-password";
 import { useSessionStorageState } from "@/lib/use-session-storage-state";
 import { institutionLoginUrl } from "@/lib/institution-portal";
+import {
+  DEFAULT_INSTITUTION_COLOR,
+  institutionThemeStyle,
+  normalizeInstitutionColor,
+} from "@/lib/institution-theme";
 
 const field =
   "h-10 w-full rounded-md border border-input bg-background px-3 text-sm shadow-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20";
@@ -84,6 +89,7 @@ function OnboardForm({ onDone }: { onDone: () => void | Promise<void> }) {
   const [ok, setOk] = useState<string | null>(null);
   const [credentials, setCredentials] = useState<TemporaryCredentials | null>(null);
   const [logo, setLogo] = useState<File | null>(null);
+  const [primaryColor, setPrimaryColor] = useState(DEFAULT_INSTITUTION_COLOR);
   const [createdLoginUrl, setCreatedLoginUrl] = useState<string | null>(null);
   const [catalogPickerOpen, setCatalogPickerOpen] = useState(false);
   const [catalogSubjectIds, setCatalogSubjectIds] = useState<string[]>([]);
@@ -133,6 +139,7 @@ function OnboardForm({ onDone }: { onDone: () => void | Promise<void> }) {
         logo_data: logoData,
         logo_content_type: logo?.type,
         logo_filename: logo?.name,
+        primary_color: primaryColor,
         catalog_subject_ids: catalogSubjectIds,
       });
       setOk(
@@ -155,6 +162,7 @@ function OnboardForm({ onDone }: { onDone: () => void | Promise<void> }) {
       setAdminEmail("");
       setAdminPassword("");
       setLogo(null);
+      setPrimaryColor(DEFAULT_INSTITUTION_COLOR);
       setCatalogSubjectIds([]);
       await onDone();
     } catch (err) {
@@ -231,6 +239,43 @@ function OnboardForm({ onDone }: { onDone: () => void | Promise<void> }) {
               PNG or JPEG, up to 1 MB. It appears above this institution&apos;s login form.
             </span>
           </label>
+
+          <fieldset className="rounded-lg border border-dashed p-4">
+            <legend className="px-1 text-sm font-medium">Institution theme</legend>
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
+              <label className="flex flex-col gap-1.5 text-sm font-medium">
+                Brand color
+                <input
+                  type="color"
+                  value={normalizeInstitutionColor(primaryColor)}
+                  onChange={(event) => setPrimaryColor(event.target.value.toUpperCase())}
+                  className="h-10 w-16 cursor-pointer rounded-md border border-input bg-background p-1"
+                  aria-label="Choose institution brand color"
+                />
+              </label>
+              <label className="flex min-w-0 flex-1 flex-col gap-1.5 text-sm font-medium">
+                Hex value
+                <input
+                  className={field}
+                  value={primaryColor}
+                  onChange={(event) => setPrimaryColor(event.target.value.toUpperCase())}
+                  onBlur={() => setPrimaryColor(normalizeInstitutionColor(primaryColor))}
+                  pattern="#[0-9A-Fa-f]{6}"
+                  maxLength={7}
+                />
+              </label>
+              <div
+                className="flex h-10 min-w-36 items-center justify-center rounded-md px-4 text-sm font-semibold"
+                style={{
+                  ...institutionThemeStyle(primaryColor),
+                  background: "var(--tenant-primary)",
+                  color: "var(--tenant-on-primary)",
+                }}
+              >
+                Theme preview
+              </div>
+            </div>
+          </fieldset>
 
           <div className="rounded-lg border border-dashed p-4">
             <p className="mb-3 text-sm font-medium text-muted-foreground">
@@ -395,6 +440,19 @@ function EditInstitutionDialog({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [logo, setLogo] = useState<File | null>(null);
+  const [primaryColor, setPrimaryColor] = useState(
+    normalizeInstitutionColor(institution.primary_color),
+  );
+  const selectedLogoUrl = useMemo(
+    () => (logo ? URL.createObjectURL(logo) : null),
+    [logo],
+  );
+
+  useEffect(() => {
+    return () => {
+      if (selectedLogoUrl) URL.revokeObjectURL(selectedLogoUrl);
+    };
+  }, [selectedLogoUrl]);
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
@@ -420,6 +478,7 @@ function EditInstitutionDialog({
         logo_data: logoData,
         logo_content_type: logo?.type,
         logo_filename: logo?.name,
+        primary_color: normalizeInstitutionColor(primaryColor),
       });
       await onSaved();
       onClose();
@@ -434,7 +493,7 @@ function EditInstitutionDialog({
     <Dialog
       onClose={onClose}
       ariaLabelledBy="edit-institution-title"
-      contentClassName="w-full max-w-lg rounded-2xl border bg-card p-6 shadow-xl"
+      contentClassName="max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-2xl border bg-card p-6 shadow-xl"
     >
       <div className="flex items-start justify-between gap-4">
         <div>
@@ -448,10 +507,83 @@ function EditInstitutionDialog({
         </button>
       </div>
       <form onSubmit={submit} className="mt-5 flex flex-col gap-4">
+        <div
+          className="rounded-xl border p-4"
+          style={institutionThemeStyle(primaryColor)}
+        >
+          <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+            Current branding
+          </p>
+          <div className="mt-3 flex items-center gap-4">
+            <div className="flex h-16 w-24 shrink-0 items-center justify-center overflow-hidden rounded-lg border bg-white p-2">
+              {selectedLogoUrl || institution.logo_url ? (
+                // Existing logos use short-lived signed URLs; selected files use a local preview URL.
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={selectedLogoUrl ?? institution.logo_url ?? ""}
+                  alt={`${name || institution.name} logo preview`}
+                  className="max-h-full max-w-full object-contain"
+                />
+              ) : (
+                <span className="text-xs text-muted-foreground">No logo</span>
+              )}
+            </div>
+            <div className="min-w-0">
+              <p className="truncate font-semibold">{name || institution.name}</p>
+              <p className="truncate text-xs text-muted-foreground">{institution.subdomain}</p>
+              <p className="mt-1 truncate text-xs text-muted-foreground">
+                {logo?.name ?? institution.logo_filename ?? (institution.logo_url ? "Existing institution logo" : "No logo uploaded")}
+              </p>
+            </div>
+          </div>
+          <div
+            className="mt-3 rounded-lg px-3 py-2 text-sm font-semibold text-primary-foreground"
+            style={{ background: "var(--tenant-primary)" }}
+          >
+            Theme preview
+          </div>
+        </div>
         <label className="flex flex-col gap-1.5 text-sm font-medium">
           Institution name
           <input className={field} value={name} onChange={(event) => setName(event.target.value)} />
         </label>
+        <fieldset className="rounded-lg border p-3">
+          <legend className="px-1 text-sm font-medium">Institution theme</legend>
+          <div className="flex items-end gap-3">
+            <label className="flex flex-col gap-1.5 text-sm font-medium">
+              Brand color
+              <input
+                type="color"
+                value={normalizeInstitutionColor(primaryColor)}
+                onChange={(event) => setPrimaryColor(event.target.value.toUpperCase())}
+                className="h-10 w-16 cursor-pointer rounded-md border border-input bg-background p-1"
+                aria-label="Choose institution brand color"
+              />
+            </label>
+            <label className="flex min-w-0 flex-1 flex-col gap-1.5 text-sm font-medium">
+              Hex value
+              <input
+                className={field}
+                value={primaryColor}
+                onChange={(event) => setPrimaryColor(event.target.value.toUpperCase())}
+                onBlur={() => setPrimaryColor(normalizeInstitutionColor(primaryColor))}
+                pattern="#[0-9A-Fa-f]{6}"
+                maxLength={7}
+                placeholder="#2E8857"
+              />
+            </label>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setPrimaryColor(DEFAULT_INSTITUTION_COLOR)}
+            >
+              Reset
+            </Button>
+          </div>
+          <p className="mt-2 text-xs text-muted-foreground">
+            Applied only to this institution&apos;s portal and tenant dashboards.
+          </p>
+        </fieldset>
         <label className="flex flex-col gap-1.5 text-sm font-medium">
           Replace institution logo
           <input

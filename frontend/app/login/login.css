@@ -74,7 +74,7 @@
 /* RIGHT PANEL */
 .login-page .right { display: flex; align-items: center; justify-content: center; padding: 48px 52px; }
 .login-page .card { width: 100%; max-width: 448px; background: #fff; border-radius: 24px; border: 1px solid rgba(46, 136, 87, 0.09); box-shadow: 0 30px 90px rgba(13, 51, 32, 0.12); overflow: hidden; }
-.login-page .card-head { background: linear-gradient(135deg, #1a5c38 0%, #2e8857 100%); padding: 28px 32px 30px; position: relative; overflow: hidden; }
+.login-page .card-head { background: linear-gradient(135deg, var(--tenant-primary-dark, #1a5c38) 0%, var(--tenant-primary, #2e8857) 100%); padding: 28px 32px 30px; position: relative; overflow: hidden; }
 .login-page .card-head::before { content: ''; position: absolute; top: -60px; right: -60px; width: 200px; height: 200px; border-radius: 50%; background: rgba(255, 255, 255, 0.04); }
 .login-page .card-logo { display: inline-block; background: #fff; padding: 8px 14px; border-radius: 8px; font-weight: 700; color: #15603d; margin-bottom: 14px; font-size: 13px; letter-spacing: 0.02em; }
 .login-page .card-title { font-family: Georgia, "Times New Roman", serif; font-size: 22px; color: #fff; margin-bottom: 3px; }
@@ -99,7 +99,7 @@
 .login-page .forgot-link { font-size: 12px; color: var(--g700); text-decoration: none; font-weight: 500; }
 .login-page .forgot-link:hover { text-decoration: underline; }
 
-.login-page .btn-signin { width: 100%; padding: 14px; border: none; border-radius: 12px; background: linear-gradient(135deg, var(--g700), #1a5c38); color: #fff; font-family: inherit; font-size: 15px; font-weight: 600; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 8px; box-shadow: 0 8px 28px rgba(46, 136, 87, 0.28); transition: box-shadow 0.25s, transform 0.2s; }
+.login-page .btn-signin { width: 100%; padding: 14px; border: none; border-radius: 12px; background: linear-gradient(135deg, var(--g700), var(--tenant-primary-dark, #1a5c38)); color: var(--tenant-on-primary, #fff); font-family: inherit; font-size: 15px; font-weight: 600; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 8px; box-shadow: 0 8px 28px color-mix(in srgb, var(--tenant-primary, #2e8857) 28%, transparent); transition: box-shadow 0.25s, transform 0.2s; }
 .login-page .btn-signin:hover { box-shadow: 0 14px 44px rgba(46, 136, 87, 0.42); transform: translateY(-2px); }
 .login-page .btn-signin:active { transform: scale(0.98); }
 .login-page .btn-signin:disabled { opacity: 0.7; cursor: default; transform: none; box-shadow: 0 8px 28px rgba(46, 136, 87, 0.2); }
@@ -846,7 +846,7 @@
   gap: 10px;
   border: 0;
   border-radius: 12px;
-  color: #fff;
+  color: var(--tenant-on-primary, #fff);
   background: var(--login-green);
   box-shadow: 0 10px 24px rgba(20, 91, 52, 0.19);
   font: 700 15px/1 var(--font-sans), "Noto Sans", Arial, sans-serif;
@@ -855,7 +855,7 @@
 }
 
 .login-redesign .login-primary:hover {
-  background: #195f3a;
+  background: var(--tenant-primary-dark, #195f3a);
   box-shadow: 0 13px 28px rgba(20, 91, 52, 0.25);
   transform: translateY(-1px);
 }
@@ -1213,9 +1213,9 @@
   display: grid;
   gap: 0.35rem;
   margin-top: 1.1rem;
-  border: 1px solid rgba(46, 136, 87, 0.18);
+  border: 1px solid color-mix(in srgb, var(--tenant-primary, #2e8857) 18%, transparent);
   border-radius: 0.8rem;
-  background: rgba(46, 136, 87, 0.055);
+  background: color-mix(in srgb, var(--tenant-primary, #2e8857) 6%, white);
   padding: 0.8rem 0.9rem;
   color: #53655b;
   font-size: 0.78rem;
@@ -1223,7 +1223,7 @@
 }
 
 .login-redesign .login-portal-guidance strong {
-  color: #245a41;
+  color: var(--tenant-primary-dark, #245a41);
 }
 
 @media (max-width: 900px) {

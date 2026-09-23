@@ -28,6 +28,7 @@ import {
 } from "@/lib/institution-portal";
 import { createClient } from "@/lib/supabase";
 import { safeDashboardNext } from "@/lib/safe-next";
+import { institutionThemeStyle } from "@/lib/institution-theme";
 
 export default function AuthCallbackPage() {
   const router = useRouter();
@@ -262,7 +263,10 @@ export default function AuthCallbackPage() {
   const noCoursesAvailable = !isProcessing && courses.length === 0 && !error;
 
   return (
-    <div className="fixed inset-0 z-50 flex min-h-screen items-center justify-center bg-muted/40 p-4">
+    <div
+      className="fixed inset-0 z-50 flex min-h-screen items-center justify-center bg-muted/40 p-4"
+      style={institutionThemeStyle(branding?.primary_color)}
+    >
       {isProcessing && (
         <div className="animate-rise flex flex-col items-center gap-3 rounded-2xl bg-card px-8 py-7 shadow-xl">
           {branding?.logo_url ? (
@@ -276,7 +280,7 @@ export default function AuthCallbackPage() {
           ) : branding ? (
             <Building2 size={30} className="text-primary" />
           ) : null}
-          <div className="h-7 w-7 animate-spin rounded-full border-4 border-emerald-100 border-t-emerald-700" aria-label="Loading" />
+          <div className="h-7 w-7 animate-spin rounded-full border-4 border-primary/20 border-t-primary" aria-label="Loading" />
           <p className="text-sm text-muted-foreground">
             Finishing {branding?.name ? `${branding.name} ` : ""}sign-in…
           </p>
@@ -360,7 +364,7 @@ export default function AuthCallbackPage() {
               </label>
               <button
                 type="button"
-                className="w-full rounded-xl bg-emerald-700 px-4 py-3 text-sm font-semibold text-white transition hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-60"
+                className="w-full rounded-xl bg-primary px-4 py-3 text-sm font-semibold text-primary-foreground transition hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-60"
                 disabled={!courseId || !courseLevelId}
                 onClick={() => completeGoogleSignup(courseId, courseLevelId)}
               >
@@ -384,7 +388,7 @@ export default function AuthCallbackPage() {
           {error && (
             <Link
               href={institutionLoginPath(institutionSlug)}
-              className="mt-5 block text-center text-sm font-medium text-emerald-700 hover:underline"
+              className="mt-5 block text-center text-sm font-medium text-primary hover:underline"
             >
               Return to sign in
             </Link>

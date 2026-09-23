@@ -20,6 +20,7 @@ import {
 } from "@/lib/institution-portal";
 import { safeDashboardNext } from "@/lib/safe-next";
 import { createClient } from "@/lib/supabase";
+import { institutionThemeStyle } from "@/lib/institution-theme";
 import "../login/login.css";
 
 function MailIcon() {
@@ -229,7 +230,10 @@ export default function SignupPage() {
   }
 
   return (
-    <div className="login-page signup-centered">
+    <div
+      className="login-page signup-centered"
+      style={institutionThemeStyle(branding?.primary_color, false)}
+    >
       <div className="wrap">
         <div className="right">
           <div className="card">

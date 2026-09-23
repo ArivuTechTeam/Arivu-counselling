@@ -18,6 +18,7 @@ import {
 } from "@/lib/institution-portal";
 import { safeDashboardNext } from "@/lib/safe-next";
 import { createClient } from "@/lib/supabase";
+import { institutionThemeStyle } from "@/lib/institution-theme";
 import "./login.css";
 
 function MailIcon() {
@@ -265,7 +266,11 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="login-page login-redesign" ref={pageRef}>
+    <div
+      className="login-page login-redesign"
+      ref={pageRef}
+      style={institutionThemeStyle(branding?.primary_color, false)}
+    >
       <main className="login-layout">
         <section className="login-auth" aria-labelledby="login-title">
           <div className="login-auth-scroll">

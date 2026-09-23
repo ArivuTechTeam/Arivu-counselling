@@ -643,6 +643,7 @@ export type DashboardProfile = {
     name: string;
     subdomain: string;
     logo_url: string | null;
+    primary_color: string;
   } | null;
 };
 
@@ -1548,6 +1549,9 @@ export type InstitutionRow = {
   course_count: number;
   level_count: number;
   subject_count: number;
+  logo_url: string | null;
+  logo_filename: string | null;
+  primary_color: string;
 };
 export type ReviewPipelineFull = {
   pending_review: number;
@@ -1586,6 +1590,7 @@ export type OnboardInstitutionInput = {
   logo_content_type?: string;
   logo_filename?: string;
   catalog_subject_ids?: string[];
+  primary_color?: string;
 };
 export const onboardInstitution = (input: OnboardInstitutionInput) =>
   jsonRequest<{ created: boolean; tenant_id: string }>(
@@ -1601,6 +1606,7 @@ export type InstitutionUpdateInput = {
   logo_data?: string;
   logo_content_type?: string;
   logo_filename?: string;
+  primary_color?: string;
 };
 export type InstitutionDetails = {
   id: string;
@@ -1609,6 +1615,9 @@ export type InstitutionDetails = {
   plan_tier: string;
   is_active: boolean;
   created_at: string | null;
+  logo_url: string | null;
+  logo_filename: string | null;
+  primary_color: string;
 };
 export type InstitutionOfferingSubject = {
   id: string;
@@ -1641,6 +1650,7 @@ export type InstitutionBranding = {
   name: string;
   subdomain: string;
   logo_url: string | null;
+  primary_color: string;
 };
 export async function getInstitutionBranding(
   subdomain: string,

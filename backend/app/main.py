@@ -296,6 +296,7 @@ class InstitutionIdentityOut(BaseModel):
     name: str
     subdomain: str
     logo_url: str | None
+    primary_color: str
 
 
 class CurrentProfileOut(BaseModel):
@@ -344,6 +345,7 @@ def read_my_profile(
             name=profile.tenant_name,
             subdomain=profile.tenant_subdomain,
             logo_url=logo_url,
+            primary_color=profile.tenant_primary_color or "#2E8857",
         )
 
     return CurrentProfileOut(

@@ -24,13 +24,13 @@ from typing import Callable, Literal
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.lib.auth import CurrentProfile, get_current_profile
 from app.lib.role_checks import require_institution_admin, require_super_admin
 from app.lib.api_errors import auth_provisioning_error, public_error
 from app.lib.supabase import get_service_client
-from app.lib.storage import delete_bytes, upload_bytes
+from app.lib.storage import delete_bytes, signed_url, upload_bytes
 from app.services.account_deletion import erase_account_data
 from app.services.catalog import active_catalog_subject_ids, provision_catalog_subject
 from app.services.institution_offerings import (
@@ -47,6 +47,17 @@ ADMIN_DIRECTORY_PAGE_SIZE = 100
 ADMIN_QUIZ_SET_PAGE_SIZE_MAX = 100
 INSTITUTION_LOGO_MAX_BYTES = 1024 * 1024
 INSTITUTION_LOGO_TYPES = {"image/png": "png", "image/jpeg": "jpg"}
+
+
+def _signed_logo_url(path: object) -> str | None:
+    if not isinstance(path, str) or not path:
+        return None
+    try:
+        return signed_url(path, expires_in=3600)
+    except Exception:  # noqa: BLE001
+        # Branding metadata must remain manageable even if Storage is
+        # temporarily unavailable; the private object path is never exposed.
+        return None
 
 
 class StrictApiResponse(BaseModel):
@@ -168,6 +179,9 @@ class InstitutionRow(StrictApiResponse):
     course_count: int
     level_count: int
     subject_count: int
+    logo_url: str | None = None
+    logo_filename: str | None = None
+    primary_color: str = "#2E8857"
 
 
 class PlatformActivityPoint(StrictApiResponse):
@@ -214,6 +228,9 @@ class TenantDetails(StrictApiResponse):
     plan_tier: str
     is_active: bool
     created_at: datetime | None = None
+    logo_url: str | None = None
+    logo_filename: str | None = None
+    primary_color: str = "#2E8857"
 
 
 class OfferingSubject(StrictApiResponse):
@@ -2302,14 +2319,28 @@ async def platform_overview(
         institution_rows = overview.get("institutions_table") or []
         tenant_ids = [str(row["id"]) for row in institution_rows]
         offerings = institution_offerings_by_tenant(service, tenant_ids)
+        branding_rows = (
+            service.table("tenants")
+            .select("id, logo_url, logo_filename, primary_color")
+            .in_("id", tenant_ids)
+            .execute()
+            .data
+            or []
+        ) if tenant_ids else []
+        branding_by_tenant = {str(row["id"]): row for row in branding_rows}
         enriched_rows: list[dict] = []
         for row in institution_rows:
             tenant_courses = offerings.get(str(row["id"]), [])
+            branding = branding_by_tenant.get(str(row["id"]), {})
+            browser_logo = _signed_logo_url(branding.get("logo_url"))
             enriched_rows.append(
                 {
                     **row,
                     "courses": [course["name"] for course in tenant_courses],
                     **offering_counts(tenant_courses),
+                    "logo_url": browser_logo,
+                    "logo_filename": branding.get("logo_filename"),
+                    "primary_color": branding.get("primary_color") or "#2E8857",
                 }
             )
         return {**overview, "institutions_table": enriched_rows}
@@ -2351,11 +2382,22 @@ class TenantCreate(BaseModel):
     logo_data: str | None = Field(default=None, max_length=1_500_000)
     logo_content_type: str | None = None
     logo_filename: str | None = Field(default=None, max_length=255)
+    primary_color: str = "#2E8857"
     # Optional first institution admin created alongside the tenant.
     admin_full_name: str | None = None
     admin_email: str | None = None
     admin_password: str | None = Field(default=None, min_length=12, max_length=128)
     catalog_subject_ids: list[UUID] = Field(default_factory=list, max_length=175)
+
+    @field_validator("primary_color")
+    @classmethod
+    def validate_primary_color(cls, value: str) -> str:
+        value = value.strip().upper()
+        if len(value) != 7 or value[0] != "#" or any(
+            character not in "0123456789ABCDEF" for character in value[1:]
+        ):
+            raise ValueError("Brand color must be a six-digit hex color.")
+        return value
 
 
 class TenantUpdate(BaseModel):
@@ -2367,6 +2409,19 @@ class TenantUpdate(BaseModel):
     logo_data: str | None = Field(default=None, max_length=1_500_000)
     logo_content_type: str | None = None
     logo_filename: str | None = Field(default=None, max_length=255)
+    primary_color: str | None = None
+
+    @field_validator("primary_color")
+    @classmethod
+    def validate_primary_color(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        value = value.strip().upper()
+        if len(value) != 7 or value[0] != "#" or any(
+            character not in "0123456789ABCDEF" for character in value[1:]
+        ):
+            raise ValueError("Brand color must be a six-digit hex color.")
+        return value
 
 
 def _decode_institution_logo(
@@ -2480,6 +2535,7 @@ def onboard_institution(
                     "subdomain": subdomain,
                     "plan_tier": body.plan_tier,
                     "is_active": True,
+                    "primary_color": body.primary_color,
                 }
             )
             .execute()
@@ -2501,7 +2557,7 @@ def onboard_institution(
             upload_bytes(logo_path, logo_bytes, logo_content_type)
             logo_update = (
                 service.table("tenants")
-                .update({"logo_url": logo_path})
+                .update({"logo_url": logo_path, "logo_filename": body.logo_filename})
                 .eq("id", tenant_id)
                 .execute()
             )
@@ -2651,7 +2707,7 @@ def update_institution(
     service = get_service_client()
     existing = (
         service.table("tenants")
-        .select("id, logo_url")
+        .select("id, logo_url, logo_filename, primary_color")
         .eq("id", tenant_id)
         .maybe_single()
         .execute()
@@ -2673,6 +2729,7 @@ def update_institution(
                 exception=exc,
             ) from exc
         changes["logo_url"] = new_logo_path
+        changes["logo_filename"] = body.logo_filename
     try:
         updated = (
             service.table("tenants")
@@ -2715,6 +2772,9 @@ def update_institution(
         "plan_tier": row["plan_tier"],
         "is_active": row["is_active"],
         "created_at": row.get("created_at"),
+        "logo_url": _signed_logo_url(row.get("logo_url")),
+        "logo_filename": row.get("logo_filename"),
+        "primary_color": row.get("primary_color") or "#2E8857",
     }
 
 

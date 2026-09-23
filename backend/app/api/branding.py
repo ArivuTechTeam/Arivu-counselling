@@ -24,6 +24,7 @@ class InstitutionBranding(BaseModel):
     name: str
     subdomain: str
     logo_url: str | None
+    primary_color: str
 
 
 @router.get("/{subdomain}/branding", response_model=InstitutionBranding)
@@ -36,7 +37,7 @@ def institution_branding(subdomain: str) -> dict:
     result = (
         get_service_client()
         .table("tenants")
-        .select("id, name, subdomain, logo_url")
+        .select("id, name, subdomain, logo_url, primary_color")
         .eq("subdomain", slug)
         .eq("is_active", True)
         .maybe_single()
@@ -62,4 +63,5 @@ def institution_branding(subdomain: str) -> dict:
         "name": result.data["name"],
         "subdomain": result.data["subdomain"],
         "logo_url": browser_logo,
+        "primary_color": result.data.get("primary_color") or "#2E8857",
     }

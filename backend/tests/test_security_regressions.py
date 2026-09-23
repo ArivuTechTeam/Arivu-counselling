@@ -579,6 +579,7 @@ class PasswordGateTests(unittest.TestCase):
             tenant_name="Alliance University",
             tenant_subdomain="alliance",
             tenant_logo_path="tenant-logos/alliance.png",
+            tenant_primary_color="#7C3AED",
         )
         with patch("app.main.signed_url", return_value="https://signed.example/logo"):
             result = read_my_profile(profile)
@@ -586,6 +587,7 @@ class PasswordGateTests(unittest.TestCase):
         self.assertEqual(result.institution.name, "Alliance University")
         self.assertEqual(result.institution.subdomain, "alliance")
         self.assertEqual(result.institution.logo_url, "https://signed.example/logo")
+        self.assertEqual(result.institution.primary_color, "#7C3AED")
 
 
 class PasswordPolicyTests(unittest.TestCase):

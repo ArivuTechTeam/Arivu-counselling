@@ -101,10 +101,13 @@ migration-44-challenge-join-codes.sql
 migration-45-global-course-catalog.sql
 migration-46-seed-global-course-catalog.sql
 migration-47-student-level-enrollment.sql
+migration-48-tenant-branding-metadata.sql
 ```
 
 (Filenames above verified 2026-09-22 against `migrations/`, through
-`migration-47-student-level-enrollment.sql` — earlier drafts of
+`migration-48-tenant-branding-metadata.sql` stores the original institution
+logo filename for super-admin display, normalizes the legacy unused color
+default, and validates tenant brand colors. `migration-47-student-level-enrollment.sql` — earlier drafts of
 this runbook named migrations 31–34 `migration-31-chunked-document-generation.sql`,
 `migration-32-reset-chunked-generation-schema.sql`,
 `migration-33-document-archive-status.sql`, and

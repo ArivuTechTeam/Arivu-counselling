@@ -80,6 +80,7 @@ class InstitutionBrandingTests(unittest.TestCase):
                     "name": "Bright Future Academy",
                     "subdomain": "bright-future",
                     "logo_url": "tenant-logos/tenant-a/logo.png",
+                    "primary_color": "#7C3AED",
                     "is_active": True,
                 }
             ]
@@ -95,6 +96,7 @@ class InstitutionBrandingTests(unittest.TestCase):
             result["tenant_id"], "00000000-0000-0000-0000-000000000010"
         )
         self.assertEqual(result["logo_url"], "https://signed.example/logo")
+        self.assertEqual(result["primary_color"], "#7C3AED")
         signer.assert_called_once_with("tenant-logos/tenant-a/logo.png", expires_in=3600)
 
     def test_public_branding_hides_inactive_or_invalid_tenants(self) -> None:
@@ -105,6 +107,7 @@ class InstitutionBrandingTests(unittest.TestCase):
                     "name": "Paused Academy",
                     "subdomain": "paused",
                     "logo_url": None,
+                    "primary_color": "#2E8857",
                     "is_active": False,
                 }
             ]

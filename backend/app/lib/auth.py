@@ -103,6 +103,7 @@ class CurrentProfile(BaseModel):
     tenant_name: str | None = None
     tenant_subdomain: str | None = None
     tenant_logo_path: str | None = None
+    tenant_primary_color: str | None = None
 
 
 def get_current_user(
@@ -161,7 +162,7 @@ def get_current_profile(
         .select(
             "id,tenant_id,role,full_name,must_change_password,"
             "tenant:tenants!profiles_tenant_id_fkey("
-            "id,is_active,name,subdomain,logo_url)"
+            "id,is_active,name,subdomain,logo_url,primary_color)"
         )
         .eq("id", user.user_id)
         .maybe_single()  # returns None instead of erroring if no row
@@ -212,5 +213,8 @@ def get_current_profile(
         ),
         tenant_logo_path=(
             tenant.get("logo_url") if isinstance(tenant, dict) else None
+        ),
+        tenant_primary_color=(
+            tenant.get("primary_color") if isinstance(tenant, dict) else None
         ),
     )

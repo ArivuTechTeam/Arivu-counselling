@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -408,16 +409,53 @@ class SuperAdminRegressionTests(unittest.TestCase):
         with patch("app.api.admin.get_service_client", return_value=service):
             result = update_institution(
                 "tenant-a",
-                TenantUpdate(name="Renamed Institution", plan_tier="growth", is_active=False),
+                TenantUpdate(
+                    name="Renamed Institution",
+                    plan_tier="growth",
+                    is_active=False,
+                    primary_color="#7c3aed",
+                ),
                 SUPER,
             )
 
         self.assertEqual(result["name"], "Renamed Institution")
         self.assertEqual(result["plan_tier"], "growth")
         self.assertFalse(result["is_active"])
+        self.assertEqual(result["primary_color"], "#7C3AED")
         stored = next(row for row in service.tables["tenants"] if row["id"] == "tenant-a")
         self.assertEqual(stored["name"], "Renamed Institution")
         self.assertFalse(stored["is_active"])
+        self.assertEqual(stored["primary_color"], "#7C3AED")
+
+    def test_tenant_brand_color_must_be_six_digit_hex(self) -> None:
+        with self.assertRaises(ValidationError):
+            TenantUpdate(primary_color="green")
+
+    def test_replacing_tenant_logo_preserves_original_filename(self) -> None:
+        service = _ProvisionService()
+        png = b"\x89PNG\r\n\x1a\n" + b"safe-image"
+        with (
+            patch("app.api.admin.get_service_client", return_value=service),
+            patch("app.api.admin.upload_bytes") as upload,
+            patch("app.api.admin.signed_url", return_value="https://signed.example/logo"),
+        ):
+            result = update_institution(
+                "tenant-a",
+                TenantUpdate(
+                    plan_tier="free",
+                    logo_data=base64.b64encode(png).decode(),
+                    logo_content_type="image/png",
+                    logo_filename="alliance-mark.png",
+                ),
+                SUPER,
+            )
+
+        stored = next(row for row in service.tables["tenants"] if row["id"] == "tenant-a")
+        self.assertEqual(stored["logo_filename"], "alliance-mark.png")
+        self.assertTrue(stored["logo_url"].endswith(".png"))
+        self.assertEqual(result["logo_filename"], "alliance-mark.png")
+        self.assertEqual(result["logo_url"], "https://signed.example/logo")
+        upload.assert_called_once()
 
     def test_platform_overview_is_super_only(self) -> None:
         admin = CurrentProfile(user_id="admin", tenant_id="tenant-a", role="institution_admin")

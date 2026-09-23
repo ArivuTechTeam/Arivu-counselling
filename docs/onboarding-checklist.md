@@ -15,7 +15,7 @@ Google sign-in requires the additional provider and redirect configuration in
   institution admin's teacher subject assignments.
 - [ ] Confirm `migration-45-global-course-catalog.sql`,
   `migration-46-seed-global-course-catalog.sql`, and
-  `migration-47-student-level-enrollment.sql` are applied in order. They add
+  `migration-48-tenant-branding-metadata.sql` are applied in order. They add
   the global catalogue, provision tenant offerings, materialize the operational
   Course → Level → Subject hierarchy, and require Course + Level for new
   student signups. Repository files do not prove that production has applied
@@ -29,6 +29,7 @@ Google sign-in requires the additional provider and redirect configuration in
   first administrator's email, temporary password, and any catalogue courses,
   levels, and subjects the institution should receive at launch.
 - [ ] Prepare an optional institution logo as PNG or JPEG, no larger than 1 MB.
+- [ ] Choose the institution brand color (a six-digit hex color); it can also be changed later from **Manage institution**.
 - [ ] In Supabase **Authentication → Providers → Email**, confirm whether email
   confirmation is enabled. If enabled, verify that confirmation emails are
   delivered before inviting students. The signup screen requires students to
@@ -46,6 +47,7 @@ Google sign-in requires the additional provider and redirect configuration in
      it as a live custom domain yet.
    - **Plan** — `Free`, `Starter`, `Growth`, or `Enterprise`.
    - **Institution logo** — optional PNG or JPEG up to 1 MB. This is stored
+   - **Institution brand color** — controls that institution's login, signup, OAuth completion, and tenant dashboard theme without changing other institutions.
      privately and displayed only through a time-limited URL.
    - **Courses, levels and subjects offered** — optional catalogue selections.
      Selecting any subjects provisions their parent levels and courses for the

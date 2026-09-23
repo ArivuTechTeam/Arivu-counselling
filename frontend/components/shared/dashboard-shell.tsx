@@ -38,6 +38,7 @@ import {
 import { createClient } from "@/lib/supabase";
 import { useCourses } from "@/lib/staff-queries";
 import { institutionLoginPath } from "@/lib/institution-portal";
+import { institutionThemeStyle } from "@/lib/institution-theme";
 
 type IconComponent = (p: { size?: number; className?: string }) => React.JSX.Element;
 
@@ -551,7 +552,10 @@ export function DashboardShell({
     : sections;
 
   return (
-    <div className="flex h-screen overflow-hidden bg-background">
+    <div
+      className="flex h-screen overflow-hidden bg-background"
+      style={tenantRole ? institutionThemeStyle(institution?.primary_color) : undefined}
+    >
       <a
         href="#dashboard-main"
         className="fixed left-3 top-3 z-[60] -translate-y-20 rounded-md bg-background px-4 py-2 font-semibold text-foreground shadow-lg transition-transform focus:translate-y-0"
@@ -580,9 +584,10 @@ export function DashboardShell({
         aria-modal={navOpen ? "true" : undefined}
         aria-label={navOpen ? "Dashboard navigation" : undefined}
         tabIndex={navOpen ? -1 : undefined}
-        className={`fixed inset-y-0 left-0 z-30 flex w-64 shrink-0 flex-col overflow-y-auto bg-gradient-to-b from-[#2E8857] to-[#245a41] p-4 text-white transition-transform duration-300 ease-in-out md:visible md:relative md:translate-x-0 ${
+        className={`fixed inset-y-0 left-0 z-30 flex w-64 shrink-0 flex-col overflow-y-auto p-4 text-white transition-transform duration-300 ease-in-out md:visible md:relative md:translate-x-0 ${
           navOpen ? "visible translate-x-0" : "invisible -translate-x-full"
         }`}
+        style={{ background: "linear-gradient(to bottom, var(--tenant-sidebar-start, #2E8857), var(--tenant-primary-dark, #245a41))" }}
       >
         <div className="mb-4 flex w-full items-center justify-between gap-2">
           <Link
@@ -604,9 +609,9 @@ export function DashboardShell({
                     />
                   </>
                 ) : (
-                  <Building2 size={25} className="text-[#2E8857]" aria-hidden="true" />
+                  <Building2 size={25} className="text-primary" aria-hidden="true" />
                 )}
-                <span className="max-w-[190px] truncate text-xs font-bold text-[#245a41]">
+                <span className="max-w-[190px] truncate text-xs font-bold text-primary">
                   {institution?.name ?? "Institution"}
                 </span>
               </span>
