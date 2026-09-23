@@ -699,6 +699,22 @@ export const changePassword = (currentPassword: string, password: string) =>
     password,
   });
 
+export type AcademicAccess = {
+  course: string;
+  level: string | null;
+  subjects: string[];
+};
+
+export type AccountSettings = {
+  full_name: string | null;
+  email: string | null;
+  role: string;
+  academic_access: AcademicAccess[];
+};
+
+export const getAccountSettings = () =>
+  jsonRequest<AccountSettings>("/api/v1/auth/settings", "GET");
+
 export const deleteOwnAccount = () =>
   jsonRequest<{ deleted: boolean }>("/api/v1/auth/account", "DELETE", {
     confirmation: "DELETE",

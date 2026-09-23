@@ -1,6 +1,6 @@
 # Personal data flow and deletion audit
 
-Last reviewed: 2026-09-22
+Last reviewed: 2026-09-23
 
 This document describes application behavior visible in this repository. Hosting
 providers may additionally process IP addresses, user-agent strings, and request
@@ -54,9 +54,12 @@ outside this repository and requires a vendor retention/DPA review.
   unless an explicitly public workflow requires registration metadata or an
   opaque share token.
 
-Identity diagnostic endpoints return only authentication status or role/password
-change state. Question mutation endpoints use an explicit response model that
-drops database ownership and tenant fields.
+Identity diagnostic endpoints return only authentication status or
+role/password-change state. The authenticated account-settings endpoint returns
+the caller's own full name, email, role, and display-only academic assignments;
+every enrollment/assignment lookup is filtered by the authoritative user and
+tenant. It omits internal user/tenant IDs. Question mutation endpoints use an
+explicit response model that drops database ownership and tenant fields.
 
 ## Password controls
 
@@ -81,7 +84,8 @@ written to the application database, or returned in an API response.
 ## Account deletion behavior
 
 `DELETE /api/v1/auth/account` requires an authenticated session and an exact
-`DELETE` confirmation. It:
+`DELETE` confirmation from the role-specific Settings page. The destructive
+action is not exposed directly in the avatar menu. It:
 
 1. revokes all Supabase Auth sessions for the supplied access token;
 2. deletes the account's original private Storage objects, whose bytes may

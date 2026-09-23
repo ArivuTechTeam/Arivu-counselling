@@ -171,13 +171,17 @@ export default function DashboardLayout({
       }}
     >
       <ToastProvider>
-        <DashboardIdentityProvider role={role} institution={institution}>
+        <DashboardIdentityProvider
+          role={role}
+          email={email}
+          institution={institution}
+          canChangePassword={canChangePassword}
+        >
           <DashboardShell
             role={role}
             email={email}
             institution={institution}
             mustChangePassword={mustChangePassword}
-            canChangePassword={canChangePassword}
           >
             {bootstrapError && !ready ? (
               <div className="mx-auto flex min-h-[60vh] max-w-md items-center">

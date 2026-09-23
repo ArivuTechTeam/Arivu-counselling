@@ -301,7 +301,7 @@ Guards: **public** / **student** / **staff** (teacher+admin+super) / **admin** (
 - `GET /api/v1/me` — identity from JWT
 - `GET /api/v1/me/profile` — role/password-change state plus safe institution name, slug, and signed logo URL for non-super-admin users; internal tenant/user IDs are omitted
 
-**Auth account management** (`/api/v1`, `auth_account.py`) — self-service account actions for the signed-in user (e.g. password change enforcement, account deletion); tenant/role come from `profiles`, not the request.
+**Auth account management** (`/api/v1`, `auth_account.py`) — `GET /api/v1/auth/settings` returns the signed-in user's display identity plus tenant-scoped student Course → Level → Subject access or teacher assignments. The role-specific Settings pages share one frontend component and contain optional password change and the account-deletion Danger Zone; the avatar menu links there and retains only sign-out as a direct action. The mandatory first-login temporary-password gate remains in the dashboard shell. Tenant/role come from the authoritative profile, never the request.
 
 **Documents** (`/api/v1/documents`) — `POST /upload` and `GET ""` are teacher-only by design. Limits: PDF/DOCX only, 30 MiB, 5000-char preview.
 

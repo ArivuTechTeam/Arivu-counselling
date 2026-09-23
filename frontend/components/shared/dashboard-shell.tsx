@@ -7,7 +7,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { ChangePasswordModal } from "@/components/shared/change-password-modal";
 import { DevAccountSwitcher } from "@/components/shared/dev-account-switcher";
-import { Dialog, useEscapeKey } from "@/components/ui/dialog";
+import { useEscapeKey } from "@/components/ui/dialog";
 import { ThemeToggle } from "@/components/shared/theme-provider";
 import {
   BarChart3,
@@ -21,6 +21,7 @@ import {
   Plus,
   RefreshCw,
   Search,
+  Settings,
   Sparkles,
   Trophy,
   UserCheck,
@@ -28,7 +29,7 @@ import {
   X,
   Zap,
 } from "@/components/ui/icons";
-import { deleteOwnAccount, type DashboardProfile } from "@/lib/api";
+import { type DashboardProfile } from "@/lib/api";
 import {
   clearDashboardBootstrap,
   HOME_BY_ROLE,
@@ -125,6 +126,12 @@ const NAV: Record<string, NavItem[]> = {
       section: "Monitoring",
       icon: FileText,
     },
+    {
+      label: "Settings",
+      href: "/dashboard/teacher/settings",
+      section: "Account",
+      icon: Settings,
+    },
   ],
   institution_admin: [
     {
@@ -163,6 +170,12 @@ const NAV: Record<string, NavItem[]> = {
       section: "Analytics",
       icon: BarChart3,
     },
+    {
+      label: "Settings",
+      href: "/dashboard/institution-admin/settings",
+      section: "Account",
+      icon: Settings,
+    },
   ],
   super_admin: [
     {
@@ -200,6 +213,12 @@ const NAV: Record<string, NavItem[]> = {
       href: "/dashboard/super-admin/api-logs",
       section: "Monitoring",
       icon: BarChart3,
+    },
+    {
+      label: "Settings",
+      href: "/dashboard/super-admin/settings",
+      section: "Account",
+      icon: Settings,
     },
   ],
   student: [
@@ -257,6 +276,12 @@ const NAV: Record<string, NavItem[]> = {
       href: "/dashboard/student/weak-areas",
       section: "Progress",
       icon: RefreshCw,
+    },
+    {
+      label: "Settings",
+      href: "/dashboard/student/settings",
+      section: "Account",
+      icon: Settings,
     },
   ],
 };
@@ -375,14 +400,12 @@ export function DashboardShell({
   email,
   institution = null,
   mustChangePassword = false,
-  canChangePassword = true,
   children,
 }: {
   role: string | null;
   email: string;
   institution?: DashboardProfile["institution"];
   mustChangePassword?: boolean;
-  canChangePassword?: boolean;
   children: React.ReactNode;
 }) {
   const pathname = usePathname();
@@ -393,10 +416,6 @@ export function DashboardShell({
   const navTriggerRef = useRef<HTMLButtonElement>(null);
   const [pwOpen, setPwOpen] = useState(false);
   const [pwDone, setPwDone] = useState(false);
-  const [deleteOpen, setDeleteOpen] = useState(false);
-  const [deleteConfirmation, setDeleteConfirmation] = useState("");
-  const [deleting, setDeleting] = useState(false);
-  const [deleteError, setDeleteError] = useState<string | null>(null);
   const [navQuery, setNavQuery] = useState("");
   const [openSections, setOpenSections] = useState<Set<string>>(
     () =>
@@ -515,29 +534,6 @@ export function DashboardShell({
     clearDashboardBootstrap();
     await supabase.auth.signOut({ scope: "local" });
     router.replace(tenantLogin);
-  }
-
-  async function deleteAccount() {
-    if (deleteConfirmation !== "DELETE") return;
-    setDeleting(true);
-    setDeleteError(null);
-    try {
-      await deleteOwnAccount();
-    } catch (error) {
-      setDeleteError(
-        error instanceof Error
-          ? error.message
-          : "Account deletion could not be completed. Please try again.",
-      );
-      setDeleting(false);
-      return;
-    }
-    try {
-      await createClient().auth.signOut({ scope: "local" });
-    } finally {
-      clearDashboardBootstrap();
-      router.replace(`${tenantLogin}?reason=account-deleted`);
-    }
   }
 
   const sections = groupBySection(items);
@@ -781,28 +777,13 @@ export function DashboardShell({
                       {role ? role.replace("_", " ") : ""}
                     </div>
                   </div>
-                  {canChangePassword && (
-                    <button
-                      onClick={() => {
-                        setMenuOpen(false);
-                        setPwOpen(true);
-                      }}
-                      className="w-full border-b px-4 py-2.5 text-left text-sm font-medium text-foreground hover:bg-accent"
-                    >
-                      Change password
-                    </button>
-                  )}
-                  <button
-                    onClick={() => {
-                      setMenuOpen(false);
-                      setDeleteConfirmation("");
-                      setDeleteError(null);
-                      setDeleteOpen(true);
-                    }}
-                    className="w-full border-b px-4 py-2.5 text-left text-sm font-medium text-destructive hover:bg-accent"
+                  <Link
+                    href={`${homeHref}/settings`}
+                    onClick={() => setMenuOpen(false)}
+                    className="block w-full border-b px-4 py-2.5 text-left text-sm font-medium text-foreground hover:bg-accent"
                   >
-                    Delete account
-                  </button>
+                    Profile & settings
+                  </Link>
                   <button
                     onClick={signOut}
                     className="w-full px-4 py-2.5 text-left text-sm font-medium text-destructive hover:bg-accent"
@@ -819,7 +800,7 @@ export function DashboardShell({
       </div>
 
       <ChangePasswordModal
-        open={pwOpen && (canChangePassword || mustChangePassword)}
+        open={pwOpen && mustChangePassword}
         forced={mustChangePassword && !pwDone}
         onClose={() => setPwOpen(false)}
         onDone={async () => {
@@ -838,60 +819,6 @@ export function DashboardShell({
           }
         }}
       />
-
-      {deleteOpen && (
-        <Dialog
-          onClose={() => {
-            if (!deleting) setDeleteOpen(false);
-          }}
-          closeOnBackdrop={!deleting}
-          ariaLabelledBy="delete-account-title"
-          contentClassName="w-full max-w-md rounded-2xl border border-border bg-card p-6 shadow-2xl"
-        >
-            <h2 id="delete-account-title" className="text-lg font-bold text-foreground">
-              Permanently delete account
-            </h2>
-            <p className="mt-2 text-sm text-muted-foreground">
-              This removes your login, profile, enrolments, attempts, answers,
-              bookmarks, revision state, activity events, and original uploaded
-              files. Generated institution teaching content is retained without
-              your name or account ID.
-            </p>
-            <label className="mt-5 flex flex-col gap-2 text-sm font-medium text-foreground">
-              Type DELETE to confirm
-              <input
-                value={deleteConfirmation}
-                onChange={(event) => setDeleteConfirmation(event.target.value)}
-                disabled={deleting}
-                autoComplete="off"
-                className="h-10 rounded-lg border border-input bg-background px-3 outline-none focus:ring-2 focus:ring-ring disabled:opacity-50"
-              />
-            </label>
-            {deleteError && (
-              <p className="mt-3 text-sm text-destructive" role="alert">
-                {deleteError}
-              </p>
-            )}
-            <div className="mt-6 flex justify-end gap-2">
-              <button
-                type="button"
-                disabled={deleting}
-                onClick={() => setDeleteOpen(false)}
-                className="rounded-lg border border-input px-4 py-2 text-sm font-semibold text-foreground hover:bg-secondary disabled:opacity-50"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                disabled={deleting || deleteConfirmation !== "DELETE"}
-                onClick={() => void deleteAccount()}
-                className="rounded-lg bg-destructive px-4 py-2 text-sm font-semibold text-destructive-foreground hover:opacity-90 disabled:opacity-50"
-              >
-                {deleting ? "Deleting…" : "Delete permanently"}
-              </button>
-            </div>
-        </Dialog>
-      )}
     </div>
   );
 }

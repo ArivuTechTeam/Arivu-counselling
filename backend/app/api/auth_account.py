@@ -82,6 +82,163 @@ class AccountDeletionResult(BaseModel):
     deleted: bool
 
 
+class AcademicAccessOut(BaseModel):
+    course: str
+    level: str | None = None
+    subjects: list[str] = Field(default_factory=list)
+
+
+class AccountSettingsOut(BaseModel):
+    full_name: str | None = None
+    email: str | None = None
+    role: str
+    academic_access: list[AcademicAccessOut] = Field(default_factory=list)
+
+
+def _academic_access(service, profile: CurrentProfile) -> list[AcademicAccessOut]:
+    """Return tenant-scoped, display-only academic assignments for this user."""
+    subject_rows: list[dict] = []
+    access_keys: set[tuple[str, str | None]] = set()
+
+    if profile.role == "student":
+        enrollments = (
+            service.table("enrollments")
+            .select("course_id, course_level_id")
+            .eq("tenant_id", profile.tenant_id)
+            .eq("profile_id", profile.user_id)
+            .execute()
+            .data
+            or []
+        )
+        access_keys = {
+            (
+                str(row["course_id"]),
+                str(row["course_level_id"])
+                if row.get("course_level_id")
+                else None,
+            )
+            for row in enrollments
+            if row.get("course_id")
+        }
+        course_ids = sorted({course_id for course_id, _level_id in access_keys})
+        if course_ids:
+            subject_query = (
+                service.table("subjects")
+                .select("name, course_id, course_level_id")
+                .eq("tenant_id", profile.tenant_id)
+                .in_("course_id", course_ids)
+            )
+            subject_rows = subject_query.execute().data or []
+    elif profile.role == "teacher":
+        assignments = (
+            service.table("teacher_subjects")
+            .select("subject_id")
+            .eq("tenant_id", profile.tenant_id)
+            .eq("teacher_id", profile.user_id)
+            .execute()
+            .data
+            or []
+        )
+        subject_ids = sorted(
+            {str(row["subject_id"]) for row in assignments if row.get("subject_id")}
+        )
+        if subject_ids:
+            subject_rows = (
+                service.table("subjects")
+                .select("id, name, course_id, course_level_id")
+                .eq("tenant_id", profile.tenant_id)
+                .in_("id", subject_ids)
+                .execute()
+                .data
+                or []
+            )
+            access_keys = {
+                (
+                    str(row["course_id"]),
+                    str(row["course_level_id"])
+                    if row.get("course_level_id")
+                    else None,
+                )
+                for row in subject_rows
+                if row.get("course_id")
+            }
+    else:
+        return []
+
+    if not access_keys:
+        return []
+
+    course_ids = sorted({course_id for course_id, _level_id in access_keys})
+    level_ids = sorted(
+        {level_id for _course_id, level_id in access_keys if level_id}
+    )
+    courses = (
+        service.table("courses")
+        .select("id, name")
+        .eq("tenant_id", profile.tenant_id)
+        .in_("id", course_ids)
+        .execute()
+        .data
+        or []
+    )
+    levels = []
+    if level_ids:
+        levels = (
+            service.table("course_levels")
+            .select("id, name, course_id")
+            .eq("tenant_id", profile.tenant_id)
+            .in_("id", level_ids)
+            .execute()
+            .data
+            or []
+        )
+    course_names = {str(row["id"]): str(row["name"]) for row in courses}
+    level_names = {str(row["id"]): str(row["name"]) for row in levels}
+
+    output: list[AcademicAccessOut] = []
+    for course_id, level_id in sorted(
+        access_keys,
+        key=lambda key: (
+            course_names.get(key[0], ""),
+            level_names.get(key[1] or "", ""),
+        ),
+    ):
+        subjects = sorted(
+            {
+                str(row["name"])
+                for row in subject_rows
+                if str(row.get("course_id")) == course_id
+                and (
+                    level_id is None
+                    or str(row.get("course_level_id")) == level_id
+                )
+                and row.get("name")
+            }
+        )
+        output.append(
+            AcademicAccessOut(
+                course=course_names.get(course_id, "Course unavailable"),
+                level=level_names.get(level_id) if level_id else None,
+                subjects=subjects,
+            )
+        )
+    return output
+
+
+@router.get("/settings", response_model=AccountSettingsOut)
+def account_settings(
+    profile: CurrentProfile = Depends(get_current_profile),
+) -> AccountSettingsOut:
+    """Return the signed-in user's own profile and academic access only."""
+    service = get_service_client()
+    return AccountSettingsOut(
+        full_name=profile.full_name,
+        email=profile.email,
+        role=profile.role,
+        academic_access=_academic_access(service, profile),
+    )
+
+
 @router.post("/change-password")
 def change_password(
     body: PasswordChange,
