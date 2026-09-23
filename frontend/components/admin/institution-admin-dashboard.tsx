@@ -22,7 +22,7 @@ import {
 } from "@/lib/api";
 import { useInstitutionAnalytics, useInstitutionQuizSets } from "@/lib/staff-queries";
 
-const BRAND = "#15603d";
+const BRAND = "var(--tenant-primary, #15603d)";
 const EMPTY_QUIZZES: AdminQuizSet[] = [];
 type Drilldown = { type: "course" | "teacher"; id: string; name: string };
 type AtRiskStudent = InstitutionAnalytics["at_risk_students"][number];
@@ -114,7 +114,10 @@ export function InstitutionAdminDashboard() {
 
   return (
     <div className="flex flex-col gap-6 pb-8">
-      <section className="relative overflow-hidden rounded-2xl bg-gradient-to-br from-[#1a6942] via-[#15603d] to-[#0f4e33] p-6 text-white shadow-lg sm:p-8">
+      <section
+        className="relative overflow-hidden rounded-2xl p-6 text-white shadow-lg sm:p-8"
+        style={{ background: "linear-gradient(135deg, var(--tenant-sidebar-start, #1a6942), var(--tenant-primary-dark, #15603d), var(--tenant-primary-deep, #0f4e33))" }}
+      >
         <div className="pointer-events-none absolute -right-10 -top-12 h-48 w-48 rounded-full bg-white/10 blur-2xl" />
         <div className="relative grid items-center gap-6 lg:grid-cols-[1fr_auto]">
           <div>
@@ -123,15 +126,15 @@ export function InstitutionAdminDashboard() {
               <span className="text-xs text-white/60">Updated {updated.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
             </div>
             <h1 className="mt-3 text-2xl font-bold sm:text-3xl">
-              <span className="text-[#9ff0a6]">{teachers}</span> teachers and <span className="text-[#9ff0a6]">{students}</span> students · {analytics.summary.avg_accuracy}% overall institute accuracy
+              <span style={{ color: "var(--tenant-primary-soft, #9ff0a6)" }}>{teachers}</span> teachers and <span style={{ color: "var(--tenant-primary-soft, #9ff0a6)" }}>{students}</span> students · {analytics.summary.avg_accuracy}% overall institute accuracy
             </h1>
             <p className="mt-2 text-sm text-white/80">{analytics.summary.courses} courses · {analytics.summary.subjects} subjects · {analytics.summary.documents} documents</p>
             <p className={`mt-4 inline-flex rounded-full px-3 py-1.5 text-sm font-semibold ${trendUp ? "bg-emerald-300/15 text-emerald-100" : "bg-rose-300/15 text-rose-100"}`}>
               {trend.delta === 0 ? "→" : trendUp ? "↑" : "↓"} {Math.abs(trend.percentage_change)}% engagement · {trend.attempts_last7} this week vs {trend.attempts_prev7} last week
             </p>
           </div>
-          <div className="flex h-28 w-28 items-center justify-center rounded-full" style={{ background: `conic-gradient(#7ae582 ${analytics.summary.avg_accuracy * 3.6}deg, rgba(255,255,255,.16) 0)` }}>
-            <div className="flex h-[94px] w-[94px] flex-col items-center justify-center rounded-full bg-[#15603d]">
+          <div className="flex h-28 w-28 items-center justify-center rounded-full" style={{ background: `conic-gradient(var(--tenant-primary-soft, #7ae582) ${analytics.summary.avg_accuracy * 3.6}deg, rgba(255,255,255,.16) 0)` }}>
+            <div className="flex h-[94px] w-[94px] flex-col items-center justify-center rounded-full" style={{ backgroundColor: "var(--tenant-primary-dark, #15603d)" }}>
               <strong className="text-3xl">{analytics.summary.avg_accuracy}%</strong>
               <span className="text-center text-[9px] uppercase leading-tight tracking-widest text-white/70">institute accuracy</span>
             </div>

@@ -178,7 +178,10 @@ export default function ChallengeHubPage({
 
       {/* Not done yet → invite to play / continue */}
       {info.my_status !== "done" && (
-        <div className="animate-rise relative overflow-hidden rounded-2xl bg-gradient-to-br from-[#1a6942] via-[#15603d] to-[#0f4e33] p-8 text-center text-white shadow-lg">
+        <div
+          className="animate-rise relative overflow-hidden rounded-2xl p-8 text-center text-white shadow-lg"
+          style={{ background: "linear-gradient(135deg, var(--tenant-sidebar-start, #1a6942), var(--tenant-primary-dark, #15603d), var(--tenant-primary-deep, #0f4e33))" }}
+        >
           <div className="pointer-events-none absolute -right-10 -top-12 h-44 w-44 rounded-full bg-white/10 blur-2xl" />
           <div className="relative">
             <h2 className="text-2xl font-bold">
@@ -206,10 +209,11 @@ export default function ChallengeHubPage({
                       : setShowReadiness(true)
                   }
                   disabled={busy}
-                  className="inline-flex items-center gap-2 rounded-lg bg-white px-6 py-2.5 text-sm font-bold text-[#15603d] shadow-md transition-transform hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-70"
+                  className="inline-flex items-center gap-2 rounded-lg bg-white px-6 py-2.5 text-sm font-bold shadow-md transition-transform hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-70"
+                  style={{ color: "var(--tenant-primary-dark, #15603d)" }}
                 >
                   {busy && (
-                    <span className="h-4 w-4 animate-spin rounded-full border-2 border-[#15603d]/30 border-t-[#15603d]" />
+                    <span className="h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent opacity-70" />
                   )}
                   {busy
                     ? "Opening…"

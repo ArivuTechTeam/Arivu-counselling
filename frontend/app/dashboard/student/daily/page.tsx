@@ -112,7 +112,10 @@ export default function DailyPage() {
       )}
 
       {/* Streak hero */}
-      <div className="animate-rise relative overflow-hidden rounded-2xl bg-gradient-to-br from-[#1a6942] via-[#15603d] to-[#0f4e33] p-6 text-white shadow-lg sm:p-8">
+      <div
+        className="animate-rise relative overflow-hidden rounded-2xl p-6 text-white shadow-lg sm:p-8"
+        style={{ background: "linear-gradient(135deg, var(--tenant-sidebar-start, #1a6942), var(--tenant-primary-dark, #15603d), var(--tenant-primary-deep, #0f4e33))" }}
+      >
         <div className="pointer-events-none absolute -right-16 -top-16 h-56 w-56 animate-pulse rounded-full bg-white/10 blur-3xl" />
 
         <div className="relative flex flex-wrap items-center justify-between gap-6">
@@ -125,7 +128,7 @@ export default function DailyPage() {
               🔥
             </span>
             <div className="flex items-end gap-2">
-              <span className="text-5xl font-extrabold leading-none text-[#9ff0a6] sm:text-6xl">
+              <span className="text-5xl font-extrabold leading-none sm:text-6xl" style={{ color: "var(--tenant-primary-soft, #9ff0a6)" }}>
                 {info.streak}
               </span>
               <span className="pb-1 text-xs font-semibold uppercase tracking-widest text-white/70">
@@ -169,7 +172,7 @@ export default function DailyPage() {
               const base =
                 "flex h-10 w-full items-center justify-center rounded-xl text-xs font-bold transition-transform hover:scale-110";
               const state = d.done
-                ? "bg-[#7ae582] text-[#0f1f17] shadow-sm"
+                ? "bg-white text-foreground shadow-sm"
                 : d.isToday
                   ? "bg-white/20 text-white ring-2 ring-white/80"
                   : d.isFuture
@@ -251,7 +254,7 @@ export default function DailyPage() {
             <button
               onClick={() => setShowReadiness(true)}
               disabled={busy}
-              className="w-fit rounded-xl bg-gradient-to-b from-[#219256] to-[#15603d] px-6 py-3 text-sm font-semibold text-white shadow-md transition-transform hover:-translate-y-0.5 disabled:opacity-60"
+              className="w-fit rounded-xl bg-primary px-6 py-3 text-sm font-semibold text-primary-foreground shadow-md transition-transform hover:-translate-y-0.5 hover:bg-primary/90 disabled:opacity-60"
             >
               {busy
                 ? "Loading…"

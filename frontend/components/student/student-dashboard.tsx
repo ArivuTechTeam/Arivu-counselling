@@ -21,7 +21,7 @@ import {
   useStudentStats,
 } from "@/lib/student-queries";
 
-const BRAND = "#15603d";
+const BRAND = "var(--tenant-primary, #15603d)";
 
 // Count a number up from 0 with an ease-out, once `on` becomes true.
 function useCountUp(target: number, on: boolean, ms = 900) {
@@ -374,9 +374,12 @@ export function StudentDashboard() {
   if (ready && quizzes === 0) {
     return (
       <div className="flex flex-col gap-6">
-        <div className="animate-rise relative overflow-hidden rounded-2xl bg-gradient-to-br from-[#1a6942] via-[#15603d] to-[#0f4e33] p-8 text-white shadow-lg">
+        <div
+          className="animate-rise relative overflow-hidden rounded-2xl p-8 text-white shadow-lg"
+          style={{ background: "linear-gradient(135deg, var(--tenant-sidebar-start, #1a6942), var(--tenant-primary-dark, #15603d), var(--tenant-primary-deep, #0f4e33))" }}
+        >
           <div className="pointer-events-none absolute -right-8 -top-10 h-40 w-40 rounded-full bg-white/10 blur-2xl" />
-          <div className="pointer-events-none absolute -bottom-16 right-32 h-52 w-52 rounded-full bg-[#7ae582]/20 blur-3xl" />
+          <div className="pointer-events-none absolute -bottom-16 right-32 h-52 w-52 rounded-full bg-white/10 blur-3xl" />
           <div className="relative max-w-xl">
             <p className="text-[11px] font-semibold uppercase tracking-widest text-white/70">
               Welcome
@@ -399,9 +402,12 @@ export function StudentDashboard() {
   return (
     <div className="flex flex-col gap-6">
       {/* Hero */}
-      <div className="animate-rise relative overflow-hidden rounded-2xl bg-gradient-to-br from-[#1a6942] via-[#15603d] to-[#0f4e33] p-6 text-white shadow-lg sm:p-8">
+      <div
+        className="animate-rise relative overflow-hidden rounded-2xl p-6 text-white shadow-lg sm:p-8"
+        style={{ background: "linear-gradient(135deg, var(--tenant-sidebar-start, #1a6942), var(--tenant-primary-dark, #15603d), var(--tenant-primary-deep, #0f4e33))" }}
+      >
         <div className="pointer-events-none absolute -right-8 -top-10 h-40 w-40 rounded-full bg-white/10 blur-2xl" />
-        <div className="pointer-events-none absolute -bottom-16 right-32 h-52 w-52 rounded-full bg-[#7ae582]/20 blur-3xl" />
+        <div className="pointer-events-none absolute -bottom-16 right-32 h-52 w-52 rounded-full bg-white/10 blur-3xl" />
         <div className="relative flex flex-wrap items-center justify-between gap-6">
           <div className="min-w-0">
             <p className="text-[11px] font-semibold uppercase tracking-widest text-white/70">
@@ -409,8 +415,8 @@ export function StudentDashboard() {
             </p>
             <h2 className="mt-2 text-2xl font-bold leading-tight sm:text-[28px]">
               You&apos;ve solved{" "}
-              <span className="text-[#9ff0a6]">{solvedA}</span> questions across{" "}
-              <span className="text-[#9ff0a6]">{quizzesA}</span> quizzes.
+              <span style={{ color: "var(--tenant-primary-soft, #9ff0a6)" }}>{solvedA}</span> questions across{" "}
+              <span style={{ color: "var(--tenant-primary-soft, #9ff0a6)" }}>{quizzesA}</span> quizzes.
             </h2>
             <p className="mt-2 text-sm text-white/80">
               {weak > 0
@@ -425,8 +431,8 @@ export function StudentDashboard() {
                 </div>
                 <div className="mt-1 h-1.5 w-full overflow-hidden rounded-full bg-white/20">
                   <div
-                    className="h-full rounded-full bg-[#9ff0a6] transition-[width] duration-700 ease-out"
-                    style={{ width: `${Math.min(100, quizzes * 10)}%` }}
+                    className="h-full rounded-full transition-[width] duration-700 ease-out"
+                    style={{ width: `${Math.min(100, quizzes * 10)}%`, backgroundColor: "var(--tenant-primary-soft, #9ff0a6)" }}
                   />
                 </div>
               </div>
@@ -437,10 +443,10 @@ export function StudentDashboard() {
           <div
             className="relative flex h-28 w-28 shrink-0 items-center justify-center rounded-full transition-all duration-700 ease-out"
             style={{
-              background: `conic-gradient(#7ae582 ${(ready ? acc : 0) * 3.6}deg, rgba(255,255,255,0.16) 0deg)`,
+              background: `conic-gradient(var(--tenant-primary-soft, #7ae582) ${(ready ? acc : 0) * 3.6}deg, rgba(255,255,255,0.16) 0deg)`,
             }}
           >
-            <div className="flex h-[94px] w-[94px] flex-col items-center justify-center rounded-full bg-[#15603d]">
+            <div className="flex h-[94px] w-[94px] flex-col items-center justify-center rounded-full" style={{ backgroundColor: "var(--tenant-primary-dark, #15603d)" }}>
               <span className="text-3xl font-bold">{accA}%</span>
               <span className="text-[10px] uppercase tracking-widest text-white/70">
                 accuracy

@@ -160,17 +160,20 @@ export function TeacherStats() {
   return (
     <div className="flex flex-col gap-6">
       {/* Hero */}
-      <div className="animate-rise relative overflow-hidden rounded-2xl bg-gradient-to-br from-[#1a6942] via-[#15603d] to-[#0f4e33] p-6 text-white shadow-lg sm:p-8">
+      <div
+        className="animate-rise relative overflow-hidden rounded-2xl p-6 text-white shadow-lg sm:p-8"
+        style={{ background: "linear-gradient(135deg, var(--tenant-sidebar-start, #1a6942), var(--tenant-primary-dark, #15603d), var(--tenant-primary-deep, #0f4e33))" }}
+      >
         <div className="pointer-events-none absolute -right-8 -top-10 h-40 w-40 rounded-full bg-white/10 blur-2xl" />
-        <div className="pointer-events-none absolute -bottom-16 right-32 h-52 w-52 rounded-full bg-[#7ae582]/20 blur-3xl" />
+        <div className="pointer-events-none absolute -bottom-16 right-32 h-52 w-52 rounded-full bg-white/10 blur-3xl" />
         <div className="relative flex flex-wrap items-center justify-between gap-6">
           <div className="min-w-0">
             <p className="text-[11px] font-semibold uppercase tracking-widest text-white/70">
               Teaching workspace
             </p>
             <h2 className="mt-2 text-2xl font-bold leading-tight sm:text-[28px]">
-              <span className="text-[#9ff0a6]">{setsA}</span> quizzes from{" "}
-              <span className="text-[#9ff0a6]">{docsA}</span> documents.
+              <span style={{ color: "var(--tenant-primary-soft, #9ff0a6)" }}>{setsA}</span> quizzes from{" "}
+              <span style={{ color: "var(--tenant-primary-soft, #9ff0a6)" }}>{docsA}</span> documents.
             </h2>
             <p className="mt-2 text-sm text-white/80">
               {pubA} published · {draftsA} in draft.
@@ -178,7 +181,8 @@ export function TeacherStats() {
             <div className="mt-4 flex flex-wrap gap-2">
               <Link
                 href="/dashboard/teacher/generate"
-                className="inline-flex items-center gap-1 rounded-md bg-white px-4 py-2 text-sm font-semibold text-[#15603d] transition-colors hover:bg-white/90"
+                className="inline-flex items-center gap-1 rounded-md bg-white px-4 py-2 text-sm font-semibold transition-colors hover:bg-white/90"
+                style={{ color: "var(--tenant-primary-dark, #15603d)" }}
               >
                 Create from material →
               </Link>
@@ -203,10 +207,10 @@ export function TeacherStats() {
           <div
             className="relative flex h-28 w-28 shrink-0 items-center justify-center rounded-full transition-all duration-700 ease-out"
             style={{
-              background: `conic-gradient(#7ae582 ${pubPct * 3.6}deg, rgba(255,255,255,0.16) 0deg)`,
+              background: `conic-gradient(var(--tenant-primary-soft, #7ae582) ${pubPct * 3.6}deg, rgba(255,255,255,0.16) 0deg)`,
             }}
           >
-            <div className="flex h-[94px] w-[94px] flex-col items-center justify-center rounded-full bg-[#15603d]">
+            <div className="flex h-[94px] w-[94px] flex-col items-center justify-center rounded-full" style={{ backgroundColor: "var(--tenant-primary-dark, #15603d)" }}>
               <span className="text-3xl font-bold">{pubA}</span>
               <span className="text-[10px] uppercase tracking-widest text-white/70">
                 published

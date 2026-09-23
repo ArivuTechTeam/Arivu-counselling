@@ -173,7 +173,7 @@ export function StudentQuizzes() {
                     type="button"
                     onClick={() => setPending(i)}
                     disabled={starting === i.variantId || i.attemptsRemaining === 0}
-                    className="group relative w-full overflow-hidden rounded-lg bg-gradient-to-b from-[#219256] to-[#15603d] px-4 py-2.5 text-sm font-semibold text-white transition-all animate-cta-glow hover:-translate-y-0.5 active:translate-y-0 disabled:cursor-not-allowed disabled:opacity-70"
+                    className="group relative w-full overflow-hidden rounded-lg bg-primary px-4 py-2.5 text-sm font-semibold text-primary-foreground transition-all animate-cta-glow hover:-translate-y-0.5 hover:bg-primary/90 active:translate-y-0 disabled:cursor-not-allowed disabled:opacity-70"
                   >
                     {/* glossy top highlight */}
                     <span className="pointer-events-none absolute inset-x-0 top-0 h-1/2 rounded-t-lg bg-white/20" />
