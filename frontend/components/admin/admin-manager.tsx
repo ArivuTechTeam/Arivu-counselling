@@ -38,6 +38,7 @@ import {
   generateTemporaryPassword,
   validTemporaryPassword,
 } from "@/lib/temporary-password";
+import { institutionLoginUrl } from "@/lib/institution-portal";
 
 const ADMIN_DRAFT_STORAGE_KEY = "super-admin-admin-draft";
 
@@ -128,7 +129,7 @@ export function AdminManager({ embedded = false }: { embedded?: boolean }) {
         password: form.password,
         institution: institution?.name ?? "Institution",
         loginUrl: institution?.subdomain
-          ? `${window.location.origin}/login/${encodeURIComponent(institution.subdomain)}`
+          ? institutionLoginUrl(institution.subdomain, window.location.origin)
           : undefined,
       });
       setForm((current) => ({
@@ -164,7 +165,7 @@ export function AdminManager({ embedded = false }: { embedded?: boolean }) {
         password: resetPassword,
         institution: resetTarget.institution,
         loginUrl: resetTarget.subdomain
-          ? `${window.location.origin}/login/${encodeURIComponent(resetTarget.subdomain)}`
+          ? institutionLoginUrl(resetTarget.subdomain, window.location.origin)
           : undefined,
       });
       setNotice(

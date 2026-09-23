@@ -11,6 +11,7 @@ import { QuizDrilldownModal } from "@/app/dashboard/institution-admin/analytics/
 import { StudentPerformanceModal } from "@/app/dashboard/institution-admin/analytics/_components/student-performance-modal";
 import { QuizPerformanceModal } from "@/app/dashboard/institution-admin/quizzes/_components/quiz-performance-modal";
 import { CheckIcon, GradIcon, LayersIcon, MetricTile, UsersIcon, useCountUp } from "@/components/admin/dashboard-kit";
+import { InstitutionAccessLinkCard } from "@/components/admin/institution-access-link-card";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { ErrorCard } from "@/components/ui/error-card";
 import { DeferredAreaTrendChart } from "@/components/shared/deferred-area-trend-chart";
@@ -92,8 +93,19 @@ export function InstitutionAdminDashboard() {
   );
 
   if (analyticsError)
-    return <ErrorCard message={analyticsError.message} onRetry={() => void analyticsQuery.mutate()} />;
-  if (!analytics) return <DashboardSkeleton />;
+    return (
+      <div className="flex flex-col gap-6">
+        <InstitutionAccessLinkCard />
+        <ErrorCard message={analyticsError.message} onRetry={() => void analyticsQuery.mutate()} />
+      </div>
+    );
+  if (!analytics)
+    return (
+      <div className="flex flex-col gap-6">
+        <InstitutionAccessLinkCard />
+        <DashboardSkeleton />
+      </div>
+    );
 
   const trend = analytics.trend;
   const trendUp = trend.delta >= 0;
@@ -126,6 +138,8 @@ export function InstitutionAdminDashboard() {
           </div>
         </div>
       </section>
+
+      <InstitutionAccessLinkCard />
 
       <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
         <MetricTile label="Students" value={students} gradient="from-card to-emerald-50/70" chip="bg-emerald-500/10 text-emerald-600" icon={<GradIcon />} />

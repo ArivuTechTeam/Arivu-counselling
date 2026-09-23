@@ -24,14 +24,6 @@ function absoluteUrl(name: string, value: string | undefined): string {
   return normalized.replace(/\/$/, "");
 }
 
-const tenantId = required(
-  "NEXT_PUBLIC_DEFAULT_TENANT_ID",
-  process.env.NEXT_PUBLIC_DEFAULT_TENANT_ID,
-);
-if (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(tenantId)) {
-  throw new Error("NEXT_PUBLIC_DEFAULT_TENANT_ID must be a UUID.");
-}
-
 export const PUBLIC_ENV = Object.freeze({
   supabaseUrl: absoluteUrl(
     "NEXT_PUBLIC_SUPABASE_URL",
@@ -41,7 +33,6 @@ export const PUBLIC_ENV = Object.freeze({
     "NEXT_PUBLIC_SUPABASE_ANON_KEY",
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
   ),
-  defaultTenantId: tenantId,
   apiBaseUrl: absoluteUrl(
     "NEXT_PUBLIC_API_BASE_URL",
     process.env.NEXT_PUBLIC_API_BASE_URL,

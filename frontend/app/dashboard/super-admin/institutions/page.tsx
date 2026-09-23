@@ -35,6 +35,7 @@ import {
   validTemporaryPassword,
 } from "@/lib/temporary-password";
 import { useSessionStorageState } from "@/lib/use-session-storage-state";
+import { institutionLoginUrl } from "@/lib/institution-portal";
 
 const field =
   "h-10 w-full rounded-md border border-input bg-background px-3 text-sm shadow-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20";
@@ -47,10 +48,6 @@ function readLogo(file: File): Promise<string> {
     reader.onerror = () => reject(new Error("Could not read the selected logo."));
     reader.readAsDataURL(file);
   });
-}
-
-function institutionLoginUrl(subdomain: string) {
-  return `${window.location.origin}/login/${encodeURIComponent(subdomain)}`;
 }
 
 function OnboardForm({ onDone }: { onDone: () => void | Promise<void> }) {
@@ -125,7 +122,7 @@ function OnboardForm({ onDone }: { onDone: () => void | Promise<void> }) {
       }
       const logoData = logo ? await readLogo(logo) : undefined;
       const slug = subdomain.trim().toLowerCase();
-      const loginUrl = institutionLoginUrl(slug);
+      const loginUrl = institutionLoginUrl(slug, window.location.origin);
       await onboardInstitution({
         name: name.trim(),
         subdomain: slug,

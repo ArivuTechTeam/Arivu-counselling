@@ -12,6 +12,10 @@ import {
   writeDashboardBootstrap,
 } from "@/lib/dashboard-bootstrap";
 import { signInWithGoogle } from "@/lib/google-auth";
+import {
+  institutionSignupPath,
+  institutionSlugFromPath,
+} from "@/lib/institution-portal";
 import { safeDashboardNext } from "@/lib/safe-next";
 import { createClient } from "@/lib/supabase";
 import "./login.css";
@@ -46,9 +50,7 @@ function ArrowIcon() {
 export default function LoginPage() {
   const router = useRouter();
   const pathname = usePathname();
-  const institutionSlug = pathname.startsWith("/login/")
-    ? decodeURIComponent(pathname.slice("/login/".length).split("/")[0] ?? "")
-    : "";
+  const institutionSlug = institutionSlugFromPath(pathname, "/login/");
   const pageRef = useRef<HTMLDivElement>(null);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -59,6 +61,7 @@ export default function LoginPage() {
   const [googleLoading, setGoogleLoading] = useState(false);
   const [branding, setBranding] = useState<InstitutionBranding | null>(null);
   const [brandingError, setBrandingError] = useState<string | null>(null);
+  const [brandingLoading, setBrandingLoading] = useState(Boolean(institutionSlug));
   const [signupHref, setSignupHref] = useState("/signup");
 
   function requestedDestination() {
@@ -73,6 +76,10 @@ export default function LoginPage() {
     setNotice(null);
     if (!email || !password) {
       setError("Please enter your email and password.");
+      return;
+    }
+    if (institutionSlug && !branding) {
+      setError("This institution access link is unavailable.");
       return;
     }
 
@@ -96,7 +103,7 @@ export default function LoginPage() {
     warmBackend();
     const { data: profile, error: profileError } = await supabase
       .from("profiles")
-      .select("role,must_change_password")
+      .select("role,must_change_password,tenant_id")
       .eq("id", user.id)
       .single();
     setLoading(false);
@@ -104,6 +111,17 @@ export default function LoginPage() {
       await supabase.auth.signOut({ scope: "local" });
       setError(
         "Your account profile could not be loaded. Please contact your administrator.",
+      );
+      return;
+    }
+    if (
+      branding &&
+      profile.role !== "super_admin" &&
+      profile.tenant_id !== branding.tenant_id
+    ) {
+      await supabase.auth.signOut({ scope: "local" });
+      setError(
+        `This account does not belong to ${branding.name}. Use the access link provided by your institution.`,
       );
       return;
     }
@@ -130,6 +148,7 @@ export default function LoginPage() {
         undefined,
         requestedDestination(),
         branding?.tenant_id,
+        institutionSlug,
       );
     } catch {
       setError("Google sign-in could not start. Please try again.");
@@ -139,13 +158,8 @@ export default function LoginPage() {
 
   useEffect(() => {
     const url = new URL(window.location.href);
-    const signupParams = new URLSearchParams();
-    if (institutionSlug) signupParams.set("institution", institutionSlug);
     const signupNext = safeDashboardNext(url.searchParams.get("next"));
-    if (signupNext !== "/dashboard") signupParams.set("next", signupNext);
-    setSignupHref(
-      `/signup${signupParams.size ? `?${signupParams.toString()}` : ""}`,
-    );
+    setSignupHref(institutionSignupPath(institutionSlug, signupNext));
     const reason = url.searchParams.get("reason");
     if (reason === "session-expired") {
       setNotice("Your session expired. Please log in again.");
@@ -184,16 +198,21 @@ export default function LoginPage() {
     let active = true;
     setBranding(null);
     setBrandingError(null);
+    setBrandingLoading(Boolean(institutionSlug));
     if (!institutionSlug) return () => { active = false; };
     getInstitutionBranding(institutionSlug)
       .then((result) => {
-        if (active) setBranding(result);
+        if (active) {
+          setBranding(result);
+          setBrandingLoading(false);
+        }
       })
       .catch(() => {
         if (active) {
           setBrandingError(
-            "This institution login link is unavailable. You can still sign in below.",
+            "This institution access link is unavailable. Ask your administrator for the correct link.",
           );
+          setBrandingLoading(false);
         }
       });
     return () => { active = false; };
@@ -267,6 +286,13 @@ export default function LoginPage() {
                 <p>Sign in to continue to your dashboard.</p>
               </header>
 
+              {branding && (
+                <div className="login-portal-guidance">
+                  <p><strong>Teachers:</strong> use the credentials provided by your institution admin.</p>
+                  <p><strong>Students:</strong> sign in below or create your own student account.</p>
+                </div>
+              )}
+
               <form className="login-form" onSubmit={handleSignIn}>
                 {notice && (
                   <div className="login-message login-message-info" role="status">
@@ -304,6 +330,7 @@ export default function LoginPage() {
                       value={email}
                       onChange={(event) => setEmail(event.target.value)}
                       onFocus={keepMobileActionsVisible}
+                      disabled={brandingLoading || Boolean(brandingError)}
                       required
                     />
                   </div>
@@ -323,6 +350,7 @@ export default function LoginPage() {
                       value={password}
                       onChange={(event) => setPassword(event.target.value)}
                       onFocus={keepMobileActionsVisible}
+                      disabled={brandingLoading || Boolean(brandingError)}
                       required
                     />
                     <button
@@ -344,7 +372,7 @@ export default function LoginPage() {
                 <button
                   className="login-primary"
                   type="submit"
-                  disabled={loading || googleLoading}
+                  disabled={loading || googleLoading || brandingLoading || Boolean(brandingError)}
                 >
                   <span>{loading ? "Signing in…" : "Sign in"}</span>
                   {!loading && <ArrowIcon />}
@@ -360,8 +388,10 @@ export default function LoginPage() {
                   busy={
                     googleLoading ||
                     loading ||
+                    brandingLoading ||
                     Boolean(institutionSlug && !branding)
                   }
+                  label={institutionSlug ? "Student sign in with Google" : undefined}
                   onClick={handleGoogleSignIn}
                 />
               </form>

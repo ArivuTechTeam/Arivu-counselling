@@ -5,6 +5,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { SWRConfig } from "swr";
 
 import { DashboardShell } from "@/components/shared/dashboard-shell";
+import { DashboardIdentityProvider } from "@/components/shared/dashboard-identity-context";
 import { ErrorCard } from "@/components/ui/error-card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ToastProvider } from "@/components/ui/toast";
@@ -170,41 +171,43 @@ export default function DashboardLayout({
       }}
     >
       <ToastProvider>
-        <DashboardShell
-          role={role}
-          email={email}
-          institution={institution}
-          mustChangePassword={mustChangePassword}
-          canChangePassword={canChangePassword}
-        >
-          {bootstrapError && !ready ? (
-            <div className="mx-auto flex min-h-[60vh] max-w-md items-center">
-              <ErrorCard
-                title="We couldn't open your dashboard"
-                message={bootstrapError}
-                onRetry={() => setBootstrapAttempt((attempt) => attempt + 1)}
-                className="w-full"
-              />
-            </div>
-          ) : ready && pathValid && pathname !== "/dashboard" ? (
-            children
-          ) : (
-            <div
-              className="mx-auto flex min-h-[60vh] w-full max-w-5xl flex-col gap-6"
-              aria-label="Loading dashboard"
-              aria-busy="true"
-            >
-              <Skeleton className="h-32 w-full rounded-2xl" />
-              <div className="grid gap-4 sm:grid-cols-3">
-                <Skeleton className="h-24 rounded-xl" />
-                <Skeleton className="h-24 rounded-xl" />
-                <Skeleton className="h-24 rounded-xl" />
+        <DashboardIdentityProvider role={role} institution={institution}>
+          <DashboardShell
+            role={role}
+            email={email}
+            institution={institution}
+            mustChangePassword={mustChangePassword}
+            canChangePassword={canChangePassword}
+          >
+            {bootstrapError && !ready ? (
+              <div className="mx-auto flex min-h-[60vh] max-w-md items-center">
+                <ErrorCard
+                  title="We couldn't open your dashboard"
+                  message={bootstrapError}
+                  onRetry={() => setBootstrapAttempt((attempt) => attempt + 1)}
+                  className="w-full"
+                />
               </div>
-              <Skeleton className="h-64 w-full rounded-xl" />
-              <span className="sr-only">Loading your dashboard…</span>
-            </div>
-          )}
-        </DashboardShell>
+            ) : ready && pathValid && pathname !== "/dashboard" ? (
+              children
+            ) : (
+              <div
+                className="mx-auto flex min-h-[60vh] w-full max-w-5xl flex-col gap-6"
+                aria-label="Loading dashboard"
+                aria-busy="true"
+              >
+                <Skeleton className="h-32 w-full rounded-2xl" />
+                <div className="grid gap-4 sm:grid-cols-3">
+                  <Skeleton className="h-24 rounded-xl" />
+                  <Skeleton className="h-24 rounded-xl" />
+                  <Skeleton className="h-24 rounded-xl" />
+                </div>
+                <Skeleton className="h-64 w-full rounded-xl" />
+                <span className="sr-only">Loading your dashboard…</span>
+              </div>
+            )}
+          </DashboardShell>
+        </DashboardIdentityProvider>
       </ToastProvider>
     </SWRConfig>
   );

@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import type { AuthError } from "@supabase/supabase-js";
 
@@ -13,7 +13,11 @@ import {
   PublicCourse,
 } from "@/lib/api";
 import { signInWithGoogle } from "@/lib/google-auth";
-import { PUBLIC_ENV } from "@/lib/public-env";
+import {
+  institutionLoginPath,
+  institutionSlugFromPath,
+  normalizeInstitutionSlug,
+} from "@/lib/institution-portal";
 import { safeDashboardNext } from "@/lib/safe-next";
 import { createClient } from "@/lib/supabase";
 import "../login/login.css";
@@ -84,6 +88,7 @@ function signupErrorMessage(error: AuthError): string {
 
 export default function SignupPage() {
   const router = useRouter();
+  const pathname = usePathname();
 
   const [fullName, setFullName] = useState("");
   const [email, setEmail] = useState("");
@@ -101,23 +106,28 @@ export default function SignupPage() {
   const [branding, setBranding] = useState<InstitutionBranding | null>(null);
   const [destination, setDestination] = useState("/dashboard");
   const [loginHref, setLoginHref] = useState("/login");
+  const [institutionSlug, setInstitutionSlug] = useState("");
 
   useEffect(() => {
     let active = true;
     const params = new URL(window.location.href).searchParams;
-    const institutionSlug = (params.get("institution") ?? "")
-      .trim()
-      .toLowerCase();
+    const slug =
+      institutionSlugFromPath(pathname, "/signup/") ||
+      normalizeInstitutionSlug(params.get("institution"));
+    setInstitutionSlug(slug);
     setDestination(safeDashboardNext(params.get("next")));
-    setLoginHref(institutionSlug ? `/login/${encodeURIComponent(institutionSlug)}` : "/login");
+    setLoginHref(institutionLoginPath(slug));
     setBranding(null);
-    if (!institutionSlug) {
-      setTenantId(PUBLIC_ENV.defaultTenantId);
-      return () => { active = false; };
-    }
     setTenantId("");
     setCourses([]);
-    getInstitutionBranding(institutionSlug)
+    if (!slug) {
+      setError(
+        "Student registration requires your institution access link. Ask your institution administrator to share it with you.",
+      );
+      return () => { active = false; };
+    }
+    setError(null);
+    getInstitutionBranding(slug)
       .then((branding) => {
         if (active) {
           setBranding(branding);
@@ -130,7 +140,7 @@ export default function SignupPage() {
         }
     });
     return () => { active = false; };
-  }, []);
+  }, [pathname]);
 
   useEffect(() => {
     if (tenantId) {
@@ -147,7 +157,7 @@ export default function SignupPage() {
     setError(null);
     setNotice(null);
     if (!tenantId) {
-      setError("Institution not configured (missing NEXT_PUBLIC_DEFAULT_TENANT_ID).");
+      setError("Use the student registration link provided by your institution.");
       return;
     }
     if (!fullName || !email || !password) {
@@ -195,7 +205,7 @@ export default function SignupPage() {
     setError(null);
     setNotice(null);
     if (!tenantId) {
-      setError("Institution not configured (missing NEXT_PUBLIC_DEFAULT_TENANT_ID).");
+      setError("Use the student registration link provided by your institution.");
       return;
     }
     setGoogleLoading(true);
@@ -205,7 +215,13 @@ export default function SignupPage() {
       // for it after Google sign-in when they haven't — the database
       // callback validates whichever course arrives and derives the tenant
       // before creating a student profile.
-      await signInWithGoogle(courseId, courseLevelId, destination, tenantId);
+      await signInWithGoogle(
+        courseId,
+        courseLevelId,
+        destination,
+        tenantId,
+        institutionSlug,
+      );
     } catch {
       setError("Google sign-in could not start. Please try again.");
       setGoogleLoading(false);
@@ -228,8 +244,8 @@ export default function SignupPage() {
               {branding?.name && (
                 <p className="signup-institution-name">{branding.name}</p>
               )}
-              <div className="card-title">Create your account</div>
-              <div className="card-sub">Enrol &amp; get started</div>
+              <div className="card-title">Create your student account</div>
+              <div className="card-sub">Choose your course and level to enrol</div>
             </div>
 
             <form className="form-body" onSubmit={handleSignup}>
@@ -310,7 +326,7 @@ export default function SignupPage() {
                 </div>
               </div>
 
-              <button className="btn-signin" type="submit" disabled={loading || googleLoading}>
+              <button className="btn-signin" type="submit" disabled={loading || googleLoading || !tenantId}>
                 {loading ? "Creating account…" : "Create account →"}
               </button>
 
@@ -321,7 +337,7 @@ export default function SignupPage() {
               </div>
 
               <GoogleAuthButton
-                busy={googleLoading || loading}
+                busy={googleLoading || loading || !tenantId}
                 onClick={handleGoogleSignup}
               />
               <p className="oauth-help">

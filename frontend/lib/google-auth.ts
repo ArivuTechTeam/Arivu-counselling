@@ -4,12 +4,14 @@ export const PENDING_GOOGLE_COURSE_KEY = "pending_google_course_id";
 export const PENDING_GOOGLE_LEVEL_KEY = "pending_google_course_level_id";
 export const PENDING_AUTH_NEXT_KEY = "pending_auth_next";
 export const PENDING_GOOGLE_TENANT_KEY = "pending_google_tenant_id";
+export const PENDING_GOOGLE_INSTITUTION_KEY = "pending_google_institution_slug";
 
 export async function signInWithGoogle(
   courseId?: string,
   courseLevelId?: string,
   nextPath?: string,
   tenantId?: string,
+  institutionSlug?: string,
 ): Promise<void> {
   if (courseId) {
     window.sessionStorage.setItem(PENDING_GOOGLE_COURSE_KEY, courseId);
@@ -32,10 +34,22 @@ export async function signInWithGoogle(
     window.sessionStorage.removeItem(PENDING_AUTH_NEXT_KEY);
   }
 
-  const redirectTo = new URL("/auth/callback", window.location.origin).toString();
+  if (institutionSlug) {
+    window.sessionStorage.setItem(
+      PENDING_GOOGLE_INSTITUTION_KEY,
+      institutionSlug,
+    );
+  } else {
+    window.sessionStorage.removeItem(PENDING_GOOGLE_INSTITUTION_KEY);
+  }
+
+  const redirectUrl = new URL("/auth/callback", window.location.origin);
+  if (institutionSlug) {
+    redirectUrl.searchParams.set("institution", institutionSlug);
+  }
   const { error } = await createClient().auth.signInWithOAuth({
     provider: "google",
-    options: { redirectTo },
+    options: { redirectTo: redirectUrl.toString() },
   });
 
   if (error) throw error;

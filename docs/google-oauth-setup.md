@@ -35,14 +35,17 @@ validation. Restarting Docker does not replace these database operations.
      **Redirect URLs**.
    - Add `http://localhost:3001/auth/callback` while testing locally.
 
-Both login and signup call `signInWithOAuth({ provider: "google", options:
-{ redirectTo } })`. The application calculates `redirectTo` from the current
-origin and always uses `/auth/callback`.
+Both institution login and signup call `signInWithOAuth({ provider: "google",
+options: { redirectTo } })` for students. The application calculates
+`redirectTo` from the current origin, uses `/auth/callback`, and carries the
+institution slug as a callback query parameter so branding and tenant context
+survive the provider redirect.
 
 ## New student from the signup page
 
-1. The student opens the institution-specific signup link and selects a course
-   and one of that course's levels.
+1. The student opens the shared `/login/{subdomain}` institution link, chooses
+   **Create a student account**, and selects a course and one of that course's
+   levels on `/signup/{subdomain}`.
 2. The student clicks **Sign in with Google** and completes Google's consent
    screen.
 3. Supabase creates the Google Auth identity. The Auth trigger recognizes a
@@ -74,9 +77,11 @@ If the user closes the callback before selecting a course, the Auth identity
 remains unable to access application data. Signing in with Google again returns
 them to Course + Level selection.
 
-## Existing email/password user
+## Existing account
 
-Supabase automatically links a Google identity whose verified email matches an
-existing Auth user. The callback finds the existing profile and sends that same
-user to the dashboard without changing their tenant, role, or enrollments.
-No second application profile is created.
+For an existing student, Supabase may link a Google identity whose verified
+email matches the Auth user. The callback verifies that the student's tenant
+matches the institution link before continuing without changing their tenant,
+role, or enrollments. Teacher and institution-admin profiles are rejected from
+the Google callback; those roles must use the provisioned email/password
+credentials shown to the administrator.

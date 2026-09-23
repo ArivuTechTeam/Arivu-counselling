@@ -27,10 +27,6 @@ function requiredUrl(name) {
 const supabaseUrl = requiredUrl("NEXT_PUBLIC_SUPABASE_URL");
 const apiUrl = requiredUrl("NEXT_PUBLIC_API_BASE_URL");
 requiredValue("NEXT_PUBLIC_SUPABASE_ANON_KEY");
-const tenantId = requiredValue("NEXT_PUBLIC_DEFAULT_TENANT_ID");
-if (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(tenantId)) {
-  throw new Error("NEXT_PUBLIC_DEFAULT_TENANT_ID must be a UUID.");
-}
 const websocketOrigin = `${supabaseUrl.protocol === "https:" ? "wss:" : "ws:"}//${supabaseUrl.host}`;
 const developmentScripts = process.env.NODE_ENV === "development" ? " 'unsafe-eval'" : "";
 const contentSecurityPolicy = [

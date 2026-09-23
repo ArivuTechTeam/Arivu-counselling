@@ -36,6 +36,7 @@ import {
 } from "@/lib/dashboard-bootstrap";
 import { createClient } from "@/lib/supabase";
 import { useCourses } from "@/lib/staff-queries";
+import { institutionLoginPath } from "@/lib/institution-portal";
 
 type IconComponent = (p: { size?: number; className?: string }) => React.JSX.Element;
 
@@ -408,9 +409,7 @@ export function DashboardShell({
   const initial = (email?.[0] ?? "?").toUpperCase();
   const tenantRole =
     role === "institution_admin" || role === "teacher" || role === "student";
-  const tenantLogin = institution?.subdomain
-    ? `/login/${encodeURIComponent(institution.subdomain)}`
-    : "/login";
+  const tenantLogin = institutionLoginPath(institution?.subdomain ?? "");
 
   // First-login security prompt: admin-created accounts still hold a temp
   // password the admin set — nudge them to replace it.

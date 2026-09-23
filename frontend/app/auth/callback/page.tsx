@@ -4,8 +4,14 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { Brand } from "@/components/ui/brand";
-import { listPublicCourses, PublicCourse, warmBackend } from "@/lib/api";
+import { Building2 } from "@/components/ui/icons";
+import {
+  getInstitutionBranding,
+  type InstitutionBranding,
+  listPublicCourses,
+  type PublicCourse,
+  warmBackend,
+} from "@/lib/api";
 import {
   dashboardDestination,
   isDashboardRole,
@@ -15,8 +21,12 @@ import { PENDING_GOOGLE_COURSE_KEY } from "@/lib/google-auth";
 import { PENDING_GOOGLE_LEVEL_KEY } from "@/lib/google-auth";
 import { PENDING_AUTH_NEXT_KEY } from "@/lib/google-auth";
 import { PENDING_GOOGLE_TENANT_KEY } from "@/lib/google-auth";
+import { PENDING_GOOGLE_INSTITUTION_KEY } from "@/lib/google-auth";
+import {
+  institutionLoginPath,
+  normalizeInstitutionSlug,
+} from "@/lib/institution-portal";
 import { createClient } from "@/lib/supabase";
-import { PUBLIC_ENV } from "@/lib/public-env";
 import { safeDashboardNext } from "@/lib/safe-next";
 
 export default function AuthCallbackPage() {
@@ -28,7 +38,15 @@ export default function AuthCallbackPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const defaultTenantId = PUBLIC_ENV.defaultTenantId;
+  const [branding, setBranding] = useState<InstitutionBranding | null>(null);
+  const [institutionSlug, setInstitutionSlug] = useState("");
+
+  const clearPendingGoogleSignup = useCallback(() => {
+    window.sessionStorage.removeItem(PENDING_GOOGLE_COURSE_KEY);
+    window.sessionStorage.removeItem(PENDING_GOOGLE_LEVEL_KEY);
+    window.sessionStorage.removeItem(PENDING_GOOGLE_TENANT_KEY);
+    window.sessionStorage.removeItem(PENDING_GOOGLE_INSTITUTION_KEY);
+  }, []);
 
   const finishDestination = useCallback(() => {
     const destination = safeDashboardNext(
@@ -62,9 +80,7 @@ export default function AuthCallbackPage() {
       setSaving(false);
       return;
     }
-    window.sessionStorage.removeItem(PENDING_GOOGLE_COURSE_KEY);
-    window.sessionStorage.removeItem(PENDING_GOOGLE_LEVEL_KEY);
-    window.sessionStorage.removeItem(PENDING_GOOGLE_TENANT_KEY);
+    clearPendingGoogleSignup();
     const {
       data: { session },
     } = await supabase.auth.getSession();
@@ -73,7 +89,7 @@ export default function AuthCallbackPage() {
     warmBackend();
     router.replace(dashboardDestination("student", finishDestination()));
     router.refresh();
-  }, [finishDestination, router]);
+  }, [clearPendingGoogleSignup, finishDestination, router]);
 
   useEffect(() => {
     if (initialized.current) return;
@@ -82,6 +98,28 @@ export default function AuthCallbackPage() {
     async function finishOAuth() {
       try {
         const url = new URL(window.location.href);
+        const callbackInstitution = normalizeInstitutionSlug(
+          url.searchParams.get("institution"),
+        );
+        const storedInstitution = normalizeInstitutionSlug(
+          window.sessionStorage.getItem(PENDING_GOOGLE_INSTITUTION_KEY),
+        );
+        const resolvedInstitution = callbackInstitution || storedInstitution;
+        setInstitutionSlug(resolvedInstitution);
+
+        let resolvedBranding: InstitutionBranding | null = null;
+        if (resolvedInstitution) {
+          try {
+            resolvedBranding = await getInstitutionBranding(resolvedInstitution);
+            setBranding(resolvedBranding);
+          } catch {
+            setError(
+              "This institution access link is unavailable. Ask your administrator for the correct link.",
+            );
+            setLoading(false);
+            return;
+          }
+        }
         const providerError =
           url.searchParams.get("error_description") || url.searchParams.get("error");
         if (providerError) throw new Error(providerError);
@@ -113,7 +151,7 @@ export default function AuthCallbackPage() {
 
         const { data: profile, error: profileError } = await supabase
           .from("profiles")
-          .select("id,role,must_change_password")
+          .select("id,role,must_change_password,tenant_id")
           .eq("id", user.id)
           .maybeSingle();
         if (profileError) throw profileError;
@@ -125,9 +163,30 @@ export default function AuthCallbackPage() {
           if (!isDashboardRole(profile.role)) {
             throw new Error("Account profile has an unsupported role.");
           }
-          window.sessionStorage.removeItem(PENDING_GOOGLE_COURSE_KEY);
-          window.sessionStorage.removeItem(PENDING_GOOGLE_LEVEL_KEY);
-          window.sessionStorage.removeItem(PENDING_GOOGLE_TENANT_KEY);
+          if (
+            profile.role === "teacher" ||
+            profile.role === "institution_admin"
+          ) {
+            await supabase.auth.signOut({ scope: "local" });
+            setError(
+              "Teacher and institution administrator accounts must sign in with the email and password provided by their administrator.",
+            );
+            setLoading(false);
+            return;
+          }
+          if (
+            resolvedBranding &&
+            profile.role !== "super_admin" &&
+            profile.tenant_id !== resolvedBranding.tenant_id
+          ) {
+            await supabase.auth.signOut({ scope: "local" });
+            setError(
+              `This account does not belong to ${resolvedBranding.name}. Use the access link provided by your institution.`,
+            );
+            setLoading(false);
+            return;
+          }
+          clearPendingGoogleSignup();
           writeDashboardBootstrap(
             user.id,
             profile.role,
@@ -142,12 +201,22 @@ export default function AuthCallbackPage() {
         }
 
         const tenantId =
-          window.sessionStorage.getItem(PENDING_GOOGLE_TENANT_KEY) ||
-          defaultTenantId;
+          window.sessionStorage.getItem(PENDING_GOOGLE_TENANT_KEY);
         if (!tenantId) {
-          throw new Error(
-            "Institution not configured (missing NEXT_PUBLIC_DEFAULT_TENANT_ID).",
+          await supabase.auth.signOut({ scope: "local" });
+          setError(
+            "Student registration must start from the access link shared by your institution.",
           );
+          setLoading(false);
+          return;
+        }
+        if (resolvedBranding && tenantId !== resolvedBranding.tenant_id) {
+          await supabase.auth.signOut({ scope: "local" });
+          setError(
+            "The institution in this sign-in request does not match the shared access link. Please start again from your institution portal.",
+          );
+          setLoading(false);
+          return;
         }
 
         const availableCourses = await listPublicCourses(tenantId);
@@ -181,7 +250,7 @@ export default function AuthCallbackPage() {
     }
 
     void finishOAuth();
-  }, [completeGoogleSignup, defaultTenantId, finishDestination, router]);
+  }, [clearPendingGoogleSignup, completeGoogleSignup, finishDestination, router]);
 
   // While exchanging the code / checking for an existing profile, show only a
   // brief, low-ceremony spinner — existing users never see anything past this.
@@ -196,16 +265,50 @@ export default function AuthCallbackPage() {
     <div className="fixed inset-0 z-50 flex min-h-screen items-center justify-center bg-muted/40 p-4">
       {isProcessing && (
         <div className="animate-rise flex flex-col items-center gap-3 rounded-2xl bg-card px-8 py-7 shadow-xl">
+          {branding?.logo_url ? (
+            // The source is a short-lived URL from the private logo bucket.
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={branding.logo_url}
+              alt={`${branding.name} logo`}
+              className="mb-1 max-h-12 max-w-[220px] object-contain"
+            />
+          ) : branding ? (
+            <Building2 size={30} className="text-primary" />
+          ) : null}
           <div className="h-7 w-7 animate-spin rounded-full border-4 border-emerald-100 border-t-emerald-700" aria-label="Loading" />
-          <p className="text-sm text-muted-foreground">Finishing Google sign-in…</p>
+          <p className="text-sm text-muted-foreground">
+            Finishing {branding?.name ? `${branding.name} ` : ""}sign-in…
+          </p>
         </div>
       )}
 
       {(needsCourse || noCoursesAvailable || error) && (
         <section className="animate-rise w-full max-w-sm rounded-2xl bg-card p-6 shadow-xl">
           <div className="mb-4 flex justify-center">
-            <Brand height={30} />
+            {branding?.logo_url ? (
+              // The source is a short-lived URL from the private logo bucket.
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={branding.logo_url}
+                alt={`${branding.name} logo`}
+                className="max-h-14 max-w-[240px] object-contain"
+              />
+            ) : (
+              <div className="flex flex-col items-center gap-2 text-center">
+                <Building2 size={30} className="text-primary" />
+                <p className="font-semibold text-foreground">
+                  {branding?.name ?? "Institution portal"}
+                </p>
+              </div>
+            )}
           </div>
+
+          {branding?.logo_url && (
+            <p className="mb-4 text-center text-sm font-semibold text-foreground">
+              {branding.name}
+            </p>
+          )}
 
           {needsCourse && (
             <>
@@ -280,7 +383,7 @@ export default function AuthCallbackPage() {
 
           {error && (
             <Link
-              href="/login"
+              href={institutionLoginPath(institutionSlug)}
               className="mt-5 block text-center text-sm font-medium text-emerald-700 hover:underline"
             >
               Return to sign in

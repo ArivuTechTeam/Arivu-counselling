@@ -295,7 +295,6 @@ Notes/gotchas below.
 |---|---|
 | `NEXT_PUBLIC_SUPABASE_URL` | Supabase project URL |
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | anon public key |
-| `NEXT_PUBLIC_DEFAULT_TENANT_ID` | Fallback tenant UUID for generic `/signup`; tenant-specific signup uses `?institution=<subdomain>` |
 | `NEXT_PUBLIC_API_BASE_URL` | the deployed **backend URL** from step 2 |
 
 → After it deploys, copy the **frontend URL**.

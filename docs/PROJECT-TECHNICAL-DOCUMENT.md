@@ -317,7 +317,7 @@ Guards: **public** / **student** / **staff** (teacher+admin+super) / **admin** (
 
 **Admin** (`/api/v1`) — user management (`/users` admin), institution onboarding & admin management (`/platform/tenants`, `/admins` super_admin), dashboards (`/admin/overview`, `/admin/analytics`, `/platform/overview`, `/platform/ai-monitoring`), and the super-admin-protected operational offering tree (`/platform/tenants/{tenant_id}/offerings`). Institution onboarding accepts optional catalogue subject IDs and an optional validated PNG/JPEG logo (maximum 1 MB); catalogue selections atomically provision their parent courses/levels, while the logo is stored privately and only its path is persisted. Platform institution/admin responses expose offering names and counts. Handler functions live in `admin.py`; `institution_admin.py` and `super_admin.py` are thin, explicit path-allowlist routers.
 
-**Institution login/signup branding** — each active institution receives a path-based login link at `/login/{subdomain}`. Its student link opens `/signup?institution={subdomain}`. The unauthenticated, read-only endpoint `GET /api/v1/public/institutions/{subdomain}/branding` returns only the tenant ID needed to scope public course lookup, institution name, slug, and a one-hour signed logo URL. Login/signup surfaces are otherwise neutral. Authenticated non-super-admin dashboards receive the same institution identity through `/api/v1/me/profile`; the shell shows its name/logo and preserves `?institution={subdomain}` in the URL. This is path/query-based context, not custom DNS tenancy.
+**Institution access and branding** — each active institution receives one path-based access link at `/login/{subdomain}`. Institution admins and teachers use their provisioned email/password credentials on that page; students can sign in or continue to the self-registration route at `/signup/{subdomain}`. Password and Google self-registration are student-only. The OAuth callback carries the institution slug and renders the same institution name/logo while Course + Level enrollment is completed. The unauthenticated, read-only endpoint `GET /api/v1/public/institutions/{subdomain}/branding` returns only the tenant ID needed to scope public course lookup, institution name, slug, and a one-hour signed logo URL. Login/signup surfaces are otherwise neutral. Authenticated non-super-admin dashboards receive the same institution identity through `/api/v1/me/profile`; the shell shows its name/logo. This is path-based context, not custom DNS tenancy.
 
 **Teacher** (`/api/v1`) — `/teacher/class-overview`, `/teacher/class-monitor`, `/teacher/student-report/{id}` (staff).
 
@@ -600,7 +600,6 @@ SUPABASE (dashboard-configured): Postgres + Auth + Storage — settings apply in
 ### 10.3 Environment variables
 **Frontend (browser-exposed, `NEXT_PUBLIC_*`):**
 - `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY` (RLS-safe anon key)
-- `NEXT_PUBLIC_DEFAULT_TENANT_ID` (fallback tenant for generic `/signup`; tenant-specific links resolve their tenant from `?institution={subdomain}`)
 - `NEXT_PUBLIC_API_BASE_URL` (backend URL — **baked at build time**, so changing it requires a redeploy)
 
 **Backend (secret):**

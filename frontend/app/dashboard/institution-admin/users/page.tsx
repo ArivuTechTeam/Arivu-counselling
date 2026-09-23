@@ -3,6 +3,11 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 
+import {
+  TemporaryCredentials,
+  TemporaryCredentialsDialog,
+} from "@/components/admin/temporary-credentials-dialog";
+import { useDashboardIdentity } from "@/components/shared/dashboard-identity-context";
 import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
 import {
@@ -33,6 +38,7 @@ import {
 } from "@/lib/api";
 import { useCourses, useInstitutionUsers } from "@/lib/staff-queries";
 import { useSessionStorageState } from "@/lib/use-session-storage-state";
+import { institutionLoginUrl } from "@/lib/institution-portal";
 import {
   generateTemporaryPassword,
   validTemporaryPassword,
@@ -72,6 +78,7 @@ function subjectsByLevel(subjects: Subject[]): Array<[string, string, Subject[]]
 }
 
 export default function UsersPage() {
+  const { institution } = useDashboardIdentity();
   const [query, setQuery] = useSessionStorageState(
     "institution-users-query",
     "",
@@ -116,6 +123,7 @@ export default function UsersPage() {
   const [teacherCourseError, setTeacherCourseError] = useState<string | null>(null);
   const [rosterError, setRosterError] = useState<string | null>(null);
   const [temporaryCredentials, setTemporaryCredentials] = useState<Record<string, TemporaryCredential>>({});
+  const [credentialsDialog, setCredentialsDialog] = useState<TemporaryCredentials | null>(null);
   const [copiedTeacherId, setCopiedTeacherId] = useState<string | null>(null);
   const [credentialResetTeacher, setCredentialResetTeacher] = useState<AdminUser | null>(null);
   const [resettingCredential, setResettingCredential] = useState(false);
@@ -189,6 +197,23 @@ export default function UsersPage() {
     }, 4000);
   }
 
+  function currentInstitutionLoginUrl(): string | undefined {
+    return institution?.subdomain
+      ? institutionLoginUrl(institution.subdomain, window.location.origin)
+      : undefined;
+  }
+
+  function teacherCredentialText(credential: TemporaryCredential): string {
+    return [
+      ...(institution?.name ? [`Institution: ${institution.name}`] : []),
+      ...(currentInstitutionLoginUrl()
+        ? [`Login link: ${currentInstitutionLoginUrl()}`]
+        : []),
+      `Email: ${credential.email}`,
+      `Temporary password: ${credential.password}`,
+    ].join("\n");
+  }
+
   const total = directory?.total ?? 0;
   const totalPages = Math.max(1, Math.ceil(total / TEACHERS_PER_PAGE));
   const currentPage = Math.min(page, totalPages);
@@ -215,6 +240,12 @@ export default function UsersPage() {
         ...current,
         [created.id]: { email: submittedEmail, password: submittedPassword },
       }));
+      setCredentialsDialog({
+        email: submittedEmail,
+        password: submittedPassword,
+        institution: institution?.name ?? "Institution",
+        loginUrl: currentInstitutionLoginUrl(),
+      });
       setForm({ full_name: "", email: "", password: "", course_id: "", level_id: "", subject_ids: [] });
       setPage(1);
       await teachersQuery.mutate();
@@ -241,7 +272,7 @@ export default function UsersPage() {
     }
     try {
       await navigator.clipboard.writeText(
-        `Email: ${credential.email}\nTemporary password: ${credential.password}`,
+        teacherCredentialText(credential),
       );
       setCopiedTeacherId(teacher.id);
       window.setTimeout(() => setCopiedTeacherId(null), 2000);
@@ -280,8 +311,13 @@ export default function UsersPage() {
     setResettingCredential(false);
     try {
       await navigator.clipboard.writeText(
-        `Email: ${credential.email}\nTemporary password: ${credential.password}`,
+        teacherCredentialText(credential),
       );
+      setCredentialsDialog({
+        ...credential,
+        institution: institution?.name ?? "Institution",
+        loginUrl: currentInstitutionLoginUrl(),
+      });
       setCopiedTeacherId(teacherId);
       showNotice("success", "New temporary login generated and copied.");
       window.setTimeout(() => setCopiedTeacherId(null), 2000);
@@ -907,6 +943,13 @@ export default function UsersPage() {
             </div>
           </div>
         </Dialog>
+      )}
+
+      {credentialsDialog && (
+        <TemporaryCredentialsDialog
+          credentials={credentialsDialog}
+          onClose={() => setCredentialsDialog(null)}
+        />
       )}
     </div>
   );
