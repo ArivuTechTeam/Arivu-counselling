@@ -32,8 +32,8 @@ from app.services.attempt_timing import (
     timing_payload,
 )
 from app.services.events import ATTEMPT_SUBMITTED, log_event
-from app.services.grading import grade_answer
-from app.services.selector import enrolled_subject_ids
+from app.services.scoring import normalize_policy, score
+from app.services.batch_access import assigned_quiz_ids, student_can_access_quiz
 
 router = APIRouter(prefix="/api/v1", tags=["student"])
 
@@ -116,7 +116,7 @@ def _require_student(profile: CurrentProfile) -> None:
 
 
 QUESTION_ATTEMPT_COLUMNS = (
-    "id, type, question_text, options, correct_answer, explanation, marks"
+    "id, type, question_text, options, correct_answer, explanation, marks, figure_id"
 )
 
 
@@ -202,6 +202,7 @@ def _strip_answer(q: dict) -> dict:
         "question_text": q["question_text"],
         "options": q.get("options"),
         "marks": q.get("marks"),
+        "figure_id": q.get("figure_id"),
     }
 
 
@@ -260,23 +261,61 @@ def list_quizzes(profile: CurrentProfile = Depends(get_current_profile)) -> list
         configure=lambda query: query.eq("tenant_id", profile.tenant_id),
     )
     subject_ids = [s["id"] for s in subjects]
-    if not subject_ids:
+    batches_on = getattr(get_settings(), "batches_enabled", False)
+    if not subject_ids and not batches_on:
         return []
 
-    # 3) Published quizzes tagged with one of those subjects.
-    sets = select_all_in(
-        service,
-        "quiz_sets",
-        "id, title, published_at, subject_id, chapter_id",
-        in_column="subject_id",
-        values=subject_ids,
-        configure=lambda query: query.eq("tenant_id", profile.tenant_id).eq(
-            "status", "published"
-        ),
-        order_column="published_at",
-        order_desc=True,
+    # 3) Published quizzes the student may see:
+    #    - legacy_course quizzes tagged with an enrolled subject (unchanged), plus
+    #    - (only when batches are enabled) assigned_batches quizzes reachable via an
+    #      available assignment to a batch the student actively belongs to.
+    def _legacy_sets_config(query):
+        query = query.eq("tenant_id", profile.tenant_id).eq("status", "published")
+        if batches_on:
+            query = query.eq("audience_mode", "legacy_course")
+        return query
+
+    sets = (
+        select_all_in(
+            service,
+            "quiz_sets",
+            "id, title, published_at, subject_id, chapter_id",
+            in_column="subject_id",
+            values=subject_ids,
+            configure=_legacy_sets_config,
+            order_column="published_at",
+            order_desc=True,
+        )
+        if subject_ids
+        else []
     )
-    # Resolve subject + chapter NAMES so the student can browse by subject/chapter.
+    if batches_on:
+        seen = {quiz_set["id"] for quiz_set in sets}
+        assigned_ids = [
+            quiz_id
+            for quiz_id in assigned_quiz_ids(
+                service, tenant_id=profile.tenant_id, profile_id=profile.user_id
+            )
+            if quiz_id not in seen
+        ]
+        if assigned_ids:
+            sets = sets + select_all_in(
+                service,
+                "quiz_sets",
+                "id, title, published_at, subject_id, chapter_id",
+                in_column="id",
+                values=assigned_ids,
+                configure=lambda query: query.eq("tenant_id", profile.tenant_id)
+                .eq("status", "published")
+                .eq("audience_mode", "assigned_batches"),
+                order_column="published_at",
+                order_desc=True,
+            )
+    if not sets:
+        return []
+
+    # Resolve subject + chapter NAMES for every quiz shown (legacy or assigned).
+    present_subject_ids = list({s["subject_id"] for s in sets if s.get("subject_id")})
     subj_name = {
         s["id"]: s["name"]
         for s in select_all_in(
@@ -284,10 +323,10 @@ def list_quizzes(profile: CurrentProfile = Depends(get_current_profile)) -> list
             "subjects",
             "id, name",
             in_column="id",
-            values=subject_ids,
+            values=present_subject_ids,
             configure=lambda query: query.eq("tenant_id", profile.tenant_id),
         )
-    }
+    } if present_subject_ids else {}
     chapter_ids = list({s.get("chapter_id") for s in sets if s.get("chapter_id")})
     chap_name = {}
     if chapter_ids:
@@ -406,6 +445,25 @@ class StartAttemptRequest(BaseModel):
     variant_id: str
 
 
+def _resolve_quiz_scoring_policy(service, quiz_set_id: str, tenant_id: str) -> dict | None:
+    """The rules of a quiz's attached scoring policy, or None (default full/zero).
+    Gated by SCORING_POLICIES_ENABLED, so scoring is unchanged until it's on."""
+    if not getattr(get_settings(), "scoring_policies_enabled", False):
+        return None
+    quiz = (
+        service.table("quiz_sets").select("scoring_policy_id")
+        .eq("id", quiz_set_id).eq("tenant_id", tenant_id).maybe_single().execute()
+    )
+    policy_id = (quiz.data or {}).get("scoring_policy_id") if quiz else None
+    if not policy_id:
+        return None
+    row = (
+        service.table("scoring_policies").select("rules")
+        .eq("id", policy_id).eq("tenant_id", tenant_id).maybe_single().execute()
+    )
+    return (row.data or {}).get("rules") if row else None
+
+
 @router.post("/attempts", response_model=AttemptInProgressOut)
 def start_attempt(
     body: StartAttemptRequest,
@@ -426,20 +484,14 @@ def start_attempt(
     if variant is None or not variant.data:
         raise HTTPException(status_code=404, detail="Quiz variant not found.")
 
-    qs = (
-        service.table("quiz_sets")
-        .select("status, subject_id")
-        .eq("id", variant.data["quiz_set_id"])
-        .eq("tenant_id", profile.tenant_id)
-        .single()
-        .execute()
-    )
-    if qs.data["status"] != "published":
-        raise HTTPException(status_code=400, detail="This quiz is not published.")
-    if qs.data.get("subject_id") not in enrolled_subject_ids(service, profile):
+    # Access gate (single source of truth): the quiz must be published and either
+    # a legacy_course quiz in an enrolled subject or an assigned_batches quiz the
+    # student can reach via batch assignment. With BATCHES_ENABLED off this is
+    # exactly the legacy course-subject rule.
+    if not student_can_access_quiz(service, profile, variant.data["quiz_set_id"]):
         raise HTTPException(
             status_code=403,
-            detail="This quiz is not assigned to your course.",
+            detail="This quiz is not available to you.",
         )
 
     previous_attempts = (
@@ -508,6 +560,18 @@ def start_attempt(
                 detail=f"You have already used all {attempt_limit} attempts for this quiz.",
             ) from exc
         raise
+    # Freeze the scoring policy onto the attempt (only when enabled + attached),
+    # so the score can never change if the policy is edited later.
+    scoring_policy = _resolve_quiz_scoring_policy(
+        service, variant.data["quiz_set_id"], profile.tenant_id
+    )
+    if scoring_policy is not None:
+        service.table("quiz_attempts").update(
+            {"scoring_policy_snapshot": scoring_policy}
+        ).eq("id", attempt_id).eq("tenant_id", profile.tenant_id).eq(
+            "student_id", profile.user_id
+        ).execute()
+
     # These questions were already loaded to validate the quiz. Return the
     # answer-stripped taking state so the client can render immediately instead
     # of repeating the attempt + link + question queries after navigation.
@@ -597,6 +661,7 @@ def get_attempt(
                 "correct_answer": q["correct_answer"],
                 "explanation": q.get("explanation"),
                 "marks": q.get("marks"),
+                "figure_id": q.get("figure_id"),
                 "student_answer": a.get("student_answer"),
                 "is_correct": a.get("is_correct"),
                 "marks_awarded": a.get("marks_awarded"),
@@ -716,12 +781,17 @@ def submit_attempt(
                 detail="Answer every question before submitting.",
             )
 
+    # Scoring policy frozen at attempt start (None = default full/zero, which the
+    # engine reproduces exactly via grade_answer).
+    policy = attempt.get("scoring_policy_snapshot")
     total = 0.0
     results = []
     answer_rows = []
     for q in questions:
         student_answer = submitted.get(q["id"])
-        is_correct, awarded = grade_answer(q, student_answer)
+        outcome = score(q, student_answer, policy)
+        is_correct = outcome.state == "correct"
+        awarded = outcome.awarded
         total += awarded
         answer_rows.append(
             {
@@ -742,11 +812,15 @@ def submit_attempt(
                 "correct_answer": q["correct_answer"],
                 "explanation": q.get("explanation"),
                 "marks": q.get("marks"),
+                "figure_id": q.get("figure_id"),
                 "student_answer": student_answer,
                 "is_correct": is_correct,
                 "marks_awarded": awarded,
             }
         )
+
+    if policy is not None and normalize_policy(policy)["clamp_negative_total"]:
+        total = max(0.0, total)  # negative-marking exams never drop below zero
 
     submitted_at = datetime.now(timezone.utc).isoformat()
     claimed = (

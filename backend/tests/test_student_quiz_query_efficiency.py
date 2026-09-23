@@ -196,7 +196,7 @@ class StudentQuizQueryEfficiencyTests(unittest.TestCase):
         self.assertEqual(
             question_selects,
             [
-                "id, type, question_text, options, correct_answer, explanation, marks"
+                "id, type, question_text, options, correct_answer, explanation, marks, figure_id"
             ],
         )
 
@@ -214,7 +214,7 @@ class StudentQuizQueryEfficiencyTests(unittest.TestCase):
         self.assertEqual(
             question_selects,
             [
-                "id, chapter_id, type, question_text, options, correct_answer, explanation, marks"
+                "id, chapter_id, type, question_text, options, correct_answer, explanation, marks, figure_id"
             ],
         )
 

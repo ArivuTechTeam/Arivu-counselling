@@ -13,7 +13,7 @@ def erase_account_data(service, *, user_id: str, tenant_id: str) -> None:
     """
     rows = (
         service.table("documents")
-        .select("storage_path")
+        .select("id, storage_path")
         .eq("tenant_id", tenant_id)
         .eq("uploaded_by", user_id)
         .execute()
@@ -29,6 +29,18 @@ def erase_account_data(service, *, user_id: str, tenant_id: str) -> None:
     )
     for storage_path in storage_paths:
         delete_bytes(storage_path)
+
+    # Also erase figures rendered from those documents (question-figures bucket),
+    # before anonymize_account_data removes the rows we'd need to find their paths.
+    document_ids = [
+        row["id"] for row in rows if isinstance(row, dict) and row.get("id")
+    ]
+    if document_ids:
+        from app.services.document_figures import purge_figures_for_documents
+
+        purge_figures_for_documents(
+            service, tenant_id=tenant_id, document_ids=document_ids
+        )
 
     service.rpc(
         "anonymize_account_data",

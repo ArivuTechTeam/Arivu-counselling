@@ -20,6 +20,7 @@ from app.lib.auth import CurrentProfile
 from app.lib.config import get_settings
 from app.lib.supabase import get_service_client
 from app.services.blueprint import generate_and_persist_from_material
+from app.services.commerce_context import commerce_context_for_prompt
 from app.services.teacher_access import teacher_has_subject
 from app.services.topic_capacity import topic_choice_names
 
@@ -201,6 +202,7 @@ class QuizGeneratorService:
             selected_only_material=True,
             source_document_id=job["document_id"],
             evidence_catalog=evidence_catalog,
+            commerce_context=commerce_context_for_prompt(service, profile.tenant_id, subject_id),
             **persistence_options,
         )
 

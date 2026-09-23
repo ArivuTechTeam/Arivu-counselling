@@ -40,7 +40,10 @@ const contentSecurityPolicy = [
   // granting the broader JavaScript `unsafe-eval` permission in production.
   `script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'${developmentScripts}`,
   "style-src 'self' 'unsafe-inline'",
-  "img-src 'self' data: blob:",
+  // Extracted figure PNGs are served from private Supabase Storage via signed
+  // URLs, so the storage origin must be allowed for <img> (connect-src already
+  // permits it for other calls).
+  `img-src 'self' data: blob: ${supabaseUrl.origin}`,
   "font-src 'self' data:",
   `connect-src 'self' ${supabaseUrl.origin} ${websocketOrigin} ${apiUrl.origin}`,
   "object-src 'none'",

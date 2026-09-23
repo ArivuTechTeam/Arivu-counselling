@@ -106,7 +106,35 @@ class Settings:
     def __init__(self) -> None:
         # Enable only after the additive faculty-job migration and worker are ready.
         self.faculty_jobs_enabled = _boolean("FACULTY_JOBS_ENABLED", False)
+        self.quiz_reuse_enabled = _boolean("QUIZ_REUSE_ENABLED", False)
+        # Batch-scoped delivery (Phase 6.1). Off by default: quizzes stay
+        # 'legacy_course' (course-wide) and batch assignments are ignored, so
+        # student access is unchanged until this is turned on per rollout.
+        self.batches_enabled = _boolean("BATCHES_ENABLED", False)
+        # Per-question scoring policies (Phase 6.2). Off by default: a quiz's
+        # attached scoring_policy_id is ignored and scoring stays full/zero, so
+        # existing scores are unchanged until this is turned on per paper.
+        self.scoring_policies_enabled = _boolean("SCORING_POLICIES_ENABLED", False)
+        # Commerce Vertical Pack (Phase 6.3). Off by default: the generation
+        # prompt asks for no numeric-check inputs and verification runs exactly as
+        # today. On (for commerce tenants) it adds independent numeric verification
+        # of generated numericals. Generation is byte-identical when off.
+        self.commerce_pack_enabled = _boolean("COMMERCE_PACK_ENABLED", False)
         self.faculty_jobs_poll_seconds = _positive_int("FACULTY_JOBS_POLL_SECONDS", 3)
+        # A queued job should be claimed within seconds. If work waits longer than
+        # this with no live worker lease, the worker is treated as stalled/absent
+        # (surfaced by the deployment preflight and super-admin worker-health).
+        self.faculty_worker_stale_seconds = _positive_int("FACULTY_WORKER_STALE_SECONDS", 120)
+        # AI-call logs keep tiny cost/token metadata forever, but the large raw
+        # prompt/response payloads (which contain uploaded document text) are
+        # blanked after this many days by the retention job. Privacy + cost; no
+        # row or metadata is deleted. See app/services/ai_log_retention.py.
+        self.ai_log_raw_retention_days = _positive_int("AI_LOG_RAW_RETENTION_DAYS", 30)
+        # Document-figure support (Phase 1: extract captioned figures during
+        # analysis). Off by default — enable per-tenant after migration-45 + the
+        # question-figures storage bucket exist. Safe rollout, like faculty jobs.
+        self.figure_attach_enabled = _boolean("FIGURE_ATTACH_ENABLED", False)
+        self.figure_max_per_document = _positive_int("FIGURE_MAX_PER_DOCUMENT", 50)
         self.app_env: str = os.getenv("APP_ENV", "production").strip().lower()
         if self.app_env not in {"production", "development", "test"}:
             raise RuntimeError("APP_ENV must be production, development, or test.")

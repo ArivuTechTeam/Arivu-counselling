@@ -117,6 +117,24 @@ const NAV: Record<string, NavItem[]> = {
       icon: BookOpen,
     },
     {
+      label: "Batches",
+      href: "/dashboard/institution-admin/batches",
+      section: "Management",
+      icon: Users,
+    },
+    {
+      label: "Exam standards",
+      href: "/dashboard/institution-admin/exam-standards",
+      section: "Management",
+      icon: BarChart3,
+    },
+    {
+      label: "Paper profiles",
+      href: "/dashboard/institution-admin/paper-profiles",
+      section: "Management",
+      icon: BookOpen,
+    },
+    {
       label: "Quizzes",
       href: "/dashboard/institution-admin/quizzes",
       section: "Management",

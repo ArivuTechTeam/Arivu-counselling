@@ -26,6 +26,7 @@ from app.lib.auth import CurrentProfile, get_current_profile
 from app.lib.storage import download_bytes, signed_url, upload_bytes
 from app.lib.supabase import get_service_client
 from app.lib.supabase_queries import select_all, select_all_in
+from app.services.document_figures import list_document_figures
 from app.services.extraction import MIN_READABLE_PDF_TEXT_CHARS, extract_text
 from app.services.teacher_access import teacher_has_subject
 
@@ -573,3 +574,45 @@ def document_file_url(
         file_type=doc.data.get("file_type"),
         expires_in=SIGNED_URL_TTL_SECONDS,
     )
+
+
+class DocumentFigureOut(BaseModel):
+    id: str
+    page: int | None = None
+    label: str | None = None
+    caption: str | None = None
+    width: int | None = None
+    height: int | None = None
+    url: str | None = None  # short-lived signed image URL
+
+
+@router.get("/{document_id}/figures", response_model=list[DocumentFigureOut])
+def document_figures(
+    document_id: str,
+    profile: CurrentProfile = Depends(get_current_profile),
+) -> list[DocumentFigureOut]:
+    """Captioned figures extracted from the teacher's OWN document (Phase 1).
+
+    Scoped to the caller's tenant + ownership exactly like /file-url. Each figure
+    carries a short-lived signed image URL. Used to inspect extraction quality
+    before figures are attached to questions (later phase).
+    """
+    _require_teacher(profile)
+    service = get_service_client()
+    owned = (
+        service.table("documents")
+        .select("id")
+        .eq("id", document_id)
+        .eq("tenant_id", profile.tenant_id)
+        .eq("uploaded_by", profile.user_id)
+        .maybe_single()
+        .execute()
+    )
+    if owned is None or not owned.data:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found.")
+    return [
+        DocumentFigureOut(**figure)
+        for figure in list_document_figures(
+            service, tenant_id=profile.tenant_id, document_id=document_id
+        )
+    ]

@@ -8,7 +8,7 @@ import type { AuthError } from "@supabase/supabase-js";
 import { GoogleAuthButton } from "@/components/auth/google-auth-button";
 import { SplitText } from "@/components/shared/split-text";
 import { Brand } from "@/components/ui/brand";
-import { listPublicCourses } from "@/lib/api";
+import { listPublicBatches, listPublicCourses } from "@/lib/api";
 import { initAuthFx } from "@/lib/auth-fx";
 import { signInWithGoogle } from "@/lib/google-auth";
 import { PUBLIC_ENV } from "@/lib/public-env";
@@ -95,6 +95,8 @@ export default function SignupPage() {
   const [showPw, setShowPw] = useState(false);
   const [courseId, setCourseId] = useState("");
   const [courses, setCourses] = useState<{ id: string; name: string }[]>([]);
+  const [batchId, setBatchId] = useState("");
+  const [batches, setBatches] = useState<{ id: string; name: string }[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -111,6 +113,18 @@ export default function SignupPage() {
         );
     }
   }, [tenantId]);
+
+  // Batches belong to a course. Load them when a course is chosen; the batch
+  // dropdown only appears when this institution has batches for that course.
+  useEffect(() => {
+    setBatchId("");
+    setBatches([]);
+    if (tenantId && courseId) {
+      listPublicBatches(tenantId, courseId)
+        .then(setBatches)
+        .catch(() => setBatches([]));
+    }
+  }, [tenantId, courseId]);
 
   async function handleSignup(e: React.FormEvent) {
     e.preventDefault();
@@ -139,6 +153,8 @@ export default function SignupPage() {
           // The database derives the tenant from this course and always creates
           // a student. It ignores browser-supplied role/tenant metadata.
           course_id: courseId,
+          // Optional batch; the signup trigger validates it against this course.
+          ...(batchId ? { batch_id: batchId } : {}),
         },
       },
     });
@@ -366,6 +382,21 @@ export default function SignupPage() {
                   </select>
                 </div>
               </div>
+
+              {batches.length > 0 && (
+                <div className="field">
+                  <label className="field-label" htmlFor="signup-batch">Batch</label>
+                  <div className="field-box">
+                    <span className="field-icon"><BookIcon /></span>
+                    <select id="signup-batch" className="field-input" value={batchId} onChange={(e) => setBatchId(e.target.value)}>
+                      <option value="">Select your batch…</option>
+                      {batches.map((b) => (
+                        <option key={b.id} value={b.id}>{b.name}</option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+              )}
 
               <button className="btn-signin" type="submit" disabled={loading || googleLoading}>
                 {loading ? "Creating account…" : "Create account →"}

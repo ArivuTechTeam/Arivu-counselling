@@ -21,6 +21,7 @@ python-dotenv==1.2.2      # load secrets from .env into the environment
 # --- Document text extraction (Slice 2) ---
 pdfplumber==0.11.10       # extract text from PDF files
 python-docx==1.2.0        # extract text from Word (.docx) files
+PyMuPDF==1.28.2           # render captioned figures from PDFs (document-figure support)
 python-multipart==0.0.32  # lets FastAPI parse uploaded files (multipart/form-data)
 
 # --- Tests ---

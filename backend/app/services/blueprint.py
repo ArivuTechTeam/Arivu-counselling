@@ -26,6 +26,7 @@ from app.services.blueprint_prompts import (
     build_blueprint_system_prompt,
     build_blueprint_user_prompt,
 )
+from app.services.commerce_context import commerce_context_for_prompt
 from app.services.events import QUESTION_GENERATED, log_events, make_event
 from app.services.extraction import extract_text_with_pages, require_readable_generation_pages
 from app.services.llm.base import LLMError
@@ -75,6 +76,10 @@ class BPQuestion(BaseModel):
     source_page_start: int | None = None
     source_page_end: int | None = None
     grounding_confidence: float = 0
+    # Optional structured inputs for independent numeric verification (P6.3-A):
+    # {"family": "simple_interest", "inputs": {...}}. Used at verification only;
+    # not persisted. Populated only when the commerce pack asks for it.
+    calc: dict | None = None
 
     def check_shape(self) -> None:
         validate_question_answer_shape(self.type, self.options, self.correct_answer)
@@ -318,6 +323,29 @@ def _generate_with_exact_mix(
         )
 
 
+def _attach_source_figures(service, tenant_id: str, source_document_id, result) -> None:
+    """Best-effort, flag-gated: link generated questions to their source-document
+    figures AFTER persistence, using the returned rows' own ids.
+
+    Fully decoupled from the commit path — it only issues follow-up UPDATEs and
+    never raises, so figure linking can never affect quiz generation. Imported
+    locally to keep this module's import graph (and pymupdf) out of the hot path.
+    """
+    if not source_document_id or not isinstance(result, dict):
+        return
+    try:
+        from app.services.document_figures import attach_figures_to_questions
+
+        attach_figures_to_questions(
+            service,
+            tenant_id=tenant_id,
+            document_id=source_document_id,
+            questions=result.get("questions") or [],
+        )
+    except Exception:  # noqa: BLE001 - figure linking is a non-critical enhancement
+        logger.warning("Figure attachment step skipped for document %s", source_document_id)
+
+
 def _get_or_create(service, table: str, tenant_id: str, match: dict, insert: dict) -> str:
     """Return the id of a row matching `match`, creating it from `insert` if none."""
     q = service.table(table).select("id").eq("tenant_id", tenant_id)
@@ -393,6 +421,7 @@ def generate_blueprint_quiz(
         profile=profile,
         type_counts=type_counts,
         source_document_id=document_id,
+        commerce_context=commerce_context_for_prompt(service, tid, subject_id),
         persist_result=persist_result,
     )
 
@@ -414,6 +443,7 @@ def generate_and_persist_from_material(
     selected_only_material: bool = False,
     source_document_id: str | None = None,
     evidence_catalog: dict[str, dict] | None = None,
+    commerce_context: str | None = None,
     persist_result: Callable[[dict], dict] | None = None,
 ) -> dict:
     """Write + persist a blueprint-driven quiz from a block of `material`.
@@ -434,13 +464,18 @@ def generate_and_persist_from_material(
     selected_only = selected_only_material or per_topic
     blueprint = build_blueprint(selected, total_questions, selected_only=selected_only)
 
-    # Generate with the configured stage provider and controlled fallback.
+    # Generate with the configured stage provider and controlled fallback. This
+    # function stays a pure payload builder — it performs no DB reads/writes before
+    # the atomic commit — so the commerce context (AY / jurisdiction / framework) is
+    # resolved by the caller and passed in; it is None when the pack is off.
     system = build_blueprint_system_prompt(
         question_types,
         cognitive_level,
         difficulty,
         selected_only_material=selected_only,
         evidence_ids_required=bool(evidence_catalog),
+        commerce_calc_enabled=getattr(get_settings(), "commerce_pack_enabled", False),
+        commerce_context=commerce_context,
     )
     user = build_blueprint_user_prompt(
         material,
@@ -614,7 +649,7 @@ def generate_and_persist_from_material(
     if persist_result is not None:
         # The durable worker commits all result rows and job completion in one
         # fenced database transaction. No partial quiz/chapter writes precede it.
-        return persist_result({
+        result = persist_result({
             "title": f"{chapter_name} — {cognitive_level}",
             "chapter_name": chapter_name,
             "variant_type": cognitive_level,
@@ -628,6 +663,8 @@ def generate_and_persist_from_material(
                 for question, check in zip(questions, verification, strict=True)
             ],
         })
+        _attach_source_figures(service, tid, source_document_id, result)
+        return result
 
     # 4) Persist chapter + selected topics (exam-setter data; powers analytics).
     chapter_id = _get_or_create(
@@ -742,10 +779,12 @@ def generate_and_persist_from_material(
         ]
     )
 
-    return {
+    result = {
         "quiz_set_id": quiz_set_id,
         "variant_id": variant_id,
         "provider": provider,
         "blueprint": blueprint,
         "questions": stored,
     }
+    _attach_source_figures(service, tid, source_document_id, result)
+    return result

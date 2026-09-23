@@ -8,6 +8,7 @@ from fastapi import APIRouter
 
 from app.api.admin import router as handler_router
 from app.api.api_logs import router as api_logs_router
+from app.api.worker_status import router as worker_status_router
 
 _PATHS = {
     "/api/v1/tenants",
@@ -31,3 +32,5 @@ if {route.path for route in router.routes} != _PATHS:
 # API-call observability is intentionally isolated from legacy admin.py while
 # remaining mounted only under this role-specific router.
 router.include_router(api_logs_router)
+# Durable-worker health, isolated the same way.
+router.include_router(worker_status_router)

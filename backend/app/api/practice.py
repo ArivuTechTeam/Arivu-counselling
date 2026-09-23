@@ -33,7 +33,7 @@ from app.services.attempt_timing import (
     taking_questions,
     timing_payload,
 )
-from app.services.grading import grade_answer
+from app.services.scoring import normalize_policy, score
 from app.services.selector import enrolled_subject_ids, select_question_ids
 from app.services.student_access import student_has_graded_question
 
@@ -64,7 +64,7 @@ def _exam_deadline_passed(session: dict, now: datetime | None = None) -> bool:
 DEFAULT_EXAM = {"questions": 50, "duration_minutes": 60, "negative_marking": 0.25}
 DAILY_QUESTION_COUNT = 10
 PRACTICE_QUESTION_COLUMNS = (
-    "id, chapter_id, type, question_text, options, correct_answer, explanation, marks"
+    "id, chapter_id, type, question_text, options, correct_answer, explanation, marks, figure_id"
 )
 
 
@@ -81,6 +81,37 @@ def _exam_config(service, tenant_id: str) -> dict:
     return {**DEFAULT_EXAM, **(cfg or {})}
 
 
+def _resolve_exam_scoring_policy(service, profile: CurrentProfile) -> dict | None:
+    """The official scoring policy bound to the student's course (exam simulator),
+    or None. None -> the exam-config negative marking applies (current behaviour).
+    Gated by SCORING_POLICIES_ENABLED, so exam scoring is unchanged until it's on."""
+    if not getattr(get_settings(), "scoring_policies_enabled", False):
+        return None
+    enrolled = (
+        service.table("enrollments").select("course_id")
+        .eq("profile_id", profile.user_id).eq("tenant_id", profile.tenant_id)
+        .execute().data or []
+    )
+    course_ids = [e["course_id"] for e in enrolled if e.get("course_id")]
+    if not course_ids:
+        return None
+    courses = (
+        service.table("courses").select("exam_scoring_policy_id")
+        .in_("id", course_ids).eq("tenant_id", profile.tenant_id).execute().data or []
+    )
+    policy_id = next(
+        (c["exam_scoring_policy_id"] for c in courses if c.get("exam_scoring_policy_id")),
+        None,
+    )
+    if not policy_id:
+        return None
+    row = (
+        service.table("scoring_policies").select("rules")
+        .eq("id", policy_id).eq("tenant_id", profile.tenant_id).maybe_single().execute()
+    )
+    return (row.data or {}).get("rules") if row else None
+
+
 def _strip(q: dict) -> dict:
     """What a student may SEE while taking — no correct_answer/explanation."""
     return {
@@ -89,6 +120,7 @@ def _strip(q: dict) -> dict:
         "question_text": q["question_text"],
         "options": q.get("options"),
         "marks": q.get("marks"),
+        "figure_id": q.get("figure_id"),
     }
 
 
@@ -342,6 +374,7 @@ def get_practice(
                 "correct_answer": q["correct_answer"],
                 "explanation": q.get("explanation"),
                 "marks": q.get("marks"),
+                "figure_id": q.get("figure_id"),
                 "student_answer": a.get("student_answer"),
                 "is_correct": a.get("is_correct"),
                 "marks_awarded": a.get("marks_awarded"),
@@ -433,9 +466,13 @@ def submit_practice(
                 status_code=400,
                 detail="Answer every question before submitting.",
             )
-    # Negative marking is frozen into the session's config (exam mode). A wrong,
-    # ANSWERED question loses marks; a blank one scores 0 (never negative).
-    neg = float(cfg.get("negative_marking") or 0)
+    # Scoring policy: an injected official-standard snapshot (exam simulator /
+    # mock) if present, else the session's negative-marking config. This
+    # reproduces the previous behaviour: wrong+answered loses marks, blank = 0.
+    policy = s.get("scoring_policy_snapshot")
+    if policy is None:
+        neg = float(cfg.get("negative_marking") or 0)
+        policy = {"wrong_penalty": neg, "clamp_negative_total": True} if neg > 0 else None
 
     total = 0.0
     max_score = 0.0
@@ -443,9 +480,9 @@ def submit_practice(
     answer_rows = []
     for q in questions:
         student_answer = submitted.get(q["id"])
-        is_correct, awarded = grade_answer(q, student_answer)
-        if not is_correct and neg > 0 and is_answered(student_answer):
-            awarded = -neg
+        outcome = score(q, student_answer, policy)
+        is_correct = outcome.state == "correct"
+        awarded = outcome.awarded
         total += awarded
         max_score += float(q.get("marks") or 1)
         answer_rows.append(
@@ -467,13 +504,14 @@ def submit_practice(
                 "correct_answer": q["correct_answer"],
                 "explanation": q.get("explanation"),
                 "marks": q.get("marks"),
+                "figure_id": q.get("figure_id"),
                 "student_answer": student_answer,
                 "is_correct": is_correct,
                 "marks_awarded": awarded,
             }
         )
 
-    if neg > 0:
+    if policy is not None and normalize_policy(policy)["clamp_negative_total"]:
         total = max(0.0, total)  # an exam total never drops below zero
 
     graded_config = cfg
@@ -886,26 +924,30 @@ def start_exam(profile: CurrentProfile = Depends(get_current_profile)) -> dict:
             detail="Some Exam questions are no longer available. Please try again.",
         )
     started_at = datetime.now(timezone.utc).isoformat()
+    # Freeze the official scoring standard (if the course has one) onto the exam
+    # session; the submit path grades against this snapshot.
+    exam_policy = _resolve_exam_scoring_policy(service, profile)
+    session_values = {
+        "tenant_id": profile.tenant_id,
+        "student_id": profile.user_id,
+        "mode": "exam",
+        "active_slot": True,
+        "config": {
+            "count": len(ids),
+            "negative_marking": float(cfg["negative_marking"]),
+            "duration_minutes": int(cfg["duration_minutes"]),
+        },
+        "question_ids": ids,
+        "question_snapshot": questions,
+        "status": "in_progress",
+        "started_at": started_at,
+    }
+    if exam_policy is not None:
+        session_values["scoring_policy_snapshot"] = exam_policy
     try:
         sess = (
             service.table("practice_sessions")
-            .insert(
-                {
-                    "tenant_id": profile.tenant_id,
-                    "student_id": profile.user_id,
-                    "mode": "exam",
-                    "active_slot": True,
-                    "config": {
-                        "count": len(ids),
-                        "negative_marking": float(cfg["negative_marking"]),
-                        "duration_minutes": int(cfg["duration_minutes"]),
-                    },
-                    "question_ids": ids,
-                    "question_snapshot": questions,
-                    "status": "in_progress",
-                    "started_at": started_at,
-                }
-            )
+            .insert(session_values)
             .execute()
             .data[0]
         )

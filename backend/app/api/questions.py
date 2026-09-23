@@ -37,6 +37,7 @@ from app.services.question_validation import validate_question_answer_shape
 from app.services.review import RegenerationSourceError, regenerate_question
 from app.services.student_access import student_has_graded_question
 from app.services.tutor import explain_question
+from app.services import quiz_reuse
 
 router = APIRouter(prefix="/api/v1/questions", tags=["questions"])
 
@@ -50,11 +51,11 @@ def _require_teacher(profile: CurrentProfile) -> None:
 
 
 def _assert_teacher_question(
-    service, question_id: str, profile: CurrentProfile
+    service, question_id: str, profile: CurrentProfile, *, editing: bool = True
 ) -> None:
     question = (
         service.table("questions")
-        .select("id")
+        .select("id,release_locked" if quiz_reuse.enabled() else "id")
         .eq("id", question_id)
         .eq("tenant_id", profile.tenant_id)
         .eq("created_by", profile.user_id)
@@ -63,9 +64,12 @@ def _assert_teacher_question(
     )
     if question is None or not question.data:
         raise HTTPException(status_code=404, detail="Question not found.")
+    if editing:
+        quiz_reuse.assert_editable(question.data)
 
 
 class QuestionEdit(BaseModel):
+    expected_version: int | None = Field(default=None, ge=1)
     question_text: str | None = Field(default=None, min_length=1)
     options: list[dict] | None = None
     correct_answer: Any | None = None
@@ -79,6 +83,8 @@ class QuestionApproval(BaseModel):
 
 
 class QuestionOut(BaseModel):
+    content_version: int | None = None
+    release_locked: bool = False
     id: str
     type: str
     question_text: str
@@ -96,6 +102,14 @@ class QuestionOut(BaseModel):
     verification_warnings: list[str] = Field(default_factory=list)
     confidence_score: float | None = None
     source: str | None = None
+    figure_id: str | None = None
+    figure: dict | None = None
+
+
+class QuestionFigureUpdate(BaseModel):
+    # null clears the attached figure; a value attaches one of the question's
+    # source-document figures (validated below).
+    figure_id: str | None = None
 
 
 def _match_review_snapshot(query, row: dict):
@@ -115,6 +129,8 @@ def _match_review_snapshot(query, row: dict):
         else:
             expected = json.dumps(value, ensure_ascii=False) if field in json_fields else value
             query = query.eq(field, expected)
+    if row.get("content_version") is not None:
+        query = query.eq("content_version", row["content_version"])
     return query
 
 
@@ -127,6 +143,7 @@ def edit_question(
     _require_teacher(profile)
     # Only update the fields the teacher actually sent.
     updates = body.model_dump(exclude_unset=True)
+    expected_version = updates.pop("expected_version", None)
     if not updates:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -144,6 +161,10 @@ def edit_question(
     )
     if existing is None or not existing.data:
         raise HTTPException(status_code=404, detail="Question not found.")
+    if quiz_reuse.enabled():
+        quiz_reuse.assert_editable(existing.data)
+        if expected_version != existing.data.get("content_version"):
+            raise HTTPException(409, "This question changed or the editor is outdated. Reload before saving.")
 
     # The browser renders a missing explanation as an empty textarea. Treat
     # that round-trip as unchanged, rather than clearing verification on save.
@@ -215,6 +236,105 @@ def edit_question(
     return updated.data[0]
 
 
+def _question_document_id(service, question_id: str, tenant_id: str) -> str | None:
+    """The source document of the question's quiz set (tenant-scoped), or None."""
+    link = (
+        service.table("quiz_variant_questions")
+        .select("variant_id")
+        .eq("question_id", question_id)
+        .eq("tenant_id", tenant_id)
+        .maybe_single()
+        .execute()
+    )
+    if not link or not link.data:
+        return None
+    variant = (
+        service.table("quiz_variants")
+        .select("quiz_set_id")
+        .eq("id", link.data["variant_id"])
+        .eq("tenant_id", tenant_id)
+        .maybe_single()
+        .execute()
+    )
+    if not variant or not variant.data:
+        return None
+    quiz_set = (
+        service.table("quiz_sets")
+        .select("document_id")
+        .eq("id", variant.data["quiz_set_id"])
+        .eq("tenant_id", tenant_id)
+        .maybe_single()
+        .execute()
+    )
+    return (quiz_set.data or {}).get("document_id") if quiz_set else None
+
+
+@router.put("/{question_id}/figure", response_model=QuestionOut)
+def set_question_figure(
+    question_id: str,
+    body: QuestionFigureUpdate,
+    profile: CurrentProfile = Depends(get_current_profile),
+) -> dict:
+    """Teacher confirms/swaps/removes the figure attached to a question.
+
+    `figure_id = null` removes it. A non-null id must be a figure of THIS
+    question's own source document (never another document/tenant), so a teacher
+    can only choose among the figures the source PDF actually contains.
+    """
+    _require_teacher(profile)
+    service = get_service_client()
+    _assert_teacher_question(service, question_id, profile)
+
+    figure_id = body.figure_id
+    figure: dict | None = None
+    if figure_id:
+        document_id = _question_document_id(service, question_id, profile.tenant_id)
+        candidate = (
+            service.table("document_figures")
+            .select("id, document_id")
+            .eq("id", figure_id)
+            .eq("tenant_id", profile.tenant_id)
+            .maybe_single()
+            .execute()
+        )
+        if candidate is None or not candidate.data:
+            raise HTTPException(status_code=404, detail="Figure not found.")
+        if document_id and candidate.data.get("document_id") != document_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="That figure belongs to a different document.",
+            )
+
+    updated = (
+        service.table("questions")
+        .update({"figure_id": figure_id})
+        .eq("id", question_id)
+        .eq("tenant_id", profile.tenant_id)
+        .eq("created_by", profile.user_id)
+        .execute()
+    )
+    if not updated.data:
+        raise HTTPException(status_code=404, detail="Question not found.")
+
+    if figure_id:
+        from app.services.document_figures import figures_for_questions
+
+        figure = figures_for_questions(
+            service, tenant_id=profile.tenant_id, figure_ids=[figure_id]
+        ).get(figure_id)
+
+    log_event(
+        tenant_id=profile.tenant_id,
+        event_type=QUESTION_EDITED,
+        actor_id=profile.user_id,
+        actor_role=profile.role,
+        subject_type="question",
+        subject_id=question_id,
+        metadata={"edited_fields": ["figure_id"], "figure_attached": bool(figure_id)},
+    )
+    return {**updated.data[0], "figure": figure}
+
+
 def _set_review_status(
     question_id: str, profile: CurrentProfile, review_status: str
 ) -> dict:
@@ -259,6 +379,7 @@ def approve_question(
     if not question or not question.data:
         raise HTTPException(status_code=404, detail="Question not found.")
     row = question.data
+    quiz_reuse.assert_editable(row)
     if row.get("review_status") == "approved":
         return row
     note = (body.resolution_note or "").strip() if body else ""
@@ -375,7 +496,7 @@ def explain(
         raise HTTPException(status_code=403, detail="Teachers and students only.")
     service = get_service_client()
     if profile.role == "teacher":
-        _assert_teacher_question(service, question_id, profile)
+        _assert_teacher_question(service, question_id, profile, editing=False)
     elif not student_has_graded_question(service, question_id, profile):
         raise HTTPException(
             status_code=403,

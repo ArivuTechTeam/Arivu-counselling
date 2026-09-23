@@ -16,12 +16,16 @@ from __future__ import annotations
 from app.lib.supabase import get_service_client
 
 BUCKET = "documents"
+# Private bucket for extracted figure PNGs (document-figure support).
+FIGURES_BUCKET = "question-figures"
 
 
-def upload_bytes(path: str, content: bytes, content_type: str) -> str:
+def upload_bytes(
+    path: str, content: bytes, content_type: str, *, bucket: str = BUCKET
+) -> str:
     """Upload raw bytes to `path` inside the bucket. Returns the stored path."""
     client = get_service_client()
-    client.storage.from_(BUCKET).upload(
+    client.storage.from_(bucket).upload(
         path,
         content,
         {"content-type": content_type},
@@ -29,19 +33,19 @@ def upload_bytes(path: str, content: bytes, content_type: str) -> str:
     return path
 
 
-def download_bytes(path: str) -> bytes:
+def download_bytes(path: str, *, bucket: str = BUCKET) -> bytes:
     """Download the file at `path` from the bucket as raw bytes."""
     client = get_service_client()
-    return client.storage.from_(BUCKET).download(path)
+    return client.storage.from_(bucket).download(path)
 
 
-def delete_bytes(path: str) -> None:
-    """Delete a stored object when a later database operation cannot reference it."""
+def delete_bytes(paths: "str | list[str]", *, bucket: str = BUCKET) -> None:
+    """Delete one or more stored objects. Accepts a single path or a list."""
     client = get_service_client()
-    client.storage.from_(BUCKET).remove([path])
+    client.storage.from_(bucket).remove([paths] if isinstance(paths, str) else paths)
 
 
-def signed_url(path: str, expires_in: int) -> str:
+def signed_url(path: str, expires_in: int, *, bucket: str = BUCKET) -> str:
     """
     Return a time-limited signed URL for a PRIVATE object, valid for
     `expires_in` seconds. The storage3 client returns a full absolute URL under
@@ -49,7 +53,7 @@ def signed_url(path: str, expires_in: int) -> str:
     expose the raw storage path or any service-role credential to the client.
     """
     client = get_service_client()
-    result = client.storage.from_(BUCKET).create_signed_url(path, expires_in)
+    result = client.storage.from_(bucket).create_signed_url(path, expires_in)
     url = result.get("signedURL") or result.get("signed_url")
     if not isinstance(url, str) or not url:
         raise RuntimeError("Storage did not return a signed URL.")

@@ -139,7 +139,11 @@ def test_import_receipt_survives_reload_and_exposes_import_confidence():
         get_quiz_set_detail(result["quiz_set_id"], "other-tenant")
 
 
-def test_bulk_approval_includes_only_verified_and_preserves_flagged_rejected_and_other_owners():
+def test_bulk_approval_includes_flagged_and_preserves_rejected_and_other_owners():
+    # Bulk approval covers EVERY structurally valid pending/needs-edit question in
+    # the teacher's own quiz, including AI-flagged ones (unsupported/ambiguous/
+    # needs_teacher_review/None). It still skips invalid answer structures and
+    # never touches rejected, other-owner, or other-tenant questions.
     rows = [{**candidate(), "id": f"q-{index}", "verification_status": state,
              "review_status": "pending_review", "tenant_id": "tenant-1", "created_by": "teacher-1"}
             for index, state in enumerate(["verified", "unsupported", "ambiguous", "needs_teacher_review", None])]
@@ -156,9 +160,15 @@ def test_bulk_approval_includes_only_verified_and_preserves_flagged_rejected_and
     })
     with patch("app.api.quiz.get_service_client", return_value=service), patch("app.api.quiz.log_events") as events:
         result = approve_all_questions("quiz-1", PROFILE)
-    assert result == {"approved": 2, "skipped": 1}
-    assert [row["id"] for row in service.tables["questions"] if row["review_status"] == "approved"] == ["q-0", "needs-edit"]
-    assert len(events.call_args.args[0]) == 2
+    # 5 pending (incl. the 4 flagged) + 1 needs-edit approved; malformed skipped.
+    assert result == {"approved": 6, "skipped": 1}
+    assert [row["id"] for row in service.tables["questions"] if row["review_status"] == "approved"] == [
+        "q-0", "q-1", "q-2", "q-3", "q-4", "needs-edit"]
+    # rejected / other-owner / other-tenant remain untouched.
+    assert {row["id"] for row in service.tables["questions"] if row["review_status"] == "rejected"} == {"rejected"}
+    assert next(r for r in service.tables["questions"] if r["id"] == "other-owner")["review_status"] == "pending_review"
+    assert next(r for r in service.tables["questions"] if r["id"] == "other-tenant")["review_status"] == "pending_review"
+    assert len(events.call_args.args[0]) == 6
 
 
 @pytest.mark.parametrize("typed", [False, True])

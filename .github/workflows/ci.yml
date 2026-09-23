@@ -6,6 +6,27 @@ on:
       - main
 
 jobs:
+  faculty-database:
+    name: Faculty queue database guarantees
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install isolated Postgres test runtime
+        run: npm install --prefix .tmp/pg-test --no-audit --no-fund --save-exact @electric-sql/pglite@0.3.14
+
+      - name: Verify migrations, leases and atomic job completion
+        run: node scripts/test-faculty-jobs-db.mjs
+
+      - name: Verify quiz copying and immutable publication
+        run: node scripts/test-quiz-reuse-db.mjs
+
   backend:
     name: Backend tests
     runs-on: ubuntu-latest

@@ -8,12 +8,14 @@ import { Label } from "@/components/ui/label";
 import { SparkBurst } from "@/components/ui/spark-burst";
 import { formatAnswerValue, statusLabel, typeLabel } from "@/lib/format";
 import {
+  DocumentFigure,
   QuestionPatch,
   ReviewQuestion,
   approveQuestion,
   editQuestion,
   regenerateQuestion,
   rejectQuestion,
+  setQuestionFigure,
 } from "@/lib/api";
 
 const CHOICE_TYPES = ["mcq_single", "mcq_multi", "true_false"];
@@ -100,14 +102,153 @@ function CheckIcon({ className }: { className?: string }) {
   );
 }
 
+// Figure attach/confirm/swap/remove (Phase 2). The teacher review queue is the
+// correctness gate: the AI best-effort links a source-document figure, and the
+// teacher confirms it (by leaving it and approving), swaps it, or removes it.
+function FigureControls({
+  question,
+  documentFigures,
+  onChange,
+}: {
+  question: ReviewQuestion;
+  documentFigures: DocumentFigure[];
+  onChange: (q: ReviewQuestion) => void;
+}) {
+  const [picking, setPicking] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const current = question.figure ?? null;
+  // Nothing to show when the source document has no figures and none is attached.
+  if (!current && documentFigures.length === 0) return null;
+
+  async function apply(figureId: string | null) {
+    setError(null);
+    setBusy(true);
+    try {
+      onChange(await setQuestionFigure(question.id, figureId));
+      setPicking(false);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not update the figure.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="mb-3 rounded-lg border border-input bg-muted/20 p-3">
+      {current ? (
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-start">
+          {current.url && (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={current.url}
+              alt={current.label ?? "Attached figure"}
+              className="h-28 w-auto shrink-0 rounded-md border bg-white object-contain"
+            />
+          )}
+          <div className="min-w-0 flex-1">
+            <p className="text-xs font-semibold text-foreground">
+              {current.label ?? "Figure"}
+              {current.page != null && (
+                <span className="ml-1 font-normal text-muted-foreground">
+                  (source page {current.page})
+                </span>
+              )}
+            </p>
+            {current.caption && (
+              <p className="mt-0.5 line-clamp-2 text-xs text-muted-foreground">
+                {current.caption}
+              </p>
+            )}
+            <div className="mt-2 flex flex-wrap gap-2">
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => setPicking((p) => !p)}
+                disabled={busy || documentFigures.length === 0}
+              >
+                {picking ? "Close" : "Change figure"}
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => apply(null)}
+                disabled={busy}
+              >
+                {busy ? "Removing…" : "Remove"}
+              </Button>
+            </div>
+          </div>
+        </div>
+      ) : (
+        <div className="flex items-center justify-between gap-2">
+          <p className="text-xs text-muted-foreground">
+            This question may need a figure from the source document.
+          </p>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => setPicking((p) => !p)}
+            disabled={busy}
+          >
+            {picking ? "Close" : "Add figure"}
+          </Button>
+        </div>
+      )}
+
+      {picking && (
+        <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3">
+          {documentFigures.map((figure) => {
+            const selected = figure.id === question.figure_id;
+            return (
+              <button
+                key={figure.id}
+                type="button"
+                onClick={() => apply(figure.id)}
+                disabled={busy}
+                className={`flex flex-col items-center gap-1 rounded-md border p-1.5 text-left transition-colors hover:border-primary ${
+                  selected ? "border-primary ring-2 ring-primary/20" : "border-input"
+                }`}
+                title={figure.caption ?? figure.label ?? undefined}
+              >
+                {figure.url ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img
+                    src={figure.url}
+                    alt={figure.label ?? "Figure"}
+                    className="h-20 w-full rounded bg-white object-contain"
+                  />
+                ) : (
+                  <span className="flex h-20 w-full items-center justify-center rounded bg-muted text-[10px] text-muted-foreground">
+                    No preview
+                  </span>
+                )}
+                <span className="w-full truncate text-[11px] font-medium text-foreground">
+                  {figure.label ?? "Figure"}
+                  {figure.page != null ? ` · p${figure.page}` : ""}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+
+      {error && <p className="mt-2 text-xs text-destructive">{error}</p>}
+    </div>
+  );
+}
+
 export function QuestionReviewCard({
   index,
   question,
   onChange,
+  documentFigures = [],
 }: {
   index: number;
   question: ReviewQuestion;
   onChange: (q: ReviewQuestion) => void;
+  documentFigures?: DocumentFigure[];
 }) {
   const [editing, setEditing] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
@@ -209,7 +350,7 @@ export function QuestionReviewCard({
         </span>
       </div>
 
-      {editing ? (
+      {editing && !question.release_locked ? (
         <EditForm
           question={question}
           onCancel={closeEditor}
@@ -223,6 +364,11 @@ export function QuestionReviewCard({
           <p className="mb-3 text-[15px] font-medium leading-relaxed text-foreground">
             {question.question_text}
           </p>
+          <fieldset disabled={question.release_locked}><FigureControls
+            question={question}
+            documentFigures={documentFigures}
+            onChange={onChange}
+          /></fieldset>
           {question.options && (
             <div className="mb-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
               {question.options.map((o) => {
@@ -311,7 +457,8 @@ export function QuestionReviewCard({
             </details>
           )}
 
-          <div className="mt-3 flex flex-wrap gap-2">
+          {question.release_locked && <p className="mt-3 text-sm text-muted-foreground">Released question. Duplicate this quiz to make changes.</p>}
+          <fieldset disabled={question.release_locked} className="mt-3 flex flex-wrap gap-2">
             <Button
               size="sm"
               onClick={() => run("approve", () => approveQuestion(question.id))}
@@ -363,7 +510,7 @@ export function QuestionReviewCard({
             >
               {busy === "regen" ? "Regenerating…" : "Regenerate"}
             </Button>
-          </div>
+          </fieldset>
         </>
       )}
 
@@ -503,7 +650,7 @@ function EditForm({
           answers: fill.split(",").map((s) => s.trim()).filter(Boolean),
         };
       }
-      onSaved(await editQuestion(question.id, patch));
+      onSaved(await editQuestion(question.id, patch, question.content_version));
     } catch (e) {
       setError(e instanceof Error ? e.message : "Save failed");
     } finally {
