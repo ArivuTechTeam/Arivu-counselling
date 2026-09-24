@@ -443,7 +443,6 @@ function EditInstitutionDialog({
   const [primaryColor, setPrimaryColor] = useState(
     normalizeInstitutionColor(institution.primary_color),
   );
-  const [featureFlags, setFeatureFlags] = useState(institution.feature_flags);
   const selectedLogoUrl = useMemo(
     () => (logo ? URL.createObjectURL(logo) : null),
     [logo],
@@ -480,7 +479,6 @@ function EditInstitutionDialog({
         logo_content_type: logo?.type,
         logo_filename: logo?.name,
         primary_color: normalizeInstitutionColor(primaryColor),
-        feature_flags: featureFlags,
       });
       await onSaved();
       onClose();
@@ -621,34 +619,6 @@ function EditInstitutionDialog({
             </span>
           </span>
         </label>
-        <fieldset className="rounded-lg border p-3">
-          <legend className="px-1 text-sm font-medium">Advanced features</legend>
-          <p className="mb-3 text-xs text-muted-foreground">
-            Enable capabilities only after their Railway master switch and required services are ready.
-          </p>
-          <div className="grid gap-2 sm:grid-cols-2">
-            {([
-              ["faculty_jobs", "Background generation"],
-              ["quiz_reuse", "Safe quiz reuse"],
-              ["batches", "Batches & assignments"],
-              ["scoring_policies", "Scoring policies"],
-              ["commerce_pack", "Commerce question pack"],
-              ["figure_attach", "Document figures"],
-            ] as const).map(([key, label]) => (
-              <label key={key} className="flex items-center gap-2 rounded-md border px-3 py-2 text-sm">
-                <input
-                  type="checkbox"
-                  checked={featureFlags[key]}
-                  onChange={(event) =>
-                    setFeatureFlags((current) => ({ ...current, [key]: event.target.checked }))
-                  }
-                  className="h-4 w-4 accent-primary"
-                />
-                {label}
-              </label>
-            ))}
-          </div>
-        </fieldset>
         {error && (
           <div className="rounded-lg border border-destructive/20 bg-destructive/5 px-3 py-2 text-sm text-destructive">
             {error}

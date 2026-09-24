@@ -44,7 +44,7 @@ create table tenants (
   logo_url text,
   logo_filename text check (logo_filename is null or char_length(logo_filename) <= 255),
   primary_color text not null default '#2E8857' check (primary_color ~ '^#[0-9A-Fa-f]{6}$'),
-  feature_flags jsonb not null default '{}'::jsonb check (jsonb_typeof(feature_flags) = 'object'),
+  feature_flags jsonb not null default '{"faculty_jobs":true,"quiz_reuse":true,"batches":true,"scoring_policies":true,"commerce_pack":true,"figure_attach":true}'::jsonb check (jsonb_typeof(feature_flags) = 'object'),
   secondary_color text default '#1E293B',
   plan_tier text not null default 'free',  -- fk-like reference to plan_limits.plan_tier
   is_active boolean not null default true,
@@ -1853,25 +1853,6 @@ create index if not exists idx_batch_memberships_member
   on public.batch_memberships(tenant_id, profile_id, active);
 create index if not exists idx_batch_memberships_batch
   on public.batch_memberships(tenant_id, batch_id);
-
-create or replace function public.enforce_batch_feature_enabled()
-returns trigger language plpgsql security definer set search_path = '' as $$
-begin
-  if not exists (
-    select 1 from public.tenants t
-    where t.id = new.tenant_id
-      and coalesce((t.feature_flags->>'batches')::boolean, false)
-  ) then
-    raise exception 'Batch management is not enabled for this institution';
-  end if;
-  return new;
-end;
-$$;
-create trigger enforce_batch_feature_on_memberships
-  before insert or update on public.batch_memberships
-  for each row execute function public.enforce_batch_feature_enabled();
-revoke all on function public.enforce_batch_feature_enabled()
-  from public, anon, authenticated, service_role;
 
 create table if not exists public.quiz_assignments (
   id uuid primary key default gen_random_uuid(),

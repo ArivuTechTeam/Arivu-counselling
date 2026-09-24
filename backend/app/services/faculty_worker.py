@@ -102,9 +102,8 @@ def run_one(service=None, *, heartbeat_seconds: float = 20) -> bool:
     job = service.rpc("claim_faculty_job", {}).execute().data
     if not job:
         return False
-    # A tenant can be opted out after a job was queued. Recheck the effective
-    # master + tenant switch before starting a provider call, then cancel the
-    # claimed job instead of leaving it to retry indefinitely.
+    # Recheck the platform master switch before starting a provider call. This
+    # cancels already-queued work if operations disables generation globally.
     if not tenant_feature_enabled(service, job["tenant_id"], "faculty_jobs"):
         update_job(service, job, "cancel")
         return True

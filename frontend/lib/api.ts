@@ -1863,7 +1863,6 @@ export type InstitutionUpdateInput = {
   logo_content_type?: string;
   logo_filename?: string;
   primary_color?: string;
-  feature_flags?: InstitutionFeatureFlags;
 };
 export type InstitutionDetails = {
   id: string;

@@ -107,19 +107,14 @@ class Settings:
         # Enable only after the additive faculty-job migration and worker are ready.
         self.faculty_jobs_enabled = _boolean("FACULTY_JOBS_ENABLED", False)
         self.quiz_reuse_enabled = _boolean("QUIZ_REUSE_ENABLED", False)
-        # Batch-scoped delivery (Phase 6.1). Off by default: quizzes stay
-        # 'legacy_course' (course-wide) and batch assignments are ignored, so
-        # student access is unchanged until this is turned on per rollout.
+        # Batch-scoped delivery (Phase 6.1). This is an emergency platform
+        # switch; production enables it for every commerce institution.
         self.batches_enabled = _boolean("BATCHES_ENABLED", False)
-        # Per-question scoring policies (Phase 6.2). Off by default: a quiz's
-        # attached scoring_policy_id is ignored and scoring stays full/zero, so
-        # existing scores are unchanged until this is turned on per paper.
+        # Per-question scoring policies (Phase 6.2). This can be disabled
+        # platform-wide during an incident without changing stored policies.
         self.scoring_policies_enabled = _boolean("SCORING_POLICIES_ENABLED", False)
-        # Commerce Vertical Pack (Phase 6.3). Off by default: the generation
-        # prompt asks for no numeric-check inputs and verification runs exactly as
-        # today. When enabled for a commerce deployment, it adds independent
-        # numeric verification of generated numericals. Generation is
-        # byte-identical when off. This is currently deployment-wide.
+        # Commerce Vertical Pack (Phase 6.3). Production enables this for the
+        # commerce-only product; the switch remains as an operational kill path.
         self.commerce_pack_enabled = _boolean("COMMERCE_PACK_ENABLED", False)
         self.faculty_jobs_poll_seconds = _positive_int("FACULTY_JOBS_POLL_SECONDS", 3)
         # A queued job should be claimed within seconds. If work waits longer than
@@ -132,8 +127,8 @@ class Settings:
         # row or metadata is deleted. See app/services/ai_log_retention.py.
         self.ai_log_raw_retention_days = _positive_int("AI_LOG_RAW_RETENTION_DAYS", 30)
         # Document-figure support (Phase 1: extract captioned figures during
-        # analysis). Off by default — enable after migration 49 + the
-        # question-figures storage bucket exist. Safe rollout, like faculty jobs.
+        # analysis). Production enables it after the private bucket is ready;
+        # the switch remains a platform-wide emergency control.
         self.figure_attach_enabled = _boolean("FIGURE_ATTACH_ENABLED", False)
         self.figure_max_per_document = _positive_int("FIGURE_MAX_PER_DOCUMENT", 50)
         self.app_env: str = os.getenv("APP_ENV", "production").strip().lower()

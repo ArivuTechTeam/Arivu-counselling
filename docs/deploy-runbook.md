@@ -111,10 +111,11 @@ migration-54-scoring-policies.sql
 migration-55-course-exam-standard.sql
 migration-56-paper-profiles.sql
 migration-57-tenant-feature-rollout.sql
+migration-58-commerce-platform-defaults.sql
 ```
 
-(Filenames above verified 2026-09-23 against `migrations/`, through migration
-56. `migration-48-tenant-branding-metadata.sql` stores the original institution
+(Filenames above verified 2026-09-24 against `migrations/`, through migration
+58. `migration-48-tenant-branding-metadata.sql` stores the original institution
 logo filename for super-admin display, normalizes the legacy unused color
 default, and validates tenant brand colors. Earlier drafts of this runbook named
 migrations 31–34 `migration-31-chunked-document-generation.sql`,
@@ -190,14 +191,16 @@ migration 53 extends password and Google signup with optional, validated batch
 membership. Migration 54 adds scoring policies and atomic per-attempt policy
 snapshots. Migration 55 binds an official scoring standard to each course level,
 and migration 56 stores one commerce paper profile per course level. Migration
-57 adds per-institution rollout controls and rejects batch membership writes
-for institutions where batches are disabled. Apply all of 49–57 before enabling
-their matching deployment flags. Do not use the
+57 introduced per-institution rollout controls. Migration 58 supersedes that
+temporary rollout model: every existing and future institution receives the
+complete commerce feature set, while Railway variables remain platform-wide
+emergency switches. Apply all of 49–58 before enabling their matching
+deployment flags. Do not use the
 pre-integration `changes-pavyaa` migration numbers: they collided with the
 existing catalogue, level-enrollment, and branding migrations.
 
 For a fresh database, `migrations/schema.sql` already includes the final effects
-of migrations 31, 33, 34, 35, 37, 39, 40, 47, and 49–57 (verified 2026-09-24 by grepping
+of migrations 31, 33, 34, 35, 37, 39, 40, 47, and 49–58 (verified 2026-09-24 by grepping
 `schema.sql` for each migration's distinguishing columns/functions — e.g.
 `question_snapshot` from migration 37, and the `_backend_provisioning_intent`/
 `provisioned_by_backend` trigger logic from migrations 39–40). The incremental
@@ -262,9 +265,9 @@ secrets rather than copying secret values between services.
 ### Advanced feature master switches
 
 Set the following on the API service. Set `FACULTY_JOBS_ENABLED=true` on the
-worker too. These are deployment-wide master switches; a capability remains
-hidden and rejected until Super Admin also enables it in **Manage institution →
-Advanced features** for that tenant.
+worker too. These are deployment-wide emergency switches. With migration 58,
+every institution receives the complete commerce feature set automatically;
+there is no per-institution feature setup.
 
 | Variable | Recommended production value |
 |---|---|

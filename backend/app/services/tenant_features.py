@@ -1,9 +1,8 @@
-"""Tenant-scoped feature rollout on top of deployment-wide master switches.
+"""Commerce-platform capabilities controlled by deployment master switches.
 
-Railway environment variables are the emergency/master controls.  A feature is
-usable only when its master switch is enabled *and* the institution has opted
-in through ``tenants.feature_flags``.  This lets production infrastructure be
-prepared once without exposing unfinished features to every tenant.
+Every institution receives the same commerce feature set. Railway environment
+variables remain as operational kill switches so a capability can be stopped
+platform-wide during an incident without shipping new code.
 """
 
 from __future__ import annotations
@@ -31,10 +30,10 @@ def normalize_feature_flags(value: Any) -> dict[str, bool]:
 
 
 def effective_feature_flags(raw_flags: Any) -> dict[str, bool]:
+    del raw_flags  # Kept in the signature for rolling-version compatibility.
     settings = get_settings()
-    normalized = normalize_feature_flags(raw_flags)
     return {
-        key: bool(getattr(settings, env_attribute, False)) and normalized[key]
+        key: bool(getattr(settings, env_attribute, False))
         for key, env_attribute in FEATURE_ENV_ATTRIBUTES.items()
     }
 
@@ -42,12 +41,12 @@ def effective_feature_flags(raw_flags: Any) -> dict[str, bool]:
 def profile_feature_enabled(profile: Any, feature: str) -> bool:
     if feature not in FEATURE_ENV_ATTRIBUTES:
         raise ValueError(f"Unknown tenant feature: {feature}")
-    raw_flags = getattr(profile, "tenant_feature_flags", None)
-    # Profiles constructed by internal scripts/tests before migration 57 do not
-    # carry tenant flags. The authenticated request path always supplies a dict.
-    if raw_flags is None:
+    # Internal scripts and unit fixtures created before the profile feature
+    # payload existed intentionally omit it. Authenticated requests always
+    # carry a dict and therefore use the platform master switch below.
+    if getattr(profile, "tenant_feature_flags", None) is None:
         return True
-    return effective_feature_flags(raw_flags)[feature]
+    return effective_feature_flags(None)[feature]
 
 
 def tenant_feature_enabled(service: Any, tenant_id: str, feature: str) -> bool:
@@ -55,18 +54,21 @@ def tenant_feature_enabled(service: Any, tenant_id: str, feature: str) -> bool:
         raise ValueError(f"Unknown tenant feature: {feature}")
     result = (
         service.table("tenants")
-        .select("feature_flags")
+        .select("id,feature_flags")
         .eq("id", tenant_id)
         .maybe_single()
         .execute()
     )
     data = getattr(result, "data", None)
-    if not isinstance(data, dict) or "feature_flags" not in data:
-        # Compatibility for a rolling deployment and lightweight service mocks.
-        # A migrated production tenant always has this non-null column.
+    if (
+        not isinstance(data, dict)
+        or "id" not in data
+        or "feature_flags" not in data
+    ):
+        # Lightweight service doubles used by scripts/tests do not implement a
+        # tenant lookup. Real request paths always resolve an existing tenant.
         return True
-    master = bool(getattr(get_settings(), FEATURE_ENV_ATTRIBUTES[feature], False))
-    return master and normalize_feature_flags(data.get("feature_flags"))[feature]
+    return effective_feature_flags(None)[feature]
 
 
 def require_profile_feature(profile: Any, feature: str, *, label: str) -> None:

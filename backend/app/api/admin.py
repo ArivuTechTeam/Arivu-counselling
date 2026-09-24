@@ -2414,19 +2414,6 @@ class TenantUpdate(BaseModel):
     logo_content_type: str | None = None
     logo_filename: str | None = Field(default=None, max_length=255)
     primary_color: str | None = None
-    feature_flags: dict[str, bool] | None = None
-
-    @field_validator("feature_flags")
-    @classmethod
-    def validate_feature_flags(
-        cls, value: dict[str, bool] | None
-    ) -> dict[str, bool] | None:
-        if value is None:
-            return None
-        unknown = set(value) - set(normalize_feature_flags({}))
-        if unknown:
-            raise ValueError(f"Unknown institution features: {', '.join(sorted(unknown))}")
-        return normalize_feature_flags(value)
 
     @field_validator("primary_color")
     @classmethod
