@@ -1,5 +1,5 @@
 -- ============================================================================
--- Migration 59 - Extended objective question types (Phase 6.4)
+-- Migration 61 - Extended objective question types (Phase 6.4)
 -- Run this ONCE in the Supabase SQL Editor.
 --
 -- Adds three new auto-graded objective types to the question_type enum:
@@ -23,5 +23,5 @@ alter type question_type add value if not exists 'matching';
 notify pgrst, 'reload schema';
 
 -- ============================================================================
--- END OF MIGRATION 59
+-- END OF MIGRATION 61
 -- ============================================================================
