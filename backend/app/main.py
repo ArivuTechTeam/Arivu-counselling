@@ -58,6 +58,7 @@ from app.lib.config import get_settings
 from app.lib.request_trace import request_id_for_header
 from app.lib.storage import signed_url
 from app.lib.supabase import SupabaseUnavailableError
+from app.services.tenant_features import effective_feature_flags
 
 logger = logging.getLogger(__name__)
 
@@ -327,6 +328,7 @@ class CurrentProfileOut(BaseModel):
     role: str
     must_change_password: bool
     institution: InstitutionIdentityOut | None = None
+    features: dict[str, bool]
 
 
 @app.get("/api/v1/me", tags=["auth"], response_model=AuthenticatedIdentityOut)
@@ -376,4 +378,5 @@ def read_my_profile(
         role=profile.role,
         must_change_password=profile.must_change_password,
         institution=institution,
+        features=effective_feature_flags(profile.tenant_feature_flags),
     )

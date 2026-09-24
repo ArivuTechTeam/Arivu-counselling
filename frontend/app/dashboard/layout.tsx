@@ -39,6 +39,14 @@ export default function DashboardLayout({
   >(null);
   const [mustChangePassword, setMustChangePassword] = useState(false);
   const [canChangePassword, setCanChangePassword] = useState(false);
+  const [features, setFeatures] = useState<DashboardProfile["features"]>({
+    faculty_jobs: false,
+    quiz_reuse: false,
+    batches: false,
+    scoring_policies: false,
+    commerce_pack: false,
+    figure_attach: false,
+  });
   const [bootstrapError, setBootstrapError] = useState<string | null>(null);
   const [bootstrapAttempt, setBootstrapAttempt] = useState(0);
   const [sessionAvailable, setSessionAvailable] = useState(false);
@@ -115,6 +123,7 @@ export default function DashboardLayout({
       setRole(resolvedRole);
       setMustChangePassword(passwordChangeRequired);
       setInstitution(data.institution);
+      setFeatures(data.features);
       setReady(true);
     });
     return () => {
@@ -176,6 +185,7 @@ export default function DashboardLayout({
           email={email}
           institution={institution}
           canChangePassword={canChangePassword}
+          features={features}
         >
           <DashboardShell
             role={role}

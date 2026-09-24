@@ -16,6 +16,7 @@ from app.services.faculty_jobs import validate_source
 from app.services.llm import LLMError
 from app.services.quiz_extraction import _extract_document_content, _prefix_pyq, _validate_import_candidates
 from app.services.quiz_generator_service import QuizGeneratorService
+from app.services.tenant_features import tenant_feature_enabled
 
 logger = logging.getLogger(__name__)
 
@@ -101,6 +102,12 @@ def run_one(service=None, *, heartbeat_seconds: float = 20) -> bool:
     job = service.rpc("claim_faculty_job", {}).execute().data
     if not job:
         return False
+    # A tenant can be opted out after a job was queued. Recheck the effective
+    # master + tenant switch before starting a provider call, then cancel the
+    # claimed job instead of leaving it to retry indefinitely.
+    if not tenant_feature_enabled(service, job["tenant_id"], "faculty_jobs"):
+        update_job(service, job, "cancel")
+        return True
     done = threading.Event()
 
     def heartbeat() -> None:

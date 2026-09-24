@@ -12,17 +12,21 @@ import { useToast } from "@/components/ui/toast";
 import { QuestionPaperButtons } from "@/components/shared/pdf-buttons";
 import { QuestionReviewCard } from "@/components/teacher/question-review-card";
 import { QuestionReviewNavigator } from "@/components/teacher/question-review-navigator";
+import { useDashboardIdentity } from "@/components/shared/dashboard-identity-context";
 import { statusLabel, variantLabel } from "@/lib/format";
 import {
   DocumentFigure,
   QuizSetDetail,
   ReviewQuestion,
+  ScoringPolicy,
   archiveQuizSet,
   approveAllQuestions,
   getQuizSet,
   listDocumentFigures,
   publishQuizSet,
   duplicateQuizSet,
+  listScoringPolicies,
+  setQuizScoringPolicy,
 } from "@/lib/api";
 
 type ReviewFilter =
@@ -68,6 +72,7 @@ function StatusFilter({
 
 export default function ReviewDetailPage({ params }: { params: { id: string } }) {
   const router = useRouter();
+  const { features } = useDashboardIdentity();
   const { notify } = useToast();
   const [detail, setDetail] = useState<QuizSetDetail | null>(null);
   const [documentFigures, setDocumentFigures] = useState<DocumentFigure[]>([]);
@@ -79,6 +84,8 @@ export default function ReviewDetailPage({ params }: { params: { id: string } })
   const [archiving, setArchiving] = useState(false);
   const [activeQuestionId, setActiveQuestionId] = useState<string | null>(null);
   const [reviewFilter, setReviewFilter] = useState<ReviewFilter>("all");
+  const [scoringPolicies, setScoringPolicies] = useState<ScoringPolicy[]>([]);
+  const [savingPolicy, setSavingPolicy] = useState(false);
   // One-shot spark burst on the big "win" actions (publish / approve-all).
   const [celebrate, setCelebrate] = useState(false);
 
@@ -100,6 +107,25 @@ export default function ReviewDetailPage({ params }: { params: { id: string } })
       // Filtering remains usable without session storage.
     }
   }, [params.id]);
+
+  useEffect(() => {
+    if (!features.scoring_policies) return;
+    listScoringPolicies().then(setScoringPolicies).catch(() => setScoringPolicies([]));
+  }, [features.scoring_policies]);
+
+  async function changeScoringPolicy(policyId: string) {
+    if (!detail) return;
+    setSavingPolicy(true);
+    setError(null);
+    try {
+      const result = await setQuizScoringPolicy(params.id, policyId || null);
+      setDetail({ ...detail, scoring_policy_id: result.scoring_policy_id });
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Couldn't update scoring.");
+    } finally {
+      setSavingPolicy(false);
+    }
+  }
 
   function celebrateBurst() {
     setCelebrate(true);
@@ -388,7 +414,23 @@ export default function ReviewDetailPage({ params }: { params: { id: string } })
               />
             </div>
 
-          <div className="flex shrink-0 items-center gap-2">
+            <div className="flex shrink-0 items-center gap-2">
+          {features.scoring_policies && detail.status === "draft" && (
+            <label className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
+              Scoring
+              <select
+                className="h-9 max-w-52 rounded-md border border-input bg-background px-2 text-sm text-foreground"
+                value={detail.scoring_policy_id ?? ""}
+                disabled={savingPolicy}
+                onChange={(event) => void changeScoringPolicy(event.target.value)}
+              >
+                <option value="">Standard — no deduction</option>
+                {scoringPolicies.map((policy) => (
+                  <option key={policy.id} value={policy.id}>{policy.name}</option>
+                ))}
+              </select>
+            </label>
+          )}
           {detail.status === "published" && (
             <Link href={`/dashboard/teacher/performance/${params.id}`}>
               <Button size="sm" variant="outline">View performance</Button>

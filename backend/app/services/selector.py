@@ -15,8 +15,9 @@ from __future__ import annotations
 import random
 
 from app.lib.auth import CurrentProfile
-from app.lib.config import get_settings
 from app.lib.supabase_queries import select_all_in
+from app.lib.config import get_settings
+from app.services.tenant_features import profile_feature_enabled
 
 # Absolute ceiling on how many questions one selection scans / returns.
 # 100 covers a full-length exam (e.g. CA Foundation 100Q); shorter modes cap lower.
@@ -98,7 +99,15 @@ def _accessible_published_set_ids(service, published_rows, tenant_id, profile) -
     items never leak into another batch's practice pool. With BATCHES_ENABLED off
     (or no profile) this is every published set, i.e. the current behavior.
     """
-    if not getattr(get_settings(), "batches_enabled", False) or profile is None:
+    batches_enabled = bool(
+        profile
+        and (
+            getattr(get_settings(), "batches_enabled", False)
+                if getattr(profile, "tenant_feature_flags", None) is None
+            else profile_feature_enabled(profile, "batches")
+        )
+    )
+    if not batches_enabled:
         return {row["id"] for row in published_rows}
     from app.services.batch_access import assigned_quiz_ids
 

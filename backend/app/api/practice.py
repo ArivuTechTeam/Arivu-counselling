@@ -36,6 +36,7 @@ from app.services.attempt_timing import (
 from app.services.scoring import normalize_policy, score
 from app.services.selector import enrolled_subject_ids, select_question_ids
 from app.services.student_access import student_has_graded_question
+from app.services.tenant_features import profile_feature_enabled
 
 router = APIRouter(prefix="/api/v1", tags=["practice"])
 
@@ -85,7 +86,12 @@ def _resolve_exam_scoring_policy(service, profile: CurrentProfile) -> dict | Non
     """The official scoring policy bound to the student's course level,
     or None. None -> the exam-config negative marking applies (current behaviour).
     Gated by SCORING_POLICIES_ENABLED, so exam scoring is unchanged until it's on."""
-    if not getattr(get_settings(), "scoring_policies_enabled", False):
+    scoring_enabled = (
+        getattr(get_settings(), "scoring_policies_enabled", False)
+        if profile.tenant_feature_flags is None
+        else profile_feature_enabled(profile, "scoring_policies")
+    )
+    if not scoring_enabled:
         return None
     enrolled = (
         service.table("enrollments").select("course_level_id")

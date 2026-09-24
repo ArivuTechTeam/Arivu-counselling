@@ -28,6 +28,7 @@ from app.lib.storage import download_bytes, signed_url, upload_bytes
 from app.lib.supabase import get_service_client
 from app.lib.supabase_queries import select_all, select_all_in
 from app.services.document_figures import list_document_figures
+from app.services.tenant_features import require_profile_feature
 from app.services.extraction import MIN_READABLE_PDF_TEXT_CHARS, extract_text
 from app.services.teacher_access import teacher_has_subject
 
@@ -595,6 +596,7 @@ def document_figures(
     before figures are attached to questions (later phase).
     """
     require_teacher(profile, action="view document figures")
+    require_profile_feature(profile, "figure_attach", label="Question figures")
     service = get_service_client()
     owned = (
         service.table("documents")

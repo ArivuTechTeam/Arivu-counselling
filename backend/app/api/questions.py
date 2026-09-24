@@ -39,6 +39,7 @@ from app.services.review import RegenerationSourceError, regenerate_question
 from app.services.student_access import student_has_graded_question
 from app.services.tutor import explain_question
 from app.services import quiz_reuse
+from app.services.tenant_features import require_profile_feature
 
 router = APIRouter(prefix="/api/v1/questions", tags=["questions"])
 
@@ -47,7 +48,7 @@ def _assert_teacher_question(
 ) -> None:
     question = (
         service.table("questions")
-        .select("id,release_locked" if quiz_reuse.enabled() else "id")
+        .select("id,release_locked" if quiz_reuse.enabled(profile) else "id")
         .eq("id", question_id)
         .eq("tenant_id", profile.tenant_id)
         .eq("created_by", profile.user_id)
@@ -153,7 +154,7 @@ def edit_question(
     )
     if existing is None or not existing.data:
         raise HTTPException(status_code=404, detail="Question not found.")
-    if quiz_reuse.enabled():
+    if quiz_reuse.enabled(profile):
         quiz_reuse.assert_editable(existing.data)
         if expected_version != existing.data.get("content_version"):
             raise HTTPException(409, "This question changed or the editor is outdated. Reload before saving.")
@@ -274,6 +275,7 @@ def set_question_figure(
     can only choose among the figures the source PDF actually contains.
     """
     require_teacher(profile, action="edit question figures")
+    require_profile_feature(profile, "figure_attach", label="Question figures")
     service = get_service_client()
     _assert_teacher_question(service, question_id, profile)
 

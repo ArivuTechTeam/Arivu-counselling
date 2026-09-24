@@ -27,6 +27,7 @@ from app.lib.storage import (
 )
 from app.services.figure_extraction import extract_document_figures
 from app.services.figure_matching import match_question_figure
+from app.services.tenant_features import tenant_feature_enabled
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +43,9 @@ def extract_and_store_for_document(
     is off or the document isn't a PDF, and never raises.
     """
     settings = get_settings()
-    if not settings.figure_attach_enabled:
+    if not settings.figure_attach_enabled or not tenant_feature_enabled(
+        service, tenant_id, "figure_attach"
+    ):
         return 0
     try:
         doc = (
@@ -213,7 +216,11 @@ def attach_figures_to_questions(
     the document has no figures, or `document_id` is missing. Never raises.
     Returns the number of questions linked to a figure.
     """
-    if not document_id or not get_settings().figure_attach_enabled:
+    if (
+        not document_id
+        or not get_settings().figure_attach_enabled
+        or not tenant_feature_enabled(service, tenant_id, "figure_attach")
+    ):
         return 0
     try:
         catalog = _figure_catalog_for_matching(service, tenant_id, document_id)

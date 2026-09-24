@@ -16,6 +16,7 @@ staff management and correction.
 
 from __future__ import annotations
 
+from typing import Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -25,6 +26,7 @@ from app.lib.auth import CurrentProfile, get_current_profile
 from app.lib.role_checks import require_institution_admin, require_staff
 from app.lib.supabase import get_service_client
 from app.lib.supabase_queries import select_all_in
+from app.services.tenant_features import require_profile_feature, tenant_feature_enabled
 
 router = APIRouter(prefix="/api/v1", tags=["batches"])
 
@@ -42,6 +44,11 @@ class BatchUpdate(BaseModel):
 
 class MemberAdd(BaseModel):
     profile_id: UUID
+    membership_role: Literal["student", "teacher"] = "student"
+
+
+def _require_batches(profile: CurrentProfile) -> None:
+    require_profile_feature(profile, "batches", label="Batch management")
 
 
 def _owned_batch(service, batch_id: str, tenant_id: str) -> dict:
@@ -61,6 +68,8 @@ def public_batches(tenant_id: UUID, course_id: UUID, course_level_id: UUID) -> l
     """Active batch names for the signup dropdown, scoped to one course of an
     active institution. Only registration metadata (id + name) is exposed."""
     service = get_service_client()
+    if not tenant_feature_enabled(service, str(tenant_id), "batches"):
+        return []
     rows = (
         service.table("batches")
         .select("id, name, tenants!inner(is_active)")
@@ -86,6 +95,7 @@ def list_batches(
     profile: CurrentProfile = Depends(get_current_profile),
 ) -> list[dict]:
     require_staff(profile, action="view batches")
+    _require_batches(profile)
     service = get_service_client()
     query = (
         service.table("batches")
@@ -104,6 +114,7 @@ def create_batch(
     body: BatchCreate, profile: CurrentProfile = Depends(get_current_profile)
 ) -> dict:
     require_institution_admin(profile, action="manage batches")
+    _require_batches(profile)
     service = get_service_client()
     level = (
         service.table("course_levels").select("id, course_id, is_active")
@@ -141,6 +152,7 @@ def update_batch(
     profile: CurrentProfile = Depends(get_current_profile),
 ) -> dict:
     require_institution_admin(profile, action="manage batches")
+    _require_batches(profile)
     service = get_service_client()
     _owned_batch(service, str(batch_id), profile.tenant_id)
     updates = {k: v for k, v in {"name": body.name and body.name.strip(),
@@ -163,6 +175,7 @@ def list_members(
     batch_id: UUID, profile: CurrentProfile = Depends(get_current_profile)
 ) -> list[dict]:
     require_staff(profile, action="view batches")
+    _require_batches(profile)
     service = get_service_client()
     _owned_batch(service, str(batch_id), profile.tenant_id)
     members = (
@@ -188,6 +201,7 @@ def list_eligible_students(
 ) -> list[dict]:
     """Students enrolled in the batch's exact course level, for roster repair."""
     require_institution_admin(profile, action="manage batches")
+    _require_batches(profile)
     service = get_service_client()
     batch = _owned_batch(service, str(batch_id), profile.tenant_id)
     enrollments = (
@@ -211,37 +225,88 @@ def list_eligible_students(
     return [{"id": row["id"], "full_name": row.get("full_name")} for row in students]
 
 
+@router.get("/batches/{batch_id}/eligible-teachers")
+def list_eligible_teachers(
+    batch_id: UUID, profile: CurrentProfile = Depends(get_current_profile)
+) -> list[dict]:
+    """Teachers assigned to at least one subject in the batch's course level."""
+    require_institution_admin(profile, action="manage batches")
+    _require_batches(profile)
+    service = get_service_client()
+    batch = _owned_batch(service, str(batch_id), profile.tenant_id)
+    subjects = (
+        service.table("subjects").select("id")
+        .eq("tenant_id", profile.tenant_id)
+        .eq("course_id", batch["course_id"])
+        .eq("course_level_id", batch["course_level_id"])
+        .execute().data or []
+    )
+    subject_ids = [row["id"] for row in subjects]
+    if not subject_ids:
+        return []
+    assignments = select_all_in(
+        service, "teacher_subjects", "teacher_id",
+        in_column="subject_id", values=subject_ids,
+        configure=lambda q: q.eq("tenant_id", profile.tenant_id),
+    )
+    teacher_ids = sorted({row["teacher_id"] for row in assignments})
+    if not teacher_ids:
+        return []
+    teachers = select_all_in(
+        service, "profiles", "id, full_name, role",
+        in_column="id", values=teacher_ids,
+        configure=lambda q: q.eq("tenant_id", profile.tenant_id).eq("role", "teacher"),
+    )
+    return [{"id": row["id"], "full_name": row.get("full_name")} for row in teachers]
+
+
 @router.post("/batches/{batch_id}/members", status_code=201)
 def add_member(
     batch_id: UUID, body: MemberAdd,
     profile: CurrentProfile = Depends(get_current_profile),
 ) -> dict:
-    """Add or restore a student to a batch (roster correction)."""
+    """Add or restore an eligible student or teacher to a batch."""
     require_institution_admin(profile, action="manage batches")
+    _require_batches(profile)
     service = get_service_client()
     batch = _owned_batch(service, str(batch_id), profile.tenant_id)
     if batch.get("status") != "active":
         raise HTTPException(status_code=409, detail="Archived batches cannot accept members.")
-    student = (
+    member = (
         service.table("profiles").select("id, role")
         .eq("id", str(body.profile_id)).eq("tenant_id", profile.tenant_id)
         .maybe_single().execute()
     )
-    if student is None or not student.data or student.data.get("role") != "student":
-        raise HTTPException(status_code=404, detail="Student not found in this institution.")
-    enrollment = (
-        service.table("enrollments").select("id")
-        .eq("tenant_id", profile.tenant_id)
-        .eq("profile_id", str(body.profile_id))
-        .eq("course_id", batch["course_id"])
-        .eq("course_level_id", batch["course_level_id"])
-        .maybe_single().execute()
-    )
-    if enrollment is None or not enrollment.data:
-        raise HTTPException(
-            status_code=409,
-            detail="Student is not enrolled in this batch's course and level.",
+    if member is None or not member.data or member.data.get("role") != body.membership_role:
+        raise HTTPException(status_code=404, detail="Eligible member not found in this institution.")
+    if body.membership_role == "student":
+        eligibility_result = (
+            service.table("enrollments").select("id")
+            .eq("tenant_id", profile.tenant_id)
+            .eq("profile_id", str(body.profile_id))
+            .eq("course_id", batch["course_id"])
+            .eq("course_level_id", batch["course_level_id"])
+            .maybe_single().execute()
         )
+        eligible = bool(eligibility_result and eligibility_result.data)
+    else:
+        subject_rows = (
+            service.table("subjects").select("id")
+            .eq("tenant_id", profile.tenant_id)
+            .eq("course_id", batch["course_id"])
+            .eq("course_level_id", batch["course_level_id"])
+            .execute().data or []
+        )
+        subject_ids = [row["id"] for row in subject_rows]
+        teacher_rows = select_all_in(
+            service, "teacher_subjects", "id",
+            in_column="subject_id", values=subject_ids,
+            configure=lambda q: q.eq("tenant_id", profile.tenant_id)
+            .eq("teacher_id", str(body.profile_id)),
+        ) if subject_ids else []
+        eligible = bool(teacher_rows)
+    if not eligible:
+        raise HTTPException(status_code=409, detail="Member is not assigned to this batch's course and level.")
     existing = (
         service.table("batch_memberships").select("id")
         .eq("tenant_id", profile.tenant_id).eq("batch_id", str(batch_id))
@@ -249,14 +314,16 @@ def add_member(
     )
     if existing and existing.data:
         updated = (
-            service.table("batch_memberships").update({"active": True})
+            service.table("batch_memberships").update({
+                "active": True, "membership_role": body.membership_role,
+            })
             .eq("id", existing.data["id"]).eq("tenant_id", profile.tenant_id).execute()
         )
         return updated.data[0]
     return (
         service.table("batch_memberships").insert({
             "tenant_id": profile.tenant_id, "batch_id": str(batch_id),
-            "profile_id": str(body.profile_id), "membership_role": "student",
+            "profile_id": str(body.profile_id), "membership_role": body.membership_role,
         }).execute().data[0]
     )
 
@@ -268,6 +335,7 @@ def deactivate_member(
 ) -> dict:
     """Deactivate a membership (soft-remove; preserves history)."""
     require_institution_admin(profile, action="manage batches")
+    _require_batches(profile)
     service = get_service_client()
     updated = (
         service.table("batch_memberships").update({"active": False})

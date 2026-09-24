@@ -11,6 +11,7 @@ from app.lib.auth import CurrentProfile
 from app.lib.config import get_settings
 from app.lib.supabase import get_service_client
 from app.services.teacher_access import teacher_has_subject
+from app.services.tenant_features import require_profile_feature
 
 
 PUBLIC_COLUMNS = "id,kind,status,phase,attempts,result,error_message,created_at,updated_at"
@@ -55,8 +56,7 @@ def find_request(profile: CurrentProfile, key: str) -> dict | None:
 
 
 def enqueue(profile: CurrentProfile, key: str, kind: str, request: dict) -> dict:
-    if not get_settings().faculty_jobs_enabled:
-        raise HTTPException(503, "Background processing is not enabled yet.")
+    require_profile_feature(profile, "faculty_jobs", label="Background processing")
     if profile.role != "teacher":
         raise HTTPException(403, "Only teachers can create these jobs.")
     try:

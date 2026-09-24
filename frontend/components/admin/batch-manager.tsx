@@ -9,6 +9,7 @@ import {
   createBatch,
   listBatchMembers,
   listEligibleBatchStudents,
+  listEligibleBatchTeachers,
   listBatches,
   removeBatchMember,
   updateBatch,
@@ -185,19 +186,23 @@ export function BatchManager() {
 function RosterDialog({ batch, onClose }: { batch: Batch; onClose: () => void }) {
   const [members, setMembers] = useState<BatchMember[] | null>(null);
   const [eligible, setEligible] = useState<{ id: string; full_name?: string | null }[]>([]);
-  const [studentId, setStudentId] = useState("");
+  const [eligibleTeachers, setEligibleTeachers] = useState<{ id: string; full_name?: string | null }[]>([]);
+  const [memberId, setMemberId] = useState("");
+  const [memberRole, setMemberRole] = useState<"student" | "teacher">("student");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setError(null);
     try {
-      const [memberRows, eligibleRows] = await Promise.all([
+      const [memberRows, eligibleRows, teacherRows] = await Promise.all([
         listBatchMembers(batch.id),
         listEligibleBatchStudents(batch.id),
+        listEligibleBatchTeachers(batch.id),
       ]);
       setMembers(memberRows);
       setEligible(eligibleRows);
+      setEligibleTeachers(teacherRows);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Couldn't load the roster.");
     }
@@ -217,12 +222,12 @@ function RosterDialog({ batch, onClose }: { batch: Batch; onClose: () => void })
   }
 
   async function add() {
-    if (!studentId) return;
+    if (!memberId) return;
     setBusy(true);
     setError(null);
     try {
-      await addBatchMember(batch.id, studentId);
-      setStudentId("");
+      await addBatchMember(batch.id, memberId, memberRole);
+      setMemberId("");
       await load();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Couldn't add the student.");
@@ -244,18 +249,25 @@ function RosterDialog({ batch, onClose }: { batch: Batch; onClose: () => void })
         </div>
         {error && <p className="mb-2 text-sm text-destructive">{error}</p>}
         {batch.status === "active" && (
-          <div className="mb-4 flex gap-2">
-            <select className={field} value={studentId} onChange={(e) => setStudentId(e.target.value)}>
-              <option value="">Add an enrolled student…</option>
-              {eligible
-                .filter((student) => !active.some((member) => member.profile_id === student.id))
-                .map((student) => (
-                  <option key={student.id} value={student.id}>
-                    {student.full_name ?? student.id}
+          <div className="mb-4 grid gap-2 sm:grid-cols-[130px_1fr_auto]">
+            <select className={field} value={memberRole} onChange={(e) => {
+              setMemberRole(e.target.value as "student" | "teacher");
+              setMemberId("");
+            }}>
+              <option value="student">Student</option>
+              <option value="teacher">Teacher</option>
+            </select>
+            <select className={field} value={memberId} onChange={(e) => setMemberId(e.target.value)}>
+              <option value="">Add eligible {memberRole}…</option>
+              {(memberRole === "student" ? eligible : eligibleTeachers)
+                .filter((person) => !active.some((member) => member.profile_id === person.id))
+                .map((person) => (
+                  <option key={person.id} value={person.id}>
+                    {person.full_name ?? person.id}
                   </option>
                 ))}
             </select>
-            <button className={solidBtn} type="button" disabled={busy || !studentId} onClick={add}>
+            <button className={solidBtn} type="button" disabled={busy || !memberId} onClick={add}>
               Add
             </button>
           </div>
@@ -270,7 +282,12 @@ function RosterDialog({ batch, onClose }: { batch: Batch; onClose: () => void })
           <ul className="divide-y divide-border">
             {active.map((m) => (
               <li key={m.id} className="flex items-center justify-between py-2.5">
-                <span className="text-sm">{m.full_name ?? m.profile_id}</span>
+                <span className="text-sm">
+                  {m.full_name ?? m.profile_id}
+                  <span className="ml-2 rounded-full bg-muted px-2 py-0.5 text-[10px] uppercase text-muted-foreground">
+                    {m.membership_role}
+                  </span>
+                </span>
                 <button className={ghostBtn} onClick={() => remove(m)}>Remove</button>
               </li>
             ))}

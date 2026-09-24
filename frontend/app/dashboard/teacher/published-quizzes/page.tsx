@@ -11,6 +11,7 @@ import { SkeletonList } from "@/components/ui/skeleton";
 import { Inbox } from "@/components/ui/icons";
 import { QuestionPaperButtons } from "@/components/shared/pdf-buttons";
 import { useTeacherPublishedQuizzes } from "@/lib/staff-queries";
+import { useDashboardIdentity } from "@/components/shared/dashboard-identity-context";
 
 function dateLabel(value: string | null) {
   if (!value) return "—";
@@ -19,6 +20,7 @@ function dateLabel(value: string | null) {
 }
 
 export default function PublishedQuizzesPage() {
+  const { features } = useDashboardIdentity();
   const { data, error, mutate } = useTeacherPublishedQuizzes();
   const quizzes = data?.quizzes ?? [];
   const [assignQuiz, setAssignQuiz] = useState<{ id: string; title: string } | null>(null);
@@ -48,13 +50,13 @@ export default function PublishedQuizzesPage() {
                     compact
                   />
                   <Link href={`/dashboard/teacher/performance/${quiz.id}`} className="rounded-lg border border-input px-3 py-2 text-sm font-medium hover:border-primary/50 hover:text-primary">View performance →</Link>
-                  <button
+                  {features.batches && <button
                     type="button"
                     onClick={() => setAssignQuiz({ id: quiz.id, title: quiz.title })}
                     className="rounded-lg border border-input px-3 py-2 text-sm font-medium hover:border-primary/50 hover:text-primary"
                   >
                     Assign to batches
-                  </button>
+                  </button>}
                 </div>
               </div>
               <div className="mt-5 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
@@ -70,7 +72,7 @@ export default function PublishedQuizzesPage() {
           ))}
         </div>
       )}
-      {assignQuiz && (
+      {features.batches && assignQuiz && (
         <AssignBatchesDialog
           quizSetId={assignQuiz.id}
           quizTitle={assignQuiz.title}

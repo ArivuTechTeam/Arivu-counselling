@@ -12,7 +12,7 @@ generation never fails because of this feature.
 
 from __future__ import annotations
 
-from app.lib.config import get_settings
+from app.services.tenant_features import tenant_feature_enabled
 
 # The profile fields that carry commerce context, in display order.
 PROFILE_FIELDS = ("exam_body", "level", "paper", "assessment_year", "framework")
@@ -25,7 +25,7 @@ def commerce_context_for_prompt(service, tenant_id: str, subject_id: str) -> str
     so the caller - and the pure payload builder it feeds - is byte-identical to
     today. When on, it resolves the course level's paper profile and formats it.
     """
-    if not getattr(get_settings(), "commerce_pack_enabled", False):
+    if not tenant_feature_enabled(service, tenant_id, "commerce_pack"):
         return None
     return format_commerce_context(resolve_paper_profile(service, tenant_id, subject_id))
 

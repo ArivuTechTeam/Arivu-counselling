@@ -39,6 +39,7 @@ import { createClient } from "@/lib/supabase";
 import { useCourses } from "@/lib/staff-queries";
 import { institutionLoginPath } from "@/lib/institution-portal";
 import { institutionThemeStyle } from "@/lib/institution-theme";
+import { useDashboardIdentity } from "@/components/shared/dashboard-identity-context";
 
 type IconComponent = (p: { size?: number; className?: string }) => React.JSX.Element;
 
@@ -50,6 +51,7 @@ type NavItem = {
   soon?: boolean;
   section?: string;
   icon: IconComponent;
+  feature?: keyof DashboardProfile["features"];
 };
 
 const PRIMARY_ACTION: Record<
@@ -164,18 +166,21 @@ const NAV: Record<string, NavItem[]> = {
       href: "/dashboard/institution-admin/batches",
       section: "Management",
       icon: Users,
+      feature: "batches",
     },
     {
       label: "Exam standards",
       href: "/dashboard/institution-admin/exam-standards",
       section: "Management",
       icon: BarChart3,
+      feature: "scoring_policies",
     },
     {
       label: "Paper profiles",
       href: "/dashboard/institution-admin/paper-profiles",
       section: "Management",
       icon: BookOpen,
+      feature: "commerce_pack",
     },
     {
       label: "Quizzes",
@@ -427,6 +432,7 @@ export function DashboardShell({
   mustChangePassword?: boolean;
   children: React.ReactNode;
 }) {
+  const { features } = useDashboardIdentity();
   const pathname = usePathname();
   const router = useRouter();
   const [menuOpen, setMenuOpen] = useState(false);
@@ -514,7 +520,9 @@ export function DashboardShell({
     };
   }, [navOpen]);
 
-  const items = role ? NAV[role] ?? [] : [];
+  const items = role
+    ? (NAV[role] ?? []).filter((item) => !item.feature || features[item.feature])
+    : [];
   const dashboardRole = role && role in PRIMARY_ACTION
     ? (role as DashboardRole)
     : null;

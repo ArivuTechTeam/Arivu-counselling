@@ -35,7 +35,7 @@ def get_quiz_set_detail(quiz_set_id: str, tenant_id: str) -> dict:
 
     qs = (
         service.table("quiz_sets")
-        .select("id, title, status, created_at, published_at, document_id")
+        .select("id, title, status, created_at, published_at, document_id, scoring_policy_id")
         .eq("id", quiz_set_id)
         .eq("tenant_id", tenant_id)
         .maybe_single()

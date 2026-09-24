@@ -20,17 +20,35 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field, model_validator
 
 from app.lib.auth import CurrentProfile, get_current_profile
-from app.lib.role_checks import require_teacher
 from app.lib.config import get_settings
+from app.lib.role_checks import require_teacher
 from app.lib.supabase import get_service_client
 from app.lib.supabase_queries import select_all_in
+from app.services.tenant_features import require_profile_feature
 
 router = APIRouter(prefix="/api/v1/quiz-sets", tags=["assignments"])
 
 
-def _require_batches_enabled() -> None:
-    if not getattr(get_settings(), "batches_enabled", False):
-        raise HTTPException(status_code=503, detail="Batch assignment is not enabled yet.")
+def _require_batches_enabled(
+    profile: CurrentProfile, *, legacy_master_check: bool = False
+) -> None:
+    if profile.tenant_feature_flags is None:
+        if legacy_master_check and not getattr(get_settings(), "batches_enabled", False):
+            raise HTTPException(status_code=503, detail="Batch assignment is not enabled yet.")
+        return
+    require_profile_feature(profile, "batches", label="Batch assignment")
+
+
+def _managed_batch_ids(service, profile: CurrentProfile) -> set[str]:
+    rows = (
+        service.table("batch_memberships").select("batch_id")
+        .eq("tenant_id", profile.tenant_id)
+        .eq("profile_id", profile.user_id)
+        .eq("membership_role", "teacher")
+        .eq("active", True)
+        .execute().data or []
+    )
+    return {str(row["batch_id"]) for row in rows}
 
 
 def _owned_quiz(service, quiz_set_id: str, profile: CurrentProfile) -> dict:
@@ -73,7 +91,7 @@ def list_eligible_batches(
 ) -> list[dict]:
     """Only active batches in the quiz subject's exact course and level."""
     require_teacher(profile, action="assign quizzes")
-    _require_batches_enabled()
+    _require_batches_enabled(profile, legacy_master_check=True)
     service = get_service_client()
     quiz = _owned_quiz(service, str(quiz_set_id), profile)
     course_id, course_level_id = _quiz_academic_scope(
@@ -81,15 +99,24 @@ def list_eligible_batches(
     )
     if not course_id or not course_level_id:
         return []
-    return (
-        service.table("batches")
-        .select("id, course_id, course_level_id, name, exam_session, status, created_at")
-        .eq("tenant_id", profile.tenant_id)
-        .eq("course_id", course_id)
-        .eq("course_level_id", course_level_id)
-        .eq("status", "active")
-        .order("name")
-        .execute().data or []
+    managed_ids = sorted(_managed_batch_ids(service, profile))
+    if profile.tenant_feature_flags is None:
+        managed_ids = [
+            str(row["id"])
+            for row in (
+                service.table("batches").select("id")
+                .eq("tenant_id", profile.tenant_id).execute().data or []
+            )
+        ]
+    if not managed_ids:
+        return []
+    return select_all_in(
+        service, "batches",
+        "id, course_id, course_level_id, name, exam_session, status, created_at",
+        in_column="id", values=managed_ids,
+        configure=lambda q: q.eq("tenant_id", profile.tenant_id)
+        .eq("course_id", course_id).eq("course_level_id", course_level_id)
+        .eq("status", "active"),
     )
 
 
@@ -99,7 +126,7 @@ def assign_to_batches(
     profile: CurrentProfile = Depends(get_current_profile),
 ) -> dict:
     require_teacher(profile, action="assign quizzes")
-    _require_batches_enabled()
+    _require_batches_enabled(profile, legacy_master_check=True)
     service = get_service_client()
     quiz = _owned_quiz(service, str(quiz_set_id), profile)
     if quiz.get("status") != "published":
@@ -111,6 +138,14 @@ def assign_to_batches(
         raise HTTPException(status_code=400, detail="This quiz is not linked to a course level.")
 
     batch_ids = [str(b) for b in dict.fromkeys(body.batch_ids)]
+    if (
+        profile.tenant_feature_flags is not None
+        and set(batch_ids) - _managed_batch_ids(service, profile)
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail="You can assign quizzes only to batches you manage.",
+        )
     valid = select_all_in(
         service, "batches", "id", in_column="id", values=batch_ids,
         configure=lambda q: q.eq("tenant_id", profile.tenant_id)
@@ -162,6 +197,7 @@ def list_assignments(
     quiz_set_id: UUID, profile: CurrentProfile = Depends(get_current_profile)
 ) -> list[dict]:
     require_teacher(profile, action="view quiz assignments")
+    _require_batches_enabled(profile)
     service = get_service_client()
     _owned_quiz(service, str(quiz_set_id), profile)
     return (
@@ -181,6 +217,7 @@ def withdraw_assignment(
     audience_mode='assigned_batches' — it is simply visible to no batch until
     reassigned, never silently reverting to course-wide visibility."""
     require_teacher(profile, action="withdraw quiz assignments")
+    _require_batches_enabled(profile)
     service = get_service_client()
     _owned_quiz(service, str(quiz_set_id), profile)
     updated = (

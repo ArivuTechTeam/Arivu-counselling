@@ -1,0 +1,9 @@
+FROM python:3.12-slim
+
+WORKDIR /app
+COPY requirements.txt requirements.lock ./
+RUN pip install --no-cache-dir --require-hashes -r requirements.lock
+COPY . .
+
+# One-shot cleanup command for a Railway Cron service (recommended daily).
+CMD ["python", "-m", "app.services.ai_log_retention"]

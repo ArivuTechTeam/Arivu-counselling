@@ -111,6 +111,42 @@ def _assign(service, batch_ids, *, enabled=True):
 
 
 class AssignTests(unittest.TestCase):
+    def test_tenant_rollout_requires_teacher_batch_membership(self):
+        profile = _teacher().model_copy(
+            update={"tenant_feature_flags": {"batches": True}}
+        )
+        with patch.object(mod, "get_service_client", return_value=_Service(_base())), patch(
+            "app.services.tenant_features.get_settings",
+            return_value=SimpleNamespace(batches_enabled=True),
+        ):
+            with self.assertRaises(HTTPException) as error:
+                mod.assign_to_batches(
+                    QUIZ, AssignRequest(batch_ids=[BATCH]), profile
+                )
+        self.assertEqual(error.exception.status_code, 403)
+
+    def test_tenant_rollout_allows_managed_batch(self):
+        data = _base()
+        data["batch_memberships"] = [{
+            "tenant_id": T,
+            "batch_id": BATCH,
+            "profile_id": "teacher-1",
+            "membership_role": "teacher",
+            "active": True,
+        }]
+        profile = _teacher().model_copy(
+            update={"tenant_feature_flags": {"batches": True}}
+        )
+        service = _Service(data)
+        with patch.object(mod, "get_service_client", return_value=service), patch(
+            "app.services.tenant_features.get_settings",
+            return_value=SimpleNamespace(batches_enabled=True),
+        ):
+            result = mod.assign_to_batches(
+                QUIZ, AssignRequest(batch_ids=[BATCH]), profile
+            )
+        self.assertEqual(result["audience_mode"], "assigned_batches")
+
     def test_flag_off_is_503(self):
         with self.assertRaises(HTTPException) as e:
             _assign(_Service(_base()), [BATCH], enabled=False)

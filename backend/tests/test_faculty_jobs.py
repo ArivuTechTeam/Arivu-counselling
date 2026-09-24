@@ -128,6 +128,19 @@ def test_worker_records_bounded_retry_request_after_provider_failure():
     assert service.rpc.call_args.args[1]["p_retryable"] is True
 
 
+def test_worker_cancels_claimed_job_when_tenant_feature_was_disabled():
+    row = job()
+    service = Mock()
+    service.rpc.return_value.execute.return_value.data = row
+    with patch(
+        "app.services.faculty_worker.tenant_feature_enabled", return_value=False
+    ), patch("app.services.faculty_worker.process_job") as process:
+        assert run_one(service)
+    process.assert_not_called()
+    assert service.rpc.call_args.args[0] == "update_faculty_job"
+    assert service.rpc.call_args.args[1]["p_action"] == "cancel"
+
+
 def test_blueprint_prepares_atomic_payload_without_legacy_database_writes():
     service = Mock()
     service.table.side_effect = AssertionError("No result rows before atomic commit")

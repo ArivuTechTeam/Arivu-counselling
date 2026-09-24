@@ -20,9 +20,10 @@ from __future__ import annotations
 
 from datetime import date, datetime, timezone
 
-from app.lib.config import get_settings
 from app.lib.supabase_queries import select_all_in
+from app.lib.config import get_settings
 from app.services.selector import enrolled_subject_ids
+from app.services.tenant_features import profile_feature_enabled
 
 LEGACY_COURSE = "legacy_course"
 ASSIGNED_BATCHES = "assigned_batches"
@@ -156,7 +157,12 @@ def student_can_access_quiz(
         return False
 
     audience = row.get("audience_mode") or LEGACY_COURSE
-    if not getattr(get_settings(), "batches_enabled", False) or audience == LEGACY_COURSE:
+    batches_enabled = (
+        getattr(get_settings(), "batches_enabled", False)
+        if getattr(profile, "tenant_feature_flags", None) is None
+        else profile_feature_enabled(profile, "batches")
+    )
+    if not batches_enabled or audience == LEGACY_COURSE:
         # Legacy course-wide rule (unchanged): published + subject enrolled.
         return row.get("subject_id") in enrolled_subject_ids(service, profile)
 

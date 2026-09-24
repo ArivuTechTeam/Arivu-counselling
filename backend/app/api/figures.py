@@ -25,6 +25,7 @@ from app.lib.supabase import get_service_client
 from app.lib.supabase_queries import select_all_in
 from app.services.selector import accessible_practice_question_ids, enrolled_subject_ids
 from app.services.student_access import student_has_graded_question
+from app.services.tenant_features import require_profile_feature
 
 logger = logging.getLogger(__name__)
 
@@ -146,6 +147,7 @@ def get_figure_image(
     Staff may view their tenant's figures. Students must additionally be enrolled
     in the subject of an approved linked question.
     """
+    require_profile_feature(profile, "figure_attach", label="Question figures")
     service = get_service_client()
     row = (
         service.table("document_figures")

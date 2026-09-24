@@ -35,6 +35,7 @@ from app.services.quiz_extraction import extract_quiz
 from app.services.rate_limit import QUIZ_EXTRACTION, enforce_ai_rate_limit
 from app.services.faculty_jobs import enqueue, find_request, public_job
 from app.services.teacher_access import teacher_has_subject
+from app.services.tenant_features import profile_feature_enabled
 
 router = APIRouter(prefix="/api/v1/quiz-sets", tags=["extraction"])
 logger = logging.getLogger(__name__)
@@ -121,7 +122,12 @@ async def extract_quiz_endpoint(
     # (Checked BEFORE storing so a declined duplicate leaves no orphan file/row.)
     content_hash = hashlib.sha256(content).hexdigest()
     if background is True:
-        if not get_settings().faculty_jobs_enabled:
+        jobs_enabled = (
+            get_settings().faculty_jobs_enabled
+            if profile.tenant_feature_flags is None
+            else profile_feature_enabled(profile, "faculty_jobs")
+        )
+        if not jobs_enabled:
             raise HTTPException(503, "Background processing is not enabled yet.")
         if not request_key or not isinstance(request_key, str):
             raise HTTPException(400, "A request identifier is required.")

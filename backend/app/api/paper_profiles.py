@@ -21,6 +21,11 @@ from app.lib.role_checks import require_institution_admin, require_staff
 from app.lib.supabase import get_service_client
 from app.lib.supabase_queries import select_all_in
 from app.services.commerce_context import PROFILE_FIELDS
+from app.services.tenant_features import require_profile_feature
+
+
+def _require_commerce(profile: CurrentProfile) -> None:
+    require_profile_feature(profile, "commerce_pack", label="Commerce paper profiles")
 
 router = APIRouter(prefix="/api/v1", tags=["paper-profiles"])
 
@@ -53,6 +58,7 @@ def _present(row: dict | None) -> dict | None:
 @router.get("/paper-profiles")
 def list_paper_profiles(profile: CurrentProfile = Depends(get_current_profile)) -> list[dict]:
     require_staff(profile, action="view paper profiles")
+    _require_commerce(profile)
     service = get_service_client()
     levels = (
         service.table("course_levels").select("id, course_id, name")
@@ -89,6 +95,7 @@ def set_paper_profile(
     profile: CurrentProfile = Depends(get_current_profile),
 ) -> dict:
     require_institution_admin(profile, action="set paper profiles")
+    _require_commerce(profile)
     service = get_service_client()
     level = (
         service.table("course_levels").select("id, course_id, name")

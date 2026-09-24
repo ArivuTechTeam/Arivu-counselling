@@ -110,6 +110,7 @@ migration-53-signup-batch-membership.sql
 migration-54-scoring-policies.sql
 migration-55-course-exam-standard.sql
 migration-56-paper-profiles.sql
+migration-57-tenant-feature-rollout.sql
 ```
 
 (Filenames above verified 2026-09-23 against `migrations/`, through migration
@@ -188,13 +189,15 @@ duplication. Migration 52 adds level-aware batches and quiz assignments;
 migration 53 extends password and Google signup with optional, validated batch
 membership. Migration 54 adds scoring policies and atomic per-attempt policy
 snapshots. Migration 55 binds an official scoring standard to each course level,
-and migration 56 stores one commerce paper profile per course level. Apply all
-of 49–56 before enabling their matching deployment flags. Do not use the
+and migration 56 stores one commerce paper profile per course level. Migration
+57 adds per-institution rollout controls and rejects batch membership writes
+for institutions where batches are disabled. Apply all of 49–57 before enabling
+their matching deployment flags. Do not use the
 pre-integration `changes-pavyaa` migration numbers: they collided with the
 existing catalogue, level-enrollment, and branding migrations.
 
 For a fresh database, `migrations/schema.sql` already includes the final effects
-of migrations 31, 33, 34, 35, 37, 39, 40, 47, and 49–56 (verified 2026-09-23 by grepping
+of migrations 31, 33, 34, 35, 37, 39, 40, 47, and 49–57 (verified 2026-09-24 by grepping
 `schema.sql` for each migration's distinguishing columns/functions — e.g.
 `question_snapshot` from migration 37, and the `_backend_provisioning_intent`/
 `provisioned_by_backend` trigger logic from migrations 39–40). The incremental
@@ -237,6 +240,44 @@ function's owner and privileges match what it sets.
   (`CMD uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}`) so this
   can't regress even if Railway ever re-applies a plain string command.
 - **Python:** 3.12 (set by `FROM python:3.12-slim` in the Dockerfile).
+
+### Required companion Railway services
+
+Durable generation and automatic log retention must not run inside the web
+process. Add these services in the same Railway project/environment and share
+the backend variables with them:
+
+| Service | Root | Dockerfile | Schedule / behavior |
+|---|---|---|---|
+| `quiz-generator-worker` | `backend` | `Dockerfile.worker` | Always running; no public domain |
+| `quiz-generator-retention` | `backend` | `Dockerfile.retention` | Railway Cron `0 2 * * *` (daily at 02:00 UTC); no public domain |
+
+Run only one worker initially. The database queue keeps jobs durable across
+restarts. The retention service is one-shot and exits after each cron run.
+Set `RAILWAY_DOCKERFILE_PATH=Dockerfile.worker` on the worker service and
+`RAILWAY_DOCKERFILE_PATH=Dockerfile.retention` on the retention service. Use
+Railway shared/reference variables for the existing backend configuration and
+secrets rather than copying secret values between services.
+
+### Advanced feature master switches
+
+Set the following on the API service. Set `FACULTY_JOBS_ENABLED=true` on the
+worker too. These are deployment-wide master switches; a capability remains
+hidden and rejected until Super Admin also enables it in **Manage institution →
+Advanced features** for that tenant.
+
+| Variable | Recommended production value |
+|---|---|
+| `FACULTY_JOBS_ENABLED` | `true` after the worker service is running |
+| `QUIZ_REUSE_ENABLED` | `true` |
+| `BATCHES_ENABLED` | `true` |
+| `SCORING_POLICIES_ENABLED` | `true` |
+| `COMMERCE_PACK_ENABLED` | `true` |
+| `FIGURE_ATTACH_ENABLED` | `true` |
+| `FACULTY_JOBS_POLL_SECONDS` | `3` |
+| `FACULTY_WORKER_STALE_SECONDS` | `120` |
+| `FIGURE_MAX_PER_DOCUMENT` | `50` |
+| `AI_LOG_RAW_RETENTION_DAYS` | `30` |
 
 **Environment variables** (from `backend/.env.example`). The connection and
 AI provider variables were confirmed present on the live Railway service as

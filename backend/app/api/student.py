@@ -35,6 +35,7 @@ from app.services.events import ATTEMPT_SUBMITTED, log_event
 from app.services.scoring import normalize_policy, score
 from app.services.batch_access import assigned_quiz_ids, student_can_access_quiz
 from app.services.selector import enrolled_subject_ids
+from app.services.tenant_features import profile_feature_enabled
 
 router = APIRouter(prefix="/api/v1", tags=["student"])
 
@@ -245,7 +246,11 @@ def list_quizzes(profile: CurrentProfile = Depends(get_current_profile)) -> list
     if not subject_ids:
         return []
 
-    batches_on = getattr(get_settings(), "batches_enabled", False)
+    batches_on = (
+        getattr(get_settings(), "batches_enabled", False)
+        if profile.tenant_feature_flags is None
+        else profile_feature_enabled(profile, "batches")
+    )
 
     # A batch may narrow visibility inside the student's Course -> Level subject
     # entitlement, but it must never grant a subject from another level/course.
@@ -422,11 +427,19 @@ class StartAttemptRequest(BaseModel):
     variant_id: str
 
 
-def _resolve_quiz_scoring_policy(service, quiz_set_id: str, tenant_id: str) -> dict | None:
+def _resolve_quiz_scoring_policy(
+    service, quiz_set_id: str, profile: CurrentProfile
+) -> dict | None:
     """The rules of a quiz's attached scoring policy, or None (default full/zero).
     Gated by SCORING_POLICIES_ENABLED, so scoring is unchanged until it's on."""
-    if not getattr(get_settings(), "scoring_policies_enabled", False):
+    scoring_enabled = (
+        getattr(get_settings(), "scoring_policies_enabled", False)
+        if profile.tenant_feature_flags is None
+        else profile_feature_enabled(profile, "scoring_policies")
+    )
+    if not scoring_enabled:
         return None
+    tenant_id = profile.tenant_id
     quiz = (
         service.table("quiz_sets").select("scoring_policy_id")
         .eq("id", quiz_set_id).eq("tenant_id", tenant_id).maybe_single().execute()
@@ -500,7 +513,7 @@ def start_attempt(
         questions, variant.data.get("time_limit_minutes")
     )
     scoring_policy = _resolve_quiz_scoring_policy(
-        service, variant.data["quiz_set_id"], profile.tenant_id
+        service, variant.data["quiz_set_id"], profile
     )
     started_at = datetime.now(timezone.utc).isoformat()
     try:

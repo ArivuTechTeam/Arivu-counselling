@@ -1,6 +1,7 @@
 """Service-only quiz reuse and release calls; no AI or storage mutations."""
 from fastapi import HTTPException
 from app.lib.config import get_settings
+from app.services.tenant_features import profile_feature_enabled
 
 MESSAGES = {
     "quiz_locked": "This paper has been released. Duplicate it to edit a new draft.",
@@ -15,7 +16,9 @@ MESSAGES = {
 }
 
 
-def enabled() -> bool:
+def enabled(profile=None) -> bool:
+    if profile is not None:
+        return profile_feature_enabled(profile, "quiz_reuse")
     return getattr(get_settings(), "quiz_reuse_enabled", False)
 
 

@@ -1,4 +1,4 @@
-// Isolated Postgres integration checks for migrations 52-56.
+// Isolated Postgres integration checks for migrations 52-57.
 // No hosted database or credentials are used.
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -10,7 +10,7 @@ process.on("uncaughtException", error => {
 });
 
 const db = new PGlite();
-const migrations = [52, 53, 54, 55, 56].map(number => {
+const migrations = [52, 53, 54, 55, 56, 57].map(number => {
   const filename = fs.readdirSync("migrations").find(name => name.startsWith(`migration-${number}-`));
   assert.ok(filename, `migration ${number}`);
   return fs.readFileSync(`migrations/${filename}`, "utf8");
@@ -232,6 +232,18 @@ await db.query(
   "insert into batches(id,tenant_id,course_id,course_level_id,name,created_by) values($1,$2,$3,$4,'2027',$5)",
   [batch, t1, c1, l1, admin],
 );
+await assert.rejects(
+  db.query(
+    "insert into batch_memberships(tenant_id,batch_id,profile_id) values($1,$2,$3)",
+    [t1, batch, student],
+  ),
+  undefined,
+  "a disabled tenant must not receive batch memberships",
+);
+await db.query(
+  "update tenants set feature_flags=$1 where id=$2",
+  [{ batches: true }, t1],
+);
 await db.query(
   "insert into batch_memberships(tenant_id,batch_id,profile_id) values($1,$2,$3)",
   [t1, batch, student],
@@ -279,5 +291,5 @@ for (const table of ["batches", "batch_memberships", "quiz_assignments", "scorin
 }
 await db.exec("reset role");
 
-console.log("PASS: migrations 52-56 rerun, level scope, tenant FKs, attempt snapshots, browser denial");
+console.log("PASS: migrations 52-57 rerun, feature rollout, level scope, tenant FKs, attempt snapshots, browser denial");
 await db.close();

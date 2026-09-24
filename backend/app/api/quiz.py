@@ -706,7 +706,7 @@ def get_quiz_set(
     service = get_service_client()
     _teacher_quiz_set(service, quiz_set_id, profile)
     try:
-        before = quiz_reuse.rpc(service, "quiz_publication_state", profile, quiz_set_id) if quiz_reuse.enabled() else {}
+        before = quiz_reuse.rpc(service, "quiz_publication_state", profile, quiz_set_id) if quiz_reuse.enabled(profile) else {}
         detail = get_quiz_set_detail(quiz_set_id, profile.tenant_id)
         if before and before != quiz_reuse.rpc(service, "quiz_publication_state", profile, quiz_set_id):
             raise HTTPException(409, "This quiz changed while loading. Refresh to see the latest version.")
@@ -733,7 +733,7 @@ class PublishQuizRequest(BaseModel):
 def duplicate_quiz_set(quiz_set_id: UUID, body: CopyQuizRequest,
                        profile: CurrentProfile = Depends(get_current_profile)) -> dict:
     require_teacher(profile, action="duplicate quizzes")
-    if not quiz_reuse.enabled():
+    if not quiz_reuse.enabled(profile):
         raise HTTPException(503, "Quiz reuse is not enabled yet.")
     return quiz_reuse.rpc(get_service_client(), "copy_quiz_draft", profile, str(quiz_set_id),
                           p_key=str(body.request_key), p_title=body.title.strip())
@@ -753,7 +753,7 @@ def publish_quiz_set(
     require_teacher(profile, action="access quiz sets")
     service = get_service_client()
     _teacher_quiz_set(service, quiz_set_id, profile)
-    if quiz_reuse.enabled():
+    if quiz_reuse.enabled(profile):
         if body is None:
             raise HTTPException(409, "Refresh the quiz before publishing.")
         detail = get_quiz_set_detail(quiz_set_id, profile.tenant_id)

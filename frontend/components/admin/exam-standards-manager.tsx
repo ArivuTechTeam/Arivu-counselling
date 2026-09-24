@@ -4,8 +4,11 @@ import { useCallback, useEffect, useState } from "react";
 
 import {
   CourseExamStandard,
+  ScoringPolicy,
   ScoringPreset,
+  createScoringPolicy,
   listExamStandards,
+  listScoringPolicies,
   listScoringPresets,
   setExamStandard,
 } from "@/lib/api";
@@ -19,13 +22,22 @@ export function ExamStandardsManager() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState<string | null>(null);
+  const [policies, setPolicies] = useState<ScoringPolicy[]>([]);
+  const [policyName, setPolicyName] = useState("");
+  const [wrongPenalty, setWrongPenalty] = useState("0");
+  const [fractionalPenalty, setFractionalPenalty] = useState(false);
+  const [partialCredit, setPartialCredit] = useState(false);
+  const [creating, setCreating] = useState(false);
 
   const load = useCallback(async () => {
     setError(null);
     try {
-      const [p, r] = await Promise.all([listScoringPresets(), listExamStandards()]);
+      const [p, r, custom] = await Promise.all([
+        listScoringPresets(), listExamStandards(), listScoringPolicies(),
+      ]);
       setPresets(p);
       setRows(r);
+      setPolicies(custom);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Couldn't load exam standards.");
     } finally {
@@ -53,6 +65,31 @@ export function ExamStandardsManager() {
     }
   }
 
+  async function createPolicy(event: React.FormEvent) {
+    event.preventDefault();
+    setCreating(true);
+    setError(null);
+    try {
+      const created = await createScoringPolicy({
+        name: policyName.trim(),
+        wrong_penalty: Number(wrongPenalty),
+        penalty_is_fraction: fractionalPenalty,
+        omission_score: 0,
+        multi_mode: partialCredit ? "mrm_partial" : "all_or_nothing",
+        clamp_negative_total: true,
+      });
+      setPolicies((current) => [...current, created].sort((a, b) => a.name.localeCompare(b.name)));
+      setPolicyName("");
+      setWrongPenalty("0");
+      setFractionalPenalty(false);
+      setPartialCredit(false);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Couldn't create the scoring policy.");
+    } finally {
+      setCreating(false);
+    }
+  }
+
   return (
     <div className="mx-auto flex max-w-4xl flex-col gap-6">
       <div>
@@ -60,7 +97,7 @@ export function ExamStandardsManager() {
         <p className="mt-1 text-sm text-muted-foreground">
           Choose how the <strong>exam simulator</strong> scores each course level — the official
           marking rule of that exam (e.g. CA Foundation deducts 0.25 per wrong answer, CMA
-          deducts nothing). Normal practice quizzes are unaffected.
+          deducts nothing). Custom policies for normal quizzes can be created below.
         </p>
       </div>
 
@@ -96,6 +133,49 @@ export function ExamStandardsManager() {
             </div>
           ))}
         </div>
+      )}
+
+      {!loading && (
+        <section className="rounded-xl border bg-card p-5 shadow-sm">
+          <h2 className="text-lg font-semibold">Custom quiz scoring policies</h2>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Teachers can attach these rules to a draft quiz before publishing it. Existing attempts keep their saved scoring snapshot.
+          </p>
+          {policies.length > 0 && (
+            <ul className="mt-4 grid gap-2 sm:grid-cols-2">
+              {policies.map((policy) => (
+                <li key={policy.id} className="rounded-lg border px-3 py-2 text-sm">
+                  <strong>{policy.name}</strong>
+                  <span className="mt-1 block text-xs text-muted-foreground">
+                    Wrong answer: −{policy.rules.wrong_penalty ?? 0}{policy.rules.penalty_is_fraction ? " × marks" : " marks"}
+                    {policy.rules.multi_mode === "mrm_partial" ? " · partial multi-select credit" : ""}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+          <form onSubmit={createPolicy} className="mt-4 grid gap-3 rounded-lg border border-dashed p-4 sm:grid-cols-2">
+            <label className="text-sm font-medium">
+              Policy name
+              <input required maxLength={120} className={`${field} mt-1`} value={policyName} onChange={(e) => setPolicyName(e.target.value)} placeholder="Weekly test — negative marking" />
+            </label>
+            <label className="text-sm font-medium">
+              Wrong-answer deduction
+              <input required type="number" min="0" max="100" step="0.01" className={`${field} mt-1`} value={wrongPenalty} onChange={(e) => setWrongPenalty(e.target.value)} />
+            </label>
+            <label className="flex items-center gap-2 text-sm">
+              <input type="checkbox" checked={fractionalPenalty} onChange={(e) => setFractionalPenalty(e.target.checked)} />
+              Treat deduction as a fraction of question marks
+            </label>
+            <label className="flex items-center gap-2 text-sm">
+              <input type="checkbox" checked={partialCredit} onChange={(e) => setPartialCredit(e.target.checked)} />
+              Give partial credit on multi-select questions
+            </label>
+            <button disabled={creating} className="w-fit rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground disabled:opacity-50">
+              {creating ? "Creating…" : "Create policy"}
+            </button>
+          </form>
+        </section>
       )}
     </div>
   );

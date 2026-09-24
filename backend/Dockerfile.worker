@@ -1,0 +1,10 @@
+FROM python:3.12-slim
+
+WORKDIR /app
+COPY requirements.txt requirements.lock ./
+RUN pip install --no-cache-dir --require-hashes -r requirements.lock
+COPY . .
+
+# Long-running durable generation worker. Configure this as a separate Railway
+# service; it deliberately exposes no HTTP port.
+CMD ["python", "-m", "app.services.faculty_worker"]

@@ -38,6 +38,7 @@ from app.services.institution_offerings import (
     offering_counts,
 )
 from app.services.teacher_access import replace_teacher_subjects
+from app.services.tenant_features import normalize_feature_flags
 
 router = APIRouter(prefix="/api/v1", tags=["admin"])
 
@@ -182,6 +183,7 @@ class InstitutionRow(StrictApiResponse):
     logo_url: str | None = None
     logo_filename: str | None = None
     primary_color: str = "#2E8857"
+    feature_flags: dict[str, bool] = Field(default_factory=dict)
 
 
 class PlatformActivityPoint(StrictApiResponse):
@@ -231,6 +233,7 @@ class TenantDetails(StrictApiResponse):
     logo_url: str | None = None
     logo_filename: str | None = None
     primary_color: str = "#2E8857"
+    feature_flags: dict[str, bool] = Field(default_factory=dict)
 
 
 class OfferingSubject(StrictApiResponse):
@@ -2321,7 +2324,7 @@ async def platform_overview(
         offerings = institution_offerings_by_tenant(service, tenant_ids)
         branding_rows = (
             service.table("tenants")
-            .select("id, logo_url, logo_filename, primary_color")
+            .select("id, logo_url, logo_filename, primary_color, feature_flags")
             .in_("id", tenant_ids)
             .execute()
             .data
@@ -2341,6 +2344,7 @@ async def platform_overview(
                     "logo_url": browser_logo,
                     "logo_filename": branding.get("logo_filename"),
                     "primary_color": branding.get("primary_color") or "#2E8857",
+                    "feature_flags": normalize_feature_flags(branding.get("feature_flags")),
                 }
             )
         return {**overview, "institutions_table": enriched_rows}
@@ -2410,6 +2414,19 @@ class TenantUpdate(BaseModel):
     logo_content_type: str | None = None
     logo_filename: str | None = Field(default=None, max_length=255)
     primary_color: str | None = None
+    feature_flags: dict[str, bool] | None = None
+
+    @field_validator("feature_flags")
+    @classmethod
+    def validate_feature_flags(
+        cls, value: dict[str, bool] | None
+    ) -> dict[str, bool] | None:
+        if value is None:
+            return None
+        unknown = set(value) - set(normalize_feature_flags({}))
+        if unknown:
+            raise ValueError(f"Unknown institution features: {', '.join(sorted(unknown))}")
+        return normalize_feature_flags(value)
 
     @field_validator("primary_color")
     @classmethod
@@ -2707,7 +2724,7 @@ def update_institution(
     service = get_service_client()
     existing = (
         service.table("tenants")
-        .select("id, logo_url, logo_filename, primary_color")
+        .select("id, logo_url, logo_filename, primary_color, feature_flags")
         .eq("id", tenant_id)
         .maybe_single()
         .execute()
@@ -2775,6 +2792,7 @@ def update_institution(
         "logo_url": _signed_logo_url(row.get("logo_url")),
         "logo_filename": row.get("logo_filename"),
         "primary_color": row.get("primary_color") or "#2E8857",
+        "feature_flags": normalize_feature_flags(row.get("feature_flags")),
     }
 
 

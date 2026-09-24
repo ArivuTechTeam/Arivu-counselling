@@ -615,6 +615,7 @@ export type QuizSetDetail = QuizSetSummary & {
   release_locked?: boolean;
   reuse_enabled?: boolean;
   document_id?: string | null;
+  scoring_policy_id?: string | null;
   import_summaries?: (ImportSummary & { extraction_job_id: string })[];
   variants: {
     id: string;
@@ -664,6 +665,16 @@ export type DashboardProfile = {
     logo_url: string | null;
     primary_color: string;
   } | null;
+  features: InstitutionFeatureFlags;
+};
+
+export type InstitutionFeatureFlags = {
+  faculty_jobs: boolean;
+  quiz_reuse: boolean;
+  batches: boolean;
+  scoring_policies: boolean;
+  commerce_pack: boolean;
+  figure_attach: boolean;
 };
 
 export const getDashboardProfile = () =>
@@ -1389,8 +1400,20 @@ export const listEligibleBatchStudents = (id: string) =>
     "GET",
   );
 
-export const addBatchMember = (id: string, profileId: string) =>
-  jsonRequest<BatchMember>(`/api/v1/batches/${id}/members`, "POST", { profile_id: profileId });
+export const listEligibleBatchTeachers = (id: string) =>
+  jsonRequest<{ id: string; full_name?: string | null }[]>(
+    `/api/v1/batches/${id}/eligible-teachers`,
+    "GET",
+  );
+
+export const addBatchMember = (
+  id: string,
+  profileId: string,
+  membershipRole: "student" | "teacher" = "student",
+) => jsonRequest<BatchMember>(`/api/v1/batches/${id}/members`, "POST", {
+  profile_id: profileId,
+  membership_role: membershipRole,
+});
 
 export const removeBatchMember = (id: string, profileId: string) =>
   jsonRequest<{ deactivated: boolean }>(`/api/v1/batches/${id}/members/${profileId}`, "DELETE");
@@ -1439,6 +1462,38 @@ export const setExamStandard = (courseLevelId: string, presetKey: string | null)
     `/api/v1/exam-standards/${courseLevelId}`,
     "PUT",
     { preset_key: presetKey },
+  );
+
+export type ScoringPolicy = {
+  id: string;
+  name: string;
+  rules: {
+    wrong_penalty?: number;
+    penalty_is_fraction?: boolean;
+    omission_score?: number;
+    multi_mode?: "all_or_nothing" | "mrm_partial";
+    clamp_negative_total?: boolean;
+  };
+  created_at: string;
+};
+
+export const listScoringPolicies = () =>
+  jsonRequest<ScoringPolicy[]>("/api/v1/scoring-policies", "GET");
+
+export const createScoringPolicy = (input: {
+  name: string;
+  wrong_penalty: number;
+  penalty_is_fraction: boolean;
+  omission_score: number;
+  multi_mode: "all_or_nothing" | "mrm_partial";
+  clamp_negative_total: boolean;
+}) => jsonRequest<ScoringPolicy>("/api/v1/scoring-policies", "POST", input);
+
+export const setQuizScoringPolicy = (quizSetId: string, policyId: string | null) =>
+  jsonRequest<{ quiz_set_id: string; scoring_policy_id: string | null }>(
+    `/api/v1/quiz-sets/${quizSetId}/scoring-policy`,
+    "PUT",
+    { policy_id: policyId },
   );
 
 // --- Commerce paper profiles per course level (Phase 6.3-D) ---
@@ -1752,6 +1807,7 @@ export type InstitutionRow = {
   logo_url: string | null;
   logo_filename: string | null;
   primary_color: string;
+  feature_flags: InstitutionFeatureFlags;
 };
 export type ReviewPipelineFull = {
   pending_review: number;
@@ -1807,6 +1863,7 @@ export type InstitutionUpdateInput = {
   logo_content_type?: string;
   logo_filename?: string;
   primary_color?: string;
+  feature_flags?: InstitutionFeatureFlags;
 };
 export type InstitutionDetails = {
   id: string;
@@ -1818,6 +1875,7 @@ export type InstitutionDetails = {
   logo_url: string | null;
   logo_filename: string | null;
   primary_color: string;
+  feature_flags: InstitutionFeatureFlags;
 };
 export type InstitutionOfferingSubject = {
   id: string;

@@ -11,6 +11,7 @@ from app.lib.config import get_settings
 from app.lib.supabase import get_service_client
 from app.services.faculty_jobs import PUBLIC_COLUMNS, enqueue, load_owned, public_job
 from app.services.quiz_generator_service import QuizGeneratorService
+from app.services.tenant_features import profile_feature_enabled, require_profile_feature
 
 router = APIRouter(prefix="/api/v1/faculty-jobs", tags=["faculty-jobs"])
 
@@ -28,7 +29,12 @@ class GenerateJobRequest(BlueprintGenerateRequest):
 @router.get("")
 def list_jobs(profile: CurrentProfile = Depends(get_current_profile)) -> dict:
     require_teacher(profile)
-    if not get_settings().faculty_jobs_enabled:
+    enabled = (
+        get_settings().faculty_jobs_enabled
+        if profile.tenant_feature_flags is None
+        else profile_feature_enabled(profile, "faculty_jobs")
+    )
+    if not enabled:
         return {"enabled": False, "jobs": []}
     columns = PUBLIC_COLUMNS.replace("result,", "quiz_set_id:result->>quiz_set_id,")
     rows = (get_service_client().table("faculty_jobs").select(columns)
@@ -40,8 +46,11 @@ def list_jobs(profile: CurrentProfile = Depends(get_current_profile)) -> dict:
 @router.post("", status_code=202)
 def create_job(req: GenerateJobRequest, profile: CurrentProfile = Depends(get_current_profile)) -> dict:
     require_teacher(profile)
-    if not get_settings().faculty_jobs_enabled:
-        raise HTTPException(503, "Background processing is not enabled yet.")
+    if profile.tenant_feature_flags is None:
+        if not get_settings().faculty_jobs_enabled:
+            raise HTTPException(503, "Background processing is not enabled yet.")
+    else:
+        require_profile_feature(profile, "faculty_jobs", label="Background processing")
     selected, counts, total, types = _resolve_blueprint_plan(req.selected_topics, req.type_counts)
     if not req.chapter_name.strip() or not 1 <= total <= 50 or len(selected) > total:
         raise HTTPException(400, "Choose a chapter and between 1 and 50 questions with a valid topic allocation.")

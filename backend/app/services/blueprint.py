@@ -474,7 +474,7 @@ def generate_and_persist_from_material(
         difficulty,
         selected_only_material=selected_only,
         evidence_ids_required=bool(evidence_catalog),
-        commerce_calc_enabled=getattr(get_settings(), "commerce_pack_enabled", False),
+        commerce_calc_enabled=bool(commerce_context),
         commerce_context=commerce_context,
     )
     user = build_blueprint_user_prompt(

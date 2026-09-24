@@ -88,7 +88,7 @@ class TenantActivationGuardTests(unittest.TestCase):
         self.assertEqual(service.table_calls, ["profiles"])
         self.assertIn(
             "tenant:tenants!profiles_tenant_id_fkey("
-            "id,is_active,name,subdomain,logo_url,primary_color)",
+            "id,is_active,name,subdomain,logo_url,primary_color,feature_flags)",
             service.selections[0],
         )
 
