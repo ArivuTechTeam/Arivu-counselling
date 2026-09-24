@@ -34,6 +34,12 @@ class _Query:
         self.single = True
         return self
 
+    def order(self, *_a, **_k):
+        return self
+
+    def limit(self, *_a, **_k):
+        return self
+
     def execute(self):
         rows = [
             r for r in self.service.data.get(self.table, [])
@@ -53,6 +59,7 @@ class _Service:
 
 def _service(policy_on_course=POLICY, rules=None):
     return _Service({
+        "tenants": [{"id": T, "exam_config": {"questions": 50, "duration_minutes": 60, "negative_marking": 0.25}}],
         "enrollments": [{"tenant_id": T, "profile_id": "stu-1", "course_id": COURSE, "course_level_id": LEVEL}],
         "course_levels": [{"tenant_id": T, "id": LEVEL, "course_id": COURSE, "exam_scoring_policy_id": policy_on_course}],
         "scoring_policies": [{"tenant_id": T, "id": POLICY, "rules": rules or {"wrong_penalty": 0.25}}],
@@ -98,6 +105,47 @@ class ResolveExamScoringPolicyTests(unittest.TestCase):
 
     def test_conflicting_enrolled_level_policies_do_not_pick_arbitrarily(self):
         self.assertIsNone(self._resolve(_service_with_conflicting_levels(), enabled=True))
+
+    def test_exam_briefing_uses_effective_course_policy(self):
+        service = _service(rules={
+            "wrong_penalty": 0.5,
+            "penalty_is_fraction": True,
+            "multi_mode": "mrm_partial",
+        })
+        with patch.object(mod, "get_service_client", return_value=service), patch.object(
+            mod, "get_settings", return_value=SimpleNamespace(scoring_policies_enabled=True)
+        ):
+            briefing = mod.exam_config(STUDENT)
+        self.assertEqual(briefing["negative_marking"], 0.5)
+        self.assertTrue(briefing["penalty_is_fraction"])
+        self.assertTrue(briefing["partial_credit"])
+        self.assertIsNone(briefing["active_session_id"])
+
+    def test_active_exam_briefing_keeps_frozen_pattern_and_policy(self):
+        service = _service(rules={"wrong_penalty": 0.5})
+        service.data["practice_sessions"] = [{
+            "id": "exam-1", "tenant_id": T, "student_id": STUDENT.user_id,
+            "mode": "exam", "status": "in_progress", "started_at": "2026-09-24T00:00:00Z",
+            "config": {"count": 20, "duration_minutes": 30, "negative_marking": 0.25},
+            "scoring_policy_snapshot": {"wrong_penalty": 0.1},
+        }]
+        with patch.object(mod, "get_service_client", return_value=service), patch.object(
+            mod, "get_settings", return_value=SimpleNamespace(scoring_policies_enabled=True)
+        ):
+            briefing = mod.exam_config(STUDENT)
+        self.assertEqual(briefing["active_session_id"], "exam-1")
+        self.assertEqual(briefing["questions"], 20)
+        self.assertEqual(briefing["duration_minutes"], 30)
+        self.assertEqual(briefing["negative_marking"], 0.1)
+        self.assertFalse(briefing["penalty_is_fraction"])
+
+    def test_exam_briefing_falls_back_to_institution_penalty(self):
+        with patch.object(mod, "get_service_client", return_value=_service()), patch.object(
+            mod, "get_settings", return_value=SimpleNamespace(scoring_policies_enabled=False)
+        ):
+            briefing = mod.exam_config(STUDENT)
+        self.assertEqual(briefing["negative_marking"], 0.25)
+        self.assertFalse(briefing["penalty_is_fraction"])
 
 
 if __name__ == "__main__":

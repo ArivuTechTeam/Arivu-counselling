@@ -6,7 +6,7 @@ import { AlertTriangle, RefreshCw } from "./icons";
  * fetch. Keep the page header above it; drop this into the body.
  */
 export function ErrorCard({
-  title = "Something went wrong",
+  title = "We couldn't complete this request",
   message,
   onRetry,
   className,
