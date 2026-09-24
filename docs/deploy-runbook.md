@@ -1,17 +1,23 @@
 # Deploy Runbook — quiz-generator-v1
 
-A practical, repeatable guide to getting this app live. Two deployables:
-**frontend (Next.js → Vercel)** and **backend (FastAPI → a host that runs
-uvicorn)**, both talking to one **Supabase** project.
+A practical, repeatable guide to getting this app live. The frontend runs on
+Vercel; Railway production has two independently deployed backend processes:
+the public FastAPI service (`quiz-generator`) and the private durable faculty-job
+worker (`quiz-generator-worker`). They share one Supabase project.
 
 > Backend note: there is no `vercel.json`, so the FastAPI backend is **not**
 > set up for Vercel serverless. It runs on a host that runs `uvicorn` directly
 > (zero adapter work) — **Render** and **Railway** both work; **confirmed live
-> on Railway as of 2026-09-04** (verified in the Railway dashboard: service
-> `quiz-generator`, project `ExamApp`, environment `production`, domain
+> on Railway as of 2026-09-24** (verified via the Railway CLI: service
+> `quiz-generator`, project `quiz-generator`, environment `production`, domain
 > `quiz-generator-production-7461.up.railway.app`). Render remains a valid
 > alternative if you're setting this up fresh, but isn't what's deployed today.
 > The frontend goes on Vercel.
+
+> **Production service inventory (verified 2026-09-24):** only
+> `quiz-generator` and `quiz-generator-worker` remain. The old daily
+> `quiz-generator-retention` service was deleted after migration 59 removed the
+> raw AI-log columns it cleaned. Do not recreate that cron for this schema.
 
 ## Deployment security gates
 
@@ -123,9 +129,11 @@ before enabling `EXTENDED_QUESTION_TYPES_ENABLED`. It adds three objective
 question-type enum values. `migration-60-student-contact.sql` creates the private
 student feedback and support inbox table; apply it before deploying the contact
 API. `migration-59-personal-data-minimization.sql` drops legacy raw AI
-prompt/response columns and extends account erasure; its application was
-reported by the operator on 2026-09-24, but should be verified from the
-production migration record before a future deployment. `migration-48-tenant-branding-metadata.sql` stores the original institution
+prompt/response columns and extends account erasure. The operator reported it
+applied on 2026-09-24; a read-only production API probe that day confirmed
+`api_call_logs.id` exists and `raw_request`/`raw_response` do not. That probe
+does not establish the complete migration history.
+`migration-48-tenant-branding-metadata.sql` stores the original institution
 logo filename for super-admin display, normalizes the legacy unused color
 default, and validates tenant brand colors. Earlier drafts of this runbook named
 migrations 31–34 `migration-31-chunked-document-generation.sql`,
@@ -254,7 +262,7 @@ function's owner and privileges match what it sets.
   can't regress even if Railway ever re-applies a plain string command.
 - **Python:** 3.12 (set by `FROM python:3.12-slim` in the Dockerfile).
 
-### Required companion Railway services
+### Required companion Railway service
 
 Durable generation must not run inside the web process. Add this service in
 the same Railway project/environment and share
@@ -269,6 +277,21 @@ restarts. Set `RAILWAY_DOCKERFILE_PATH=Dockerfile.worker` on the worker service.
 Railway shared/reference variables for the existing backend configuration and
 secrets rather than copying secret values between services.
 
+The API and worker are separate deployments. `scripts/deploy.sh` updates **only**
+`quiz-generator`; it does not update `quiz-generator-worker`. When a backend
+change affects worker code, shared job contracts, or settings, deploy the same
+verified `main` revision to the worker as a separate, explicitly scoped action.
+Confirm the worker uses `Dockerfile.worker`, has no public domain, and is healthy
+afterward. Do not mistake an API `/health` response for worker readiness; use
+the super-admin `/api/v1/platform/worker-health` check and a small queued-job
+smoke test. The obsolete retention cron is not a companion service.
+
+**Observed 2026-09-24:** the worker's latest successful deployment preceded
+the API deployment that day. Railway status alone does not prove the two are
+running the same code revision. Before a worker-sensitive release, compare the
+deployed revisions or redeploy both from the same verified commit; do not infer
+worker compatibility from the API health check.
+
 ### Advanced feature master switches
 
 Set the following on the API service. Set `FACULTY_JOBS_ENABLED=true` on the
@@ -279,6 +302,7 @@ there is no per-institution feature setup.
 | Variable | Recommended production value |
 |---|---|
 | `FACULTY_JOBS_ENABLED` | `true` after the worker service is running |
+| `EXTENDED_QUESTION_TYPES_ENABLED` | `false` until migration 61 and a coordinated API/worker rollout are verified; then enable only if the institution-facing feature is intended |
 | `QUIZ_REUSE_ENABLED` | `true` |
 | `BATCHES_ENABLED` | `true` |
 | `SCORING_POLICIES_ENABLED` | `true` |
@@ -348,7 +372,9 @@ explicitly in Railway only if the defaults need overriding.
 **Deploying a change (Railway):** merge to `main` first, then run
 `scripts/deploy.sh` from `main` (or `railway up backend --path-as-root
 --service quiz-generator` directly) — merging alone does not deploy, see
-Step 0. On first-ever setup (fresh Render project, or a from-scratch Railway
+Step 0. This command deploys the API only; assess worker compatibility and
+deploy the worker separately when its code or shared job contract changes. On
+first-ever setup (fresh Render project, or a from-scratch Railway
 project), copy the **backend URL** after the first deploy (e.g.
 `https://…onrender.com`); for the current Railway deploy, see the live URL in
 Notes/gotchas below.
@@ -396,9 +422,12 @@ hostname changes, then restart or redeploy the backend.
 3. Open `/login/<subdomain>` and follow student signup. Confirm institution
    branding and tenant-only Course + Level choices, then create a disposable
    student if the environment permits it.
-4. Log in as that student → Dashboard → **Smart Quiz** → take & submit → score shows.
-5. **Daily Challenge** → start → streak ticks. **Exam Simulator** → timer counts down.
+4. Log in as that student → Dashboard → **Practice & Mock Tests** → **Topic Practice** → take & submit → score shows.
+5. **Daily Challenge** → start → streak ticks. **Practice & Mock Tests** → **Mock Exam** → timer counts down.
 6. **Leaderboard** shows your course. **Revision** two tabs work.
+7. If durable faculty jobs are enabled, check worker health separately and
+   submit one small teacher generation/import job; verify it progresses from
+   queued to a completed review draft.
 
 If a page 500s, check the backend logs and that all env vars are set + migrations run.
 
