@@ -14,7 +14,11 @@ from app.lib.supabase import get_service_client
 from app.services.blueprint import generate_blueprint_quiz
 from app.services.faculty_jobs import validate_source
 from app.services.llm import LLMError
-from app.services.quiz_extraction import _extract_document_content, _prefix_pyq, _validate_import_candidates
+from app.services.quiz_extraction import (
+    _extract_document_content,
+    _validate_import_candidates,
+    pyq_insert_fields,
+)
 from app.services.quiz_generator_service import QuizGeneratorService
 from app.services.tenant_features import tenant_feature_enabled
 
@@ -42,6 +46,12 @@ def prepare_extraction(service, job: dict, profile: CurrentProfile) -> dict:
                .maybe_single().execute().data)
     if not document or not chapter:
         raise ValueError("Source or chapter unavailable")
+    # Paper analysis runs only when the tenant flag is on AND the teacher opted in
+    # for this upload ("Does this document contain PYQ/MTP/RTP?"). Otherwise this is
+    # exactly today's extraction.
+    paper_mode = getattr(get_settings(), "paper_bank_enabled", False) and bool(
+        request.get("analyze_papers")
+    )
     content = download_bytes(document["storage_path"])
     raw, provider = _extract_document_content(
         content=content,
@@ -49,6 +59,7 @@ def prepare_extraction(service, job: dict, profile: CurrentProfile) -> dict:
         tenant_id=profile.tenant_id,
         document_id=request["document_id"],
         job_id=job["id"],
+        paper_mode=paper_mode,
     )
     questions, receipt = _validate_import_candidates(raw)
     if not questions:
@@ -58,10 +69,32 @@ def prepare_extraction(service, job: dict, profile: CurrentProfile) -> dict:
         "title": chapter["name"], "variant_type": "mixed", "source": "extracted",
         "provider": provider, "import_summary": receipt,
         "overall_confidence": sum(confidences) / len(confidences) if confidences else None,
-        "questions": [{**q.model_dump(), "explanation": _prefix_pyq(q.explanation, q.is_pyq, q.year),
+        "questions": [{**q.model_dump(), **pyq_insert_fields(q, paper_mode),
                        "verification_status": "needs_teacher_review", "verification_warnings": q.verification_warnings}
                       for q in questions],
     }
+
+
+def _persist_pyq_columns(service, tenant_id: str, result: dict | None) -> None:
+    """After the atomic commit, write the PYQ columns for the created questions
+    (only when PYQ is on). Best-effort: the questions already exist, so a failure
+    here never fails a completed job - the teacher can still mark PYQ in review."""
+    if not getattr(get_settings(), "paper_bank_enabled", False):
+        return
+    for q in (result or {}).get("questions") or []:
+        if not q.get("paper_type") or not q.get("id"):
+            continue
+        try:
+            service.table("questions").update({
+                "paper_type": q.get("paper_type"),
+                "paper_year": q.get("paper_year") or q.get("year") or None,
+                "paper_exam": q.get("paper_exam") or None,
+                "paper_source_note": q.get("paper_source_note") or None,
+                "model_answer": q.get("model_answer") or None,
+                "answer_summary": q.get("answer_summary") or None,
+            }).eq("id", q["id"]).eq("tenant_id", tenant_id).execute()
+        except Exception:  # noqa: BLE001 - best-effort paper tagging
+            logger.warning("Could not tag paper columns for question %s", q.get("id"))
 
 
 def process_job(service, job: dict) -> dict:
@@ -86,7 +119,9 @@ def process_job(service, job: dict) -> dict:
         # A crash after preparation must not consume another model call.
         return service.rpc("finish_faculty_job", {"p_id": job["id"], "p_token": job["lease_token"]}).execute().data
     if job["kind"] == "extraction":
-        return commit(prepare_extraction(service, job, profile))
+        result = commit(prepare_extraction(service, job, profile))
+        _persist_pyq_columns(service, job["tenant_id"], result)
+        return result
     arguments = {key: request[key] for key in (
         "subject_id", "chapter_name", "selected_topics", "total_questions",
         "question_types", "type_counts", "cognitive_level", "difficulty",

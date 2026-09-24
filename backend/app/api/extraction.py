@@ -87,6 +87,7 @@ async def extract_quiz_endpoint(
     profile: CurrentProfile = Depends(get_current_profile),
     background: bool = Form(False),
     request_key: str | None = Form(None),
+    analyze_papers: bool = Form(False),
 ) -> dict:
     require_teacher(profile, action="extract quizzes")
 
@@ -211,7 +212,7 @@ async def extract_quiz_endpoint(
     if background is True:
         job = enqueue(profile, request_key, "extraction", {
             "document_id": document_id, "subject_id": subject_id, "chapter_id": chapter_id,
-            "content_hash": content_hash,
+            "content_hash": content_hash, "analyze_papers": bool(analyze_papers),
         })
         if job.get("source_document_id") != document_id:
             # Another identical submission won the atomic enqueue. Remove only
@@ -233,6 +234,7 @@ async def extract_quiz_endpoint(
             subject_id=subject_id,
             chapter_id=chapter_id,
             profile=profile,
+            analyze_papers=bool(analyze_papers),
         )
     except ValueError as exc:
         raise public_error(

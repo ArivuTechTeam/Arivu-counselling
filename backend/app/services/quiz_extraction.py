@@ -20,6 +20,7 @@ API layer maps those to HTTP status codes.
 from __future__ import annotations
 
 import logging
+from typing import Literal
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 
@@ -32,9 +33,11 @@ from app.lib.supabase import get_service_client
 from app.services.extraction import MIN_READABLE_PDF_TEXT_CHARS, extract_text, extract_text_with_pages
 from app.services.import_fidelity import inventory, question_chunks, reconcile
 from app.services.extraction_prompts import (
-    EXTRACTION_SYSTEM,
     EXTRACTION_USER_FILE,
+    PYQ_CONTEXT_SYSTEM,
     build_extraction_user_text,
+    build_pyq_context_user,
+    extraction_system,
 )
 from app.services.generation import GeneratedQuestion
 from app.services.ai_call_logging import ai_call_context
@@ -61,9 +64,20 @@ _TEXT_EXT = {"docx"}  # always extracted to text first
 class ExtractedQuestion(GeneratedQuestion):
     """A generated-question shape plus extraction-only metadata."""
 
+    # Extraction may additionally pull DESCRIPTIVE questions (paper mode only);
+    # generation never does, so this widening is extraction-scoped.
+    type: Literal[  # type: ignore[assignment]
+        "mcq_single", "mcq_multi", "true_false", "numerical", "fill_blank", "descriptive"
+    ]
     confidence: float | None = Field(default=None, ge=0, le=1)
-    is_pyq: bool = False
+    is_pyq: bool = False            # base contract (normal extraction / off path)
     year: str | None = None
+    # Paper-analysis mode (teacher opted in):
+    paper_type: str | None = None   # 'pyq' | 'mtp' | 'rtp'
+    exam: str | None = None
+    paper_source_note: str | None = None
+    model_answer: str | None = None    # descriptive: suggested answer from the document
+    answer_summary: str | None = None  # descriptive: AI key-point summary (for grading)
     source_number: str | None = None
     verification_status: str = "needs_teacher_review"
     verification_warnings: list[str] = Field(default_factory=list)
@@ -86,7 +100,16 @@ def _validate_import_candidates(raw: dict) -> tuple[list[ExtractedQuestion], dic
             question.verification_status = "needs_teacher_review"
             if not question.verification_warnings:
                 question.verification_warnings = ["Imported answer is unconfirmed; compare with the original paper before approval."]
-            question.check_shape()
+            if question.type == "descriptive":
+                # Descriptive questions have no auto-gradeable answer; they carry a
+                # model answer instead and are graded by AI later. Give correct_answer
+                # a non-null placeholder so the (NOT NULL) questions column accepts it.
+                if not (question.model_answer and question.model_answer.strip()):
+                    raise ValueError("Descriptive question has no model answer.")
+                if question.correct_answer is None:
+                    question.correct_answer = {"model_answer": question.model_answer}
+            else:
+                question.check_shape()
             if not question.question_text.strip():
                 raise ValueError("Question text is empty.")
             questions.append(question)
@@ -117,23 +140,76 @@ def _now() -> str:
 
 
 def _prefix_pyq(explanation: str | None, is_pyq: bool, year: str | None) -> str | None:
-    """v1: carry PYQ/year in the explanation text (no dedicated columns yet)."""
+    """v1: carry PYQ/year in the explanation text. Used ONLY when PYQ is off; with
+    PYQ on, year/exam live in dedicated columns and the explanation is left clean."""
     if not is_pyq:
         return explanation
     tag = f"[PYQ {year}]" if year else "[PYQ]"
     return f"{tag} {explanation}".strip() if explanation else tag
 
 
+def _pyq_on() -> bool:
+    return getattr(get_settings(), "paper_bank_enabled", False)
+
+
+def pyq_insert_fields(question, paper_mode: bool = False) -> dict:
+    """The explanation + paper columns for a question insert. Outside paper mode
+    (normal extraction / flag off / teacher said No) this is byte-identical to
+    today (legacy explanation-prefix, no paper columns). In paper mode the question
+    carries a classified paper_type and the paper_* columns are written."""
+    if not paper_mode:
+        return {"explanation": _prefix_pyq(question.explanation, question.is_pyq, question.year)}
+    paper_type = getattr(question, "paper_type", None) or ("pyq" if question.is_pyq else None)
+    return {
+        "explanation": question.explanation,
+        "paper_type": paper_type,
+        "paper_year": (question.year or None) if paper_type else None,
+        "paper_exam": (getattr(question, "exam", None) or None) if paper_type else None,
+        "paper_source_note": (getattr(question, "paper_source_note", None) or None) if paper_type else None,
+        "model_answer": (getattr(question, "model_answer", None) or None) if paper_type else None,
+        "answer_summary": (getattr(question, "answer_summary", None) or None) if paper_type else None,
+    }
+
+
+def detect_pyq_context(
+    text: str, *, tenant_id: str | None = None, document_id: str | None = None,
+    job_id: str | None = None,
+) -> dict | None:
+    """Best-effort document-level PYQ context for LARGE (chunked) papers, so a
+    banner/heading on the first or last page still reaches questions extracted from
+    other chunks. Scans only the head + tail (where such markers live). Returns
+    {"exam", "year"} or None; never raises - detection is a bonus, not a gate."""
+    head_tail = text[:6000] + ("\n...\n" + text[-4000:] if len(text) > 10000 else "")
+    try:
+        with ai_call_context(
+            "pyq_context", tenant_id=tenant_id, document_id=document_id, job_id=job_id
+        ):
+            raw, _provider = complete_json_with_fallback(
+                PYQ_CONTEXT_SYSTEM,
+                build_pyq_context_user(head_tail),
+                preferred_provider=getattr(
+                    get_settings(), "typed_quiz_extraction_provider", "deepseek"
+                ),
+            )
+        if not isinstance(raw, dict) or not raw.get("is_pyq_paper"):
+            return None
+        exam = (raw.get("exam") or "").strip() or None
+        year = (raw.get("year") or "").strip() or None
+        return {"exam": exam, "year": year} if (exam or year) else None
+    except Exception:  # noqa: BLE001 - detection is best-effort
+        return None
+
+
 def _vision_extract(
     mime_type: str, content: bytes, *, tenant_id: str | None = None,
-    document_id: str | None = None, job_id: str | None = None,
+    document_id: str | None = None, job_id: str | None = None, paper_mode: bool = False,
 ) -> tuple[dict, str]:
     """Read a scanned page/image with Gemini vision (the only path that can)."""
     with ai_call_context(
         "quiz_extraction", tenant_id=tenant_id, document_id=document_id, job_id=job_id
     ):
         raw = gemini_json_multimodal(
-            EXTRACTION_SYSTEM,
+            extraction_system(paper_mode),
             EXTRACTION_USER_FILE,
             files=[(mime_type, content)],
         )
@@ -158,7 +234,7 @@ def _merge_questions(results: list[dict]) -> list[dict]:
 
 def _extract_text_chunk(
     chunk: str, *, tenant_id: str | None = None, document_id: str | None = None,
-    job_id: str | None = None,
+    job_id: str | None = None, pyq_context: dict | None = None, paper_mode: bool = False,
 ) -> tuple[dict, str]:
     """Extract one text chunk, retrying once on a transient model error so a
     single blip doesn't fail the whole (multi-chunk) document."""
@@ -169,8 +245,8 @@ def _extract_text_chunk(
                 "quiz_extraction", tenant_id=tenant_id, document_id=document_id, job_id=job_id
             ):
                 return complete_json_with_fallback(
-                    EXTRACTION_SYSTEM,
-                    build_extraction_user_text(chunk),
+                    extraction_system(paper_mode),
+                    build_extraction_user_text(chunk, pyq_context),
                     preferred_provider=getattr(
                         get_settings(), "typed_quiz_extraction_provider", "deepseek"
                     ),
@@ -183,7 +259,7 @@ def _extract_text_chunk(
 
 def _text_extract(
     text: str, *, tenant_id: str | None = None, document_id: str | None = None,
-    job_id: str | None = None, page_spans: tuple = (),
+    job_id: str | None = None, page_spans: tuple = (), paper_mode: bool = False,
 ) -> tuple[dict, str]:
     """Parse locally extracted text with the configured text provider and fallback.
 
@@ -204,11 +280,12 @@ def _text_extract(
         if pages:
             item.update(page_start=min(pages), page_end=max(pages))
     if len(text) <= chunk_chars:
+        # Single call sees the whole paper, so no separate context pass is needed.
         with ai_call_context(
             "quiz_extraction", tenant_id=tenant_id, document_id=document_id, job_id=job_id
         ):
             raw, provider = complete_json_with_fallback(
-                EXTRACTION_SYSTEM,
+                extraction_system(paper_mode),
                 build_extraction_user_text(text),
                 preferred_provider=getattr(
                     settings, "typed_quiz_extraction_provider", "deepseek"
@@ -216,6 +293,12 @@ def _text_extract(
             )
         return reconcile(raw, source), provider
 
+    # Chunked (large paper): resolve the document-level paper context ONCE so a
+    # first/last-page marker reaches every chunk. Best-effort, only in paper mode.
+    pyq_context = (
+        detect_pyq_context(text, tenant_id=tenant_id, document_id=document_id, job_id=job_id)
+        if paper_mode else None
+    )
     chunks = _chunk_text(text, chunk_chars)
     workers = max(1, min(settings.extraction_chunk_concurrency, len(chunks)))
     with ThreadPoolExecutor(max_workers=workers) as pool:
@@ -224,7 +307,8 @@ def _text_extract(
         pairs = list(
             pool.map(
                 lambda chunk: _extract_text_chunk(
-                    chunk, tenant_id=tenant_id, document_id=document_id, job_id=job_id
+                    chunk, tenant_id=tenant_id, document_id=document_id,
+                    job_id=job_id, pyq_context=pyq_context, paper_mode=paper_mode,
                 ),
                 chunks,
             )
@@ -237,7 +321,7 @@ def _text_extract(
 
 def _extract_document_content(
     *, content: bytes, ext: str, tenant_id: str | None = None,
-    document_id: str | None = None, job_id: str | None = None,
+    document_id: str | None = None, job_id: str | None = None, paper_mode: bool = False,
 ) -> tuple[dict, str]:
     """Route by document nature, then extract model JSON + the provider used.
 
@@ -251,13 +335,15 @@ def _extract_document_content(
     # Images: vision is the only option.
     if ext in _IMAGE_MIME:
         return _vision_extract(
-            _IMAGE_MIME[ext], content, tenant_id=tenant_id, document_id=document_id, job_id=job_id
+            _IMAGE_MIME[ext], content, tenant_id=tenant_id, document_id=document_id,
+            job_id=job_id, paper_mode=paper_mode,
         )
 
     # DOCX: always has a text layer.
     if ext == "docx":
         return _text_extract(
-            extract_text(content, "docx"), tenant_id=tenant_id, document_id=document_id, job_id=job_id
+            extract_text(content, "docx"), tenant_id=tenant_id, document_id=document_id,
+            job_id=job_id, paper_mode=paper_mode,
         )
 
     # PDF: prefer the text path when it's a typed document; fall back to vision
@@ -270,7 +356,7 @@ def _extract_document_content(
         except Exception:  # noqa: BLE001 - unreadable text layer -> treat as scanned
             return _vision_extract(
                 "application/pdf", content, tenant_id=tenant_id,
-                document_id=document_id, job_id=job_id,
+                document_id=document_id, job_id=job_id, paper_mode=paper_mode,
             )
         pages = [{"page": span.page_number,
                   "text_characters": len(text[span.char_start:span.char_end].strip()),
@@ -291,12 +377,12 @@ def _extract_document_content(
         if use_vision:
             raw, provider = _vision_extract(
                 "application/pdf", content, tenant_id=tenant_id,
-                document_id=document_id, job_id=job_id,
+                document_id=document_id, job_id=job_id, paper_mode=paper_mode,
             )
         else:
             raw, provider = _text_extract(
                 text, tenant_id=tenant_id, document_id=document_id,
-                job_id=job_id, page_spans=extracted.page_spans,
+                job_id=job_id, page_spans=extracted.page_spans, paper_mode=paper_mode,
             )
         return {**raw, "source_manifest": {"pages": pages, "route": "vision" if use_vision else "text",
                 "sparse_pages": sparse, "coverage_verified": False}}, provider
@@ -310,8 +396,10 @@ def extract_quiz(
     subject_id: str,
     chapter_id: str,
     profile: CurrentProfile,
+    analyze_papers: bool = False,
 ) -> dict:
     service = get_service_client()
+    paper_mode = _pyq_on() and bool(analyze_papers)
 
     # 0) Authorise: the teacher must own the target subject (explicit assignment
     #    is authoritative — same rule the generator enforces).
@@ -391,6 +479,7 @@ def extract_quiz(
             tenant_id=profile.tenant_id,
             document_id=document_id,
             job_id=job_id,
+            paper_mode=paper_mode,
         )
 
         # 4) Validate per-question; skip malformed ones (teacher reviews the rest).
@@ -449,7 +538,7 @@ def extract_quiz(
                         "question_text": q.question_text,
                         "options": q.options,
                         "correct_answer": q.correct_answer,
-                        "explanation": _prefix_pyq(q.explanation, q.is_pyq, q.year),
+                        **pyq_insert_fields(q, paper_mode),
                         "difficulty": q.difficulty,
                         "marks": q.marks,
                         "source": "extracted",

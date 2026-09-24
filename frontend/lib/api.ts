@@ -379,6 +379,7 @@ export async function extractQuiz(
   subjectId: string,
   chapterId: string,
   force = false,
+  analyzePapers = false,
 ): Promise<ExtractResult | QueuedFacultyResponse> {
   const headers = await authHeader();
   const background = (await listFacultyJobs()).enabled;
@@ -387,6 +388,7 @@ export async function extractQuiz(
   form.append("subject_id", subjectId);
   form.append("chapter_id", chapterId);
   form.append("force", String(force));
+  form.append("analyze_papers", String(analyzePapers));
   if (background) {
     form.append("background", "true");
     form.append("request_key", crypto.randomUUID());
@@ -608,6 +610,10 @@ export type ReviewQuestion = {
   verification_warnings?: string[];
   figure_id?: string | null;
   figure?: DocumentFigure | null;
+  paper_type?: "pyq" | "mtp" | "rtp" | null;
+  paper_year?: string | null;
+  paper_exam?: string | null;
+  model_answer?: string | null;
 };
 
 export type QuizSetDetail = QuizSetSummary & {
@@ -675,10 +681,81 @@ export type InstitutionFeatureFlags = {
   scoring_policies: boolean;
   commerce_pack: boolean;
   figure_attach: boolean;
+  // Separate paper-bank (PYQ/MTP/RTP) rollout toggle; always present on the
+  // /me/profile response, optional here so the 6-key fallbacks stay valid.
+  paper_bank?: boolean;
 };
 
 export const getDashboardProfile = () =>
   jsonRequest<DashboardProfile>("/api/v1/me/profile", "GET");
+
+// --- Mock Test & PYQ student surface (KB-D): PYQ / MTP / RTP ---
+export type PaperType = "pyq" | "mtp" | "rtp";
+export type PaperSubject = { subject_id: string; subject_name: string; count: number };
+export type PaperFilters = {
+  total: number;
+  chapters: { chapter_id: string; chapter_name: string; count: number }[];
+  question_types: { type: string; count: number }[];
+};
+export type PaperTakeQuestion = {
+  id: string;
+  type: string;
+  question_text: string;
+  options?: { id: string; text: string }[] | null;
+  marks?: number;
+  exam?: string | null;
+  year?: string | null;
+};
+export type PaperResult = {
+  question_id: string;
+  type: string;
+  question_text: string;
+  options?: { id: string; text: string }[] | null;
+  student_answer: unknown;
+  correct_answer: unknown;
+  explanation?: string | null;
+  is_correct: boolean;
+  marks_awarded: number;
+};
+export type PaperScorecard = {
+  score: number;
+  total: number;
+  correct: number;
+  count: number;
+  results: PaperResult[];
+};
+export type PaperStart = {
+  paper_type: PaperType;
+  subject_id: string;
+  chapter_id?: string | null;
+  question_type?: string | null;
+  count: number;
+};
+
+export type PaperBankSummary = {
+  totals: { pyq: number; mtp: number; rtp: number; total: number };
+  subjects: { subject_id: string; subject_name: string; pyq: number; mtp: number; rtp: number; total: number }[];
+};
+export const getPaperBank = () =>
+  jsonRequest<PaperBankSummary>("/api/v1/papers/bank", "GET");
+
+export const listPaperSubjects = (paperType: PaperType) =>
+  jsonRequest<PaperSubject[]>(`/api/v1/papers/subjects?paper_type=${paperType}`, "GET");
+
+export const getPaperFilters = (paperType: PaperType, subjectId: string) =>
+  jsonRequest<PaperFilters>(
+    `/api/v1/papers/filters?paper_type=${paperType}&subject_id=${encodeURIComponent(subjectId)}`,
+    "GET",
+  );
+
+export const startPaperAttempt = (body: PaperStart) =>
+  jsonRequest<{ paper_type: PaperType; requested: number; available: number; questions: PaperTakeQuestion[] }>(
+    "/api/v1/papers/start", "POST", body,
+  );
+
+export const submitPaperAttempt = (
+  answers: { question_id: string; student_answer: unknown }[],
+) => jsonRequest<PaperScorecard>("/api/v1/papers/submit", "POST", { answers });
 
 async function listBoundedPages<T>(
   path: string,

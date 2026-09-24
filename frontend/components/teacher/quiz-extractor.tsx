@@ -21,6 +21,7 @@ import {
   listChapters,
 } from "@/lib/api";
 import { useCourses } from "@/lib/staff-queries";
+import { useDashboardIdentity } from "@/components/shared/dashboard-identity-context";
 
 const fieldClass =
   "h-10 w-full rounded-md border border-input bg-background px-3 text-sm shadow-sm transition-colors focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20";
@@ -86,6 +87,9 @@ export function QuizExtractor() {
   const [formHydrated, setFormHydrated] = useState(false);
 
   const [file, setFile] = useState<File | null>(null);
+  const [analyzePapers, setAnalyzePapers] = useState(false);
+  const { features } = useDashboardIdentity();
+  const paperBank = !!features?.paper_bank;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const displayError = error ?? coursesQuery.error?.message ?? null;
@@ -163,7 +167,7 @@ export function QuizExtractor() {
         const chapter = await createChapter(subjectId, newChapterName.trim());
         chapterId = chapter.id;
       }
-      const res = await extractQuiz(file, subjectId, chapterId, force);
+      const res = await extractQuiz(file, subjectId, chapterId, force, analyzePapers);
       window.sessionStorage.removeItem(EXTRACT_FORM_STORAGE_KEY);
       if ("background_job" in res) {
         setBusy(false);
@@ -327,6 +331,27 @@ export function QuizExtractor() {
         </div>
 
         {displayError && <InlineError message={displayError} />}
+
+        {paperBank && (
+          <label className="flex items-start gap-2.5 rounded-lg border border-input bg-background px-3 py-2.5 text-sm">
+            <input
+              type="checkbox"
+              className="mt-0.5 h-4 w-4 accent-primary"
+              checked={analyzePapers}
+              disabled={busy}
+              onChange={(e) => setAnalyzePapers(e.target.checked)}
+            />
+            <span>
+              <span className="font-medium text-foreground">
+                This document contains previous-year (PYQ), mock test (MTP), or revision (RTP) questions
+              </span>
+              <span className="mt-0.5 block text-xs text-muted-foreground">
+                When ticked, the AI classifies each question (year &amp; exam) and adds them to the student
+                Mock Test &amp; PYQ bank on publish. Leave unticked for a normal quiz.
+              </span>
+            </span>
+          </label>
+        )}
 
         {busy ? (
           <div className="flex items-center gap-2 rounded-lg border border-primary/20 bg-primary/5 px-3 py-2.5 text-sm text-primary">

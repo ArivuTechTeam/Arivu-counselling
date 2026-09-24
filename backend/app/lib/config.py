@@ -126,6 +126,15 @@ class Settings:
         # the switch remains a platform-wide emergency control.
         self.figure_attach_enabled = _boolean("FIGURE_ATTACH_ENABLED", False)
         self.figure_max_per_document = _positive_int("FIGURE_MAX_PER_DOCUMENT", 50)
+        # Paper knowledge base - PYQ / MTP / RTP (KB). Off by default: extraction,
+        # storage, review, publish, and the student dashboard are byte-identical.
+        # When on (and the teacher opts in per upload), extraction classifies the
+        # paper, published questions are snapshotted into the paper_questions bank,
+        # and students get the "Mock Test & PYQ" surface. Requires migrations 60-61.
+        # PYQ_ENABLED is accepted as a legacy alias during the transition.
+        self.paper_bank_enabled = _boolean("PAPER_BANK_ENABLED", False) or _boolean(
+            "PYQ_ENABLED", False
+        )
         self.app_env: str = os.getenv("APP_ENV", "production").strip().lower()
         if self.app_env not in {"production", "development", "test"}:
             raise RuntimeError("APP_ENV must be production, development, or test.")

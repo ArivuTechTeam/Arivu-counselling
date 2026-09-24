@@ -39,6 +39,7 @@ from app.api import (
     figures,
     paper_profiles,
     practice,
+    pyq,
     questions,
     quiz,
     student,
@@ -295,6 +296,7 @@ app.include_router(extraction.router)
 app.include_router(faculty_jobs.router)
 app.include_router(figures.router)
 app.include_router(practice.router)
+app.include_router(pyq.router)
 app.include_router(quiz.router)
 app.include_router(questions.router)
 app.include_router(student.router)
@@ -373,9 +375,13 @@ def read_my_profile(
             primary_color=profile.tenant_primary_color or "#2E8857",
         )
 
+    # Commerce platform capabilities plus the PYQ toggle (a separate rollout switch
+    # kept out of the tenant feature registry) so the UI can show/hide the PYQ tab.
+    features = effective_feature_flags(profile.tenant_feature_flags)
+    features["paper_bank"] = getattr(get_settings(), "paper_bank_enabled", False)
     return CurrentProfileOut(
         role=profile.role,
         must_change_password=profile.must_change_password,
         institution=institution,
-        features=effective_feature_flags(profile.tenant_feature_flags),
+        features=features,
     )
