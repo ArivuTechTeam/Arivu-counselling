@@ -138,11 +138,7 @@ def provision_catalog_subject(
     if result.course_name_collision or result.subject_name_collision:
         logger.warning(
             "Catalog provisioning preserved same-name free-form rows",
-            extra={
-                "tenant_id": tenant_id,
-                "catalog_subject_id": catalog_subject_id,
-                "course_name_collision": result.course_name_collision,
-                "subject_name_collision": result.subject_name_collision,
-            },
+            extra={"course_name_collision": result.course_name_collision,
+                   "subject_name_collision": result.subject_name_collision},
         )
     return result

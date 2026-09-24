@@ -254,8 +254,8 @@ const NAV: Record<string, NavItem[]> = {
       icon: BookOpen,
     },
     {
-      label: "Smart Quiz",
-      href: "/dashboard/student/smart-quiz",
+      label: "Practice & Mock Tests",
+      href: "/dashboard/student/practice",
       section: "Practice",
       icon: Zap,
     },
@@ -276,12 +276,6 @@ const NAV: Record<string, NavItem[]> = {
       href: "/dashboard/student/challenge",
       section: "Practice",
       icon: UserCheck,
-    },
-    {
-      label: "Exam Simulator",
-      href: "/dashboard/student/exam",
-      section: "Practice",
-      icon: FileText,
     },
     {
       label: "Leaderboard",

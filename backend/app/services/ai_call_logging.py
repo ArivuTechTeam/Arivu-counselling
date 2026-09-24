@@ -1,4 +1,4 @@
-"""Non-blocking, super-admin-only observability for raw AI provider calls."""
+"""Non-blocking, metadata-only observability for AI provider calls."""
 
 from __future__ import annotations
 
@@ -120,7 +120,7 @@ def log_ai_call(
     *, provider: str, model: str, request: dict, response: dict | None,
     was_fallback: bool, started_at: float, error_message: str | None = None,
 ) -> None:
-    """Queue a best-effort raw-provider log without delaying the actual request."""
+    """Queue cost/health metadata without persisting prompts or responses."""
     if not _logging_enabled():
         return
     input_tokens, output_tokens, cached_tokens, thinking_tokens = _usage(provider, response)
@@ -146,8 +146,6 @@ def log_ai_call(
         "thinking_tokens": thinking_tokens,
         "cost_usd": str(cost_usd) if cost_usd is not None else None,
         "cost_inr": str(cost_inr) if cost_inr is not None else None,
-        "raw_request": request,
-        "raw_response": response,
         "latency_ms": max(0, round((time.perf_counter() - started_at) * 1000)),
         "status": "error" if error_message else "success",
         "error_message": error_message,

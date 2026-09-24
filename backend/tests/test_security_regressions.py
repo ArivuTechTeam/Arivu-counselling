@@ -428,6 +428,14 @@ class SecretSafetyTests(unittest.TestCase):
         self.assertNotIn("exc_info=True", source)
         self.assertNotIn("%r", source)
 
+    def test_background_jobs_do_not_persist_raw_exception_text(self) -> None:
+        root = Path(__file__).resolve().parents[2]
+        source = "\n".join(
+            path.read_text() for path in (root / "backend" / "app").rglob("*.py")
+        )
+        self.assertNotRegex(source, r"error_message\s*=\s*str\(exc\)")
+        self.assertNotRegex(source, r'["\']error_message["\']\s*:\s*str\(exc\)')
+
 
 class _RowsQuery:
     def __init__(self, rows: list[dict]) -> None:

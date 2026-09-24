@@ -352,7 +352,8 @@ class SynthesizeTests(unittest.TestCase):
             bp = synth.synthesize(document_id="d1", tenant_id="t1", profile=profile)
         self.assertEqual(limit.call_count, 2)
         self.assertEqual(bp["topics"][0]["topic_name"], "A")
-        self.assertIn("provider timed out", "\n".join(logs.output))
+        self.assertIn("failed (LLMError)", "\n".join(logs.output))
+        self.assertNotIn("provider timed out", "\n".join(logs.output))
 
     def test_merge_plan_preserves_full_verbatim_material_server_side(self) -> None:
         first = _topic(

@@ -72,16 +72,8 @@ function OnboardForm({ onDone }: { onDone: () => void | Promise<void> }) {
     "free",
     (value): value is string => typeof value === "string",
   );
-  const [adminName, setAdminName] = useSessionStorageState(
-    "super-admin-onboard-admin-name",
-    "",
-    (value): value is string => typeof value === "string",
-  );
-  const [adminEmail, setAdminEmail] = useSessionStorageState(
-    "super-admin-onboard-admin-email",
-    "",
-    (value): value is string => typeof value === "string",
-  );
+  const [adminName, setAdminName] = useState("");
+  const [adminEmail, setAdminEmail] = useState("");
   const [adminPassword, setAdminPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [busy, setBusy] = useState(false);

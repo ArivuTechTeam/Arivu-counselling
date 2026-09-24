@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import { PGlite } from "../.tmp/pg-test/node_modules/@electric-sql/pglite/dist/index.js";
 
-process.on("uncaughtException", error => { console.error(error.message); process.exit(1); });
+process.on("uncaughtException", () => { console.error("Database migration test failed."); process.exit(1); });
 
 const db = new PGlite();
 const schema = fs.readFileSync("migrations/schema.sql", "utf8");

@@ -278,13 +278,7 @@ def spot_check_verbatim_facts(
             if _fact_matches_source(str(fact), source):
                 matched += 1
             else:
-                logger.warning(
-                    "Consolidated fact failed verbatim spot-check "
-                    "(topic=%s, fact_index=%d, source_ranges=%s)",
-                    str(topic.get("topic_name") or "")[:120],
-                    fact_index,
-                    ranges,
-                )
+                logger.warning("Consolidated fact failed verbatim spot-check")
         if checked >= sample_size:
             break
     return {"checked": checked, "matched": matched, "warnings": checked - matched}
@@ -393,9 +387,9 @@ class MasterBlueprintSynthesizer:
             except (LLMError, ValidationError) as exc:
                 last_error = exc
                 logger.warning(
-                    "Blueprint consolidation attempt %d of 2 failed: %s",
+                    "Blueprint consolidation attempt %d of 2 failed (%s)",
                     attempt + 1,
-                    exc,
+                    type(exc).__name__,
                 )
         raise last_error or LLMError("Blueprint synthesis failed.")
 

@@ -101,13 +101,9 @@ export function QuizExtractor() {
         const saved = JSON.parse(raw) as {
           subjectId?: string;
           chapterSel?: string;
-          newChapterName?: string;
-          fileName?: string | null;
         };
         setSubjectId(saved.subjectId || "");
         setChapterSel(saved.chapterSel || "");
-        setNewChapterName(saved.newChapterName || "");
-        setRememberedFileName(saved.fileName || null);
       }
     } catch {
       try {
@@ -128,8 +124,6 @@ export function QuizExtractor() {
         JSON.stringify({
           subjectId,
           chapterSel,
-          newChapterName,
-          fileName: file?.name || rememberedFileName,
         }),
       );
     } catch {
@@ -139,9 +133,6 @@ export function QuizExtractor() {
     formHydrated,
     subjectId,
     chapterSel,
-    newChapterName,
-    file,
-    rememberedFileName,
   ]);
 
   // Reload chapters for both a freshly chosen and a refresh-restored subject.

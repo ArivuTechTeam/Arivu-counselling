@@ -358,10 +358,10 @@ export default function StudentSubjectsPage() {
           message="Choose a course and level during signup, or ask your institution administrator to correct your enrollment."
           action={
             <button
-              onClick={() => router.push("/dashboard/student/smart-quiz")}
+              onClick={() => router.push("/dashboard/student/practice?mode=topic")}
               className="rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground shadow-sm transition-colors hover:bg-primary/90"
             >
-              Try a Smart Quiz
+              Try Topic Practice
             </button>
           }
         />

@@ -42,6 +42,7 @@ from app.api import (
     questions,
     quiz,
     student,
+    student_contact,
     super_admin,
     teacher,
     topics,
@@ -115,7 +116,7 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type", "X-Request-ID"],
-    expose_headers=["X-Request-ID", "Retry-After", "Server-Timing"],
+    expose_headers=["X-Request-ID", "X-Error-Code", "Retry-After", "Server-Timing"],
 )
 
 # Dashboard and quiz payloads are JSON-heavy. Compress responses over 1 KiB;
@@ -298,6 +299,7 @@ app.include_router(practice.router)
 app.include_router(quiz.router)
 app.include_router(questions.router)
 app.include_router(student.router)
+app.include_router(student_contact.router)
 app.include_router(teacher.router)
 app.include_router(topics.router)
 
@@ -363,8 +365,7 @@ def read_my_profile(
                 logo_url = signed_url(profile.tenant_logo_path, expires_in=3600)
             except Exception as exc:  # noqa: BLE001
                 logger.warning(
-                    "Dashboard logo URL could not be created tenant=%s error_type=%s",
-                    profile.tenant_id,
+                    "Dashboard logo URL could not be created (%s)",
                     type(exc).__name__,
                 )
         institution = InstitutionIdentityOut(

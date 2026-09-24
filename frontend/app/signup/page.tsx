@@ -207,12 +207,6 @@ export default function SignupPage() {
     });
     setLoading(false);
     if (error) {
-      // Supabase recommends branching on stable Auth error codes. Log only
-      // non-sensitive diagnostics and keep arbitrary provider text out of the UI.
-      console.error("Student signup failed", {
-        code: error.code ?? "unknown",
-        status: error.status ?? "unknown",
-      });
       setError(signupErrorMessage(error));
       return;
     }

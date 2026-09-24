@@ -12,7 +12,7 @@ From `backend/.env` + `app/lib/config.py` defaults on the reviewed branch:
 | `FIGURE_ATTACH_ENABLED` | **true** | Figure extraction + attachment active (Phases 1–2). |
 | `QUIZ_REUSE_ENABLED` | **true** | Safe-reuse release locks + atomic publish (migration 51 after integration renumbering). |
 | `FACULTY_WORKER_STALE_SECONDS` | 120 (default) | Backlog older than this with no live worker lease = "stalled" (P6.0 item 2). |
-| `AI_LOG_RAW_RETENTION_DAYS` | 30 (default) | Raw AI-log payloads blanked after 30 days (P6.0 item 4). |
+| AI log payload policy | metadata only | Migration 59 removes raw request/response columns; no retention cron is required. |
 | `CHUNKING_TRIGGER_CHARS` / `GENERATION_MAX_TEXT_CHARS` | 100000 (default) | Documents beyond this use the chunked map-reduce analysis path. |
 
 ## 2. Execution inventory — there are TWO parallel background mechanisms
@@ -59,7 +59,7 @@ Frontend timeouts (`frontend/lib/api.ts`): generation/upload **15 min**, extract
 | 1 — Approve-all covers valid pending/flagged | Done |
 | 2 — Worker supervision (detect stalled + auto-restart) | Done |
 | 3 — Figure storage hygiene (erase on account deletion; re-analyze already idempotent) | Done |
-| 4 — AI-log raw-payload redaction after 30 days | Done |
+| 4 — AI-log payload minimization | Done — migration 59 drops raw payload columns; no retention cron remains. |
 | 5 — This inventory + timeout root cause | Done |
 
 Next: **P6.1 — batches + assignments** (phase 2 of 8).

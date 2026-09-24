@@ -34,14 +34,14 @@ existing = (
 ).data
 if existing:
     course_id = existing[0]["id"]
-    print(f"course exists: {COURSE_NAME} = {course_id}")
+    print("Configured course already exists")
 else:
     course_id = (
         service.table("courses")
         .insert({"tenant_id": tenant_id, "name": COURSE_NAME})
         .execute()
     ).data[0]["id"]
-    print(f"created course: {COURSE_NAME} = {course_id}")
+    print("Configured course created")
 
 # 2) Operational level (idempotent by name within the course)
 existing_level = (
@@ -115,4 +115,4 @@ else:
     ).execute()
     print(f"student enrolled in {COURSE_NAME}")
 
-print(f"\nDONE. course_id={course_id}")
+print("Seed completed")

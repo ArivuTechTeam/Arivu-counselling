@@ -27,11 +27,11 @@ Environment templates:
 - Backend: `backend/.env.example`
 - Frontend: `frontend/.env.local.example`
 
-Deployment and security details are documented in `docs/deploy-runbook.md` and
-`docs/api-security-hardening.md`. The collection, disclosure, processor and
-deletion map is in `docs/personal-data-audit.md`.
-
-Start with `docs/README.md` for the current documentation map. In particular,
-`docs/current-ai-document-workflow.md` describes DeepSeek-first text routing,
-Gemini vision/fallback, durable retry/checkpoint behavior, and current cost
-controls; older decision briefs and dated changelogs are historical.
+Start with [`docs/README.md`](docs/README.md) for the current documentation
+map. Deployment and security guidance live in
+[`docs/deploy-runbook.md`](docs/deploy-runbook.md) and
+[`docs/api-security-hardening.md`](docs/api-security-hardening.md); the
+collection, disclosure, processor, and deletion map is in
+[`docs/personal-data-audit.md`](docs/personal-data-audit.md). Migration 59 was
+reported applied on 2026-09-24; retain its deployment record because it removes
+previously stored AI prompt/response payloads.
