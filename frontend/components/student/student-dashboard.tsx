@@ -101,12 +101,6 @@ const CalendarIcon = () => (
     <path d="M16 2v4M8 2v4M3 10h18" />
   </Icon>
 );
-const ClockIcon = () => (
-  <Icon>
-    <circle cx="12" cy="12" r="10" />
-    <path d="M12 6v6l4 2" />
-  </Icon>
-);
 const UsersIcon = () => (
   <Icon>
     <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
@@ -137,9 +131,9 @@ const FEATURES: {
   icon: React.ReactNode;
 }[] = [
   {
-    href: "/dashboard/student/smart-quiz",
-    title: "Smart Quiz",
-    desc: "Random questions, any time",
+    href: "/dashboard/student/practice",
+    title: "Practice & Mock Tests",
+    desc: "Focus on a topic or take a timed mock",
     chip: "bg-amber-500/10 text-amber-600",
     icon: <BoltIcon />,
   },
@@ -149,13 +143,6 @@ const FEATURES: {
     desc: "Keep your streak alive",
     chip: "bg-emerald-500/10 text-emerald-600",
     icon: <CalendarIcon />,
-  },
-  {
-    href: "/dashboard/student/exam",
-    title: "Exam Simulator",
-    desc: "A full, timed mock",
-    chip: "bg-rose-500/10 text-rose-500",
-    icon: <ClockIcon />,
   },
   {
     href: "/dashboard/student/challenge",

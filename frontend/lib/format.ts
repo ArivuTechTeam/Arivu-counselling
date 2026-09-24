@@ -50,12 +50,21 @@ const VARIANT_LABEL: Record<string, string> = {
   theory: "Theory",
   practical: "Practical",
   mixed: "Mixed",
+  smart: "Topic Practice",
+  exam: "Mock Exam",
 };
 
 /** "practical" → "Practical". Falls back to Title Case for unknowns. */
 export function variantLabel(v: string | null | undefined): string {
   if (!v) return "Quiz";
   return VARIANT_LABEL[v] ?? statusLabel(v);
+}
+
+/** Keep historical practice records readable after the student-facing merge. */
+export function practiceTitle(title: string | null | undefined): string {
+  if (title === "Smart practice") return "Topic Practice";
+  if (title === "Exam practice") return "Mock Exam";
+  return title || "Quiz";
 }
 
 /**

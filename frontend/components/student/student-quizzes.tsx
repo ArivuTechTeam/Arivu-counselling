@@ -127,7 +127,7 @@ export function StudentQuizzes() {
               </p>
               <div className="mt-4 flex flex-wrap gap-2">
                 <Button asChild size="sm">
-                  <Link href="/dashboard/student/smart-quiz">Start a Smart Quiz</Link>
+                  <Link href="/dashboard/student/practice?mode=topic">Start Topic Practice</Link>
                 </Button>
                 <Button asChild size="sm" variant="outline">
                   <Link href="/dashboard/student/subjects">Practice by subject</Link>
@@ -137,10 +137,10 @@ export function StudentQuizzes() {
           ) : toAttend.length === 0 ? (
             <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-dashed p-4">
               <p className="text-sm text-muted-foreground">
-                You&apos;re all caught up — keep practising with a Smart Quiz.
+                You&apos;re all caught up — keep practising with Topic Practice.
               </p>
               <Button asChild size="sm" variant="outline">
-                <Link href="/dashboard/student/smart-quiz">Start a Smart Quiz</Link>
+                <Link href="/dashboard/student/practice?mode=topic">Start Topic Practice</Link>
               </Button>
             </div>
           ) : (
