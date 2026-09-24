@@ -121,11 +121,6 @@ class Settings:
         # this with no live worker lease, the worker is treated as stalled/absent
         # (surfaced by the deployment preflight and super-admin worker-health).
         self.faculty_worker_stale_seconds = _positive_int("FACULTY_WORKER_STALE_SECONDS", 120)
-        # AI-call logs keep tiny cost/token metadata forever, but the large raw
-        # prompt/response payloads (which contain uploaded document text) are
-        # blanked after this many days by the retention job. Privacy + cost; no
-        # row or metadata is deleted. See app/services/ai_log_retention.py.
-        self.ai_log_raw_retention_days = _positive_int("AI_LOG_RAW_RETENTION_DAYS", 30)
         # Document-figure support (Phase 1: extract captioned figures during
         # analysis). Production enables it after the private bucket is ready;
         # the switch remains a platform-wide emergency control.

@@ -310,7 +310,11 @@ class RunTests(unittest.TestCase):
         self.assertEqual(result, {"total": 3, "succeeded": 2, "failed": 1})
         rows = {r["chunk_index"]: r for r in fake.db["document_chunks"]}
         self.assertEqual(rows[1]["map_status"], "failed")
-        self.assertIn("boom", rows[1]["error_message"])
+        self.assertEqual(
+            rows[1]["error_message"],
+            "Chunk analysis failed. Retry the operation.",
+        )
+        self.assertNotIn("boom", rows[1]["error_message"])
         self.assertEqual(rows[1]["attempts"], 1)  # claimed once (then retried in-call)
         self.assertEqual(rows[0]["map_status"], "succeeded")
         self.assertEqual(rows[2]["map_status"], "succeeded")

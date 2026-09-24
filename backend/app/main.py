@@ -363,8 +363,7 @@ def read_my_profile(
                 logo_url = signed_url(profile.tenant_logo_path, expires_in=3600)
             except Exception as exc:  # noqa: BLE001
                 logger.warning(
-                    "Dashboard logo URL could not be created tenant=%s error_type=%s",
-                    profile.tenant_id,
+                    "Dashboard logo URL could not be created (%s)",
                     type(exc).__name__,
                 )
         institution = InstitutionIdentityOut(

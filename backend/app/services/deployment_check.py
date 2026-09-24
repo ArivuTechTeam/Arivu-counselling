@@ -28,23 +28,6 @@ def inspect_deployment(service, settings, migration_dir: Path) -> dict:
     probe("attempt_snapshots", "quiz_attempts", "id,question_snapshot")
     probe("analysis_jobs", "quiz_generation_jobs", "id,status,phase,params")
     probe("ai_call_logging", "api_call_logs", "id,tenant_id,job_id,input_tokens,output_tokens")
-    try:
-        from datetime import datetime, timedelta, timezone
-        days = getattr(settings, "ai_log_raw_retention_days", 30)
-        cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
-        stale = (service.table("api_call_logs").select("id", count="exact")
-                 .lt("created_at", cutoff).is_("raw_request->>redacted", "null")
-                 .limit(1).execute())
-        backlog = getattr(stale, "count", None) or 0
-        if backlog > 0:
-            checks.append({"name": "ai_log_retention", "status": "warning",
-                           "detail": f"{backlog} AI-call log(s) older than {days}d still hold raw payloads. "
-                                     "Schedule 'python -m app.services.ai_log_retention'."})
-        else:
-            checks.append({"name": "ai_log_retention", "status": "pass"})
-    except Exception:
-        checks.append({"name": "ai_log_retention", "status": "unverified",
-                       "detail": "Could not assess AI-log retention backlog."})
     if settings.faculty_jobs_enabled:
         probe("faculty_queue_schema", "faculty_jobs",
               "id,tenant_id,status,lease_token,lease_expires_at,checkpoint")

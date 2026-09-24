@@ -405,9 +405,7 @@ create index idx_genjobs_tenant on quiz_generation_jobs(tenant_id);
 create index idx_genjobs_document on quiz_generation_jobs(document_id);
 create index idx_genjobs_status on quiz_generation_jobs(status);
 
--- Raw provider requests/responses are written only by the trusted backend and
--- read through super-admin API routes; they are intentionally never exposed to
--- browser roles through the Data API.
+-- Metadata-only provider telemetry. Prompts and responses are never stored.
 create table api_call_logs (
   id uuid primary key default gen_random_uuid(),
   tenant_id uuid references tenants(id) on delete set null,
@@ -423,8 +421,6 @@ create table api_call_logs (
   thinking_tokens integer,
   cost_usd numeric(18, 8),
   cost_inr numeric(18, 8),
-  raw_request jsonb not null,
-  raw_response jsonb,
   latency_ms integer not null,
   status text not null check (status in ('success', 'error')),
   error_message text,

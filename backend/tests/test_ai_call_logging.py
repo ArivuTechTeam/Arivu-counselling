@@ -66,6 +66,8 @@ class LoggingPayloadTests(unittest.TestCase):
         self.assertEqual(written[0]["cached_tokens"], 2)
         self.assertEqual(written[0]["thinking_tokens"], 3)
         self.assertEqual(written[0]["document_id"], "d1")
+        self.assertNotIn("raw_request", written[0])
+        self.assertNotIn("raw_response", written[0])
 
     def test_deepseek_usage_mapping(self) -> None:
         self.assertEqual(
@@ -131,13 +133,10 @@ class ApiLogsEndpointTests(unittest.TestCase):
                 "/api/v1/platform/api-logs?provider=gemini&page=1&page_size=50"
             ).json()
         self.assertEqual(body["total"], 1)
-        self.assertEqual(body["items"][0]["document_name"], "paper.pdf")
-        with patch.object(api_logs, "get_service_client", return_value=service):
-            detail = self._client("super_admin").get("/api/v1/platform/api-logs/l1")
-            grouped = self._client("super_admin").get(
-                "/api/v1/platform/api-logs/by-document/d1"
-            )
-        self.assertEqual(detail.status_code, 200)
-        self.assertEqual(detail.json()["raw_response"], {"ok": True})
-        self.assertEqual(grouped.status_code, 200)
-        self.assertEqual(grouped.json()["summary"]["call_count"], 1)
+        exposed = body["items"][0]
+        self.assertEqual(exposed["provider"], "gemini")
+        for forbidden in (
+            "id", "tenant_id", "document_id", "document_name", "job_id",
+            "raw_request", "raw_response",
+        ):
+            self.assertNotIn(forbidden, exposed)

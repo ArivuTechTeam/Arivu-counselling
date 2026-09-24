@@ -343,7 +343,7 @@ def _attach_source_figures(service, tenant_id: str, source_document_id, result) 
             questions=result.get("questions") or [],
         )
     except Exception:  # noqa: BLE001 - figure linking is a non-critical enhancement
-        logger.warning("Figure attachment step skipped for document %s", source_document_id)
+        logger.warning("Figure attachment step skipped")
 
 
 def _get_or_create(service, table: str, tenant_id: str, match: dict, insert: dict) -> str:

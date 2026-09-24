@@ -71,7 +71,7 @@ Grouped by theme, each with severity for the two-tenant Phase-1 launch.
 
 **E. Productization / onboarding (BLOCKER for "SaaS").** No repeatable tenant provisioning; no "Commerce Vertical Pack" instantiation; risk of per-tenant hardcoding. Onboarding academy #2 is undefined.
 
-**F. Reliability / security / privacy (BLOCKER for production).** Worker is a separate process with **no supervision** (silent `queued` hang — we hit this live); AI logs store **raw request/response unredacted** (source text/PII) with no retention policy; figure storage orphans + 10-min signed-URL expiry; no health/readiness/alerting on queue depth or worker heartbeat.
+**F. Reliability / security / privacy (BLOCKER for production).** Historical finding: AI logs once stored raw request/response payloads. Current code is metadata-only and migration 59 drops those columns (operator-reported applied 2026-09-24). Remaining gates include worker supervision, figure-storage hygiene, health/readiness/alerting, and provider-side retention verification.
 
 **G. Reporting (HIGH).** No batch-level analytics, no first-attempt-vs-retry separation, no policy-aware aggregation, no per-paper exam-readiness.
 

@@ -273,7 +273,26 @@ def main() -> int:
         "actual_external_ai_http_attempt_count": len(http_attempts),
         "elapsed_seconds": round(time.monotonic() - started, 2),
     }
-    print(json.dumps(evidence, ensure_ascii=False, indent=2, default=str))
+    # Never print source text, filenames, prompts, questions, or answers. This
+    # command may run in CI where stdout is retained by a third party.
+    safe_evidence = {
+        key: evidence[key]
+        for key in (
+            "raw_topic_count",
+            "consolidated_topic_count",
+            "selected_material_characters",
+            "late_fact_present_in_generation_material",
+            "fact_question_overlap_words",
+            "verbatim_spot_check",
+            "deepseek_reduce_verification",
+            "requested_question_type_counts",
+            "generated_question_type_counts",
+            "logical_ai_call_count",
+            "actual_external_ai_http_attempt_count",
+            "elapsed_seconds",
+        )
+    }
+    print(json.dumps(safe_evidence, indent=2, default=str))
     return 0
 
 

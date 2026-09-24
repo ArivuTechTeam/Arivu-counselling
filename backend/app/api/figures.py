@@ -170,7 +170,7 @@ def get_figure_image(
         png = download_bytes(data["storage_path"], bucket=FIGURES_BUCKET)
     except Exception as exc:  # noqa: BLE001 - a storage miss is a 404 to the client
         logger.warning(
-            "Figure image fetch failed for %s (%s)", figure_id, type(exc).__name__
+            "Figure image fetch failed (%s)", type(exc).__name__
         )
         raise HTTPException(status_code=404, detail="Figure image unavailable.") from exc
     return Response(

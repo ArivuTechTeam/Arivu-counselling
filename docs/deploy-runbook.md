@@ -112,10 +112,14 @@ migration-55-course-exam-standard.sql
 migration-56-paper-profiles.sql
 migration-57-tenant-feature-rollout.sql
 migration-58-commerce-platform-defaults.sql
+migration-59-personal-data-minimization.sql
 ```
 
 (Filenames above verified 2026-09-24 against `migrations/`, through migration
-58. `migration-48-tenant-branding-metadata.sql` stores the original institution
+59. `migration-59-personal-data-minimization.sql` drops legacy raw AI
+prompt/response columns and extends account erasure; its application was
+reported by the operator on 2026-09-24, but should be verified from the
+production migration record before a future deployment. `migration-48-tenant-branding-metadata.sql` stores the original institution
 logo filename for super-admin display, normalizes the legacy unused color
 default, and validates tenant brand colors. Earlier drafts of this runbook named
 migrations 31–34 `migration-31-chunked-document-generation.sql`,
@@ -246,19 +250,16 @@ function's owner and privileges match what it sets.
 
 ### Required companion Railway services
 
-Durable generation and automatic log retention must not run inside the web
-process. Add these services in the same Railway project/environment and share
+Durable generation must not run inside the web process. Add this service in
+the same Railway project/environment and share
 the backend variables with them:
 
 | Service | Root | Dockerfile | Schedule / behavior |
 |---|---|---|---|
 | `quiz-generator-worker` | `backend` | `Dockerfile.worker` | Always running; no public domain |
-| `quiz-generator-retention` | `backend` | `Dockerfile.retention` | Railway Cron `0 2 * * *` (daily at 02:00 UTC); no public domain |
 
 Run only one worker initially. The database queue keeps jobs durable across
-restarts. The retention service is one-shot and exits after each cron run.
-Set `RAILWAY_DOCKERFILE_PATH=Dockerfile.worker` on the worker service and
-`RAILWAY_DOCKERFILE_PATH=Dockerfile.retention` on the retention service. Use
+restarts. Set `RAILWAY_DOCKERFILE_PATH=Dockerfile.worker` on the worker service. Use
 Railway shared/reference variables for the existing backend configuration and
 secrets rather than copying secret values between services.
 
@@ -280,7 +281,6 @@ there is no per-institution feature setup.
 | `FACULTY_JOBS_POLL_SECONDS` | `3` |
 | `FACULTY_WORKER_STALE_SECONDS` | `120` |
 | `FIGURE_MAX_PER_DOCUMENT` | `50` |
-| `AI_LOG_RAW_RETENTION_DAYS` | `30` |
 
 **Environment variables** (from `backend/.env.example`). The connection and
 AI provider variables were confirmed present on the live Railway service as

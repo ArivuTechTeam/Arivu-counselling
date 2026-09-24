@@ -130,7 +130,7 @@ class GenerationJobRunner:
     def run(self, *, job_id: str, tenant_id: str | None = None) -> dict:
         job = self._load_job(job_id, tenant_id)
         if not job:
-            logger.warning("Generation job %s not found; skipping.", job_id)
+            logger.warning("Generation job not found; skipping")
             return {"status": "missing"}
 
         tenant_id = job["tenant_id"]
@@ -163,7 +163,7 @@ class GenerationJobRunner:
                     self._client, tenant_id=tenant_id, document_id=document_id
                 )
             except Exception:  # noqa: BLE001
-                logger.warning("Figure extraction step failed for job %s", job_id)
+                logger.warning("Figure extraction step failed")
 
             # Typed PDFs with a reliable index can be analysed deterministically.
             # This optional optimization is never required by the universal path.
@@ -242,12 +242,20 @@ class GenerationJobRunner:
                             document_title=title,
                             response_checkpoint=save_response,
                         )
+                completed_params = {
+                    key: value
+                    for key, value in params.items()
+                    if key not in {
+                        "single_call_response_checkpoint",
+                        "single_call_response_received_at",
+                    }
+                }
                 self._update(
                     job_id,
                     tenant_id,
                     master_blueprint=blueprint,
                     params={
-                        **params,
+                        **completed_params,
                         "analysis_mode": "single_call_ai_outline",
                         "single_call_checkpoint_status": "processed",
                     },
@@ -366,9 +374,15 @@ class GenerationJobRunner:
                 "failed": map_res["failed"],
             }
         except Exception as exc:  # noqa: BLE001 - record failure, allow retry
-            logger.warning("Generation job %s failed: %s", job_id, type(exc).__name__)
+            logger.warning("Generation job failed (%s)", type(exc).__name__)
             self._update(
-                job_id, tenant_id, status="failed", error_message=str(exc)[:500]
+                job_id,
+                tenant_id,
+                status="failed",
+                # SDK exception strings can contain response bodies or URLs
+                # with credentials in query parameters. Persist only a stable,
+                # user-safe message; the exception class is already in logs.
+                error_message="Generation failed. Retry the operation.",
             )
             raise
 
@@ -503,16 +517,16 @@ def _run_final_generation(job_id: str, tenant_id: str) -> None:
             {"status": "completed", "phase": "ready_for_review", "quiz_set_id": result.get("quiz_set_id"), "updated_at": _now()}
         ).eq("id", job_id).eq("tenant_id", tenant_id).execute()
         logger.info(
-            "Final quiz generation job %s completed in %.1fs (%s questions).",
-            job_id, time.monotonic() - started, request.get("total_questions", 0),
+            "Final quiz generation completed in %.1fs (%s questions).",
+            time.monotonic() - started, request.get("total_questions", 0),
         )
     except Exception as exc:  # noqa: BLE001 - persist a safe retryable failure
         # Do not log provider payloads or stack traces: document text may be
         # present in an exception. The durable job row retains a short public
         # error for the teacher instead.
         logger.warning(
-            "Final quiz generation job %s failed after %.1fs (%s)",
-            job_id, time.monotonic() - started, type(exc).__name__,
+            "Final quiz generation failed after %.1fs (%s)",
+            time.monotonic() - started, type(exc).__name__,
         )
         client.table("quiz_generation_jobs").update(
             {"status": "failed", "phase": "failed", "error_message": "Quiz generation could not finish. Check your source and selections, then retry. If it happens again, contact support with this task ID.", "updated_at": _now()}
@@ -530,7 +544,7 @@ def _safe_run(job_id: str, tenant_id: str) -> None:
         else:
             GenerationJobRunner().run(job_id=job_id, tenant_id=tenant_id)
     except Exception:  # noqa: BLE001 - run() already recorded the failure
-        logger.warning("Background generation job %s ended in error.", job_id)
+        logger.warning("Background generation job ended in error")
 
 
 def launch_job(job_id: str, tenant_id: str) -> None:

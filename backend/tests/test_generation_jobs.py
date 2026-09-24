@@ -219,7 +219,9 @@ class RunTests(unittest.TestCase):
 
         job = fake.db["quiz_generation_jobs"][0]
         self.assertEqual(job["status"], "failed")
-        self.assertIn("every chunk", job["error_message"])
+        self.assertEqual(
+            job["error_message"], "Generation failed. Retry the operation."
+        )
         self.assertIsNone(job["master_blueprint"])
 
     def test_reduce_error_marks_job_failed(self) -> None:
@@ -229,7 +231,10 @@ class RunTests(unittest.TestCase):
             runner.run(job_id="j1")
         job = fake.db["quiz_generation_jobs"][0]
         self.assertEqual(job["status"], "failed")
-        self.assertIn("reduce boom", job["error_message"])
+        self.assertEqual(
+            job["error_message"], "Generation failed. Retry the operation."
+        )
+        self.assertNotIn("reduce boom", job["error_message"])
 
     def test_resume_does_not_rechunk(self) -> None:
         """Second run() reuses stored chunks (idempotent chunker)."""
@@ -503,6 +508,8 @@ class RunTests(unittest.TestCase):
         self.assertEqual(resumed.calls, 1)
         self.assertEqual(resumed.saved_responses, [raw_response])
         self.assertEqual(job["params"]["single_call_checkpoint_status"], "processed")
+        self.assertNotIn("single_call_response_checkpoint", job["params"])
+        self.assertNotIn("single_call_response_received_at", job["params"])
 
 
 class CreateJobTests(unittest.TestCase):

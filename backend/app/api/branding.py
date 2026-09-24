@@ -53,8 +53,7 @@ def institution_branding(subdomain: str) -> dict:
             browser_logo = signed_url(stored_logo, expires_in=3600)
         except Exception as exc:  # noqa: BLE001
             logger.warning(
-                "Institution logo URL could not be created subdomain=%s error_type=%s",
-                slug,
+                "Institution logo URL could not be created (%s)",
                 type(exc).__name__,
             )
 

@@ -61,7 +61,7 @@ def extract_and_store_for_document(
             return 0
         pdf_bytes = download_bytes(row["storage_path"])  # source-documents bucket
     except Exception:  # noqa: BLE001 - a fetch problem must not break analysis
-        logger.warning("Figure prep failed for document %s", document_id)
+        logger.warning("Figure prep failed")
         return 0
     return store_document_figures(
         service,
@@ -106,13 +106,13 @@ def store_document_figures(
     try:
         candidates = extract_document_figures(pdf_bytes, max_figures=max_figures)
     except Exception:  # noqa: BLE001 - extraction failure must not break analysis
-        logger.warning("Figure extraction failed for document %s", document_id)
+        logger.warning("Figure extraction failed")
         return 0
 
     try:
         existing = _existing_figures(service, tenant_id, document_id)
     except Exception:  # noqa: BLE001 - a catalog read must not break analysis
-        logger.warning("Existing figure lookup failed for document %s", document_id)
+        logger.warning("Existing figure lookup failed")
         return 0
 
     # An empty extraction can mean that the source contains no supported
@@ -167,7 +167,7 @@ def store_document_figures(
                     delete_bytes(path, bucket=FIGURES_BUCKET)
                 except Exception:  # noqa: BLE001 - best-effort orphan cleanup
                     pass
-            logger.warning("Storing figure failed for document %s", document_id)
+            logger.warning("Storing figure failed")
             continue
 
     # Delete figures no longer present only after every replacement/insert
@@ -182,7 +182,7 @@ def store_document_figures(
                 .eq("tenant_id", tenant_id).eq("document_id", document_id) \
                 .in_("id", [row["id"] for row in stale]).execute()
         except Exception:  # noqa: BLE001 - stale cleanup must not break analysis
-            logger.warning("Stale figure cleanup failed for document %s", document_id)
+            logger.warning("Stale figure cleanup failed")
     return stored
 
 
@@ -225,7 +225,7 @@ def attach_figures_to_questions(
     try:
         catalog = _figure_catalog_for_matching(service, tenant_id, document_id)
     except Exception:  # noqa: BLE001 - a catalog read problem must not affect the quiz
-        logger.warning("Figure catalog read failed for document %s", document_id)
+        logger.warning("Figure catalog read failed")
         return 0
     if not catalog:
         return 0
@@ -249,7 +249,7 @@ def attach_figures_to_questions(
             ).eq("tenant_id", tenant_id).execute()
             linked += 1
         except Exception:  # noqa: BLE001 - one failed link must not stop the rest
-            logger.warning("Linking figure to question %s failed", question_id)
+            logger.warning("Linking figure to question failed")
             continue
     return linked
 
@@ -323,7 +323,7 @@ def figures_for_questions(
                 row["storage_path"], _SIGNED_URL_TTL_SECONDS, bucket=FIGURES_BUCKET
             )
         except Exception:  # noqa: BLE001 - a broken object shouldn't drop the rest
-            logger.warning("Signed URL failed for figure %s", row.get("id"))
+            logger.warning("Signed URL failed for figure")
         result[row["id"]] = {
             "id": row["id"],
             "page": row.get("page"),
@@ -354,7 +354,7 @@ def list_document_figures(service, *, tenant_id: str, document_id: str) -> list[
                 row["storage_path"], _SIGNED_URL_TTL_SECONDS, bucket=FIGURES_BUCKET
             )
         except Exception:  # noqa: BLE001 - a broken object shouldn't drop the whole list
-            logger.warning("Signed URL failed for figure %s", row.get("id"))
+            logger.warning("Signed URL failed for figure")
         figures.append(
             {
                 "id": row["id"],

@@ -69,24 +69,22 @@ def _report_one(path: str, out_dir: str, save: bool) -> tuple[int, int]:
         with pymupdf.open(stream=data, filetype="pdf") as doc:
             pages = doc.page_count
     except Exception as exc:  # noqa: BLE001
-        print(f"\n### {name}: could not open ({type(exc).__name__})")
+        print(f"Document could not be opened ({type(exc).__name__})")
         return 0, 0
 
     captions = _count_captions(data)
     figures = extract_document_figures(data, max_figures=200)
 
     misses = max(0, captions - len(figures))
-    print(f"\n### {name}")
+    print("\n### Document report")
     print(
         f"    pages={pages}  captions_detected={captions}  "
         f"figures_extracted={len(figures)}  misses={misses}"
     )
     for fig in figures:
         kb = len(fig.png_bytes) // 1024
-        cap = (fig.caption or "").replace("\n", " ")[:52]
         print(
-            f"    - {fig.label:<12} p{fig.page:<3} {fig.width}x{fig.height}px "
-            f"{kb:>4}KB  \"{cap}\""
+            f"    - page={fig.page:<3} {fig.width}x{fig.height}px {kb:>4}KB"
         )
 
     if save and figures:
@@ -97,7 +95,7 @@ def _report_one(path: str, out_dir: str, save: bool) -> tuple[int, int]:
             fn = os.path.join(doc_dir, f"{k:02d}_{safe_label}_p{fig.page}.png")
             with open(fn, "wb") as out:
                 out.write(fig.png_bytes)
-        print(f"    -> {len(figures)} PNG(s) saved to {doc_dir}")
+        print(f"    -> {len(figures)} PNG(s) saved")
 
     return captions, len(figures)
 
@@ -111,7 +109,7 @@ def main() -> None:
 
     pdfs = _find_pdfs(args.path)
     if not pdfs:
-        print(f"No PDFs found at {args.path}")
+        print("No PDFs found")
         return
 
     total_caps = total_figs = 0
@@ -127,7 +125,7 @@ def main() -> None:
         f"misses={max(0, total_caps - total_figs)}"
     )
     if not args.no_save:
-        print(f"PNGs under: {args.out}")
+        print("PNG output enabled")
 
 
 if __name__ == "__main__":

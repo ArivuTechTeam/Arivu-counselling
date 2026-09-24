@@ -1,5 +1,4 @@
--- Raw provider responses are operationally sensitive. The trusted backend
--- writes them and the application enforces super-admin-only reads.
+-- Metadata-only provider telemetry. Prompts and responses are never stored.
 create table public.api_call_logs (
   id uuid primary key default gen_random_uuid(),
   tenant_id uuid references public.tenants(id) on delete set null,
@@ -15,8 +14,6 @@ create table public.api_call_logs (
   thinking_tokens integer,
   cost_usd numeric(18, 8),
   cost_inr numeric(18, 8),
-  raw_request jsonb not null,
-  raw_response jsonb,
   latency_ms integer not null,
   status text not null check (status in ('success', 'error')),
   error_message text,

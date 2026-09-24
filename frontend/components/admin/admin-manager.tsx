@@ -77,8 +77,6 @@ export function AdminManager({ embedded = false }: { embedded?: boolean }) {
         const parsed = JSON.parse(saved) as Record<string, unknown>;
         setForm((current) => ({
           ...current,
-          full_name: typeof parsed.full_name === "string" ? parsed.full_name : "",
-          email: typeof parsed.email === "string" ? parsed.email : "",
           tenant_id: typeof parsed.tenant_id === "string" ? parsed.tenant_id : "",
         }));
       }
@@ -95,15 +93,13 @@ export function AdminManager({ embedded = false }: { embedded?: boolean }) {
       window.sessionStorage.setItem(
         ADMIN_DRAFT_STORAGE_KEY,
         JSON.stringify({
-          full_name: form.full_name,
-          email: form.email,
           tenant_id: form.tenant_id,
         }),
       );
     } catch {
       // The form still works if browser storage is unavailable.
     }
-  }, [form.email, form.full_name, form.tenant_id, formHydrated]);
+  }, [form.tenant_id, formHydrated]);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();

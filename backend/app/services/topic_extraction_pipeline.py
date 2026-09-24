@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
+import logging
 
 from pydantic import ValidationError
 
@@ -32,6 +33,9 @@ from app.services.source_material import (
     is_meaningful_evidence,
     normalise_evidence,
 )
+
+
+logger = logging.getLogger(__name__)
 
 
 def _now() -> str:
@@ -264,8 +268,15 @@ class TopicExtractionPipeline:
                 }
             ).eq("id", chunk["id"]).eq("tenant_id", tenant_id).execute()
         except Exception as exc:  # noqa: BLE001 - record; retry handled by resume
+            logger.warning("Topic extraction chunk failed (%s)", type(exc).__name__)
             client.table("document_chunks").update(
-                {"map_status": "failed", "error_message": str(exc)[:500], "updated_at": _now()}
+                {
+                    "map_status": "failed",
+                    # Never persist an upstream exception string: provider
+                    # errors may contain request URLs, response bodies, or keys.
+                    "error_message": "Chunk analysis failed. Retry the operation.",
+                    "updated_at": _now(),
+                }
             ).eq("id", chunk["id"]).eq("tenant_id", tenant_id).execute()
 
     def run(

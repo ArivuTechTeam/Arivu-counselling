@@ -79,11 +79,7 @@ function subjectsByLevel(subjects: Subject[]): Array<[string, string, Subject[]]
 
 export default function UsersPage() {
   const { institution } = useDashboardIdentity();
-  const [query, setQuery] = useSessionStorageState(
-    "institution-users-query",
-    "",
-    (value): value is string => typeof value === "string",
-  );
+  const [query, setQuery] = useState("");
   const [page, setPage] = useSessionStorageState(
     "institution-users-page",
     1,
@@ -137,8 +133,6 @@ export default function UsersPage() {
         const parsed = JSON.parse(saved) as Record<string, unknown>;
         setForm((current) => ({
           ...current,
-          full_name: typeof parsed.full_name === "string" ? parsed.full_name : "",
-          email: typeof parsed.email === "string" ? parsed.email : "",
           course_id: typeof parsed.course_id === "string" ? parsed.course_id : "",
           level_id: typeof parsed.level_id === "string" ? parsed.level_id : "",
           subject_ids: Array.isArray(parsed.subject_ids)
@@ -161,8 +155,6 @@ export default function UsersPage() {
       window.sessionStorage.setItem(
         TEACHER_DRAFT_STORAGE_KEY,
         JSON.stringify({
-          full_name: form.full_name,
-          email: form.email,
           course_id: form.course_id,
           level_id: form.level_id,
           subject_ids: form.subject_ids,
@@ -173,8 +165,6 @@ export default function UsersPage() {
     }
   }, [
     form.course_id,
-    form.email,
-    form.full_name,
     form.level_id,
     form.subject_ids,
     formHydrated,

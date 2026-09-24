@@ -41,20 +41,10 @@ const WORKFLOW_STORAGE_KEY = "quiz-generation-workflow-v1";
 type SavedGenerationWorkflow = {
   version: 1;
   documentId: string;
-  uploadedName: string | null;
   subjectId: string;
-  chapterName: string;
-  addingNewChapter: boolean;
   jobId: string | null;
   analysis: { status: string; phase: string; done: number; total: number } | null;
-  topics: string[];
-  topicPageRanges: Record<string, { start: number; end: number }[]>;
-  topicSubtopics: Record<string, string[]>;
-  topicGroups: Record<string, string>;
-  topicQuestionLimits: Record<string, number>;
-  sourceQualityWarnings: string[];
   analysisMode: string | null;
-  topicCounts: Record<string, Record<string, number>>;
   level: string;
   difficulty: string;
   desiredTotal: number;
@@ -201,7 +191,8 @@ export function BlueprintGenerator() {
 
   // Keep the faculty's document-analysis and quiz setup in this browser tab so
   // a refresh reconnects to the durable backend job instead of clearing the UI.
-  // Raw document text and file bytes are deliberately never stored here.
+  // Store only opaque workflow identifiers and non-content settings. Filenames,
+  // chapter/topic text, source excerpts, and question drafts stay in memory.
   useEffect(() => {
     try {
       const raw = window.sessionStorage.getItem(WORKFLOW_STORAGE_KEY);
@@ -209,20 +200,10 @@ export function BlueprintGenerator() {
         const saved = JSON.parse(raw) as Partial<SavedGenerationWorkflow>;
         if (saved.version === 1) {
           setDocumentId(saved.documentId || "");
-          setUploadedName(saved.uploadedName || null);
           setSubjectId(saved.subjectId || "");
-          setChapterName(saved.chapterName || "");
-          setAddingNewChapter(Boolean(saved.addingNewChapter));
           setJobId(saved.jobId || null);
           setAnalysis(saved.analysis || null);
-          setTopics(saved.topics || []);
-          setTopicPageRanges(saved.topicPageRanges || {});
-          setTopicSubtopics(saved.topicSubtopics || {});
-          setTopicGroups(saved.topicGroups || {});
-          setTopicQuestionLimits(saved.topicQuestionLimits || {});
-          setSourceQualityWarnings(saved.sourceQualityWarnings || []);
           setAnalysisMode(saved.analysisMode || null);
-          setTopicCounts(saved.topicCounts || {});
           setLevel(saved.level || "mixed");
           setDifficulty(saved.difficulty || "medium");
           setDesiredTotal(saved.desiredTotal || 10);
@@ -237,27 +218,17 @@ export function BlueprintGenerator() {
 
   useEffect(() => {
     if (!workflowHydrated) return;
-    if (!documentId && !jobId && topics.length === 0) {
+    if (!documentId && !jobId) {
       window.sessionStorage.removeItem(WORKFLOW_STORAGE_KEY);
       return;
     }
     const saved: SavedGenerationWorkflow = {
       version: 1,
       documentId,
-      uploadedName,
       subjectId,
-      chapterName,
-      addingNewChapter,
       jobId,
       analysis,
-      topics,
-      topicPageRanges,
-      topicSubtopics,
-      topicGroups,
-      topicQuestionLimits,
-      sourceQualityWarnings,
       analysisMode,
-      topicCounts,
       level,
       difficulty,
       desiredTotal,
@@ -269,10 +240,8 @@ export function BlueprintGenerator() {
       // job still runs; only automatic form restoration is unavailable.
     }
   }, [
-    workflowHydrated, documentId, uploadedName, subjectId, chapterName,
-    addingNewChapter, jobId, analysis, topics, topicPageRanges, topicSubtopics,
-    topicGroups, topicQuestionLimits, sourceQualityWarnings, analysisMode,
-    topicCounts, level, difficulty, desiredTotal,
+    workflowHydrated, documentId, subjectId, jobId, analysis, analysisMode,
+    level, difficulty, desiredTotal,
   ]);
 
   useEffect(() => {

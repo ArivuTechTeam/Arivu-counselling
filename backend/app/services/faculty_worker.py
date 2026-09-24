@@ -124,9 +124,9 @@ def run_one(service=None, *, heartbeat_seconds: float = 20) -> bool:
     try:
         process_job(service, job)
     except LeaseLost:
-        logger.info("Faculty job lease no longer held: %s", job["id"])
+        logger.info("Faculty job lease no longer held")
     except Exception as exc:
-        logger.warning("Faculty job failed: %s (%s)", job["id"], type(exc).__name__)
+        logger.warning("Faculty job failed (%s)", type(exc).__name__)
         # No raw provider/source details in logs or public status. Recoverable
         # failures are bounded to three attempts; invalid inputs fail immediately.
         retryable = isinstance(exc, LLMError) or not isinstance(exc, (ValueError, HTTPException))

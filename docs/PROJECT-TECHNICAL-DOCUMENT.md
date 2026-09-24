@@ -488,15 +488,22 @@ and application queries scope every tenant-owned read/write to one institution.
 | 39 decouple-backend-auth-provisioning | Keeps self-signup validation in the Auth trigger while moving trusted teacher/admin profile creation and rollback into the service-role backend. |
 | 40 fix-admin-auth-insert-order | Lets the Auth trigger recognize backend provisioning intent before app metadata is merged, while leaving authoritative role/tenant assignment to the backend. |
 | 41 question-review-default | Makes new question review state default to pending review. |
-| 42 API-call-logs | Stores protected provider-call usage, cost, and diagnostic payloads for super-admin monitoring. |
+| 42 API-call-logs | Adds protected provider-call usage and cost monitoring for super-admin operations. Raw payload columns were removed by migration 59. |
 | 43 faculty-background-jobs | Adds the durable service-role-only faculty job queue and checkpoint RPCs. |
 | 44 challenge-join-codes | Adds/backfills tenant-scoped friendly codes and permits the rate-limited code lookup endpoint. |
 | 45 global-course-catalog | Adds the global Course → Level → Subject catalogue, tenant offering records, and idempotent catalogue-to-tenant provisioning. |
 | 46 seed-global-course-catalog | Seeds the initial global catalogue. |
 | 47 student-level-enrollment | Adds operational course levels, backfills subjects/enrolments, and validates Course + Level atomically for password and Google student signup. |
+| 48 tenant-branding-metadata | Adds tenant branding metadata and storage validation. |
+| 49–50 document/question figures | Adds private document figures and safe question links. |
+| 51 safe-quiz-reuse | Adds immutable publication, copying, and release guards. |
+| 52–55 batches and scoring | Adds batches/assignments plus tenant-aware scoring policies and course exam standards. |
+| 56–58 commerce platform defaults | Adds paper profiles, feature rollout, and commerce defaults. |
+| 59 personal-data-minimization | Drops raw AI prompt/response columns and extends self-service account erasure. |
 
-> **Verified 2026-09-22:** migrations 13–47 above are recorded in this table
-> (the table originally stopped at 12).
+> **Repository inventory verified 2026-09-24:** migrations 13–59 above are
+> recorded in this table. Migration 59 was reported applied by the operator;
+> repository state alone cannot independently prove that production fact.
 > `docs/deploy-runbook.md` is the authoritative source for exact filenames,
 > apply order, and cross-migration dependencies — it was corrected in the same
 > pass after being found to reference four migration-31–34 filenames that

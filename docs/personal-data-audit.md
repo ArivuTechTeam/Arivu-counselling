@@ -1,6 +1,6 @@
 # Personal data flow and deletion audit
 
-Last reviewed: 2026-09-23
+Last reviewed: 2026-09-24
 
 This document describes application behavior visible in this repository. Hosting
 providers may additionally process IP addresses, user-agent strings, and request
@@ -19,8 +19,9 @@ metadata in infrastructure logs; verify their retention settings separately.
 | AI quiz generation/topic extraction | Extracted study-document text and generation settings | FastAPI → DeepSeek first, with Gemini as the configured text fallback. | Provider receives system instructions plus a bounded document excerpt or full extraction chunk. The application stores validated questions and provider name. No account name, email, tenant ID, token, or password is added to an AI prompt. |
 | Scanned quiz extraction | PDF/image bytes and extraction instructions | FastAPI → Gemini multimodal API. | Gemini receives the uploaded scan inline. Extracted questions are stored in Supabase. DeepSeek never receives raw file bytes. |
 | Question regeneration/AI tutor | Question text, options, correct answer and existing explanation | FastAPI → Gemini or DeepSeek. | Provider output is validated; tutor output is cached in `ai_explanations`. No student answer, score, name, or email is included. |
+| AI operational telemetry | Provider/model, call type, fallback flag, token counts, estimated cost, latency, status, stable error class/status | FastAPI → `api_call_logs` through a best-effort backend write. | Metadata only. Migration 59 permanently drops the former raw request/response columns; prompts, document text, and provider responses are not stored or exposed by the admin API. |
 | Quiz/practice activity | Answers, autosave state, scores, timestamps, bookmarks, revision topics | Browser → FastAPI → tenant- and user-scoped Supabase tables. Grading is local deterministic code, not AI. | `quiz_attempts`, `attempt_answers`, `practice_sessions`, `practice_answers`, `bookmarks`, and `revised_topics`. |
-| Dashboard recovery state | Non-sensitive filters, selections, draft names/emails, topic setup, and durable job identifiers | Current browser tab only | Stored in `sessionStorage` to survive refresh. Passwords, temporary passwords, access tokens, uploaded `File` objects, and destructive confirmation state are excluded. Backend/Supabase records remain authoritative. |
+| Dashboard recovery state | Non-sensitive filters/selections and opaque durable job/resource identifiers | Current browser tab only | Stored in `sessionStorage` to survive refresh. Names, emails, filenames, chapter/topic text, question/answer drafts, passwords, uploaded `File` objects, and destructive confirmation state are excluded. Supabase session/PKCE material is the one sensitive exception and is needed for per-tab authentication. Backend/Supabase records remain authoritative. |
 | Challenges/leaderboards | Creator display name, opaque share token, participant identity, scores | Browser → FastAPI → Supabase. A same-course/institution audience receives display names and scores. | `challenges` and linked practice sessions. Account deletion replaces the creator name with `Deleted user` and removes the account pointer. |
 | Operational product events | Actor UUID/role, event type, subject UUID, minimal event metadata, timestamp | FastAPI → Supabase `events`. | Used for internal product-quality analytics. Account deletion removes every event for that actor. Application logs never contain the event payload. |
 | User-initiated WhatsApp share | Challenge URL/question count, or quiz title and score percentage | Browser opens `wa.me` only when the user chooses Share. | WhatsApp receives the pre-filled share text and URL. No email, token, internal account UUID, or answer detail is included. |
@@ -34,6 +35,20 @@ or precise location. FastAPI does not read or store client IP or user-agent.
 Supabase, Vercel, Railway, Google, Gemini, DeepSeek and WhatsApp may process IP,
 device and request metadata as infrastructure providers; that processing is
 outside this repository and requires a vendor retention/DPA review.
+
+## Third-party disclosures
+
+| Processor | Data sent | Minimized boundary |
+|---|---|---|
+| Supabase Auth/Database/Storage | Email, name/provider identity, password during Auth operations, session tokens, tenant/role/enrolment links, uploaded files, quiz/activity records | Passwords go directly to Auth and are not copied into application tables. Storage is private; database access is tenant/role scoped with RLS and backend authorization. |
+| Google OAuth | OAuth protocol data and the Google identity fields returned to Supabase Auth | The app requests authentication identity only; it does not call Google profile, contacts, mail, or analytics APIs. |
+| DeepSeek | Extracted document text/chunks, generation instructions, and question material needed for the requested AI task | No account name, email, password, bearer token, tenant UUID, student answer, or score is added. |
+| Gemini | The same bounded text task data when used as fallback; PDF/image bytes for vision extraction | No application identity fields are added. Raw request/response copies are no longer kept in `api_call_logs`. |
+| WhatsApp | Only user-initiated share text: challenge link/count or quiz title and score percentage | No automatic SDK transmission; no email, account UUID, answer detail, or Auth token. |
+| Vercel/Railway and vendor edge infrastructure | Network-level IP, user-agent, request time, route and operational metadata may be processed outside application code | Application logs use route templates and never log request bodies, query strings, identity fields, document IDs, filenames, tokens, or provider payloads. Vendor retention still requires configuration/DPA review. |
+
+No analytics, advertising, error-tracking, payment, email-delivery, Twilio,
+Firebase, AWS application SDK, or card processor is present in this repository.
 
 ## Role-scoped API disclosure
 
@@ -92,17 +107,27 @@ action is not exposed directly in the avatar menu. It:
    themselves contain personal data;
 3. calls the service-role-only `anonymize_account_data` database function,
    which deletes attempts/answers, practice activity, bookmarks, revision state,
-   enrolments, assignments, rate-limit rows and actor event rows;
+   enrolments, assignments, batch memberships, rate-limit rows, actor event rows,
+   copy requests, transient document chunks, generation jobs/checkpoints and
+   linked AI telemetry; it clears extraction raw output;
 4. removes names, avatar, filenames and author/reviewer links from retained
    institution-owned teaching content;
 5. anonymizes challenge authorship; and
 6. hard-deletes the Supabase Auth identity, cascading the remaining profile.
 
+Supabase notes that an already-issued access JWT can remain cryptographically
+valid until its expiry. Global sign-out prevents refresh, while deleting the
+profile makes this app's profile-based authorization and RLS checks fail during
+that remaining window; keep production JWT lifetimes short and verify this in
+the deployment project.
+
 Institution-admin teacher removal and super-admin administrator removal use the
 same erasure routine before deleting the target Auth identity.
 
-Migration `migration-30-account-data-deletion.sql` must be applied before the
-endpoint is deployed. Generated institution teaching content remains usable,
+Migrations `migration-30-account-data-deletion.sql` and
+`migration-59-personal-data-minimization.sql` are required before the endpoint
+is deployed. The operator reported migration 59 applied on 2026-09-24; verify
+that record in Supabase before relying on it in another environment. Generated institution teaching content remains usable,
 but the original uploaded object is removed, and its random dead storage path,
 filename, hash and uploader association are anonymized in the database.
 
@@ -112,6 +137,12 @@ filename, hash and uploader association are anonymized in the database.
   in production/local Docker commands.
 - Removed storage object paths and upstream provider response bodies/model output
   from logs and exception messages.
+- Removed document/user/job UUIDs, source topic names/ranges, filenames and raw
+  exception messages from application and QA-script output.
+- Stopped persisting AI prompts/responses, removed the raw-payload admin viewer,
+  and added migration 59 to physically drop previously stored payload columns.
+- Removed names, emails, filenames, chapter/topic text, and question/answer
+  drafts from browser recovery storage; `localStorage` remains theme-only.
 - Changed temporary-password reset so the browser supplies the generated value
   and the API returns only `{ "changed": true }`.
 - Minimized `/api/v1/me`, `/api/v1/me/profile`, and question mutation responses.
@@ -127,8 +158,8 @@ filename, hash and uploader association are anonymized in the database.
 
 ## External verification still required
 
-- Apply migration 30 and test deletion against a disposable account in the
-  production Supabase project.
+- Verify migrations 30 and the reported migration-59 application in Supabase,
+  then test deletion against a disposable account in the production project.
 - Confirm Supabase Auth password policy/hash configuration and session/JWT
   lifetimes in the dashboard.
 - Review retention and data-processing terms for Supabase, Google OAuth/Gemini,
