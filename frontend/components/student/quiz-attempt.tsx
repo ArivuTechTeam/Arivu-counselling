@@ -708,7 +708,7 @@ function QuestionInput({
   onChange: (v: unknown) => void;
   onToggleMulti: (id: string) => void;
 }) {
-  if (q.type === "mcq_single" || q.type === "true_false") {
+  if (q.type === "mcq_single" || q.type === "true_false" || q.type === "assertion_reason") {
     return (
       <div className="flex flex-col gap-1.5">
         {(q.options || []).map((o) => {
@@ -741,7 +741,7 @@ function QuestionInput({
       </div>
     );
   }
-  if (q.type === "mcq_multi") {
+  if (q.type === "mcq_multi" || q.type === "mrm") {
     const arr = Array.isArray(value) ? (value as string[]) : [];
     return (
       <div className="flex flex-col gap-1.5">
@@ -771,6 +771,32 @@ function QuestionInput({
             </label>
           );
         })}
+      </div>
+    );
+  }
+  if (q.type === "matching") {
+    const opts = (q.options || []) as { id: string; text: string; side?: string }[];
+    const left = opts.filter((o) => o.side === "left");
+    const right = opts.filter((o) => o.side === "right");
+    const chosen = (value && typeof value === "object" ? value : {}) as Record<string, string>;
+    return (
+      <div className="flex flex-col gap-2">
+        {left.map((l) => (
+          <div key={l.id} className="flex items-center gap-3 rounded-md border border-input px-3 py-2.5">
+            <span className="flex-1">{l.text}</span>
+            <span className="text-muted-foreground">→</span>
+            <select
+              className="h-10 min-w-[10rem] rounded-md border border-input bg-background px-2 text-sm accent-primary"
+              value={chosen[l.id] ?? ""}
+              onChange={(e) => onChange({ ...chosen, [l.id]: e.target.value })}
+            >
+              <option value="">Select…</option>
+              {right.map((r) => (
+                <option key={r.id} value={r.id}>{r.text}</option>
+              ))}
+            </select>
+          </div>
+        ))}
       </div>
     );
   }

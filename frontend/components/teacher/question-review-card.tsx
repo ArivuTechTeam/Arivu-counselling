@@ -18,7 +18,8 @@ import {
   setQuestionFigure,
 } from "@/lib/api";
 
-const CHOICE_TYPES = ["mcq_single", "mcq_multi", "true_false"];
+const CHOICE_TYPES = ["mcq_single", "mcq_multi", "true_false", "assertion_reason", "mrm"];
+const MULTI_SELECT_TYPES = ["mcq_multi", "mrm"];
 const editDraftKey = (questionId: string) => `teacher-question-edit:${questionId}`;
 
 // Shared textarea styling so edit fields match the read-view inputs, with a
@@ -563,10 +564,10 @@ function EditForm({
     setBusy(true);
     try {
       const patch: QuestionPatch = { question_text: text, explanation };
-      if (question.type === "mcq_single") {
+      if (question.type === "mcq_single" || question.type === "assertion_reason") {
         patch.options = options;
         patch.correct_answer = single;
-      } else if (question.type === "mcq_multi") {
+      } else if (question.type === "mcq_multi" || question.type === "mrm") {
         patch.options = options;
         patch.correct_answer = multi;
       } else if (question.type === "true_false") {
@@ -590,6 +591,7 @@ function EditForm({
   }
 
   const isChoice = CHOICE_TYPES.includes(question.type);
+  const isMultiSelect = MULTI_SELECT_TYPES.includes(question.type);
 
   return (
     <div className="flex flex-col gap-3">
@@ -606,15 +608,13 @@ function EditForm({
         options.map((o) => (
           <div key={o.id} className="flex items-center gap-2">
             <input
-              type={question.type === "mcq_multi" ? "checkbox" : "radio"}
+              type={isMultiSelect ? "checkbox" : "radio"}
               name={`correct-${question.id}`}
               checked={
-                question.type === "mcq_multi"
-                  ? multi.includes(o.id)
-                  : single === o.id
+                isMultiSelect ? multi.includes(o.id) : single === o.id
               }
               onChange={() =>
-                question.type === "mcq_multi"
+                isMultiSelect
                   ? setMulti((p) =>
                       p.includes(o.id)
                         ? p.filter((x) => x !== o.id)
@@ -648,6 +648,44 @@ function EditForm({
         <div className="flex flex-col gap-1">
           <Label>Accepted answers (comma-separated)</Label>
           <Input value={fill} onChange={(e) => setFill(e.target.value)} />
+        </div>
+      )}
+
+      {question.type === "matching" && (
+        <div className="flex flex-col gap-1">
+          <Label>Correct matches</Label>
+          <div className="rounded-md border border-input bg-muted/30 p-2.5 text-sm">
+            {(() => {
+              const opts = (question.options ?? []) as {
+                id: string;
+                text: string;
+                side?: string;
+              }[];
+              const textById: Record<string, string> = Object.fromEntries(
+                opts.map((o) => [o.id, o.text]),
+              );
+              const pairs =
+                answer && typeof answer === "object" && "pairs" in answer
+                  ? ((answer as { pairs?: Record<string, string> }).pairs ?? {})
+                  : {};
+              const entries = Object.entries(pairs);
+              if (!entries.length)
+                return <span className="text-muted-foreground">No pairs.</span>;
+              return (
+                <ul className="flex flex-col gap-1">
+                  {entries.map(([l, r]) => (
+                    <li key={l}>
+                      {textById[l] ?? l} → {textById[r] ?? r}
+                    </li>
+                  ))}
+                </ul>
+              );
+            })()}
+            <p className="mt-2 text-xs text-muted-foreground">
+              Edit the wording and explanation here; the matched pairs are set at
+              generation. Use Reject &amp; regenerate to change the pairs.
+            </p>
+          </div>
         </div>
       )}
 

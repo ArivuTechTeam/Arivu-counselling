@@ -114,11 +114,15 @@ migration-57-tenant-feature-rollout.sql
 migration-58-commerce-platform-defaults.sql
 migration-59-personal-data-minimization.sql
 migration-60-student-contact.sql
+migration-61-extended-question-types.sql
 ```
 
 (Filenames above verified 2026-09-24 against `migrations/`, through migration
-60. `migration-60-student-contact.sql` creates the private student feedback and
-support inbox table; apply it before deploying the contact API. `migration-59-personal-data-minimization.sql` drops legacy raw AI
+61. Apply `migration-61-extended-question-types.sql` after migrations 59 and 60
+before enabling `EXTENDED_QUESTION_TYPES_ENABLED`. It adds three objective
+question-type enum values. `migration-60-student-contact.sql` creates the private
+student feedback and support inbox table; apply it before deploying the contact
+API. `migration-59-personal-data-minimization.sql` drops legacy raw AI
 prompt/response columns and extends account erasure; its application was
 reported by the operator on 2026-09-24, but should be verified from the
 production migration record before a future deployment. `migration-48-tenant-branding-metadata.sql` stores the original institution

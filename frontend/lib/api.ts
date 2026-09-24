@@ -686,6 +686,10 @@ export type InstitutionFeatureFlags = {
   scoring_policies: boolean;
   commerce_pack: boolean;
   figure_attach: boolean;
+  // Separate P6.4 rollout toggle (not part of the commerce registry); always
+  // present on the /me/profile response, optional here so the 6-key fallbacks
+  // elsewhere remain valid.
+  extended_question_types?: boolean;
 };
 
 export const getDashboardProfile = () =>
