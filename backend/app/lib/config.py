@@ -131,6 +131,15 @@ class Settings:
         # the switch remains a platform-wide emergency control.
         self.figure_attach_enabled = _boolean("FIGURE_ATTACH_ENABLED", False)
         self.figure_max_per_document = _positive_int("FIGURE_MAX_PER_DOCUMENT", 50)
+        # Extended objective question types (Phase 6.4): assertion_reason, mrm,
+        # matching. Off by default: teachers cannot request them and generation is
+        # byte-identical. Validation/grading always understand them so any stored
+        # data is safe; they are only ever produced when this is on. Descriptive
+        # (manual grading) is intentionally NOT part of this - it belongs to the
+        # future Mock Test Paper feature.
+        self.extended_question_types_enabled = _boolean(
+            "EXTENDED_QUESTION_TYPES_ENABLED", False
+        )
         self.app_env: str = os.getenv("APP_ENV", "production").strip().lower()
         if self.app_env not in {"production", "development", "test"}:
             raise RuntimeError("APP_ENV must be production, development, or test.")

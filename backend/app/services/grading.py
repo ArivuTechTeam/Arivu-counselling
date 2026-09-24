@@ -39,13 +39,22 @@ def _is_correct(q_type: str, correct: Any, student: Any) -> bool:
     if student is None:
         return False
 
-    if q_type in ("mcq_single", "true_false"):
+    if q_type in ("mcq_single", "true_false", "assertion_reason"):
         # correct is an option id (or "true"/"false"); compare as strings.
         return str(student) == str(correct)
 
-    if q_type == "mcq_multi":
-        # All-or-nothing: the chosen SET must equal the correct SET exactly.
+    if q_type in ("mcq_multi", "mrm"):
+        # All-or-nothing binary: the chosen SET must equal the correct SET exactly.
+        # (mrm's partial-credit awarding lives in scoring.score(); this is the
+        # fallback correctness bool used by the legacy full/zero path.)
         return set(map(str, student or [])) == set(map(str, correct or []))
+
+    if q_type == "matching":
+        # correct = {"pairs": {left_id: right_id}}; every pair must match.
+        pairs = correct.get("pairs") if isinstance(correct, dict) else None
+        if not pairs or not isinstance(student, dict):
+            return False
+        return all(str(student.get(left)) == str(right) for left, right in pairs.items())
 
     if q_type == "numerical":
         # correct = {"value": <num>, "tolerance": <num>}; within tolerance = right.

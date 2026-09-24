@@ -37,6 +37,8 @@ const TYPE_LABEL: Record<string, string> = {
   true_false: "True / False",
   numerical: "Numerical",
   fill_blank: "Fill in the blank",
+  assertion_reason: "Assertion & Reason",
+  mrm: "Multiple response",
   matching: "Matching",
 };
 
@@ -85,6 +87,12 @@ export function formatAnswerValue(v: unknown): string {
           const right = pp.right ?? pp.match ?? pp.value ?? "";
           return `${left} → ${right}`;
         })
+        .join(", ");
+    }
+    // matching: { pairs: { left_id: right_id, … } }
+    if ("pairs" in o && o.pairs && typeof o.pairs === "object") {
+      return Object.entries(o.pairs as Record<string, unknown>)
+        .map(([left, right]) => `${left} → ${String(right)}`)
         .join(", ");
     }
     // matching as a plain map: { "A": "1", "B": "2" }

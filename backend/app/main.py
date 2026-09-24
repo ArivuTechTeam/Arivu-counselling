@@ -374,9 +374,16 @@ def read_my_profile(
             primary_color=profile.tenant_primary_color or "#2E8857",
         )
 
+    # Commerce platform capabilities plus the P6.4 extended-question-types toggle,
+    # which is a separate (non-commerce) rollout switch kept out of the tenant
+    # feature registry but still surfaced so the UI can show/hide the new types.
+    features = effective_feature_flags(profile.tenant_feature_flags)
+    features["extended_question_types"] = getattr(
+        get_settings(), "extended_question_types_enabled", False
+    )
     return CurrentProfileOut(
         role=profile.role,
         must_change_password=profile.must_change_password,
         institution=institution,
-        features=effective_feature_flags(profile.tenant_feature_flags),
+        features=features,
     )

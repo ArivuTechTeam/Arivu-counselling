@@ -13,7 +13,9 @@ from app.services.source_material import (
 )
 
 
-_CHOICE_TYPES = {"mcq_single", "mcq_multi", "true_false"}
+_CHOICE_TYPES = {"mcq_single", "mcq_multi", "true_false", "assertion_reason", "mrm"}
+# Types whose correct_answer is a list of option ids (single-id types are the rest).
+_MULTI_CHOICE_TYPES = {"mcq_multi", "mrm"}
 
 _DOCUMENT_REFERENCE = re.compile(
     r"(?:"
@@ -145,6 +147,47 @@ def _finite_number(value: Any, field: str) -> float:
     return parsed
 
 
+def _validate_matching_shape(options: Any, correct_answer: Any) -> None:
+    """A matching question carries BOTH columns in `options`, each tagged with its
+    side, and a `pairs` map (left id -> right id) as the correct answer. Every left
+    item must be paired to a real right item so the grader can score it."""
+    if not isinstance(options, list) or not options:
+        raise ValueError("matching requires options")
+    left_ids: set[str] = set()
+    right_ids: set[str] = set()
+    for option in options:
+        if not isinstance(option, Mapping):
+            raise ValueError("matching options must be objects")
+        option_id = option.get("id")
+        text = option.get("text")
+        side = option.get("side")
+        if not isinstance(option_id, str) or not option_id.strip():
+            raise ValueError("matching option ids must be non-empty strings")
+        if not isinstance(text, str) or not text.strip():
+            raise ValueError("matching option text must be non-empty")
+        if side == "left":
+            left_ids.add(option_id)
+        elif side == "right":
+            right_ids.add(option_id)
+        else:
+            raise ValueError("matching option side must be 'left' or 'right'")
+    if len(left_ids) + len(right_ids) != len(options):
+        raise ValueError("matching option ids must be unique")
+    if len(left_ids) < 2:
+        raise ValueError("matching needs at least 2 left items")
+    if len(right_ids) < len(left_ids):
+        raise ValueError("matching needs a right item for every left item")
+    if not isinstance(correct_answer, Mapping):
+        raise ValueError("matching correct_answer must be an object")
+    pairs = correct_answer.get("pairs")
+    if not isinstance(pairs, Mapping) or not pairs:
+        raise ValueError("matching correct_answer requires a non-empty pairs map")
+    if set(pairs.keys()) != left_ids:
+        raise ValueError("matching must pair every left item exactly once")
+    if not all(isinstance(v, str) and v in right_ids for v in pairs.values()):
+        raise ValueError("matching pairs must map to real right ids")
+
+
 def validate_question_answer_shape(
     question_type: str,
     options: Any,
@@ -156,21 +199,25 @@ def validate_question_answer_shape(
 
     if question_type in _CHOICE_TYPES:
         option_ids = _choice_ids(question_type, options)
-        if question_type == "mcq_multi":
+        if question_type in _MULTI_CHOICE_TYPES:
             if not isinstance(correct_answer, list) or not correct_answer:
-                raise ValueError("mcq_multi correct_answer must be a non-empty list")
+                raise ValueError(f"{question_type} correct_answer must be a non-empty list")
             if not all(isinstance(answer, str) for answer in correct_answer):
-                raise ValueError("mcq_multi correct answers must be option ids")
+                raise ValueError(f"{question_type} correct answers must be option ids")
             if len(set(correct_answer)) != len(correct_answer):
-                raise ValueError("mcq_multi correct answers must be unique")
+                raise ValueError(f"{question_type} correct answers must be unique")
             if not set(correct_answer).issubset(option_ids):
-                raise ValueError("mcq_multi correct answers must match option ids")
+                raise ValueError(f"{question_type} correct answers must match option ids")
             return
 
         if not isinstance(correct_answer, str) or correct_answer not in option_ids:
             raise ValueError(
                 f"{question_type} correct_answer must match an option id"
             )
+        return
+
+    if question_type == "matching":
+        _validate_matching_shape(options, correct_answer)
         return
 
     if options is not None:

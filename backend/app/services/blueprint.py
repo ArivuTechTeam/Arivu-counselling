@@ -42,7 +42,8 @@ from app.services.source_material import render_extracted_material
 from app.services.teacher_access import teacher_has_subject
 
 QuestionType = Literal[
-    "mcq_single", "mcq_multi", "true_false", "numerical", "fill_blank"
+    "mcq_single", "mcq_multi", "true_false", "numerical", "fill_blank",
+    "assertion_reason", "mrm", "matching",
 ]
 Weight = Literal["high", "medium", "low"]
 

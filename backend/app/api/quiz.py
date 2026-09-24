@@ -49,7 +49,18 @@ from app.services.question_validation import validate_question_answer_shape
 router = APIRouter(prefix="/api/v1/quiz-sets", tags=["quiz"])
 
 CORE_TYPES = {"mcq_single", "mcq_multi", "true_false", "numerical", "fill_blank"}
+# Extended objective types (Phase 6.4). Only selectable when the flag is on, so
+# with it off the allowed set is exactly CORE_TYPES and generation is unchanged.
+EXTENDED_TYPES = {"assertion_reason", "mrm", "matching"}
 QUIZ_SET_PAGE_SIZE_MAX = 100
+
+
+def allowed_question_types() -> set[str]:
+    """The question types a teacher may request. Extended types are added only
+    when EXTENDED_QUESTION_TYPES_ENABLED is on; otherwise this is CORE_TYPES."""
+    if getattr(get_settings(), "extended_question_types_enabled", False):
+        return CORE_TYPES | EXTENDED_TYPES
+    return CORE_TYPES
 
 
 class GenerateRequest(BaseModel):
@@ -75,7 +86,7 @@ def generate(
             detail="Only teachers can generate quizzes.",
         )
 
-    invalid = set(req.question_types) - CORE_TYPES
+    invalid = set(req.question_types) - allowed_question_types()
     if not req.question_types or invalid:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -170,7 +181,7 @@ def _resolve_blueprint_plan(
         aggregate: dict[str, int] = {}
         for topic in selected_topics:
             raw_counts = topic.counts or {}
-            invalid = set(raw_counts) - CORE_TYPES
+            invalid = set(raw_counts) - allowed_question_types()
             if invalid:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
@@ -195,7 +206,7 @@ def _resolve_blueprint_plan(
         return selected, aggregate, total, list(aggregate.keys())
 
     counts = {t: n for t, n in type_counts.items() if n and n > 0}
-    invalid = set(counts) - CORE_TYPES
+    invalid = set(counts) - allowed_question_types()
     if invalid:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
