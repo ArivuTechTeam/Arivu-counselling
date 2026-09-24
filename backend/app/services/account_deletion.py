@@ -39,7 +39,7 @@ def erase_account_data(service, *, user_id: str, tenant_id: str) -> None:
         from app.services.document_figures import purge_figures_for_documents
 
         purge_figures_for_documents(
-            service, tenant_id=tenant_id, document_ids=document_ids
+            service, tenant_id=tenant_id, document_ids=document_ids, strict=True
         )
 
     service.rpc(

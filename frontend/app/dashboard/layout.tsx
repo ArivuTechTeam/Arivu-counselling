@@ -14,10 +14,9 @@ import { createClient } from "@/lib/supabase";
 import { safeDashboardNext } from "@/lib/safe-next";
 import {
   clearDashboardBootstrap,
+  dashboardContentState,
   HOME_BY_ROLE,
   isDashboardRole,
-  readDashboardBootstrap,
-  writeDashboardBootstrap,
   type DashboardRole,
 } from "@/lib/dashboard-bootstrap";
 
@@ -51,8 +50,8 @@ export default function DashboardLayout({
   const [bootstrapAttempt, setBootstrapAttempt] = useState(0);
   const [sessionAvailable, setSessionAvailable] = useState(false);
   const cacheProvider = useMemo(() => () => new Map(), []);
-  // `ready` gates role-specific page content. The stable shell can render as
-  // soon as the local session is available while the profile is resolving.
+  // `ready` gates role-specific page content until the backend verifies the
+  // current role and tenant. A cached role must never make a page ready.
   const [ready, setReady] = useState(false);
 
   // Resolve the logged-in user's role once per dashboard mount. The browser
@@ -61,6 +60,8 @@ export default function DashboardLayout({
   useEffect(() => {
     let cancelled = false;
     setBootstrapError(null);
+    setReady(false);
+    setRole(null);
     const supabase = createClient();
     // The session lives in this tab's sessionStorage. Reading it here avoids a
     // blocking Auth-server round trip on every fresh dashboard mount. This is
@@ -90,18 +91,11 @@ export default function DashboardLayout({
             user.app_metadata?.provider === "email",
         ),
       );
-      const cached = readDashboardBootstrap(user.id);
-      if (cached) {
-        setRole(cached.role);
-        setMustChangePassword(cached.mustChangePassword);
-        setReady(true);
-      }
-
       let data;
       try {
         data = await getDashboardProfile();
       } catch {
-        if (!cached) {
+        if (!cancelled) {
           setBootstrapError(
             "We couldn't load your account profile. Check your connection and try again.",
           );
@@ -119,7 +113,6 @@ export default function DashboardLayout({
       }
       const resolvedRole = data.role;
       const passwordChangeRequired = Boolean(data.must_change_password);
-      writeDashboardBootstrap(user.id, resolvedRole, passwordChangeRequired);
       setRole(resolvedRole);
       setMustChangePassword(passwordChangeRequired);
       setInstitution(data.institution);
@@ -142,6 +135,12 @@ export default function DashboardLayout({
     (pathname === "/dashboard" ||
       pathname === allowedHome ||
       pathname.startsWith(`${allowedHome}/`));
+  const contentState = dashboardContentState(
+    ready,
+    bootstrapError,
+    pathValid,
+    pathname,
+  );
 
   useEffect(() => {
     if (ready && allowedHome && pathname === "/dashboard") {
@@ -193,16 +192,16 @@ export default function DashboardLayout({
             institution={institution}
             mustChangePassword={mustChangePassword}
           >
-            {bootstrapError && !ready ? (
+            {contentState === "error" ? (
               <div className="mx-auto flex min-h-[60vh] max-w-md items-center">
                 <ErrorCard
                   title="We couldn't open your dashboard"
-                  message={bootstrapError}
+                  message={bootstrapError ?? "Please try again."}
                   onRetry={() => setBootstrapAttempt((attempt) => attempt + 1)}
                   className="w-full"
                 />
               </div>
-            ) : ready && pathValid && pathname !== "/dashboard" ? (
+            ) : contentState === "content" ? (
               children
             ) : (
               <div

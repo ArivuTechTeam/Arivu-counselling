@@ -150,6 +150,31 @@ class AccountDeletionTests(unittest.TestCase):
         self.assertNotIn("personal data", caught.exception.detail)
         self.assertFalse(any(action[0] == "rpc" for action in service.actions))
 
+    def test_figure_cleanup_failure_stops_anonymization_and_identity_deletion(self) -> None:
+        service = _DeletionService()
+        service.table = lambda _name: _DocumentQuery([
+            {"id": "document-a", "storage_path": None},
+        ])
+        with patch(
+            "app.api.auth_account.get_service_client", return_value=service
+        ), patch(
+            "app.services.document_figures.purge_figures_for_documents",
+            side_effect=RuntimeError("storage provider details"),
+        ) as purge, self.assertRaises(HTTPException) as caught:
+            delete_own_account(
+                AccountDeletion(confirmation="DELETE"),
+                self.credentials,
+                self.profile,
+            )
+
+        purge.assert_called_once_with(
+            service, tenant_id="tenant-a", document_ids=["document-a"], strict=True
+        )
+        self.assertEqual(caught.exception.status_code, 503)
+        self.assertNotIn("storage provider details", caught.exception.detail)
+        self.assertFalse(any(action[0] == "rpc" for action in service.actions))
+        self.assertFalse(any(action[0] == "delete_user" for action in service.actions))
+
 
 class PersonalDataBoundaryTests(unittest.TestCase):
     def test_migration_erases_activity_and_anonymizes_retained_content(self) -> None:

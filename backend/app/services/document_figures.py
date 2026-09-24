@@ -255,14 +255,15 @@ def attach_figures_to_questions(
 
 
 def purge_figures_for_documents(
-    service, *, tenant_id: str, document_ids: list[str]
+    service, *, tenant_id: str, document_ids: list[str], strict: bool = False
 ) -> int:
     """Delete figure storage objects + catalog rows for the given documents.
 
     Used when a user's documents are hard-deleted or their account is erased, so
     the rendered figure PNGs neither orphan in the bucket (cost) nor survive the
-    erasure of the source personal data (privacy). Best-effort: logs and
-    continues on any failure, never raises. Returns the object count removed.
+    erasure of the source personal data (privacy). Routine cleanup is
+    best-effort. Account erasure sets strict=True so a failed lookup, object
+    removal, or row removal stops deletion instead of reporting success.
     """
     ids = [d for d in dict.fromkeys(document_ids) if d]
     if not ids:
@@ -277,21 +278,27 @@ def purge_figures_for_documents(
             .data
             or []
         )
-    except Exception:  # noqa: BLE001 - erasure must proceed even if the lookup fails
+    except Exception:  # noqa: BLE001 - routine cleanup remains best-effort
         logger.warning("Figure purge lookup failed for %d document(s)", len(ids))
+        if strict:
+            raise
         return 0
     paths = [r["storage_path"] for r in rows if r.get("storage_path")]
     if paths:
         try:
             delete_bytes(paths, bucket=FIGURES_BUCKET)
-        except Exception:  # noqa: BLE001 - a row cleanup must still follow
+        except Exception:  # noqa: BLE001 - routine cleanup remains best-effort
             logger.warning("Figure object purge failed for %d object(s)", len(paths))
+            if strict:
+                raise
     try:
         service.table("document_figures").delete().eq("tenant_id", tenant_id).in_(
             "document_id", ids
         ).execute()
     except Exception:  # noqa: BLE001 - rows may also cascade-delete with the document
         logger.warning("Figure row purge failed")
+        if strict:
+            raise
     return len(paths)
 
 

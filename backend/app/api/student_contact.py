@@ -6,7 +6,7 @@ tenant, student identity, or ticket status.
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Literal
 from uuid import uuid4
 
@@ -14,6 +14,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.lib.auth import CurrentProfile, get_current_profile
+from app.lib.api_errors import public_error
 from app.lib.supabase import get_service_client
 
 router = APIRouter(prefix="/api/v1/contact", tags=["student contact"])
@@ -115,41 +116,38 @@ def submit_contact(
     if profile.role != "student":
         raise HTTPException(403, "Only students can submit this form.")
     destination = _route(payload.kind, payload.category, payload.rating)
-    service = get_service_client()
-    # A modest server-side cooldown discourages accidental doubles and spam.
-    cutoff = (datetime.now(timezone.utc) - timedelta(seconds=60)).isoformat()
-    recent = (
-        service.table("student_contact_requests")
-        .select("reference")
-        .eq("tenant_id", profile.tenant_id)
-        .eq("student_id", profile.user_id)
-        .gte("created_at", cutoff)
-        .limit(1)
-        .execute()
-        .data
-        or []
-    )
-    if recent:
-        raise HTTPException(429, "Please wait a minute before sending another request.")
-    row = {
-        "reference": uuid4().hex[:12].upper(),
-        "tenant_id": profile.tenant_id,
-        "student_id": profile.user_id,
-        "kind": payload.kind,
-        "category": payload.category,
-        "routed_to": destination,
-        "message": payload.message,
-        "rating": payload.rating,
-    }
-    result = (
-        service.table("student_contact_requests")
-        .insert(row)
-        .select("reference,routed_to,status")
-        .execute()
-    )
-    if not result.data:
+    try:
+        result = get_service_client().rpc(
+            "submit_student_contact",
+            {
+                "p_tenant_id": profile.tenant_id,
+                "p_student_id": profile.user_id,
+                "p_reference": uuid4().hex[:12].upper(),
+                "p_kind": payload.kind,
+                "p_category": payload.category,
+                "p_routed_to": destination,
+                "p_message": payload.message,
+                "p_rating": payload.rating,
+            },
+        ).execute()
+    except Exception as exc:  # noqa: BLE001 - never expose provider response bodies
+        raise public_error(
+            503,
+            "Request could not be saved. Please try again.",
+            operation="submit student contact request",
+            exception=exc,
+        ) from exc
+    row = result.data
+    if not isinstance(row, dict) or not isinstance(row.get("allowed"), bool):
         raise HTTPException(503, "Request could not be saved. Please try again.")
-    return ContactReceipt(**result.data[0])
+    if not row["allowed"]:
+        retry_after = max(1, int(row.get("retry_after_seconds") or 1))
+        raise HTTPException(
+            429,
+            "Please wait a minute before sending another request.",
+            headers={"Retry-After": str(retry_after)},
+        )
+    return ContactReceipt.model_validate(row)
 
 
 @router.get("/mine", response_model=list[ContactOut])

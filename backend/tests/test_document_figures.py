@@ -257,6 +257,47 @@ class PurgeFiguresForDocumentsTests(unittest.TestCase):
             )
         del_bytes.assert_not_called()
 
+    def test_strict_purge_stops_on_object_removal_failure(self) -> None:
+        service = _Service(select_rows=[{"storage_path": "t1/d1/a.png"}])
+        with patch.object(mod, "delete_bytes", side_effect=RuntimeError("storage unavailable")):
+            with self.assertRaises(RuntimeError):
+                mod.purge_figures_for_documents(
+                    service, tenant_id="t1", document_ids=["d1"], strict=True
+                )
+        self.assertEqual(service.deletes, 0)
+
+    def test_strict_purge_stops_on_lookup_failure(self) -> None:
+        class _Boom(_Service):
+            def table(self, name):
+                raise RuntimeError("database unavailable")
+
+        with self.assertRaises(RuntimeError):
+            mod.purge_figures_for_documents(
+                _Boom(), tenant_id="t1", document_ids=["d1"], strict=True
+            )
+
+    def test_strict_purge_stops_on_catalog_delete_failure(self) -> None:
+        class _DeleteBoom(_Service):
+            def table(self, name):
+                query = super().table(name)
+                if name == "document_figures":
+                    original_execute = query.execute
+
+                    def execute():
+                        if query.op == "delete":
+                            raise RuntimeError("database unavailable")
+                        return original_execute()
+
+                    query.execute = execute
+                return query
+
+        service = _DeleteBoom(select_rows=[{"storage_path": "t1/d1/a.png"}])
+        with patch.object(mod, "delete_bytes"):
+            with self.assertRaises(RuntimeError):
+                mod.purge_figures_for_documents(
+                    service, tenant_id="t1", document_ids=["d1"], strict=True
+                )
+
 
 if __name__ == "__main__":
     unittest.main()

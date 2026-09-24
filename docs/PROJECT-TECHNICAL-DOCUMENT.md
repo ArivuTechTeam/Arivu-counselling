@@ -181,7 +181,7 @@ app/
 ├── login/page.tsx                       PUBLIC — sign in
 ├── signup/page.tsx                      PUBLIC — tenant-aware student self-registration by course + level
 └── dashboard/
-    ├── layout.tsx                       Stable shell + cached role bootstrap and authoritative profile refresh
+    ├── layout.tsx                       Stable shell + authoritative profile verification before role pages
     ├── page.tsx                         Inert child; layout owns the role-home redirect
     │
     ├── super-admin/
@@ -247,19 +247,17 @@ confirmation state are never stored by this mechanism. See
 
 ### 5.4 Auth & session flow
 1. **Login** → `supabase.auth.signInWithPassword` → one RLS-protected
-   `profiles` read → write the versioned local dashboard bootstrap → route
-   directly to that role's home.
-2. **Dashboard layout** restores the local Supabase session and cached role to
-   render the stable shell immediately when possible. It concurrently calls the
-   authenticated `/api/v1/me/profile` endpoint to refresh the authoritative
-   role, password-change state, and tenant branding. The inert
+   `profiles` read → route directly to that role's home.
+2. **Dashboard layout** restores the local Supabase session, then calls the
+   authenticated `/api/v1/me/profile` endpoint. It shows role-specific pages
+   only after this verifies the current role, password-change state, and tenant
+   branding. A profile failure shows a retryable error. The inert
    `dashboard/page.tsx` child performs no duplicate auth lookup.
 3. Missing sessions return to `/login`; missing/invalid profiles fail closed.
    Role-mismatched dashboard paths redirect to the correct role home. The shell
    forces a **change-password modal** for admin-created accounts.
 4. Authorization for data is enforced **server-side** by the backend (Bearer
-   JWT + role checks). The cached bootstrap and frontend route gating are UX
-   optimizations only.
+   JWT + role checks). Frontend route gating is only a UX convenience.
 
 ### 5.5 Design system
 - **Tokens** in `globals.css`: HSL CSS variables, brand green primary (`#2E8857`), `--radius: 0.75rem`, full light + dark themes.
@@ -511,8 +509,9 @@ and application queries scope every tenant-owned read/write to one institution.
 | 59 personal-data-minimization | Drops raw AI prompt/response columns and extends self-service account erasure. |
 | 60 student-contact | Adds the private student feedback and support inbox. |
 | 61 extended-question-types | Adds assertion–reason, multiple-response (`mrm`), and matching enum values for flag-gated objective questions. |
+| 62 atomic-student-contact | Serializes each student's request cooldown and insert in one service-role-only database function. |
 
-> **Repository inventory verified 2026-09-24:** migrations 13–61 above are
+> **Repository inventory verified 2026-09-24:** migrations 13–62 above are
 > recorded in this table. Migration 59 was reported applied by the operator;
 > a read-only production check confirmed that its AI-log raw-payload columns
 > are absent, but did not prove the complete migration history.

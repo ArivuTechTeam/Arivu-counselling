@@ -121,10 +121,14 @@ migration-58-commerce-platform-defaults.sql
 migration-59-personal-data-minimization.sql
 migration-60-student-contact.sql
 migration-61-extended-question-types.sql
+migration-62-atomic-student-contact.sql
 ```
 
 (Filenames above verified 2026-09-24 against `migrations/`, through migration
-61. Apply `migration-61-extended-question-types.sql` after migrations 59 and 60
+62. Apply `migration-62-atomic-student-contact.sql` after migration 60 and
+before deploying the contact API that calls `submit_student_contact`; otherwise
+student submissions will return a temporary service error. Apply
+`migration-61-extended-question-types.sql` after migrations 59 and 60
 before enabling `EXTENDED_QUESTION_TYPES_ENABLED`. It adds three objective
 question-type enum values. `migration-60-student-contact.sql` creates the private
 student feedback and support inbox table; apply it before deploying the contact

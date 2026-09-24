@@ -9,7 +9,6 @@ import { getInstitutionBranding, InstitutionBranding, warmBackend } from "@/lib/
 import {
   dashboardDestination,
   isDashboardRole,
-  writeDashboardBootstrap,
 } from "@/lib/dashboard-bootstrap";
 import { signInWithGoogle } from "@/lib/google-auth";
 import {
@@ -126,11 +125,6 @@ export default function LoginPage() {
       );
       return;
     }
-    writeDashboardBootstrap(
-      user.id,
-      profile.role,
-      Boolean(profile.must_change_password),
-    );
     router.push(dashboardDestination(profile.role, requestedDestination()));
   }
 
