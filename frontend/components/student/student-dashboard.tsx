@@ -1,8 +1,6 @@
 "use client";
 
 import * as React from "react";
-import { useEffect, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
 import Link from "next/link";
 import {
   Card,
@@ -12,36 +10,12 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { StudentQuizzes } from "@/components/student/student-quizzes";
-import { ErrorCard } from "@/components/ui/error-card";
-import { Skeleton } from "@/components/ui/skeleton";
-import { DeferredAreaTrendChart } from "@/components/shared/deferred-area-trend-chart";
 import {
-  useStudentAttempts,
+  usePracticeSubjects,
+  useStudentDaily,
   useStudentQuizzes,
-  useStudentStats,
 } from "@/lib/student-queries";
-
-const BRAND = "var(--tenant-primary, #15603d)";
-
-// Count a number up from 0 with an ease-out, once `on` becomes true.
-function useCountUp(target: number, on: boolean, ms = 900) {
-  const [v, setV] = useState(0);
-  const raf = useRef<number>();
-  useEffect(() => {
-    if (!on) return;
-    const start = performance.now();
-    const tick = (t: number) => {
-      const p = Math.min(1, (t - start) / ms);
-      setV(Math.round(target * (1 - Math.pow(1 - p, 3))));
-      if (p < 1) raf.current = requestAnimationFrame(tick);
-    };
-    raf.current = requestAnimationFrame(tick);
-    return () => {
-      if (raf.current) cancelAnimationFrame(raf.current);
-    };
-  }, [target, on, ms]);
-  return v;
-}
+import { countQuizActions } from "@/lib/student-dashboard-metrics";
 
 // --- inline icons (lucide paths) ------------------------------------------
 function Icon({ children }: { children: React.ReactNode }) {
@@ -60,16 +34,16 @@ function Icon({ children }: { children: React.ReactNode }) {
     </svg>
   );
 }
-const CheckIcon = () => (
-  <Icon>
-    <circle cx="12" cy="12" r="10" />
-    <path d="m9 12 2 2 4-4" />
-  </Icon>
-);
 const FileIcon = () => (
   <Icon>
     <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
     <path d="M14 2v6h6" />
+  </Icon>
+);
+const RetryIcon = () => (
+  <Icon>
+    <path d="M3 11a9 9 0 1 1 2.6 6.4" />
+    <path d="M3 4v7h7" />
   </Icon>
 );
 const TrophyIcon = () => (
@@ -218,38 +192,22 @@ function MetricTile({
   gradient,
   chip,
   icon,
+  href,
   delay = 0,
-  onClick,
 }: {
   label: string;
   value: string | number;
   gradient: string;
   chip: string;
   icon: React.ReactNode;
+  href: string;
   delay?: number;
-  onClick?: () => void;
 }) {
   return (
-    <div
-      onClick={onClick}
-      role={onClick ? "button" : undefined}
-      tabIndex={onClick ? 0 : undefined}
-      onKeyDown={
-        onClick
-          ? (e) => {
-              if (e.key === "Enter" || e.key === " ") {
-                e.preventDefault();
-                onClick();
-              }
-            }
-          : undefined
-      }
+    <Link
+      href={href}
       style={{ animationDelay: `${delay}ms` }}
-      className={`animate-rise relative overflow-hidden rounded-2xl border bg-gradient-to-br ${gradient} p-5 shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-md ${
-        onClick
-          ? "cursor-pointer focus:outline-none focus:ring-2 focus:ring-primary/30"
-          : ""
-      }`}
+      className={`animate-rise relative overflow-hidden rounded-2xl border bg-gradient-to-br ${gradient} p-5 shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-md focus:outline-none focus:ring-2 focus:ring-primary/30`}
     >
       <div className="flex items-start justify-between gap-3">
         <div>
@@ -266,125 +224,20 @@ function MetricTile({
           {icon}
         </span>
       </div>
-      {onClick && (
-        <span className="mt-3 inline-flex items-center gap-1 text-[11px] font-semibold text-primary/80">
-          View →
-        </span>
-      )}
-    </div>
+      <span className="mt-3 inline-flex items-center gap-1 text-[11px] font-semibold text-primary/80">
+        View →
+      </span>
+    </Link>
   );
 }
 
-function masteryColor(pct: number) {
-  return pct >= 70
-    ? "bg-accent-green"
-    : pct >= 40
-      ? "bg-accent-orange"
-      : "bg-accent-pink";
-}
-
 export function StudentDashboard() {
-  const router = useRouter();
-  const statsQuery = useStudentStats();
-  const attemptsQuery = useStudentAttempts();
-  // Start the primary quiz-catalog request with the dashboard summaries. The
-  // StudentQuizzes child reuses this SWR entry when it mounts after stats load.
-  useStudentQuizzes();
-  const stats = statsQuery.data ?? null;
-  const attempts = attemptsQuery.data ?? [];
-
-  const ready = stats !== null;
-  const acc = stats?.overall_accuracy ?? 0;
-  const solved = stats?.questions_solved ?? 0;
-  const quizzes = stats?.quizzes_taken ?? 0;
-  const weak = stats?.weak_areas.length ?? 0;
-
-  const scrollToId = (id: string) =>
-    document
-      .getElementById(id)
-      ?.scrollIntoView({ behavior: "smooth", block: "start" });
-
-  const trend = [...attempts].reverse().map((a, i) => ({
-    name: `#${i + 1}`,
-    score:
-      a.total_score != null && a.max_score
-        ? Math.round((a.total_score / a.max_score) * 100)
-        : 0,
-  }));
-  const best = trend.reduce((m, t) => Math.max(m, t.score), 0);
-
-  const mastery = attempts
-    .map((a) => ({
-      id: a.attempt_id,
-      title: a.quiz_title,
-      pct:
-        a.total_score != null && a.max_score
-          ? Math.round((a.total_score / a.max_score) * 100)
-          : 0,
-    }))
-    .sort((x, y) => y.pct - x.pct)
-    .slice(0, 6);
-
-  // animated numbers
-  const accA = useCountUp(acc, ready);
-  const solvedA = useCountUp(solved, ready);
-  const quizzesA = useCountUp(quizzes, ready);
-  const bestA = useCountUp(best, ready && attempts.length > 0);
-
-  // The progress summary drives the hero. Attempt history is secondary and is
-  // allowed to recover in place without hiding available quizzes.
-  if (statsQuery.error) {
-    return (
-      <ErrorCard
-        message={statsQuery.error.message}
-        onRetry={() => void statsQuery.mutate()}
-      />
-    );
-  }
-
-  // First paint before stats arrive — skeleton the hero + tile grid.
-  if (!ready) {
-    return (
-      <div className="flex flex-col gap-6">
-        <Skeleton className="h-44 w-full rounded-2xl sm:h-48" />
-        <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-          {Array.from({ length: 4 }).map((_, i) => (
-            <Skeleton key={i} className="h-28 w-full rounded-2xl" />
-          ))}
-        </div>
-        <Skeleton className="h-64 w-full rounded-2xl" />
-      </div>
-    );
-  }
-
-  // New students: onboard them straight into taking their first quiz.
-  if (ready && quizzes === 0) {
-    return (
-      <div className="flex flex-col gap-6">
-        <div
-          className="animate-rise relative overflow-hidden rounded-2xl p-8 text-white shadow-lg"
-          style={{ background: "linear-gradient(135deg, var(--tenant-sidebar-start, #1a6942), var(--tenant-primary-dark, #15603d), var(--tenant-primary-deep, #0f4e33))" }}
-        >
-          <div className="pointer-events-none absolute -right-8 -top-10 h-40 w-40 rounded-full bg-white/10 blur-2xl" />
-          <div className="pointer-events-none absolute -bottom-16 right-32 h-52 w-52 rounded-full bg-white/10 blur-3xl" />
-          <div className="relative max-w-xl">
-            <p className="text-[11px] font-semibold uppercase tracking-widest text-white/70">
-              Welcome
-            </p>
-            <h2 className="mt-2 text-2xl font-bold leading-tight sm:text-[28px]">
-              Start taking quizzes
-            </h2>
-            <p className="mt-3 text-sm text-white/80">
-              Take your first quiz to unlock your progress dashboard — your
-              accuracy, score trend, quiz mastery, and weak areas all appear here
-              once you start.
-            </p>
-          </div>
-        </div>
-        <StudentQuizzes />
-      </div>
-    );
-  }
+  // Catalog, enrolled subjects and daily streak are actionable, and none can
+  // mistake an early exit for completed work or a solved question.
+  const quizQuery = useStudentQuizzes();
+  const subjectsQuery = usePracticeSubjects();
+  const dailyQuery = useStudentDaily();
+  const quizActions = countQuizActions(quizQuery.data ?? []);
 
   return (
     <div className="flex flex-col gap-6">
@@ -396,91 +249,79 @@ export function StudentDashboard() {
         <div className="pointer-events-none absolute -right-8 -top-10 h-40 w-40 rounded-full bg-white/10 blur-2xl" />
         <div className="pointer-events-none absolute -bottom-16 right-32 h-52 w-52 rounded-full bg-white/10 blur-3xl" />
         <div className="relative flex flex-wrap items-center justify-between gap-6">
-          <div className="min-w-0">
+          <div className="min-w-0 max-w-2xl">
             <p className="text-[11px] font-semibold uppercase tracking-widest text-white/70">
-              Your progress
+              Your next step
             </p>
             <h2 className="mt-2 text-2xl font-bold leading-tight sm:text-[28px]">
-              You&apos;ve solved{" "}
-              <span style={{ color: "var(--tenant-primary-soft, #9ff0a6)" }}>{solvedA}</span> questions across{" "}
-              <span style={{ color: "var(--tenant-primary-soft, #9ff0a6)" }}>{quizzesA}</span> quizzes.
+              Choose what to work on next
             </h2>
             <p className="mt-2 text-sm text-white/80">
-              {weak > 0
-                ? `Focus on your ${weak} weak ${weak === 1 ? "area" : "areas"} to lift your score.`
-                : "Keep practising to build your mastery."}
+              Find a new quiz, revisit one you started, or practise a subject at your own pace.
             </p>
-            {quizzes < 10 && (
-              <div className="mt-4 max-w-xs">
-                <div className="flex items-center justify-between text-[11px] text-white/70">
-                  <span>{quizzes} of 10 quizzes</span>
-                  <span>Keep going!</span>
-                </div>
-                <div className="mt-1 h-1.5 w-full overflow-hidden rounded-full bg-white/20">
-                  <div
-                    className="h-full rounded-full transition-[width] duration-700 ease-out"
-                    style={{ width: `${Math.min(100, quizzes * 10)}%`, backgroundColor: "var(--tenant-primary-soft, #9ff0a6)" }}
-                  />
-                </div>
-              </div>
-            )}
-          </div>
-
-          {/* accuracy ring */}
-          <div
-            className="relative flex h-28 w-28 shrink-0 items-center justify-center rounded-full transition-all duration-700 ease-out"
-            style={{
-              background: `conic-gradient(var(--tenant-primary-soft, #7ae582) ${(ready ? acc : 0) * 3.6}deg, rgba(255,255,255,0.16) 0deg)`,
-            }}
-          >
-            <div className="flex h-[94px] w-[94px] flex-col items-center justify-center rounded-full" style={{ backgroundColor: "var(--tenant-primary-dark, #15603d)" }}>
-              <span className="text-3xl font-bold">{accA}%</span>
-              <span className="text-[10px] uppercase tracking-widest text-white/70">
-                accuracy
-              </span>
+            <div className="mt-5 flex flex-wrap gap-2">
+              <Link href="#available" className="rounded-lg bg-white px-4 py-2 text-sm font-semibold text-primary shadow-sm hover:bg-white/90 focus:outline-none focus:ring-2 focus:ring-white/80">
+                Browse quizzes
+              </Link>
+              <Link href="/dashboard/student/practice?mode=topic" className="rounded-lg border border-white/50 px-4 py-2 text-sm font-semibold text-white hover:bg-white/10 focus:outline-none focus:ring-2 focus:ring-white/80">
+                Start topic practice
+              </Link>
             </div>
           </div>
         </div>
       </div>
 
-      {/* Metric tiles */}
+      {/* Actionable opportunities, not counts inferred from abandoned attempts. */}
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
         <MetricTile
-          label="Questions solved"
-          value={ready ? solvedA : "—"}
+          label="New quizzes"
+          value={quizQuery.data ? quizActions.newQuizzes : "—"}
           gradient="from-card to-emerald-50/70"
           chip="bg-emerald-500/10 text-emerald-600"
-          icon={<CheckIcon />}
+          icon={<FileIcon />}
+          href="#available"
           delay={0}
         />
         <MetricTile
-          label="Quizzes taken"
-          value={ready ? quizzesA : "—"}
+          label="Quizzes to revisit"
+          value={quizQuery.data ? quizActions.revisitQuizzes : "—"}
           gradient="from-card to-blue-50/70"
           chip="bg-blue-500/10 text-blue-600"
-          icon={<FileIcon />}
+          icon={<RetryIcon />}
+          href="#available"
           delay={60}
-          onClick={() => scrollToId("available")}
         />
         <MetricTile
-          label="Best score"
-          value={attempts.length ? `${bestA}%` : "—"}
+          label="Subjects to practise"
+          value={subjectsQuery.data ? subjectsQuery.data.length : "—"}
           gradient="from-card to-brand-50/70"
           chip="bg-brand-500/10 text-brand-600"
-          icon={<TrophyIcon />}
+          icon={<GridIcon />}
+          href="/dashboard/student/practice?mode=topic"
           delay={120}
-          onClick={() => scrollToId("score-trend")}
         />
         <MetricTile
-          label="Weak areas"
-          value={ready ? weak : "—"}
+          label="Daily challenge streak"
+          value={dailyQuery.data ? `${dailyQuery.data.streak} days` : "—"}
           gradient="from-card to-rose-50/70"
           chip="bg-rose-500/10 text-rose-500"
-          icon={<AlertIcon />}
+          icon={<CalendarIcon />}
+          href="/dashboard/student/daily"
           delay={180}
-          onClick={() => router.push("/dashboard/student/weak-areas")}
         />
       </div>
+
+      {(subjectsQuery.error || dailyQuery.error) && (
+        <p className="text-sm text-muted-foreground" role="status">
+          Some shortcuts are unavailable right now.{" "}
+          <button type="button" className="font-medium text-primary underline" onClick={() => {
+            if (subjectsQuery.error) void subjectsQuery.mutate();
+            if (dailyQuery.error) void dailyQuery.mutate();
+          }}>
+            Try again
+          </button>
+        </p>
+      )}
 
       {/* Quizzes to attend — third in the first-sight order */}
       <div id="available" className="scroll-mt-24">
@@ -502,81 +343,6 @@ export function StudentDashboard() {
         </CardContent>
       </Card>
 
-      {/* Score trend area chart */}
-      <Card id="score-trend" className="animate-rise scroll-mt-24">
-        <CardHeader>
-          <CardTitle>Score trend</CardTitle>
-          <CardDescription>Your attempts over time (score %).</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="h-56">
-            {attemptsQuery.error ? (
-              <ErrorCard
-                title="Score history unavailable"
-                message={attemptsQuery.error.message}
-                onRetry={() => void attemptsQuery.mutate()}
-                className="h-full justify-center"
-              />
-            ) : !attemptsQuery.data ? (
-              <Skeleton className="h-full w-full rounded-xl" />
-            ) : trend.length === 0 ? (
-              <p className="text-sm text-muted-foreground">
-                No attempts yet — take a quiz to start your trend.
-              </p>
-            ) : (
-              <DeferredAreaTrendChart
-                data={trend}
-                xKey="name"
-                yKey="score"
-                color={BRAND}
-                gradientId="studentScoreFill"
-                yDomain={[0, 100]}
-                showGrid
-              />
-            )}
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* Quiz mastery */}
-      <Card className="animate-rise">
-        <CardHeader>
-          <CardTitle>Quiz mastery</CardTitle>
-          <CardDescription>
-            Your best-performing quizzes — green is strong, red needs another go.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="flex flex-col gap-3">
-          {attemptsQuery.error ? (
-            <p className="text-sm text-muted-foreground">
-              Quiz mastery will return when score history reconnects.
-            </p>
-          ) : !attemptsQuery.data ? (
-            <Skeleton className="h-24 w-full rounded-xl" />
-          ) : mastery.length === 0 ? (
-            <p className="text-sm text-muted-foreground">
-              Take a quiz to see how you&apos;re performing.
-            </p>
-          ) : (
-            mastery.map((m) => (
-              <div key={m.id} className="flex flex-col gap-1">
-                <div className="flex items-center justify-between gap-3 text-sm">
-                  <span className="truncate text-foreground">{m.title}</span>
-                  <span className="shrink-0 font-semibold text-muted-foreground">
-                    {m.pct}%
-                  </span>
-                </div>
-                <div className="h-2 w-full overflow-hidden rounded-full bg-muted">
-                  <div
-                    className={`h-full rounded-full transition-[width] duration-700 ease-out ${masteryColor(m.pct)}`}
-                    style={{ width: ready ? `${m.pct}%` : "0%" }}
-                  />
-                </div>
-              </div>
-            ))
-          )}
-        </CardContent>
-      </Card>
     </div>
   );
 }
