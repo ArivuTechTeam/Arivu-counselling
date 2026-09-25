@@ -1,6 +1,6 @@
 # Personal data flow and deletion audit
 
-Last reviewed: 2026-09-24
+Last reviewed: 2026-09-25
 
 This document describes application behavior visible in this repository. Hosting
 providers may additionally process IP addresses, user-agent strings, and request
@@ -21,7 +21,7 @@ metadata in infrastructure logs; verify their retention settings separately.
 | Question regeneration/AI tutor | Question text, options, correct answer and existing explanation | FastAPI → Gemini or DeepSeek. | Provider output is validated; tutor output is cached in `ai_explanations`. No student answer, score, name, or email is included. |
 | AI operational telemetry | Provider/model, call type, fallback flag, token counts, estimated cost, latency, status, stable error class/status | FastAPI → `api_call_logs` through a best-effort backend write. | Metadata only. Migration 59 permanently drops the former raw request/response columns; prompts, document text, and provider responses are not stored or exposed by the admin API. |
 | Quiz/practice activity | Answers, autosave state, scores, timestamps, bookmarks, revision topics | Browser → FastAPI → tenant- and user-scoped Supabase tables. Grading is local deterministic code, not AI. | `quiz_attempts`, `attempt_answers`, `practice_sessions`, `practice_answers`, `bookmarks`, and `revised_topics`. |
-| Paper-bank descriptive practice (flag-gated) | Question key points and the student's submitted free-text answer, up to 2,000 characters | Browser → FastAPI → DeepSeek preferred, Gemini fallback, only when `PAPER_BANK_ENABLED` is enabled. The prompt does not add the student's name, email, tenant ID, or access token. | The provider receives the answer to judge key-point coverage. The app does not store this paper-bank attempt or answer in its database; the result is returned to the browser. Paid calls are capped per student per rolling hour. |
+| Paper-bank practice (flag-gated) | Selected questions, submitted answers, and (for descriptive grading) free text up to 2,000 characters | Browser → FastAPI → private `paper_attempts`; descriptive answers also go to DeepSeek preferred, Gemini fallback. The provider prompt does not add the student's name, email, tenant ID, or access token. | The server stores a frozen question/answer-key snapshot and the graded report in `paper_attempts`. Its answer key is never sent while taking; the report is returned only after every selected question is answered and the attempt is graded. Paid grading calls are capped per student per rolling hour. |
 | Dashboard recovery state | Non-sensitive filters/selections and opaque durable job/resource identifiers | Current browser tab only | Stored in `sessionStorage` to survive refresh. Names, emails, filenames, chapter/topic text, question/answer drafts, passwords, uploaded `File` objects, and destructive confirmation state are excluded. Supabase session/PKCE material is the one sensitive exception and is needed for per-tab authentication. Backend/Supabase records remain authoritative. |
 | Challenges/leaderboards | Creator display name, opaque share token, participant identity, scores | Browser → FastAPI → Supabase. A same-course/institution audience receives display names and scores. | `challenges` and linked practice sessions. Account deletion replaces the creator name with `Deleted user` and removes the account pointer. |
 | Operational product events | Actor UUID/role, event type, subject UUID, minimal event metadata, timestamp | FastAPI → Supabase `events`. | Used for internal product-quality analytics. Account deletion removes every event for that actor. Application logs never contain the event payload. |
@@ -109,15 +109,16 @@ action is not exposed directly in the avatar menu. It:
 1. revokes all Supabase Auth sessions for the supplied access token;
 2. deletes the account's original private Storage objects, whose bytes may
    themselves contain personal data;
-3. calls the service-role-only `anonymize_account_data` database function,
+3. deletes private paper attempts containing submitted answers and answer-key snapshots;
+4. calls the service-role-only `anonymize_account_data` database function,
    which deletes attempts/answers, practice activity, bookmarks, revision state,
    enrolments, assignments, batch memberships, rate-limit rows, actor event rows,
    copy requests, transient document chunks, generation jobs/checkpoints and
    linked AI telemetry; it clears extraction raw output;
-4. removes names, avatar, filenames and author/reviewer links from retained
+5. removes names, avatar, filenames and author/reviewer links from retained
    institution-owned teaching content;
-5. anonymizes challenge authorship; and
-6. hard-deletes the Supabase Auth identity, cascading the remaining profile.
+6. anonymizes challenge authorship; and
+7. hard-deletes the Supabase Auth identity, cascading the remaining profile.
 
 The profile cascade also deletes that student's feedback/support messages and
 staff replies from `student_contact_requests`.

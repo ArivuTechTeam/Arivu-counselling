@@ -32,6 +32,7 @@ from app.lib.api_errors import auth_provisioning_error, public_error
 from app.lib.supabase import get_service_client
 from app.lib.storage import delete_bytes, signed_url, upload_bytes
 from app.services.account_deletion import erase_account_data
+from app.services.attempt_timing import is_answered
 from app.services.catalog import active_catalog_subject_ids, provision_catalog_subject
 from app.services.institution_offerings import (
     institution_offerings_by_tenant,
@@ -3450,7 +3451,7 @@ async def admin_quiz_set_detail(
                 "quiz_variant_questions(question_id, "
                 "questions(id, question_text, type, difficulty, review_status)), "
                 "quiz_attempts(id, student_id, total_score, submitted_at, status, "
-                "profiles(full_name), attempt_answers(question_id, is_correct))"
+                "profiles(full_name), attempt_answers(question_id, student_answer, is_correct))"
             )
             .eq("tenant_id", tenant_id)
             .eq("quiz_set_id", quiz_set_id)
@@ -3493,6 +3494,8 @@ async def admin_quiz_set_detail(
                 }
             )
             for answer in attempt.get("attempt_answers") or []:
+                if not is_answered(answer.get("student_answer")):
+                    continue
                 bucket = answer_counts.setdefault(
                     answer["question_id"], {"answered": 0, "correct": 0}
                 )

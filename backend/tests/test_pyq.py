@@ -257,6 +257,7 @@ class DescriptiveGraderTests(unittest.TestCase):
 
 
 class PaperSubmitSafetyTests(unittest.TestCase):
+    ATTEMPT_ID = "00000000-0000-0000-0000-000000000001"
     PROFILE = CurrentProfile(user_id="student1", tenant_id="tenant1", role="student")
     DESCRIPTIVE = {
         "id": "q1", "subject_id": "subj1", "type": "descriptive",
@@ -266,13 +267,29 @@ class PaperSubmitSafetyTests(unittest.TestCase):
     }
 
     def _patches(self, row):
+        class UpdateQuery:
+            def update(self, _payload):
+                return self
+
+            def eq(self, *_args):
+                return self
+
+            def execute(self):
+                return SimpleNamespace(data=[{"id": PaperSubmitSafetyTests.ATTEMPT_ID}])
+
+        class Service:
+            def table(self, name):
+                assert name == "paper_attempts"
+                return UpdateQuery()
+
         return (
             patch.object(papers, "get_settings", return_value=SimpleNamespace(
                 paper_bank_enabled=True, rate_limit_paper_grading_per_hour=10,
             )),
-            patch.object(papers, "get_service_client", return_value=object()),
-            patch.object(papers, "enrolled_subject_ids", return_value={"subj1"}),
-            patch.object(papers, "select_all_in", return_value=[row]),
+            patch.object(papers, "get_service_client", return_value=Service()),
+            patch.object(papers, "_load_attempt", return_value={
+                "id": self.ATTEMPT_ID, "status": "in_progress", "question_snapshot": [row],
+            }),
         )
 
     def test_descriptive_uses_separate_quota(self):
@@ -284,11 +301,12 @@ class PaperSubmitSafetyTests(unittest.TestCase):
             limit = stack.enter_context(patch.object(papers, "enforce_ai_rate_limit"))
             stack.enter_context(patch.object(papers, "grade_descriptive", return_value={"q1": True}))
             result = papers.paper_submit(
-                papers.SubmitRequest(answers=[papers.SubmittedAnswer(
+                papers.SubmitRequest(attempt_id=self.ATTEMPT_ID, answers=[papers.SubmittedAnswer(
                     question_id="q1", student_answer="My explanation"
                 )]), self.PROFILE,
             )
         self.assertEqual(result["score"], 5)
+        self.assertEqual(papers.PaperScorecardOut.model_validate(result).status, "graded")
         self.assertEqual(limit.call_args.kwargs["endpoint"], "descriptive_grading")
         self.assertEqual(limit.call_args.kwargs["hourly_limit"], 10)
 
@@ -296,7 +314,7 @@ class PaperSubmitSafetyTests(unittest.TestCase):
         from contextlib import ExitStack
         from app.services.descriptive_grader import DescriptiveGradingUnavailable
 
-        body = papers.SubmitRequest(answers=[papers.SubmittedAnswer(
+        body = papers.SubmitRequest(attempt_id=self.ATTEMPT_ID, answers=[papers.SubmittedAnswer(
             question_id="q1", student_answer="My explanation"
         )])
         with ExitStack() as stack:
@@ -332,12 +350,117 @@ class PaperSubmitSafetyTests(unittest.TestCase):
                 stack.enter_context(setting)
             limit = stack.enter_context(patch.object(papers, "enforce_ai_rate_limit"))
             result = papers.paper_submit(
-                papers.SubmitRequest(answers=[papers.SubmittedAnswer(
+                papers.SubmitRequest(attempt_id=self.ATTEMPT_ID, answers=[papers.SubmittedAnswer(
                     question_id="q1", student_answer="a"
                 )]), self.PROFILE,
             )
         self.assertEqual(result["score"], 5)
         limit.assert_not_called()
+
+    def test_blank_or_missing_answer_cannot_reveal_report(self):
+        from contextlib import ExitStack
+
+        row = dict(self.DESCRIPTIVE, type="mcq_single", correct_answer="a")
+        with ExitStack() as stack:
+            for setting in self._patches(row):
+                stack.enter_context(setting)
+            with self.assertRaises(HTTPException) as error:
+                papers.paper_submit(
+                    papers.SubmitRequest(
+                        attempt_id=self.ATTEMPT_ID,
+                        answers=[papers.SubmittedAnswer(question_id="q1", student_answer=None)],
+                    ),
+                    self.PROFILE,
+                )
+        self.assertEqual(error.exception.status_code, 400)
+        self.assertFalse(papers._paper_answered("   "))
+
+
+class PaperAttemptBoundaryTests(unittest.TestCase):
+    ATTEMPT_ID = PaperSubmitSafetyTests.ATTEMPT_ID
+    PROFILE = PaperSubmitSafetyTests.PROFILE
+
+    class Query:
+        def __init__(self, row=None):
+            self.row = row
+            self.filters = []
+            self.inserted = None
+
+        def select(self, *_args):
+            return self
+
+        def eq(self, column, value):
+            self.filters.append((column, value))
+            return self
+
+        def maybe_single(self):
+            return self
+
+        def insert(self, payload):
+            self.inserted = payload
+            return self
+
+        def execute(self):
+            if self.inserted is not None:
+                return SimpleNamespace(data=[{"id": PaperAttemptBoundaryTests.ATTEMPT_ID}])
+            visible = self.row and all(self.row.get(column) == value for column, value in self.filters)
+            return SimpleNamespace(data=self.row if visible else None)
+
+    def test_start_snapshots_answers_but_only_returns_questions(self):
+        row = dict(
+            PaperSubmitSafetyTests.DESCRIPTIVE,
+            paper_type="pyq", exam="CA", year="2025",
+            options=[{"id": "a", "text": "Choice", "is_correct": True}],
+        )
+        query = self.Query()
+        service = SimpleNamespace(table=lambda _name: query)
+        with (
+            patch.object(papers, "get_settings", return_value=SimpleNamespace(paper_bank_enabled=True)),
+            patch.object(papers, "get_service_client", return_value=service),
+            patch.object(papers, "_enrolled_or_404"),
+            patch.object(papers, "_bank_rows", return_value=[row]),
+        ):
+            result = papers.paper_start(papers.StartRequest(paper_type="pyq", subject_id="subj1"), self.PROFILE)
+
+        self.assertEqual(query.inserted["question_snapshot"][0]["answer_summary"], "Key points")
+        self.assertNotIn("correct_answer", result["questions"][0])
+        self.assertEqual(result["questions"][0]["options"], [{"id": "a", "text": "Choice"}])
+        self.assertNotIn("answer_summary", papers.PaperTakingOut.model_validate(result).model_dump_json())
+
+    def test_loading_attempt_requires_student_and_tenant(self):
+        row = {
+            "id": self.ATTEMPT_ID, "tenant_id": "tenant1", "student_id": "student1",
+            "status": "in_progress", "paper_type": "pyq", "question_snapshot": [],
+        }
+        queries = []
+
+        def table(_name):
+            query = self.Query(row)
+            queries.append(query)
+            return query
+
+        service = SimpleNamespace(table=table)
+        papers._load_attempt(service, papers.UUID(self.ATTEMPT_ID), self.PROFILE)
+        query = queries[0]
+        self.assertIn(("tenant_id", "tenant1"), query.filters)
+        self.assertIn(("student_id", "student1"), query.filters)
+        with self.assertRaises(HTTPException) as error:
+            papers._load_attempt(
+                service, papers.UUID(self.ATTEMPT_ID),
+                CurrentProfile(user_id="other-student", tenant_id="tenant1", role="student"),
+            )
+        self.assertEqual(error.exception.status_code, 404)
+
+    def test_ungraded_get_never_returns_snapshot_answer_keys(self):
+        row = dict(PaperSubmitSafetyTests.DESCRIPTIVE, paper_type="pyq")
+        attempt = {"id": self.ATTEMPT_ID, "status": "in_progress", "paper_type": "pyq", "question_snapshot": [row]}
+        with (
+            patch.object(papers, "get_settings", return_value=SimpleNamespace(paper_bank_enabled=True)),
+            patch.object(papers, "get_service_client", return_value=object()),
+            patch.object(papers, "_load_attempt", return_value=attempt),
+        ):
+            result = papers.paper_attempt(papers.UUID(self.ATTEMPT_ID), self.PROFILE)
+        self.assertNotIn("model_answer", papers.PaperTakingOut.model_validate(result).model_dump_json())
 
 
 class PaperSafetyMigrationTests(unittest.TestCase):
@@ -351,6 +474,14 @@ class PaperSafetyMigrationTests(unittest.TestCase):
         self.assertIn("from public, anon, authenticated", sql)
         self.assertIn("to service_role", sql)
         self.assertIn("descriptive_grading", sql)
+
+    def test_paper_attempt_snapshots_are_private(self):
+        sql = (Path(__file__).resolve().parents[2]
+               / "migrations/migration-66-paper-attempts.sql").read_text().lower()
+        self.assertIn("create table public.paper_attempts", sql)
+        self.assertIn("alter table public.paper_attempts enable row level security", sql)
+        self.assertIn("revoke all on public.paper_attempts from public, anon, authenticated", sql)
+        self.assertIn("on delete cascade", sql)
 
 
 if __name__ == "__main__":

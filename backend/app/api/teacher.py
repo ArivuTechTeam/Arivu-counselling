@@ -17,6 +17,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from app.lib.auth import CurrentProfile, get_current_profile
 from app.lib.supabase import get_service_client
 from app.lib.supabase_queries import select_all, select_all_in
+from app.services.attempt_timing import is_answered
 from app.services.teacher_access import teacher_student_ids, teacher_subject_ids
 
 router = APIRouter(prefix="/api/v1", tags=["teacher"])
@@ -313,7 +314,7 @@ async def quiz_set_performance(
             .select(
                 "id, total_marks, quiz_variant_questions(question_id, questions(id, question_text)), "
                 "quiz_attempts(id, student_id, total_score, submitted_at, status, "
-                "profiles(full_name), attempt_answers(question_id, is_correct))"
+                "profiles(full_name), attempt_answers(question_id, student_answer, is_correct))"
             )
             .eq("tenant_id", tid).eq("quiz_set_id", quiz_set_id).execute().data or []
         )
@@ -361,6 +362,8 @@ async def quiz_set_performance(
             attempts_by_student.setdefault(student_id, []).append(normal)
             all_percentages.append(accuracy)
             for answer in attempt.get("attempt_answers") or []:
+                if not is_answered(answer.get("student_answer")):
+                    continue
                 question_id = str(answer.get("question_id") or "")
                 if not question_id:
                     continue
@@ -801,11 +804,12 @@ def student_report(
         answers = select_all_in(
             service,
             "attempt_answers",
-            "id, question_id, is_correct",
+            "id, question_id, student_answer, is_correct",
             in_column="attempt_id",
             values=attempt_ids,
             configure=lambda query: query.eq("tenant_id", tid),
         )
+        answers = [a for a in answers if is_answered(a.get("student_answer"))]
         answered = len(answers)
         qids = list({a["question_id"] for a in answers})
         qrows = select_all_in(

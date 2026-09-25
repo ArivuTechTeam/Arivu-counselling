@@ -11,17 +11,21 @@ from __future__ import annotations
 
 import random
 from collections import Counter
-from typing import Any
+from datetime import datetime, timezone
+from typing import Any, Literal
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.lib.auth import CurrentProfile, get_current_profile
+from app.lib.api_errors import public_error
 from app.lib.config import get_settings
 from app.lib.role_checks import require_staff
 from app.lib.supabase import get_service_client
 from app.lib.supabase_queries import select_all, select_all_in
 from app.services.descriptive_grader import DescriptiveGradingUnavailable, grade_descriptive
+from app.services.attempt_timing import is_answered
 from app.services.grading import grade_answer
 from app.services.rate_limit import DESCRIPTIVE_GRADING, enforce_ai_rate_limit
 from app.services.selector import enrolled_subject_ids
@@ -67,7 +71,96 @@ class SubmittedAnswer(BaseModel):
 
 
 class SubmitRequest(BaseModel):
+    attempt_id: UUID
     answers: list[SubmittedAnswer] = Field(min_length=1, max_length=_MAX_QUESTIONS)
+
+
+class PaperQuestionOut(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    type: str
+    question_text: str
+    options: Any = None
+    marks: float
+    exam: str | None = None
+    year: str | None = None
+
+
+class PaperTakingOut(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    attempt_id: str
+    status: Literal["in_progress"]
+    paper_type: str
+    requested: int
+    available: int
+    questions: list[PaperQuestionOut]
+
+
+class PaperResultOut(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    question_id: str
+    type: str
+    question_text: str
+    options: Any = None
+    student_answer: Any = None
+    correct_answer: Any = None
+    explanation: str | None = None
+    is_correct: bool
+    marks_awarded: float
+
+
+class PaperScorecardOut(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    attempt_id: str
+    status: Literal["graded"]
+    score: float
+    total: float
+    correct: int
+    count: int
+    results: list[PaperResultOut]
+
+
+def _taking_question(row: dict) -> dict:
+    options = row.get("options")
+    public_options = (
+        [{"id": option.get("id"), "text": option.get("text")}
+         for option in options if isinstance(option, dict)]
+        if isinstance(options, list) else None
+    )
+    return {
+        "id": row["id"], "type": row["type"],
+        "question_text": row["question_text"], "options": public_options,
+        "marks": row.get("marks") or 1, "exam": row.get("exam"),
+        "year": row.get("year"),
+    }
+
+
+def _paper_answered(value: Any) -> bool:
+    return bool(value.strip()) if isinstance(value, str) else is_answered(value)
+
+
+def _load_attempt(service, attempt_id: UUID, profile: CurrentProfile) -> dict:
+    try:
+        row = (
+            service.table("paper_attempts")
+            .select("id, paper_type, question_snapshot, status, result")
+            .eq("id", str(attempt_id))
+            .eq("tenant_id", profile.tenant_id)
+            .eq("student_id", profile.user_id)
+            .maybe_single().execute().data
+        )
+    except Exception as exc:
+        raise public_error(
+            503, "Paper practice is temporarily unavailable. Please try again later.",
+            operation="load paper attempt", exception=exc,
+        ) from exc
+    if not row:
+        raise HTTPException(404, "Paper attempt not found.")
+    return row
 
 
 def _bank_rows(service, profile: CurrentProfile, req: StartRequest, columns: str) -> list[dict]:
@@ -186,7 +279,7 @@ def paper_filters(
     }
 
 
-@router.post("/start")
+@router.post("/start", response_model=PaperTakingOut)
 def paper_start(
     body: StartRequest, profile: CurrentProfile = Depends(get_current_profile)
 ) -> dict:
@@ -199,27 +292,56 @@ def paper_start(
     count = max(1, min(int(body.count or 10), _MAX_QUESTIONS))
     rows = _bank_rows(
         service, profile, body,
-        "id, type, question_text, options, marks, paper_type, exam, year",
+        "id, type, question_text, options, marks, paper_type, exam, year, "
+        "correct_answer, explanation, model_answer, answer_summary",
     )
     if not rows:
         raise HTTPException(status_code=404, detail="No questions match this selection yet.")
     chosen = random.sample(rows, min(count, len(rows)))
+    try:
+        created = service.table("paper_attempts").insert({
+            "tenant_id": profile.tenant_id,
+            "student_id": profile.user_id,
+            "paper_type": body.paper_type,
+            "subject_id": body.subject_id,
+            "question_snapshot": chosen,
+        }).execute().data
+    except Exception as exc:
+        raise public_error(
+            503, "Could not start this paper set. Please try again later.",
+            operation="start paper attempt", exception=exc,
+        ) from exc
+    if not created:
+        raise HTTPException(503, "Could not start this paper set. Please try again.")
     return {
+        "attempt_id": created[0]["id"],
+        "status": "in_progress",
         "paper_type": body.paper_type,
         "requested": count,
         "available": len(rows),
-        "questions": [
-            {
-                "id": r["id"], "type": r["type"], "question_text": r["question_text"],
-                "options": r.get("options"), "marks": r.get("marks") or 1,
-                "exam": r.get("exam"), "year": r.get("year"),
-            }
-            for r in chosen
-        ],
+        "questions": [_taking_question(row) for row in chosen],
     }
 
 
-@router.post("/submit")
+@router.get("/attempts/{attempt_id}", response_model=PaperTakingOut | PaperScorecardOut)
+def paper_attempt(
+    attempt_id: UUID, profile: CurrentProfile = Depends(get_current_profile)
+) -> dict:
+    _require_enabled()
+    _require_student(profile)
+    row = _load_attempt(get_service_client(), attempt_id, profile)
+    if row["status"] == "graded":
+        return row["result"]
+    questions = row["question_snapshot"]
+    return {
+        "attempt_id": row["id"], "status": "in_progress",
+        "paper_type": row["paper_type"], "requested": len(questions),
+        "available": len(questions),
+        "questions": [_taking_question(question) for question in questions],
+    }
+
+
+@router.post("/submit", response_model=PaperScorecardOut)
 def paper_submit(
     body: SubmitRequest, profile: CurrentProfile = Depends(get_current_profile)
 ) -> dict:
@@ -227,19 +349,18 @@ def paper_submit(
     _require_enabled()
     _require_student(profile)
     service = get_service_client()
-    ids = [a.question_id for a in body.answers]
-    if len(ids) != len(set(ids)):
-        raise HTTPException(status_code=400, detail="Each question can be submitted only once.")
-    enrolled = enrolled_subject_ids(service, profile)
-    rows = select_all_in(
-        service, "paper_questions",
-        "id, type, question_text, options, correct_answer, explanation, marks, "
-        "subject_id, model_answer, answer_summary",
-        in_column="id", values=ids,
-        configure=lambda q: q.eq("tenant_id", profile.tenant_id),
-    )
-    by_id = {r["id"]: r for r in rows if r.get("subject_id") in enrolled}
+    attempt = _load_attempt(service, body.attempt_id, profile)
+    if attempt["status"] != "in_progress":
+        raise HTTPException(409, "This paper set has already been submitted. Open its report instead.")
+    rows = attempt["question_snapshot"]
+    ids = [r["id"] for r in rows]
+    submitted_ids = [a.question_id for a in body.answers]
+    if len(submitted_ids) != len(set(submitted_ids)) or set(submitted_ids) != set(ids):
+        raise HTTPException(400, "Submit one answer for every question in this paper set.")
     answer_by_id = {a.question_id: a.student_answer for a in body.answers}
+    if any(not _paper_answered(answer_by_id[qid]) for qid in ids):
+        raise HTTPException(400, "Answer every question before submitting your paper set.")
+    by_id = {row["id"]: row for row in rows}
 
     # Descriptive answers are graded by AI in one batched call; objective answers
     # are graded deterministically. A student who covers >= 90% of the model answer's
@@ -248,7 +369,7 @@ def paper_submit(
         {"question_id": qid, "answer_summary": by_id[qid].get("answer_summary"),
          "model_answer": by_id[qid].get("model_answer"), "student_answer": answer_by_id.get(qid)}
         for qid in ids
-        if qid in by_id and by_id[qid].get("type") == "descriptive"
+        if by_id[qid].get("type") == "descriptive"
     ]
     for item in descriptive_items:
         answer = item.get("student_answer")
@@ -278,9 +399,7 @@ def paper_submit(
     score = 0.0
     total = 0.0
     for qid in ids:
-        r = by_id.get(qid)
-        if not r:
-            continue  # not the student's subject / not found - skip silently
+        r = by_id[qid]
         marks = float(r.get("marks") or 1)
         total += marks
         student_answer = answer_by_id.get(qid)
@@ -301,12 +420,32 @@ def paper_submit(
             "correct_answer": correct_display, "explanation": r.get("explanation"),
             "is_correct": is_correct, "marks_awarded": awarded,
         })
-    if not results:
-        raise HTTPException(status_code=404, detail="No gradeable questions found.")
-    return {
+    report = {
+        "attempt_id": str(body.attempt_id), "status": "graded",
         "score": round(score, 2),
         "total": round(total, 2),
         "correct": sum(1 for x in results if x["is_correct"]),
         "count": len(results),
         "results": results,
     }
+    try:
+        updated = (
+            service.table("paper_attempts")
+            .update({
+                "status": "graded", "result": report,
+                "submitted_at": datetime.now(timezone.utc).isoformat(),
+            })
+            .eq("id", str(body.attempt_id))
+            .eq("tenant_id", profile.tenant_id)
+            .eq("student_id", profile.user_id)
+            .eq("status", "in_progress")
+            .execute().data
+        )
+    except Exception as exc:
+        raise public_error(
+            503, "Could not confirm the paper report. Reopen this set to check whether it was saved.",
+            operation="submit paper attempt", exception=exc,
+        ) from exc
+    if not updated:
+        raise HTTPException(409, "This paper set has already been submitted. Open its report instead.")
+    return report

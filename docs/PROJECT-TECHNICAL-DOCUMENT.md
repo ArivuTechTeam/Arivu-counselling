@@ -332,7 +332,7 @@ Guards: **public** / **student** / **staff** (teacher+admin+super) / **admin** (
 
 **Practice** (`/api/v1`) — `/practice/sessions` (start/get/submit), bookmarks, `/daily` + `/daily/start`, `/exam/config` + `/exam/start`, `/leaderboard` (all student).
 
-**Paper bank** (`/api/v1/papers`) — when `PAPER_BANK_ENABLED` is on, publishing approved PYQ/MTP/RTP questions attempts an atomic sync into a tenant- and subject-scoped `paper_questions` bank; a sync failure leaves the previous bank entries intact and does not undo quiz publication. Students select a paper type and subject for a random set; objective answers use deterministic grading, while descriptive answers are checked against stored key points by the DeepSeek-first AI grader. This is separate from normal quiz attempts and does not persist a student's paper-bank answer. The teacher upload/worker path also reads the flag; migrations 63–65 are required. See `docs/deploy-runbook.md` for rollout evidence and remaining live checks.
+**Paper bank** (`/api/v1/papers`) — when `PAPER_BANK_ENABLED` is on, publishing approved PYQ/MTP/RTP questions attempts an atomic sync into a tenant- and subject-scoped `paper_questions` bank; a sync failure leaves the previous bank entries intact and does not undo quiz publication. Students select a paper type and subject for a random, frozen set in a private `paper_attempts` row. Taking responses hide answer keys; submission requires an answer to every selected question, and only the graded report reveals correct answers. Objective answers use deterministic grading, while descriptive answers are checked against stored key points by the DeepSeek-first AI grader. This is separate from normal quiz attempts. The teacher upload/worker path also reads the flag; migrations 63–66 are required before deploying the new attempt API. See `docs/deploy-runbook.md` for rollout evidence and remaining live checks.
 
 **Challenge** (`/api/v1`) — `/challenges` (create), `/challenges/join`
 (tenant/course-scoped friendly-code lookup), `/challenges/{token}` (hub),
@@ -400,6 +400,7 @@ PostgreSQL on Supabase. The repository contains `migrations/schema.sql` plus mig
 - `ai_extraction_jobs` — one row per AI processing run on a document (history for reprocessing).
 - `questions` — the question bank: type, text, `options` (jsonb), `correct_answer` (jsonb), explanation, difficulty, marks, `source`, `review_status`, `topic_id`, verbatim source evidence/page provenance, grounding confidence, verification status/warnings, and a (currently unused) `embedding` vector column.
 - `paper_questions` — approved, answerable PYQ/MTP/RTP questions frozen at publication; tenant/subject scoped and synchronized atomically by migration 65's RPC.
+- `paper_attempts` — private student-owned paper sets, frozen question/answer-key snapshots, and graded reports; migration 66 is required before the new API is deployed.
 - `quiz_sets` → `quiz_variants` → `quiz_variant_questions` — one upload produces a set; a set has variants (by cognitive level); a variant links to ordered questions.
 
 **Student activity**
@@ -515,6 +516,7 @@ and application queries scope every tenant-owned read/write to one institution.
 | 62 atomic-student-contact | Serializes each student's request cooldown and insert in one service-role-only database function. |
 | 63–64 paper bank | Adds paper metadata and the tenant-scoped PYQ/MTP/RTP `paper_questions` bank. |
 | 65 paper-bank-safety | Makes paper-question snapshot replacement atomic and adds the descriptive-grading quota. |
+| 66 paper-attempts | Adds private, durable paper attempts so answer keys appear only in completed reports. |
 
 > **Repository inventory verified 2026-09-25:** migrations 13–65 above are
 > recorded in this table. Migration 59 was reported applied by the operator;

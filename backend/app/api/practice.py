@@ -1265,11 +1265,13 @@ def leaderboard(
         for answer in select_all_in(
             service,
             "attempt_answers",
-            "attempt_id, is_correct",
+            "attempt_id, student_answer, is_correct",
             in_column="attempt_id",
             values=list(attempt_owner),
             configure=lambda query: query.eq("tenant_id", t),
         ):
+            if not is_answered(answer.get("student_answer")):
+                continue
             d = agg[attempt_owner[answer["attempt_id"]]]
             d["answered"] += 1
             d["correct"] += 1 if answer.get("is_correct") else 0
@@ -1278,11 +1280,13 @@ def leaderboard(
         for answer in select_all_in(
             service,
             "practice_answers",
-            "session_id, is_correct",
+            "session_id, student_answer, is_correct",
             in_column="session_id",
             values=list(session_owner),
             configure=lambda query: query.eq("tenant_id", t),
         ):
+            if not is_answered(answer.get("student_answer")):
+                continue
             d = agg[session_owner[answer["session_id"]]]
             d["answered"] += 1
             d["correct"] += 1 if answer.get("is_correct") else 0
