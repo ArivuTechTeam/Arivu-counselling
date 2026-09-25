@@ -1,19 +1,17 @@
 # Dashboard refresh persistence
 
-**Verified against code:** 22 September 2026
+**Verified against code:** 24 September 2026
 
 Non-sensitive UI preferences and drafts use per-tab `sessionStorage`, primarily
 through `frontend/lib/use-session-storage-state.ts`. A refresh in the same tab
 restores them; closing the tab ends their intended lifetime. Invalid or
 unavailable browser storage falls back safely to page defaults.
 
-The dashboard shell also keeps a versioned `dashboard-bootstrap-v1` entry via
-`frontend/lib/dashboard-bootstrap.ts`. It contains only the current user ID,
-role, and forced-password-change flag so the role shell can render from the
-local Supabase session without repeating the old remote auth/profile waterfall.
-The authenticated `/api/v1/me/profile` response still refreshes the
-authoritative role, password state, and institution identity on every dashboard
-mount; the cached bootstrap is a UI fast path, not an authorization boundary.
+The dashboard no longer reads or writes a cached role. It restores the local
+Supabase session, then waits for the authenticated `/api/v1/me/profile`
+response before showing role-specific pages. If that request fails, it shows
+a retryable error instead of rendering an outdated role. Sign-out still removes
+any legacy `dashboard-bootstrap-v1` entry left by earlier versions.
 
 Currently covered:
 

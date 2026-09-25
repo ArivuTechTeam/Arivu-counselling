@@ -13,7 +13,7 @@ export default function TestHistoryPage() {
     <div className="flex flex-col gap-6">
       <PageHeader
         title="Quiz history"
-        description="Review every completed quiz and practice session, including mixed-subject Smart Quizzes."
+        description="Review completed quizzes, topic practice and mock exams in one place."
       />
       {error ? (
         <ErrorCard message={error.message} onRetry={() => void mutate()} />

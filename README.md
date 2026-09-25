@@ -33,5 +33,13 @@ map. Deployment and security guidance live in
 [`docs/api-security-hardening.md`](docs/api-security-hardening.md); the
 collection, disclosure, processor, and deletion map is in
 [`docs/personal-data-audit.md`](docs/personal-data-audit.md). Migration 59 was
-reported applied on 2026-09-24; retain its deployment record because it removes
-previously stored AI prompt/response payloads.
+reported applied on 2026-09-24; the production AI-log raw-payload columns were
+also verified absent that day. Railway production now has two services: the
+public `quiz-generator` API and the private `quiz-generator-worker` for durable
+faculty jobs. The obsolete `quiz-generator-retention` cron was deleted on
+2026-09-24 after its code and target columns were removed. API and worker
+deployments are independent; see the deploy runbook before updating either.
+
+Local coding-assistant guidance is gitignored: Codex loads `AGENTS.md` and
+`.codex/` when present; Claude Code uses `.claude/`. These files are not
+included in a fresh clone unless copied over separately.

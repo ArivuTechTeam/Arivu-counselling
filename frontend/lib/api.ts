@@ -56,6 +56,7 @@ export class ApiRequestError extends Error {
   readonly requestId: string | null;
   readonly retryable: boolean;
   readonly retryAfterSeconds: number | null;
+  readonly reason: string | null;
 
   constructor(
     message: string,
@@ -65,6 +66,7 @@ export class ApiRequestError extends Error {
       requestId?: string | null;
       retryable?: boolean;
       retryAfterSeconds?: number | null;
+      reason?: string | null;
     },
   ) {
     super(message);
@@ -74,11 +76,8 @@ export class ApiRequestError extends Error {
     this.requestId = options.requestId ?? null;
     this.retryable = options.retryable ?? false;
     this.retryAfterSeconds = options.retryAfterSeconds ?? null;
+    this.reason = options.reason ?? null;
   }
-}
-
-function requestReference(requestId: string | null): string {
-  return requestId ? ` Error reference: ${requestId}.` : "";
 }
 
 type ValidationErrorDetail = {
@@ -149,9 +148,9 @@ async function apiFetch(
     if (controller.signal.aborted) {
       if (timedOut) {
         throw new ApiRequestError(
-          `${timeoutMs >= QUIZ_EXTRACTION_TIMEOUT_MS
+          timeoutMs >= QUIZ_EXTRACTION_TIMEOUT_MS
             ? "Processing is taking longer than this page can wait. Check Recent tasks and the Review queue before starting again; the server may still finish this request."
-            : "The service did not respond in time. Please try again shortly."}${requestReference(requestId)}`,
+            : "The service did not respond in time. Please try again shortly.",
           {
             code: "request_timeout",
             requestId,
@@ -165,7 +164,7 @@ async function apiFetch(
       });
     }
     throw new ApiRequestError(
-      `Unable to reach the service. Check your connection and try again.${requestReference(requestId)}`,
+      "Unable to reach the service. Check your connection and try again.",
       {
         code: "network_error",
         requestId,
@@ -220,6 +219,7 @@ async function apiError(res: Response, fallback: string): Promise<never> {
     request_id?: string;
   };
   const requestId = res.headers.get("X-Request-ID") || body.request_id || null;
+  const reason = res.headers.get("X-Error-Code");
   const retryAfterHeader = res.headers.get("Retry-After");
   const parsedRetryAfter = retryAfterHeader
     ? Number.parseInt(retryAfterHeader, 10)
@@ -264,23 +264,34 @@ async function apiError(res: Response, fallback: string): Promise<never> {
       message: body.detail || "The service is temporarily unavailable. Please try again.",
       retryable: true,
     },
+    502: {
+      code: "service_unavailable",
+      message: "The service is temporarily unavailable. Please try again in a moment.",
+      retryable: true,
+    },
+    504: {
+      code: "request_timeout",
+      message: "The service took too long to respond. Please try again in a moment.",
+      retryable: true,
+    },
   };
   const details = statusDetails[res.status] ?? {
     code: res.status >= 500 ? ("server_error" as const) : ("request_failed" as const),
     message:
       res.status >= 500
-        ? "An unexpected server error occurred. Please try again."
+        ? "We couldn't complete this request right now. Please try again. If it keeps happening, contact support."
         : body.detail || fallback,
     retryable: res.status >= 500,
   };
   throw new ApiRequestError(
-    `${details.message}${requestReference(requestId)}`,
+    details.message,
     {
       code: details.code,
       status: res.status,
       requestId,
       retryable: details.retryable,
       retryAfterSeconds,
+      reason,
     },
   );
 }
@@ -657,7 +668,7 @@ async function jsonRequest<T>(
     timeoutMs,
   );
   if (!res.ok) {
-    return apiError(res, "Something went wrong. Please try again.");
+    return apiError(res, "We couldn't complete this request. Please try again.");
   }
   return res.json();
 }
@@ -684,6 +695,10 @@ export type InstitutionFeatureFlags = {
   // Separate paper-bank (PYQ/MTP/RTP) rollout toggle; always present on the
   // /me/profile response, optional here so the 6-key fallbacks stay valid.
   paper_bank?: boolean;
+  // Separate P6.4 rollout toggle (not part of the commerce registry); always
+  // present on the /me/profile response, optional here so the 6-key fallbacks
+  // elsewhere remain valid.
+  extended_question_types?: boolean;
 };
 
 export const getDashboardProfile = () =>
@@ -844,6 +859,47 @@ export type AccountSettings = {
 
 export const getAccountSettings = () =>
   jsonRequest<AccountSettings>("/api/v1/auth/settings", "GET");
+
+export type StudentContactKind = "feedback" | "support";
+export type StudentContactCategory = "general" | "feature_idea" | "course_access" | "quiz_issue" | "app_bug";
+export type StudentContact = {
+  reference: string;
+  kind: StudentContactKind;
+  category: StudentContactCategory;
+  routed_to: "platform" | "institution";
+  message: string;
+  rating: number | null;
+  status: "open" | "answered" | "closed";
+  reply: string | null;
+  created_at: string;
+  updated_at: string;
+  institution_name: string | null;
+};
+
+export type StudentContactReceipt = Pick<StudentContact, "reference" | "routed_to" | "status">;
+
+export const submitStudentContact = (input: {
+  kind: StudentContactKind;
+  category: StudentContactCategory;
+  message: string;
+  rating?: number | null;
+}) => jsonRequest<StudentContactReceipt>("/api/v1/contact", "POST", input);
+
+export const getMyStudentContacts = () =>
+  jsonRequest<StudentContact[]>("/api/v1/contact/mine", "GET");
+
+export const getSupportInbox = () =>
+  jsonRequest<StudentContact[]>("/api/v1/contact/inbox", "GET");
+
+export const replyToStudentContact = (
+  reference: string,
+  reply: string,
+  status: "answered" | "closed" = "answered",
+) => jsonRequest<StudentContact>(
+  `/api/v1/contact/inbox/${encodeURIComponent(reference)}/reply`,
+  "POST",
+  { reply, status },
+);
 
 export const deleteOwnAccount = () =>
   jsonRequest<{ deleted: boolean }>("/api/v1/auth/account", "DELETE", {
@@ -1073,8 +1129,14 @@ export type StartPracticeInput = {
   difficulty?: string | null;
 };
 export type PracticeSubject = { id: string; name: string };
+export type PracticeChapter = { id: string; name: string };
 export const listPracticeSubjects = () =>
   jsonRequest<PracticeSubject[]>("/api/v1/practice/subjects", "GET");
+export const listPracticeChapters = (subjectId: string) =>
+  jsonRequest<PracticeChapter[]>(
+    `/api/v1/practice/subjects/${encodeURIComponent(subjectId)}/chapters`,
+    "GET",
+  );
 export const previewPracticeSession = (input: StartPracticeInput) =>
   jsonRequest<{ requested_count: number; question_count: number }>(
     "/api/v1/practice/preview",
@@ -1275,6 +1337,8 @@ export type ExamConfig = {
   questions: number;
   duration_minutes: number;
   negative_marking: number;
+  penalty_is_fraction: boolean;
+  partial_credit: boolean;
   active_session_id: string | null;
 };
 export const getExamConfig = () =>

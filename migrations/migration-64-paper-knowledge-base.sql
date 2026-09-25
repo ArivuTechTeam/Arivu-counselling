@@ -1,7 +1,7 @@
--- Migration 61 - Knowledge base: generalise PYQ into PYQ/MTP/RTP (KB-A)
--- Apply after migration 60. Safe: the Phase-1 PYQ feature is not live yet, so
--- pyq_questions is empty and the PYQ columns on `questions` are unused. This
--- migration is additive to the rest of the system and byte-neutral when
+-- Migration 64 - Knowledge base: generalise PYQ into PYQ/MTP/RTP (KB-A)
+-- Apply after migration 63. Preserve any Phase-1 PYQ snapshots while moving
+-- them to the generalized bank. This migration is additive to the rest of the
+-- system and byte-neutral when
 -- PAPER_BANK_ENABLED is off. It:
 --   1) replaces pyq_questions with a generalised `paper_questions` bank
 --      (paper_type in pyq/mtp/rtp, + chapter, + descriptive model_answer/summary),
@@ -10,7 +10,6 @@
 begin;
 
 -- 1) The knowledge-base of classified questions (one table for all three types).
-drop table if exists public.pyq_questions;
 create table if not exists public.paper_questions (
   id                 uuid primary key default gen_random_uuid(),
   tenant_id          uuid not null references public.tenants(id) on delete cascade,
@@ -45,6 +44,23 @@ create index if not exists idx_paper_questions_tenant on public.paper_questions(
 -- Serves the student random pull (paper_type + subject + chapter + question type).
 create index if not exists idx_paper_questions_bank
   on public.paper_questions(tenant_id, paper_type, subject_id, chapter_id, type);
+
+-- Migration 63 may have been used before this one. Copy existing PYQ rows before
+-- removing the old table, retaining their IDs and source lineage. Both steps
+-- run inside this transaction, so an insert failure rolls back without data loss.
+insert into public.paper_questions (
+  id, tenant_id, paper_type, subject_id, exam, year, type, question_text,
+  options, correct_answer, explanation, marks, content_hash,
+  origin_question_id, source_quiz_set_id, source_document_id, created_by, created_at
+)
+select
+  id, tenant_id, 'pyq', subject_id, pyq_exam, pyq_year, type, question_text,
+  options, correct_answer, explanation, marks, content_hash,
+  origin_question_id, source_quiz_set_id, source_document_id, created_by, created_at
+from public.pyq_questions
+on conflict do nothing;
+
+drop table public.pyq_questions;
 
 alter table public.paper_questions enable row level security;
 revoke all on public.paper_questions from public, anon, authenticated;

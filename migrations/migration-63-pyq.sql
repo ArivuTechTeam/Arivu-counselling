@@ -1,5 +1,5 @@
--- Migration 60 - PYQ (Previous Year Questions), Phase 1 / PYQ-A
--- Apply after migration 59. Additive + nullable + flag-gated (PYQ_ENABLED,
+-- Migration 63 - PYQ (Previous Year Questions), Phase 1 / PYQ-A
+-- Apply after migration 62. Additive + nullable + flag-gated (PAPER_BANK_ENABLED,
 -- default off): with the flag off, every existing row and flow is unchanged and
 -- these columns/table simply sit unused. It adds:
 --   1) PYQ metadata columns on `questions` (replacing the v1 explanation-prefix

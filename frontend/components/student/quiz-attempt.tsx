@@ -14,7 +14,7 @@ import { Input } from "@/components/ui/input";
 import { ErrorCard } from "@/components/ui/error-card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Check, X } from "@/components/ui/icons";
-import { formatAnswerValue, typeLabel } from "@/lib/format";
+import { formatAnswerValue, practiceTitle, typeLabel } from "@/lib/format";
 import {
   AttemptInProgress,
   AttemptResult,
@@ -336,7 +336,7 @@ export function QuizAttempt({
   if (error && !state) return <ErrorCard message={error} onRetry={load} />;
   if (!state) return <QuestionPanelSkeleton />;
   if (state.status === "graded") {
-    return <Results result={state as AttemptResult} />;
+    return <Results result={state as AttemptResult} source={source} />;
   }
 
   const questions = (state as { questions: TakingQuestion[] }).questions;
@@ -708,7 +708,7 @@ function QuestionInput({
   onChange: (v: unknown) => void;
   onToggleMulti: (id: string) => void;
 }) {
-  if (q.type === "mcq_single" || q.type === "true_false") {
+  if (q.type === "mcq_single" || q.type === "true_false" || q.type === "assertion_reason") {
     return (
       <div className="flex flex-col gap-1.5">
         {(q.options || []).map((o) => {
@@ -741,7 +741,7 @@ function QuestionInput({
       </div>
     );
   }
-  if (q.type === "mcq_multi") {
+  if (q.type === "mcq_multi" || q.type === "mrm") {
     const arr = Array.isArray(value) ? (value as string[]) : [];
     return (
       <div className="flex flex-col gap-1.5">
@@ -774,6 +774,32 @@ function QuestionInput({
       </div>
     );
   }
+  if (q.type === "matching") {
+    const opts = (q.options || []) as { id: string; text: string; side?: string }[];
+    const left = opts.filter((o) => o.side === "left");
+    const right = opts.filter((o) => o.side === "right");
+    const chosen = (value && typeof value === "object" ? value : {}) as Record<string, string>;
+    return (
+      <div className="flex flex-col gap-2">
+        {left.map((l) => (
+          <div key={l.id} className="flex items-center gap-3 rounded-md border border-input px-3 py-2.5">
+            <span className="flex-1">{l.text}</span>
+            <span className="text-muted-foreground">→</span>
+            <select
+              className="h-10 min-w-[10rem] rounded-md border border-input bg-background px-2 text-sm accent-primary"
+              value={chosen[l.id] ?? ""}
+              onChange={(e) => onChange({ ...chosen, [l.id]: e.target.value })}
+            >
+              <option value="">Select…</option>
+              {right.map((r) => (
+                <option key={r.id} value={r.id}>{r.text}</option>
+              ))}
+            </select>
+          </div>
+        ))}
+      </div>
+    );
+  }
   if (q.type === "numerical") {
     return (
       <Input
@@ -794,7 +820,13 @@ function QuestionInput({
   );
 }
 
-function Results({ result }: { result: AttemptResult }) {
+function Results({
+  result,
+  source,
+}: {
+  result: AttemptResult;
+  source: "quiz" | "practice";
+}) {
   const [showCard, setShowCard] = useState(false);
   const correct = result.results.filter((q) => q.is_correct).length;
   const pct =
@@ -831,7 +863,7 @@ function Results({ result }: { result: AttemptResult }) {
             Share result
           </button>
           <StudentDownloads
-            quizTitle={result.quiz_title ?? "Quiz"}
+            quizTitle={source === "practice" ? practiceTitle(result.quiz_title) : result.quiz_title ?? "Quiz"}
             score={result.total_score}
             maxScore={result.max_score}
             results={result.results}
@@ -851,7 +883,7 @@ function Results({ result }: { result: AttemptResult }) {
 
       {showCard && (
         <ScoreCard
-          title={result.quiz_title ?? "Quiz"}
+          title={source === "practice" ? practiceTitle(result.quiz_title) : result.quiz_title ?? "Quiz"}
           pct={pct}
           correct={correct}
           total={result.results.length}

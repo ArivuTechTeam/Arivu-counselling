@@ -61,7 +61,7 @@ def prepare_extraction(service, job: dict, profile: CurrentProfile) -> dict:
         job_id=job["id"],
         paper_mode=paper_mode,
     )
-    questions, receipt = _validate_import_candidates(raw)
+    questions, receipt = _validate_import_candidates(raw, paper_mode=paper_mode)
     if not questions:
         raise ValueError("No usable questions found")
     confidences = [q.confidence for q in questions if q.confidence is not None]

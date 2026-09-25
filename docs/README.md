@@ -14,7 +14,7 @@ code remains the final source of truth.
 - [`chunked-generation-architecture.md`](chunked-generation-architecture.md) —
   implemented durable document-analysis and generation-job architecture.
 - [`deploy-runbook.md`](deploy-runbook.md) — deployment and production
-  environment variables.
+  environment variables, including the separate Railway API and faculty worker.
 - [`dashboard-state-persistence.md`](dashboard-state-persistence.md) — what UI
   state survives a refresh and what must never be stored.
 - [`personal-data-audit.md`](personal-data-audit.md) — personal-data handling.

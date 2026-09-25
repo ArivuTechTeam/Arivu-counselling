@@ -159,6 +159,17 @@ class SnapshotTests(unittest.TestCase):
 
 
 class DescriptiveTests(unittest.TestCase):
+    def test_flag_off_rejects_descriptive_even_with_model_answer(self):
+        from app.services.quiz_extraction import _validate_import_candidates
+        raw = {"questions": [{
+            "type": "descriptive", "question_text": "Explain X.",
+            "options": None, "correct_answer": None, "marks": 5,
+            "model_answer": "A complete explanation.",
+        }]}
+        questions, summary = _validate_import_candidates(raw)
+        self.assertEqual(questions, [])
+        self.assertEqual(summary["skipped"], 1)
+
     def test_validation_accepts_descriptive_with_model_answer(self):
         from app.services.quiz_extraction import _validate_import_candidates
         raw = {"questions": [{
@@ -167,7 +178,7 @@ class DescriptiveTests(unittest.TestCase):
             "model_answer": "Accrual means recognising income/expense when earned/incurred.",
             "answer_summary": "Recognise income when earned and expenses when incurred, not on cash.",
         }]}
-        questions, summary = _validate_import_candidates(raw)
+        questions, summary = _validate_import_candidates(raw, paper_mode=True)
         self.assertEqual(summary["imported"], 1)
         q = questions[0]
         self.assertEqual(q.type, "descriptive")
@@ -179,7 +190,7 @@ class DescriptiveTests(unittest.TestCase):
             "type": "descriptive", "question_text": "Explain X.",
             "options": None, "correct_answer": None, "marks": 5, "model_answer": None,
         }]}
-        questions, summary = _validate_import_candidates(raw)
+        questions, summary = _validate_import_candidates(raw, paper_mode=True)
         self.assertEqual(summary["imported"], 0)
         self.assertEqual(summary["skipped"], 1)
 

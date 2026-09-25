@@ -24,7 +24,7 @@ Turn PYQ from a lossy placeholder into a real product: detect PYQ robustly durin
 - It is a **v1 placeholder**: `_prefix_pyq()` embeds `[PYQ <year>]` into the explanation string - explicitly *"no dedicated columns yet"*. Lossy, no exam, not queryable, no student surface.
 - No `pyq` columns or table exist; an unused deterministic `pyq_parser.py` exists but is not wired in.
 
-## 3. Data model (migration-60, additive)
+## 3. Data model (renumbered migration 63 during main integration, additive)
 
 ### 3a. PYQ metadata on `questions` (nullable, default off)
 - `is_pyq boolean not null default false`
@@ -70,7 +70,7 @@ Teacher uploads MCQ doc -> extraction + PYQ context -> draft quiz_set with **PYQ
 
 ## 6. Sub-phases (build + self-verify each; flag-gated)
 
-- **PYQ-A - Data model & flag.** migration-60 (columns + `pyq_questions` + RLS + indexes) + `PYQ_ENABLED` (default off) + deployment_check probes. Behaviour-neutral.
+- **PYQ-A - Data model & flag.** migration 63 (columns + `pyq_questions` + RLS + indexes) + `PYQ_ENABLED` (default off) + deployment_check probes. Behaviour-neutral.
 - **PYQ-B - Detection.** Document-level context pass + exam detection + persist real PYQ columns (replace the explanation hack when on). Extraction byte-identical when off.
 - **PYQ-C - Review & publish.** PYQ badges + editable year/exam in the teacher review card; publish-time snapshot into `pyq_questions` (dedup + completeness gate + upsert-by-origin).
 - **PYQ-D - Student PYQ surface.** New "PYQ" nav item + page. Flow: pick **subject** (only enrolled subjects) -> see previous-year papers **grouped by exam + year**, each a takeable quiz -> **take it like a normal quiz** (one by one) -> **scorecard** + correct answers, reusing the existing quiz-taking + grading engine. New API: `GET /api/v1/pyq/subjects` (enrolled subjects + PYQ counts), `GET /api/v1/pyq/papers?subject_id=` (papers grouped by exam+year), and a take/start + submit path that reuses the attempt/scoring flow over PYQ snapshots.

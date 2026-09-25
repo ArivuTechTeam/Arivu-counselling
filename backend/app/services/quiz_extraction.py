@@ -87,7 +87,9 @@ class ExtractedQuiz(BaseModel):
     questions: list[ExtractedQuestion]
 
 
-def _validate_import_candidates(raw: dict) -> tuple[list[ExtractedQuestion], dict]:
+def _validate_import_candidates(
+    raw: dict, *, paper_mode: bool = False
+) -> tuple[list[ExtractedQuestion], dict]:
     """Account for every model candidate without claiming full source coverage."""
     candidates = raw.get("questions") or []
     if not isinstance(candidates, list):
@@ -101,6 +103,8 @@ def _validate_import_candidates(raw: dict) -> tuple[list[ExtractedQuestion], dic
             if not question.verification_warnings:
                 question.verification_warnings = ["Imported answer is unconfirmed; compare with the original paper before approval."]
             if question.type == "descriptive":
+                if not paper_mode:
+                    raise ValueError("Descriptive questions require paper analysis mode.")
                 # Descriptive questions have no auto-gradeable answer; they carry a
                 # model answer instead and are graded by AI later. Give correct_answer
                 # a non-null placeholder so the (NOT NULL) questions column accepts it.
@@ -483,7 +487,7 @@ def extract_quiz(
         )
 
         # 4) Validate per-question; skip malformed ones (teacher reviews the rest).
-        questions, import_summary = _validate_import_candidates(raw)
+        questions, import_summary = _validate_import_candidates(raw, paper_mode=paper_mode)
         skipped = import_summary["skipped"]
         if not questions:
             raise LLMError("No valid questions could be extracted from this document.")

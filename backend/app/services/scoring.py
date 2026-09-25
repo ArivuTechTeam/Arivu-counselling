@@ -80,7 +80,7 @@ def _is_answered(value) -> bool:
     """Matches the student-side notion of 'answered' (see practice.is_answered)."""
     if value is None or value == "":
         return False
-    if isinstance(value, list):
+    if isinstance(value, (list, dict)):
         return len(value) > 0
     return True
 
@@ -95,6 +95,24 @@ def _score_mrm(question: dict, student_answer, marks: float) -> Outcome:
         return Outcome(WRONG, 0.0)
     net_correct = max(0, len(chosen & correct) - len(chosen - correct))
     awarded = marks * net_correct / n
+    if awarded >= marks:
+        return Outcome(CORRECT, marks)
+    if awarded <= 0:
+        return Outcome(WRONG, 0.0)
+    return Outcome(PARTIAL, awarded)
+
+
+def _score_matching(question: dict, student_answer, marks: float) -> Outcome:
+    """Partial credit for a matching question: award marks per correctly paired
+    left item. correct_answer = {"pairs": {left_id: right_id}}; the student answer
+    is a {left_id: right_id} map."""
+    pairs = (question.get("correct_answer") or {}).get("pairs") or {}
+    if not isinstance(pairs, dict) or not pairs:
+        return Outcome(WRONG, 0.0)
+    chosen = student_answer if isinstance(student_answer, dict) else {}
+    n = len(pairs)
+    hits = sum(1 for left, right in pairs.items() if str(chosen.get(left)) == str(right))
+    awarded = marks * hits / n
     if awarded >= marks:
         return Outcome(CORRECT, marks)
     if awarded <= 0:
@@ -149,8 +167,13 @@ def score(question: dict, student_answer, policy: dict | None = None) -> Outcome
     if not _is_answered(student_answer):
         return Outcome(BLANK, float(policy["omission_score"] or 0.0))
 
-    if q_type == "mcq_multi" and policy["multi_mode"] == "mrm_partial":
+    # mrm always awards partial credit; mcq_multi does so only under an mrm policy.
+    if q_type == "mrm" or (
+        q_type == "mcq_multi" and policy["multi_mode"] == "mrm_partial"
+    ):
         return _score_mrm(question, student_answer, marks)
+    if q_type == "matching":
+        return _score_matching(question, student_answer, marks)
 
     # Numerical: use the numeric contract when the policy declares one, otherwise
     # the existing float-tolerance comparison inside grade_answer (unchanged).

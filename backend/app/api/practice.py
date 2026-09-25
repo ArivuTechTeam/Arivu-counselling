@@ -319,6 +319,30 @@ def practice_subjects(
     return sorted(rows, key=lambda row: str(row.get("name") or "").lower())
 
 
+@router.get("/practice/subjects/{subject_id}/chapters")
+def practice_subject_chapters(
+    subject_id: str,
+    profile: CurrentProfile = Depends(get_current_profile),
+) -> list[dict]:
+    """List chapter labels only for a student's enrolled subject and tenant."""
+    _require_student(profile)
+    service = get_service_client()
+    if subject_id not in enrolled_subject_ids(service, profile):
+        raise HTTPException(status_code=404, detail="Subject not found.")
+    rows = (
+        service.table("chapters")
+        .select("id,name")
+        .eq("tenant_id", profile.tenant_id)
+        .eq("subject_id", subject_id)
+        .order("order_index")
+        .order("name")
+        .execute()
+        .data
+        or []
+    )
+    return rows
+
+
 @router.post("/practice/preview")
 def preview_practice(
     body: StartPractice, profile: CurrentProfile = Depends(get_current_profile)
@@ -337,8 +361,9 @@ def preview_practice(
     if not ids:
         raise HTTPException(
             status_code=400,
-            detail="No questions available yet for this selection — ask your "
-            "teacher to publish some, or try another subject.",
+            detail="No approved questions match this selection. Try another "
+            "subject, chapter, or difficulty. If none are available, ask your teacher to publish questions.",
+            headers={"X-Error-Code": "no_questions_available"},
         )
     return {"requested_count": body.count, "question_count": len(ids)}
 
@@ -361,8 +386,9 @@ def start_practice(
     if not ids:
         raise HTTPException(
             status_code=400,
-            detail="No questions available yet for this selection — ask your "
-            "teacher to publish some, or try another subject.",
+            detail="No approved questions match this selection. Try another "
+            "subject, chapter, or difficulty. If none are available, ask your teacher to publish questions.",
+            headers={"X-Error-Code": "no_questions_available"},
         )
     questions = _load_questions(service, ids, profile.tenant_id)
     if len(questions) != len(ids):
@@ -953,17 +979,29 @@ def _active_exam_session(service, profile: CurrentProfile) -> dict | None:
 
 @router.get("/exam/config")
 def exam_config(profile: CurrentProfile = Depends(get_current_profile)) -> dict:
-    """The institution's exam pattern — for the pre-exam briefing screen."""
+    """The effective pattern and scoring rules for the next or active exam."""
     _require_student(profile)
     service = get_service_client()
     cfg = _exam_config(service, profile.tenant_id)
+    active = _active_exam_session(service, profile)
+    active_cfg = (active.get("config") or {}) if active else {}
+    policy = (
+        active.get("scoring_policy_snapshot")
+        if active
+        else _resolve_exam_scoring_policy(service, profile)
+    )
+    effective_policy = normalize_policy(
+        policy if policy is not None else {
+            "wrong_penalty": active_cfg.get("negative_marking", cfg["negative_marking"])
+        }
+    )
     return {
-        "questions": int(cfg["questions"]),
-        "duration_minutes": int(cfg["duration_minutes"]),
-        "negative_marking": float(cfg["negative_marking"]),
-        "active_session_id": (
-            active["id"] if (active := _active_exam_session(service, profile)) else None
-        ),
+        "questions": int(active_cfg.get("count", cfg["questions"])),
+        "duration_minutes": int(active_cfg.get("duration_minutes", cfg["duration_minutes"])),
+        "negative_marking": effective_policy["wrong_penalty"],
+        "penalty_is_fraction": effective_policy["penalty_is_fraction"],
+        "partial_credit": effective_policy["multi_mode"] == "mrm_partial",
+        "active_session_id": active["id"] if active else None,
     }
 
 

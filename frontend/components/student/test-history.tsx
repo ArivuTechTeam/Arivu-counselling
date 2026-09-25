@@ -6,7 +6,7 @@ import { useEffect, useState } from "react";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Inbox } from "@/components/ui/icons";
 import { AttemptHistoryItem } from "@/lib/api";
-import { variantLabel } from "@/lib/format";
+import { practiceTitle, variantLabel } from "@/lib/format";
 
 function hexFor(pct: number) {
   return pct >= 70 ? "#00a651" : pct >= 40 ? "#f5a623" : "#ff6b7a";
@@ -80,7 +80,7 @@ export function AttemptHistoryList({
                 {/* title + animated bar */}
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-base font-semibold text-foreground">
-                    {a.quiz_title}
+                    {a.source === "practice" ? practiceTitle(a.quiz_title) : a.quiz_title}
                   </p>
                   <p className="mt-0.5 text-xs text-muted-foreground">
                     {variantLabel(a.variant_type)}

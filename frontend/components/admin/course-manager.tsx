@@ -378,7 +378,7 @@ export function CourseManager() {
       await fn();
       refresh();
     } catch (e) {
-      setActionError(e instanceof Error ? e.message : "Something went wrong");
+      setActionError(e instanceof Error ? e.message : "We couldn't save this change. Please try again.");
     } finally {
       setBusy(false);
     }

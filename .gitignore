@@ -50,3 +50,6 @@ test-uploads/
 .superdesign/
 /.tmp/
 /supabase/.temp/
+.codex/
+AGENTS.md
+.agents/skills/

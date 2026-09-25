@@ -22,6 +22,7 @@ import {
   DocumentOut,
   analyzeDocument,
   checkDocumentDuplicate,
+  getDashboardProfile,
   getGenerationJob,
   listChapters,
   listDocuments,
@@ -56,6 +57,13 @@ const QUESTION_TYPES = [
   { value: "true_false", label: "True / False" },
   { value: "numerical", label: "Numerical" },
   { value: "fill_blank", label: "Fill in the blank" },
+];
+
+// Phase 6.4 objective types — offered only when the backend flag is on.
+const EXTENDED_QUESTION_TYPES = [
+  { value: "assertion_reason", label: "Assertion & Reason" },
+  { value: "mrm", label: "Multiple response" },
+  { value: "matching", label: "Matching" },
 ];
 
 function Spinner() {
@@ -128,6 +136,16 @@ export function BlueprintGenerator() {
   const router = useRouter();
   const { notify } = useToast();
   const coursesQuery = useCourses();
+
+  const [extendedTypesEnabled, setExtendedTypesEnabled] = useState(false);
+  useEffect(() => {
+    getDashboardProfile()
+      .then((p) => setExtendedTypesEnabled(!!p.features?.extended_question_types))
+      .catch(() => setExtendedTypesEnabled(false));
+  }, []);
+  const questionTypes = extendedTypesEnabled
+    ? [...QUESTION_TYPES, ...EXTENDED_QUESTION_TYPES]
+    : QUESTION_TYPES;
 
   const [documents, setDocuments] = useState<DocumentOut[]>([]);
   const [documentId, setDocumentId] = useState("");
@@ -1254,7 +1272,7 @@ export function BlueprintGenerator() {
                   {/* Per-topic blueprint: how many of each format from THIS topic. */}
                   {selected && (
                     <div className="grid grid-cols-1 gap-2 border-t border-dashed border-primary/20 pt-2 sm:grid-cols-2">
-                      {QUESTION_TYPES.map((t) => {
+                      {questionTypes.map((t) => {
                         const n = counts[t.value] || 0;
                         return (
                           <div

@@ -1,15 +1,15 @@
 # ArivuPro Quiz Platform (quiz-generator-v1) — Technical Project Document
 
-> **Purpose of this document.** A single technical reference for the ArivuPro Quiz Platform. AI/document routing, durable jobs, retry behavior, cost controls, dashboard refresh persistence, institution branding, and the Course → Level → Subject model were refreshed against `main` on 22 September 2026. See `docs/current-ai-document-workflow.md` and `docs/dashboard-state-persistence.md` for focused current references. Dated evidence, changelogs, and original plans remain historical. Repository state does not prove Railway environment values, provider health, deployed code, or applied Supabase migrations; verify those separately.
+> **Purpose of this document.** A single technical reference for the ArivuPro Quiz Platform. AI/document routing, durable jobs, retry behavior, cost controls, dashboard refresh persistence, institution branding, and the Course → Level → Subject model were refreshed against `main` on 22 September 2026. Railway topology, migration inventory, and question-type notes were updated on 24 September 2026. See `docs/current-ai-document-workflow.md` and `docs/dashboard-state-persistence.md` for focused current references. Dated evidence, changelogs, and original plans remain historical. Repository state alone does not prove Railway environment values, provider health, deployed code, or applied Supabase migrations; verify those separately.
 
 | | |
 |---|---|
 | **Product** | ArivuPro Quiz Platform — multi-tenant AI quiz generator for coaching institutions |
 | **Repository** | `ArivuTechTeam/quiz-generator` |
-| **Document version** | 1.4 |
-| **Document date** | 7 September 2026; current architecture sections refreshed 22 September 2026 |
-| **Basis** | `main` through `4129cbd`; older unrelated sections retain their dated verification notes |
-| **Status of product** | Phase 1 (functional product + multi-tenant foundation) — **live in production pilot** (production status confirmed only as of 2026-09-04/07, not re-verified in this refresh) |
+| **Document version** | 1.5 |
+| **Document date** | 7 September 2026; targeted current-state updates 24 September 2026 |
+| **Basis** | `main` through `d9f45dd` for the targeted updates; older unrelated sections retain their dated verification notes |
+| **Status of product** | Live production pilot; Railway service inventory and API health verified 2026-09-24, not an end-to-end product acceptance test |
 | **Audience** | Engineering, technical leadership, prospective contributors, stakeholders |
 
 ---
@@ -35,12 +35,12 @@
 
 ## 1. Executive Summary
 
-The ArivuPro Quiz Platform is a **multi-tenant SaaS web application** that lets coaching institutions turn teaching material into reviewed, student-ready quizzes using AI. A teacher uploads a PDF/DOCX; the system extracts the text, asks a Large Language Model (LLM) to generate questions across five question types (verified 2026-09-15 against `generation.py`'s `QuestionType` literal — six were originally planned, but the schema's sixth type, `descriptive`, isn't wired into generation or grading; see §7.1 and §13) and three cognitive levels; the teacher reviews/edits/approves them; students then take the quizzes and get auto-graded results, analytics, and a full practice/gamification suite (smart quizzes, daily challenges, exam simulator, leaderboards, challenge-a-friend).
+The ArivuPro Quiz Platform is a **multi-tenant SaaS web application** that lets coaching institutions turn teaching material into reviewed, student-ready quizzes using AI. A teacher uploads a PDF/DOCX; the system extracts the text, generates objective questions for teacher review, and publishes approved work for students. The base generator supports five objective question types; migration 61 adds three extended objective types behind `EXTENDED_QUESTION_TYPES_ENABLED`. `descriptive` remains outside automatic grading. Students use Topic Practice and Mock Exam within Practice & Mock Tests, plus daily challenges, leaderboards, and Challenge a Friend.
 
 **Architecturally**, it is a classic three-tier system built on managed cloud services:
 
 - **Frontend:** Next.js 14 (React, TypeScript, Tailwind) → deployed on **Vercel**.
-- **Backend:** FastAPI (Python) REST API → deployed on **Railway**.
+- **Backend:** FastAPI (Python) REST API and a separate durable faculty-job worker → independently deployed on **Railway**.
 - **Data & Auth:** **Supabase** (managed PostgreSQL + Auth + Storage).
 - **AI:** **DeepSeek** is the primary LLM for text workflows, with **Google Gemini** as the automatic fallback and the vision provider for scanned/image documents.
 
@@ -65,7 +65,7 @@ The application has one authoritative profile table (`profiles`) linked 1:1 to S
 | **super_admin** | Platform owner (ArivuPro). Onboards institutions (tenants), optionally provisions global-catalogue offerings, manages institution admins, and sees cross-tenant analytics, offering scope, and AI-quality monitoring. |
 | **institution_admin** | Manages one institution: creates teachers, views self-registered students, manages manual Course → Level → Subject offerings and teacher assignments, and sees institution analytics. |
 | **teacher** | Uploads material, generates quizzes, reviews/edits/approves/publishes questions, monitors their class. |
-| **student** | Takes published quizzes, practises (smart quiz, daily challenge, exam simulator, challenges), tracks weak areas and progress. |
+| **student** | Takes published quizzes, uses Topic Practice and Mock Exam in Practice & Mock Tests, joins daily/friend challenges, and tracks weak areas and progress. |
 
 ### 2.3 The business model (intended)
 - **Who pays:** the **institution** (a tenant), not students.
@@ -99,7 +99,7 @@ The application has one authoritative profile table (`profiles`) linked 1:1 to S
                                     │                        │ sign in/up, read own role)
                                     ▼                        ▼
         ┌───────────────────────────────────────┐   ┌───────────────────────────────┐
-        │   BACKEND — FastAPI (Python)           │   │        SUPABASE (managed)      │
+        │   API — FastAPI (Python)               │   │        SUPABASE (managed)      │
         │   Hosted on RAILWAY                    │   │   ┌─────────────────────────┐  │
         │   • Verifies Supabase JWT (ES256/JWKS) │   │   │  Auth (GoTrue)          │  │
         │   • Enforces role + tenant in code     │◄──┼───┤  PostgreSQL (+ RLS)     │  │
@@ -116,14 +116,21 @@ The application has one authoritative profile table (`profiles`) linked 1:1 to S
         └───────────────────────────────────────┘
 ```
 
+Railway also runs a **separate, private** `quiz-generator-worker` process from
+`backend/Dockerfile.worker`. The API stores durable faculty jobs in Supabase;
+the worker claims and processes those jobs, then writes results back. It is not
+an HTTP endpoint and is deployed independently of the API. The obsolete
+`quiz-generator-retention` cron was removed from Railway on 2026-09-24.
+
 ### 3.2 The same picture as a Mermaid diagram (renders in GitHub/Typora/most MD→PDF tools)
 
 ```mermaid
 flowchart TD
     U["Users<br/>(4 roles)"] -->|HTTPS| FE["Frontend<br/>Next.js 14 on Vercel"]
-    FE -->|"REST + Bearer JWT"| BE["Backend<br/>FastAPI on Railway"]
+    FE -->|"REST + Bearer JWT"| BE["API<br/>FastAPI on Railway"]
     FE -->|"Auth only (sign in/up)"| SB_AUTH["Supabase Auth"]
-    BE -->|"service-role key"| SB_DB[("Supabase PostgreSQL<br/>+ Row-Level Security")]
+    BE -->|"tenant-scoped data + faculty queue"| SB_DB[("Supabase PostgreSQL<br/>+ Row-Level Security")]
+    WK["Private faculty worker<br/>Railway"] -->|"claim jobs / save results"| SB_DB
     BE -->|"admin API"| SB_AUTH
     BE -->|"private bucket"| SB_ST["Supabase Storage"]
     BE -->|"text fallback + vision"| GEM["Google Gemini API"]
@@ -174,7 +181,7 @@ app/
 ├── login/page.tsx                       PUBLIC — sign in
 ├── signup/page.tsx                      PUBLIC — tenant-aware student self-registration by course + level
 └── dashboard/
-    ├── layout.tsx                       Stable shell + cached role bootstrap and authoritative profile refresh
+    ├── layout.tsx                       Stable shell + authoritative profile verification before role pages
     ├── page.tsx                         Inert child; layout owns the role-home redirect
     │
     ├── super-admin/
@@ -203,13 +210,15 @@ app/
     └── student/
         ├── page.tsx                     Dashboard (stats, streak, charts, quick actions)
         ├── subjects/page.tsx            Subjects → chapters → practice entry
-        ├── smart-quiz/page.tsx          Self-serve adaptive practice launcher
+        ├── practice/page.tsx            Topic Practice / Mock Exam selector
+        ├── smart-quiz/page.tsx          Legacy redirect to Topic Practice
+        ├── exam/page.tsx                Legacy redirect to Mock Exam
         ├── revision/page.tsx            Weak-topics to revise + bookmarks
         ├── weak-areas/page.tsx          Subject → Chapter → Topic accuracy tree
         ├── daily/page.tsx               Daily challenge + streak
         ├── challenge/page.tsx           Create "challenge a friend"
         ├── challenge/[token]/page.tsx   Accept challenge + challenge leaderboard
-        ├── exam/page.tsx                Exam simulator (timed, negative marking)
+        ├── settings/page.tsx            Account settings and routed support/feedback
         ├── leaderboard/page.tsx         Institution-scoped leaderboard
         ├── history/page.tsx             Past graded attempts
         ├── attempt/[id]/page.tsx        Take a published quiz
@@ -238,19 +247,17 @@ confirmation state are never stored by this mechanism. See
 
 ### 5.4 Auth & session flow
 1. **Login** → `supabase.auth.signInWithPassword` → one RLS-protected
-   `profiles` read → write the versioned local dashboard bootstrap → route
-   directly to that role's home.
-2. **Dashboard layout** restores the local Supabase session and cached role to
-   render the stable shell immediately when possible. It concurrently calls the
-   authenticated `/api/v1/me/profile` endpoint to refresh the authoritative
-   role, password-change state, and tenant branding. The inert
+   `profiles` read → route directly to that role's home.
+2. **Dashboard layout** restores the local Supabase session, then calls the
+   authenticated `/api/v1/me/profile` endpoint. It shows role-specific pages
+   only after this verifies the current role, password-change state, and tenant
+   branding. A profile failure shows a retryable error. The inert
    `dashboard/page.tsx` child performs no duplicate auth lookup.
 3. Missing sessions return to `/login`; missing/invalid profiles fail closed.
    Role-mismatched dashboard paths redirect to the correct role home. The shell
    forces a **change-password modal** for admin-created accounts.
 4. Authorization for data is enforced **server-side** by the backend (Bearer
-   JWT + role checks). The cached bootstrap and frontend route gating are UX
-   optimizations only.
+   JWT + role checks). Frontend route gating is only a UX convenience.
 
 ### 5.5 Design system
 - **Tokens** in `globals.css`: HSL CSS variables, brand green primary (`#2E8857`), `--radius: 0.75rem`, full light + dark themes.
@@ -373,10 +380,10 @@ Guards: **public** / **student** / **staff** (teacher+admin+super) / **admin** (
 
 ## 7. Database Schema
 
-PostgreSQL on Supabase. The repository baseline is `migrations/schema.sql` plus migrations 01, 02, and 04–47 (verified 2026-09-22). There is no migration 03; migration 04 removed the abandoned seed-library feature. The incremental files remain required for an existing database. Apply migrations once, in numeric order, using `docs/deploy-runbook.md`; repository presence does not prove production application state.
+PostgreSQL on Supabase. The repository contains `migrations/schema.sql` plus migrations 01, 02, and 04–61 (inventory verified 2026-09-24). There is no migration 03; migration 04 removed the abandoned seed-library feature. The incremental files remain required for an existing database. Apply migrations once, in numeric order, using `docs/deploy-runbook.md`; repository presence does not prove production application state.
 
 ### 7.1 Enums
-`user_role` (super_admin, institution_admin, teacher, student) · `question_type` (mcq_single, mcq_multi, numerical, true_false, fill_blank, **descriptive**) · `question_source` (ai_generated, manual) · `review_status` (pending_review, approved, rejected, needs_edit) · `document_status` · `job_status` · `variant_type` (theory, practical, mixed) · `quiz_status` (draft, published, archived) · `attempt_status` (in_progress, submitted, graded, abandoned).
+`user_role` (super_admin, institution_admin, teacher, student) · `question_type` (mcq_single, mcq_multi, numerical, true_false, fill_blank, descriptive; migration 61 adds assertion_reason, mrm, matching) · `question_source` (ai_generated, manual) · `review_status` (pending_review, approved, rejected, needs_edit) · `document_status` · `job_status` · `variant_type` (theory, practical, mixed) · `quiz_status` (draft, published, archived) · `attempt_status` (in_progress, submitted, graded, abandoned). The three extended types are produced only when their backend flag is enabled; descriptive is not auto-graded.
 
 ### 7.2 Tables by domain
 
@@ -500,10 +507,14 @@ and application queries scope every tenant-owned read/write to one institution.
 | 52–55 batches and scoring | Adds batches/assignments plus tenant-aware scoring policies and course exam standards. |
 | 56–58 commerce platform defaults | Adds paper profiles, feature rollout, and commerce defaults. |
 | 59 personal-data-minimization | Drops raw AI prompt/response columns and extends self-service account erasure. |
+| 60 student-contact | Adds the private student feedback and support inbox. |
+| 61 extended-question-types | Adds assertion–reason, multiple-response (`mrm`), and matching enum values for flag-gated objective questions. |
+| 62 atomic-student-contact | Serializes each student's request cooldown and insert in one service-role-only database function. |
 
-> **Repository inventory verified 2026-09-24:** migrations 13–59 above are
+> **Repository inventory verified 2026-09-24:** migrations 13–62 above are
 > recorded in this table. Migration 59 was reported applied by the operator;
-> repository state alone cannot independently prove that production fact.
+> a read-only production check confirmed that its AI-log raw-payload columns
+> are absent, but did not prove the complete migration history.
 > `docs/deploy-runbook.md` is the authoritative source for exact filenames,
 > apply order, and cross-migration dependencies — it was corrected in the same
 > pass after being found to reference four migration-31–34 filenames that
@@ -551,12 +562,18 @@ Teacher reviews → approve/edit/reject/regenerate → PUBLISH  →  visible to 
 `grade_answer(question, student_answer)` returns `(is_correct, marks_awarded)`:
 - **mcq_single / true_false:** exact match of the chosen option id.
 - **mcq_multi:** **all-or-nothing** — the selected set must equal the correct set.
+- **assertion_reason:** exact match of the chosen option id.
+- **mrm:** exact-set correctness in the basic grader; policy-aware scoring can
+  award partial credit (see `backend/app/services/scoring.py`).
+- **matching:** every left-to-right pair must match.
 - **numerical:** correct if `|answer − value| ≤ tolerance`.
 - **fill_blank:** normalized text match (lowercase, trimmed) against any accepted answer.
 - **No answer / unknown type:** scored wrong (fail-closed). Grading uses **no AI**, so it is instant and free.
 
-### 8.3 The practice engine (one engine, six modes)
-A single pattern powers Smart Quiz, chapter practice, Daily Challenge, Exam Simulator, Challenge-a-Friend, and Revision:
+### 8.3 The practice engine (shared modes)
+A single pattern powers Topic Practice, Mock Exam, Daily Challenge,
+Challenge-a-Friend, and Revision. Topic Practice and Mock Exam share the
+student-facing **Practice & Mock Tests** page but retain distinct rules:
 1. `select_question_ids()` picks a question pool — **always** scoped to the student's tenant, their enrolled subjects, and **approved** questions only. The pool is shuffled and sliced to the requested count, then **frozen** into the session.
 2. The chosen `question_ids` + a `config` (count, difficulty, time limit, negative marking) are stored on one `practice_sessions` row; the mode string distinguishes the experience.
 3. The same `quiz-attempt` UI and the same grading function serve every mode, so behavior is consistent and there is no code duplication.
@@ -593,15 +610,17 @@ GitHub (ArivuTechTeam/quiz-generator)
      │  push / merge to main
      ├──────────────► VERCEL   → builds & deploys FRONTEND automatically (Root Dir = frontend)
      │
-     └── (manual)  ──► RAILWAY  → backend deployed by `scripts/deploy.sh` from repository root
-                                  (no GitHub auto-deploy for backend)
+     └── (manual)  ──► RAILWAY  → API `quiz-generator` deployed by `scripts/deploy.sh`
+                                  worker `quiz-generator-worker` deployed separately
+                                  (no GitHub auto-deploy for either backend process)
 
 SUPABASE (dashboard-configured): Postgres + Auth + Storage — settings apply instantly
 ```
 
 ### 10.2 Deploy workflow (two tracks)
 - **Frontend change:** push to GitHub → **merge PR to `main`** → **Vercel auto-deploys**. (`next build` runs ESLint and fails on lint errors — always run `pnpm build` locally before merging, not just `tsc`.)
-- **Backend change:** from a clean, synchronized `main`, run **`./scripts/deploy.sh`**. It scopes Railway to `backend/` with `--path-as-root`; a bare `railway up` from the repository root is invalid for this service. Keep Railway's custom Start Command blank so the Dockerfile `CMD` expands `$PORT` correctly.
+- **Backend API change:** from a clean, synchronized `main`, run **`./scripts/deploy.sh`**. It scopes Railway to `backend/` with `--path-as-root`; a bare `railway up` from the repository root is invalid for this service. Keep Railway's custom Start Command blank so the Dockerfile `CMD` expands `$PORT` correctly.
+- **Worker or shared-job change:** deploy `quiz-generator-worker` independently from the same verified revision. The API deploy script does not update it; verify worker health and a queued job, not just API `/health`. The old retention cron was removed 2026-09-24.
 - **Supabase change:** dashboard settings (auth URLs, SMTP, RLS) apply immediately; schema changes are applied by running migration SQL in order.
 
 ### 10.3 Environment variables
@@ -701,7 +720,7 @@ The historical project specification described some choices that the **deployed 
 | Primary LLM | DeepSeek V4 | **Stage-aware:** DeepSeek `deepseek-flash` is preferred for current text stages; Gemini is the default text fallback and only vision provider |
 | Fallback LLM | Anthropic Claude Sonnet | **Gemini for current DeepSeek-first text stages;** no Claude code exists. AI Tutor retains a Gemini-first compatibility route |
 | ORM | SQLModel | **No ORM** — all DB access via the Supabase (PostgREST) client |
-| Question types | 6 incl. `matching` | Enum has `descriptive`, **not `matching`** |
+| Question types | 6 incl. `matching` | Five base auto-graded types plus `assertion_reason`, `mrm`, and `matching` added by migration 61 behind a backend flag; `descriptive` remains outside auto-grading |
 | OCR | Planned | **No OCR library.** Generate Quiz rejects unreadable scans; the separate Extract Quiz flow sends scans/images to Gemini vision |
 | Font | Plus Jakarta Sans | **Inter** is actually loaded |
 | Icons | — | `lucide-react` installed but a **hand-rolled inline SVG set** is used |
@@ -750,7 +769,7 @@ This is the biggest missing block for a "real SaaS":
 | **JWT / ES256 / JWKS** | The signed token proving a user's identity; ES256 is its signature algorithm; JWKS is the endpoint serving the public keys to verify it. |
 | **Quiz Set / Variant** | One upload creates a *set*; a set has *variants* (by cognitive level: theory/practical/mixed); a variant links to ordered questions. |
 | **Blueprint** | A weighted generation mode where the teacher assigns topic priorities and per-type counts. |
-| **Practice session** | A frozen set of questions a student practises; one table (`practice_sessions`) powers smart quiz, daily, exam, challenge, and revision via a `mode` field. |
+| **Practice session** | A frozen set of questions a student practises; one table (`practice_sessions`) powers topic practice, mock exams, daily/friend challenges, and revision via a `mode` field. |
 | **Fallback (LLM)** | If a stage's preferred text provider fails or returns invalid JSON, the backend tries its configured fallback. Vision remains Gemini-only. |
 | **Findings** | Deterministic, plain-language insights on the analytics dashboards — computed by rules, not AI. |
 

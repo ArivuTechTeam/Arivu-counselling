@@ -42,6 +42,11 @@ def _valid_type(paper_type: str) -> str:
     return paper_type
 
 
+def _require_student(profile: CurrentProfile) -> None:
+    if profile.role != "student":
+        raise HTTPException(status_code=403, detail="Students only.")
+
+
 def _enrolled_or_404(service, profile: CurrentProfile, subject_id: str) -> None:
     if subject_id not in enrolled_subject_ids(service, profile):
         raise HTTPException(status_code=404, detail="Subject not found.")
@@ -61,7 +66,7 @@ class SubmittedAnswer(BaseModel):
 
 
 class SubmitRequest(BaseModel):
-    answers: list[SubmittedAnswer] = Field(default_factory=list)
+    answers: list[SubmittedAnswer] = Field(min_length=1, max_length=_MAX_QUESTIONS)
 
 
 def _bank_rows(service, profile: CurrentProfile, req: StartRequest, columns: str) -> list[dict]:
@@ -119,6 +124,7 @@ def paper_subjects(
 ) -> list[dict]:
     """Enrolled subjects with the count of questions available for this paper type."""
     _require_enabled()
+    _require_student(profile)
     _valid_type(paper_type)
     service = get_service_client()
     subject_ids = sorted(enrolled_subject_ids(service, profile))
@@ -149,6 +155,7 @@ def paper_filters(
 ) -> dict:
     """Chapters and question types (with counts) available for a subject + type."""
     _require_enabled()
+    _require_student(profile)
     _valid_type(paper_type)
     service = get_service_client()
     _enrolled_or_404(service, profile, subject_id)
@@ -184,6 +191,7 @@ def paper_start(
 ) -> dict:
     """A RANDOM set of matching questions to take, WITHOUT the correct answers."""
     _require_enabled()
+    _require_student(profile)
     _valid_type(body.paper_type)
     service = get_service_client()
     _enrolled_or_404(service, profile, body.subject_id)
@@ -216,10 +224,11 @@ def paper_submit(
 ) -> dict:
     """Auto-grade a taken paper set and return the scorecard with correct answers."""
     _require_enabled()
+    _require_student(profile)
     service = get_service_client()
     ids = [a.question_id for a in body.answers]
-    if not ids:
-        raise HTTPException(status_code=400, detail="No answers submitted.")
+    if len(ids) != len(set(ids)):
+        raise HTTPException(status_code=400, detail="Each question can be submitted only once.")
     enrolled = enrolled_subject_ids(service, profile)
     rows = select_all_in(
         service, "paper_questions",

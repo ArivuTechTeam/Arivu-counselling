@@ -43,6 +43,33 @@ TYPE_SPECS: dict[str, str] = {
         "or alternate spelling/phrasing a correct student might write, so grading "
         "accepts equivalent answers (e.g. [\"depreciation\", \"depn\"])."
     ),
+    "assertion_reason": (
+        'assertion_reason: state an Assertion and a Reason INSIDE question_text as '
+        'two lines: "Assertion (A): <statement>" then "Reason (R): <statement>". '
+        'Use EXACTLY these 4 options verbatim: '
+        '"options": ['
+        '{"id":"a","text":"Both A and R are true and R is the correct explanation of A"},'
+        '{"id":"b","text":"Both A and R are true but R is NOT the correct explanation of A"},'
+        '{"id":"c","text":"A is true but R is false"},'
+        '{"id":"d","text":"A is false but R is true"}]. '
+        '"correct_answer": the id of the one correct option, e.g. "a".'
+    ),
+    "mrm": (
+        'mrm (multiple-response, partial credit): 4 to 6 options, MORE THAN ONE '
+        'correct. "options": [{"id":"a","text":"..."}, ... ]. '
+        '"correct_answer": array of ALL correct ids, e.g. ["a","c","d"]. Grading '
+        "awards marks per correct selection minus wrong ones, so every correct "
+        "option must be genuinely correct and every distractor genuinely wrong."
+    ),
+    "matching": (
+        'matching: two columns to pair up. "options" holds BOTH columns, each item '
+        'tagged with its side: [{"id":"l1","side":"left","text":"..."}, ... , '
+        '{"id":"r1","side":"right","text":"..."}, ... ]. Provide 3-5 left items and '
+        'at least as many right items (extra right items are allowed as distractors). '
+        'All ids unique. "correct_answer": {"pairs": {"l1":"r1","l2":"r2", ...}}. '
+        "map EVERY left id to exactly one right id. Each side item must be short and "
+        "unambiguous so exactly one pairing is correct."
+    ),
 }
 
 LEVEL_GUIDANCE: dict[str, str] = {

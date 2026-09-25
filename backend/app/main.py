@@ -43,6 +43,7 @@ from app.api import (
     questions,
     quiz,
     student,
+    student_contact,
     super_admin,
     teacher,
     topics,
@@ -116,7 +117,7 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type", "X-Request-ID"],
-    expose_headers=["X-Request-ID", "Retry-After", "Server-Timing"],
+    expose_headers=["X-Request-ID", "X-Error-Code", "Retry-After", "Server-Timing"],
 )
 
 # Dashboard and quiz payloads are JSON-heavy. Compress responses over 1 KiB;
@@ -300,6 +301,7 @@ app.include_router(pyq.router)
 app.include_router(quiz.router)
 app.include_router(questions.router)
 app.include_router(student.router)
+app.include_router(student_contact.router)
 app.include_router(teacher.router)
 app.include_router(topics.router)
 
@@ -375,10 +377,12 @@ def read_my_profile(
             primary_color=profile.tenant_primary_color or "#2E8857",
         )
 
-    # Commerce platform capabilities plus the PYQ toggle (a separate rollout switch
-    # kept out of the tenant feature registry) so the UI can show/hide the PYQ tab.
+    # Commerce capabilities plus independent paper-bank and extended-type toggles.
     features = effective_feature_flags(profile.tenant_feature_flags)
     features["paper_bank"] = getattr(get_settings(), "paper_bank_enabled", False)
+    features["extended_question_types"] = getattr(
+        get_settings(), "extended_question_types_enabled", False
+    )
     return CurrentProfileOut(
         role=profile.role,
         must_change_password=profile.must_change_password,

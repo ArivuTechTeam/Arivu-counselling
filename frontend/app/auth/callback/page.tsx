@@ -16,7 +16,6 @@ import {
 import {
   dashboardDestination,
   isDashboardRole,
-  writeDashboardBootstrap,
 } from "@/lib/dashboard-bootstrap";
 import { PENDING_GOOGLE_COURSE_KEY } from "@/lib/google-auth";
 import { PENDING_GOOGLE_LEVEL_KEY } from "@/lib/google-auth";
@@ -90,7 +89,6 @@ export default function AuthCallbackPage() {
       data: { session },
     } = await supabase.auth.getSession();
     if (!session?.user) throw new Error("Sign-up did not create a session.");
-    writeDashboardBootstrap(session.user.id, "student", false);
     warmBackend();
     router.replace(dashboardDestination("student", finishDestination()));
     router.refresh();
@@ -192,11 +190,6 @@ export default function AuthCallbackPage() {
             return;
           }
           clearPendingGoogleSignup();
-          writeDashboardBootstrap(
-            user.id,
-            profile.role,
-            Boolean(profile.must_change_password),
-          );
           warmBackend();
           router.replace(
             dashboardDestination(profile.role, finishDestination()),

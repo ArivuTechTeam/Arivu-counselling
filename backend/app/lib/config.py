@@ -130,10 +130,19 @@ class Settings:
         # storage, review, publish, and the student dashboard are byte-identical.
         # When on (and the teacher opts in per upload), extraction classifies the
         # paper, published questions are snapshotted into the paper_questions bank,
-        # and students get the "Mock Test & PYQ" surface. Requires migrations 60-61.
+        # and students get the "Mock Test & PYQ" surface. Requires migrations 63-64.
         # PYQ_ENABLED is accepted as a legacy alias during the transition.
         self.paper_bank_enabled = _boolean("PAPER_BANK_ENABLED", False) or _boolean(
             "PYQ_ENABLED", False
+        )
+        # Extended objective question types (Phase 6.4): assertion_reason, mrm,
+        # matching. Off by default: teachers cannot request them and generation is
+        # byte-identical. Validation/grading always understand them so any stored
+        # data is safe; they are only ever produced when this is on. Descriptive
+        # (manual grading) is intentionally NOT part of this - it belongs to the
+        # future Mock Test Paper feature.
+        self.extended_question_types_enabled = _boolean(
+            "EXTENDED_QUESTION_TYPES_ENABLED", False
         )
         self.app_env: str = os.getenv("APP_ENV", "production").strip().lower()
         if self.app_env not in {"production", "development", "test"}:

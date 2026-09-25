@@ -7,6 +7,8 @@ import useSWR from "swr";
 
 import { ChangePasswordForm } from "@/components/shared/change-password-form";
 import { useDashboardIdentity } from "@/components/shared/dashboard-identity-context";
+import { SupportInboxPanel } from "@/components/shared/support-inbox-panel";
+import { StudentContactPanel } from "@/components/student/student-contact-panel";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -222,6 +224,11 @@ export function AccountSettingsPage() {
             )}
           </CardContent>
         </Card>
+      )}
+
+      {data.role === "student" && <StudentContactPanel institution={institution} />}
+      {(data.role === "institution_admin" || data.role === "super_admin") && (
+        <SupportInboxPanel role={data.role} institution={institution} />
       )}
 
       <Card>

@@ -335,7 +335,8 @@ def delete_own_account(
     except Exception as exc:  # noqa: BLE001
         raise public_error(
             503,
-            "We couldn't finish deleting this account. Please contact support with the error reference.",
+            "We couldn't finish deleting your account. Please sign in again and retry; "
+            "if it keeps happening, contact support.",
             operation="delete account data",
             exception=exc,
         ) from exc
