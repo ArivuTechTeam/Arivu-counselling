@@ -936,6 +936,18 @@ def publish_quiz_set(
     }
 
 
+@router.post("/{quiz_set_id}/publish-to-batches")
+def publish_quiz_set_to_batches(
+    quiz_set_id: str,
+    body: PublishQuizRequest,
+    profile: CurrentProfile = Depends(get_current_profile),
+) -> dict:
+    """Separate route fails closed when the frontend reaches an older API deployment."""
+    if not body.batch_ids:
+        raise HTTPException(400, "Select at least one batch before publishing.")
+    return publish_quiz_set(quiz_set_id, profile, body)
+
+
 @router.post("/{quiz_set_id}/archive")
 def archive_quiz_set(
     quiz_set_id: str,

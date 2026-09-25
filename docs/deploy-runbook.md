@@ -139,6 +139,9 @@ the batch-publication API**; it has not been reported applied. The change is
 API/frontend only; the existing paper-import worker is unchanged. Before rollout, run a
 staging paper-import/publish/student-grade drill. Repository tests cannot verify
 live SQL or provider behavior.
+The batch-publication frontend calls a new `/publish-to-batches` API route so it
+fails closed against an older Railway API while Vercel updates after merge;
+deploy the API promptly after migration 67 and the main-branch merge.
 Apply `migration-62-atomic-student-contact.sql` after migration 60 and
 before deploying the contact API that calls `submit_student_contact`; otherwise
 student submissions will return a temporary service error. Apply

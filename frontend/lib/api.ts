@@ -921,7 +921,7 @@ export const deleteOwnAccount = () =>
   });
 
 export const publishQuizSet = (id: string, publicationToken?: string, batchIds?: string[]) =>
-  jsonRequest<QuizSetSummary>(`/api/v1/quiz-sets/${id}/publish`, "POST",
+  jsonRequest<QuizSetSummary>(`/api/v1/quiz-sets/${id}/${batchIds ? "publish-to-batches" : "publish"}`, "POST",
     publicationToken ? { publication_token: publicationToken, ...(batchIds ? { batch_ids: batchIds } : {}) } : undefined);
 
 export const duplicateQuizSet = (id: string, title: string, requestKey: string) =>

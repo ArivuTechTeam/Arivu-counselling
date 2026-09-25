@@ -4,7 +4,7 @@ from uuid import uuid4
 import pytest
 from fastapi import HTTPException
 
-from app.api.quiz import CopyQuizRequest, PublishQuizRequest, duplicate_quiz_set, get_quiz_set, publish_quiz_set
+from app.api.quiz import CopyQuizRequest, PublishQuizRequest, duplicate_quiz_set, get_quiz_set, publish_quiz_set, publish_quiz_set_to_batches
 from app.api.questions import QuestionEdit, edit_question, _assert_teacher_question
 from app.lib.auth import CurrentProfile
 from app.services.quiz_reuse import rpc
@@ -74,6 +74,14 @@ def test_batch_publication_uses_atomic_rpc_for_eligible_managed_batch():
     assert atomic.call_args.args[1] == "publish_quiz_to_batches_atomic"
     assert atomic.call_args.kwargs["p_batch_ids"] == [str(batch)]
     assert atomic.call_args.kwargs["p_require_managed"] is True
+
+
+def test_batch_publication_route_requires_a_batch_before_database_access():
+    with patch("app.api.quiz.get_service_client") as client:
+        with pytest.raises(HTTPException) as error:
+            publish_quiz_set_to_batches("quiz", PublishQuizRequest(publication_token="token", batch_ids=[]), PROFILE)
+    assert error.value.status_code == 400
+    client.assert_not_called()
 
 
 def test_batch_publication_rejects_unmanaged_batch_before_rpc():
