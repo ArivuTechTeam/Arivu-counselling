@@ -35,7 +35,10 @@ import {
   validTemporaryPassword,
 } from "@/lib/temporary-password";
 import { useSessionStorageState } from "@/lib/use-session-storage-state";
-import { institutionLoginUrl } from "@/lib/institution-portal";
+import {
+  institutionLoginUrl,
+  normalizeInstitutionSlug,
+} from "@/lib/institution-portal";
 import {
   DEFAULT_INSTITUTION_COLOR,
   institutionThemeStyle,
@@ -427,6 +430,7 @@ function EditInstitutionDialog({
   onSaved: () => void | Promise<void>;
 }) {
   const [name, setName] = useState(institution.name);
+  const [subdomain, setSubdomain] = useState(institution.subdomain ?? "");
   const [plan, setPlan] = useState(institution.plan_tier ?? "free");
   const [isActive, setIsActive] = useState(institution.is_active);
   const [busy, setBusy] = useState(false);
@@ -452,6 +456,13 @@ function EditInstitutionDialog({
       setError("Institution name is required.");
       return;
     }
+    const normalizedSubdomain = normalizeInstitutionSlug(subdomain);
+    if (!normalizedSubdomain || normalizedSubdomain.length > 63) {
+      setError(
+        "Access URL must use lowercase letters, numbers, and single internal hyphens only.",
+      );
+      return;
+    }
     setBusy(true);
     setError(null);
     try {
@@ -465,6 +476,7 @@ function EditInstitutionDialog({
       const logoData = logo ? await readLogo(logo) : undefined;
       await updateInstitution(institution.id, {
         name: name.trim(),
+        subdomain: normalizedSubdomain,
         plan_tier: plan as "free" | "starter" | "growth" | "enterprise",
         is_active: isActive,
         logo_data: logoData,
@@ -492,7 +504,9 @@ function EditInstitutionDialog({
           <h2 id="edit-institution-title" className="text-lg font-semibold">
             Manage institution
           </h2>
-          <p className="mt-1 text-sm text-muted-foreground">{institution.subdomain}</p>
+          <p className="mt-1 text-sm text-muted-foreground">
+            {subdomain || institution.subdomain}
+          </p>
         </div>
         <button onClick={onClose} aria-label="Close" className="rounded-md p-1 hover:bg-accent">
           <X size={18} />
@@ -522,7 +536,9 @@ function EditInstitutionDialog({
             </div>
             <div className="min-w-0">
               <p className="truncate font-semibold">{name || institution.name}</p>
-              <p className="truncate text-xs text-muted-foreground">{institution.subdomain}</p>
+              <p className="truncate text-xs text-muted-foreground">
+                {subdomain || institution.subdomain}
+              </p>
               <p className="mt-1 truncate text-xs text-muted-foreground">
                 {logo?.name ?? institution.logo_filename ?? (institution.logo_url ? "Existing institution logo" : "No logo uploaded")}
               </p>
@@ -538,6 +554,36 @@ function EditInstitutionDialog({
         <label className="flex flex-col gap-1.5 text-sm font-medium">
           Institution name
           <input className={field} value={name} onChange={(event) => setName(event.target.value)} />
+        </label>
+        <label className="flex flex-col gap-1.5 text-sm font-medium">
+          Access URL slug
+          <input
+            className={field}
+            value={subdomain}
+            onChange={(event) =>
+              setSubdomain(
+                event.target.value
+                  .toLowerCase()
+                  .replace(/\s+/g, "-")
+                  .replace(/[^a-z0-9-]/g, "")
+                  .replace(/-+/g, "-"),
+              )
+            }
+            pattern="[a-z0-9]+(?:-[a-z0-9]+)*"
+            maxLength={63}
+            required
+            autoCapitalize="none"
+            autoCorrect="off"
+            spellCheck={false}
+            aria-describedby="institution-access-url-help"
+          />
+          <span
+            id="institution-access-url-help"
+            className="text-xs font-normal text-muted-foreground"
+          >
+            New link: /login/{normalizeInstitutionSlug(subdomain) || "your-institution"}.
+            Changing this replaces the previously shared teacher and student login link.
+          </span>
         </label>
         <fieldset className="rounded-lg border p-3">
           <legend className="px-1 text-sm font-medium">Institution theme</legend>
