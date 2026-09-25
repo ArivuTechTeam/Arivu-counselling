@@ -183,8 +183,9 @@ class FacultyRosterAuthorizationTests(unittest.TestCase):
                     {"id": "a1", "tenant_id": TENANT, "variant_id": "v1", "student_id": "student-in", "status": "graded", "total_score": 1, "submitted_at": "2026-09-17T00:00:00Z"}
                 ],
                 "attempt_answers": [
-                    {"id": "aa1", "tenant_id": TENANT, "attempt_id": "a1", "question_id": "q-weak", "is_correct": False},
-                    {"id": "aa2", "tenant_id": TENANT, "attempt_id": "a1", "question_id": "q-strong", "is_correct": True},
+                    {"id": "aa1", "tenant_id": TENANT, "attempt_id": "a1", "question_id": "q-weak", "student_answer": "a", "is_correct": False},
+                    {"id": "aa2", "tenant_id": TENANT, "attempt_id": "a1", "question_id": "q-strong", "student_answer": "b", "is_correct": True},
+                    {"id": "aa3", "tenant_id": TENANT, "attempt_id": "a1", "question_id": "q-weak", "student_answer": None, "is_correct": False},
                 ],
                 "questions": [
                     {"id": "q-weak", "tenant_id": TENANT, "topic_id": "t-weak"},
@@ -200,6 +201,7 @@ class FacultyRosterAuthorizationTests(unittest.TestCase):
         with patch("app.api.teacher.get_service_client", return_value=service):
             result = student_report("student-in", _teacher())
         self.assertEqual(result["weak_areas"], [{"topic": "Needs practice", "accuracy": 0, "answered": 1}])
+        self.assertEqual(result["overall"]["questions_answered"], 2)
 
 
 class FacultyPublishingTests(unittest.TestCase):

@@ -731,6 +731,8 @@ export type PaperResult = {
   marks_awarded: number;
 };
 export type PaperScorecard = {
+  attempt_id: string;
+  status: "graded";
   score: number;
   total: number;
   correct: number;
@@ -743,6 +745,14 @@ export type PaperStart = {
   chapter_id?: string | null;
   question_type?: string | null;
   count: number;
+};
+export type PaperTaking = {
+  attempt_id: string;
+  status: "in_progress";
+  paper_type: PaperType;
+  requested: number;
+  available: number;
+  questions: PaperTakeQuestion[];
 };
 
 export type PaperBankSummary = {
@@ -762,13 +772,19 @@ export const getPaperFilters = (paperType: PaperType, subjectId: string) =>
   );
 
 export const startPaperAttempt = (body: PaperStart) =>
-  jsonRequest<{ paper_type: PaperType; requested: number; available: number; questions: PaperTakeQuestion[] }>(
+  jsonRequest<PaperTaking>(
     "/api/v1/papers/start", "POST", body,
   );
 
+export const getPaperAttempt = (id: string) =>
+  jsonRequest<PaperTaking | PaperScorecard>(
+    `/api/v1/papers/attempts/${encodeURIComponent(id)}`, "GET",
+  );
+
 export const submitPaperAttempt = (
+  attemptId: string,
   answers: { question_id: string; student_answer: unknown }[],
-) => jsonRequest<PaperScorecard>("/api/v1/papers/submit", "POST", { answers });
+) => jsonRequest<PaperScorecard>("/api/v1/papers/submit", "POST", { attempt_id: attemptId, answers });
 
 async function listBoundedPages<T>(
   path: string,

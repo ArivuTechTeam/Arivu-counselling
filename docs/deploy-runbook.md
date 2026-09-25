@@ -126,18 +126,18 @@ migration-62-atomic-student-contact.sql
 migration-63-pyq.sql
 migration-64-paper-knowledge-base.sql
 migration-65-paper-bank-safety.sql
+migration-66-paper-attempts.sql
 ```
 
 (Filenames above verified 2026-09-25 against `migrations/`, through migration
-65. Apply migrations 63, 64, and 65 in order
-after migration 62 before setting `PAPER_BANK_ENABLED=true` or deploying a
-backend configured with that flag. The paper bank also needs a coordinated API
-and worker rollout. Migration 65 installs atomic snapshot replacement and the
-descriptive-grading quota. The operator reported migrations through 65 applied
-on 2026-09-25, but this has not been checked directly in the target Supabase
-project. The recommended gate is a staging paper-import/publish/student-grade
-drill before production activation; that drill was not evidenced in the
-2026-09-25 rollout. Repository tests cannot verify live SQL or provider behavior.
+66. Migrations 63–65 support the existing paper bank; migration 66 adds durable,
+private paper attempts and **must be applied before deploying the new paper-attempt
+API**. The operator reported migrations through 65 applied on 2026-09-25, but
+that has not been checked directly in the target Supabase project. Migration 66
+has not been reported applied. The migration-66 attempt change is API/frontend
+only; the existing paper-import worker is unchanged. Before rollout, run a
+staging paper-import/publish/student-grade drill. Repository tests cannot verify
+live SQL or provider behavior.
 Apply `migration-62-atomic-student-contact.sql` after migration 60 and
 before deploying the contact API that calls `submit_student_contact`; otherwise
 student submissions will return a temporary service error. Apply
@@ -324,7 +324,7 @@ there is no per-institution feature setup.
 |---|---|
 | `FACULTY_JOBS_ENABLED` | `true` after the worker service is running |
 | `EXTENDED_QUESTION_TYPES_ENABLED` | `false` until migration 61 and a coordinated API/worker rollout are verified; then enable only if the institution-facing feature is intended |
-| `PAPER_BANK_ENABLED` | Code default `false`; recommended `false` until migrations 63–65, coordinated API/worker rollout, and paper-bank grading and snapshot checks are verified. Observed `true` on both production Railway services 2026-09-25; the end-to-end checks remain outstanding. |
+| `PAPER_BANK_ENABLED` | Code default `false`; observed `true` on both production Railway services 2026-09-25. Before deploying the new paper-attempt API, apply migration 66; verify paper start, incomplete-submit rejection, completed report, and retry behavior. The end-to-end checks remain outstanding. |
 | `RATE_LIMIT_PAPER_GRADING_PER_HOUR` | `10` paid descriptive grading attempts per student per rolling hour (requires migration 65) |
 | `QUIZ_REUSE_ENABLED` | `true` |
 | `BATCHES_ENABLED` | `true` |
@@ -464,8 +464,11 @@ hostname changes, then restart or redeploy the backend.
    queued to a completed review draft.
 8. If `PAPER_BANK_ENABLED=true`, import a small PYQ/MTP/RTP paper as a teacher,
    approve and publish its questions, then use a student in the same subject to
-   start and submit a paper attempt. Include an objective and a descriptive
-   question; confirm the snapshot exists and any provider failure is retryable.
+   start a paper attempt. Confirm the taking response hides answer keys and an
+   incomplete submission is rejected. Answer every question and submit; only
+   then should the report show correct answers. Include an objective and a
+   descriptive question; confirm the snapshot exists and any provider failure
+   is retryable. Check that another student cannot load the attempt.
 9. As an institution admin, open Edit teacher with a long subject list and
    verify Save/Cancel remain visible while the subjects scroll.
 

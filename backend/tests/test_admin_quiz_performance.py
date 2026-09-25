@@ -205,9 +205,9 @@ class _Service:
                 {"id": "attempt-open", "tenant_id": "tenant-a", "student_id": "student-a", "variant_id": "variant-a1", "status": "in_progress", "total_score": 10, "submitted_at": None},
             ],
             "attempt_answers": [
-                {"tenant_id": "tenant-a", "attempt_id": "attempt-a1", "question_id": "question-a1", "is_correct": True},
-                {"tenant_id": "tenant-a", "attempt_id": "attempt-a1", "question_id": "question-a2", "is_correct": False},
-                {"tenant_id": "tenant-a", "attempt_id": "attempt-a2", "question_id": "question-a1", "is_correct": False},
+                {"tenant_id": "tenant-a", "attempt_id": "attempt-a1", "question_id": "question-a1", "student_answer": "a", "is_correct": True},
+                {"tenant_id": "tenant-a", "attempt_id": "attempt-a1", "question_id": "question-a2", "student_answer": "b", "is_correct": False},
+                {"tenant_id": "tenant-a", "attempt_id": "attempt-a2", "question_id": "question-a1", "student_answer": "b", "is_correct": False},
             ],
             "enrollments": [
                 {"tenant_id": "tenant-a", "profile_id": "student-a", "course_id": "course-a"},
@@ -267,6 +267,16 @@ class AdminQuizPerformanceTests(unittest.TestCase):
         self.assertEqual(detail["student_performance"][0]["student_name"], "Sam")
         self.assertEqual(detail["weak_questions"][0]["question_id"], "question-a2")
         self.assertEqual(detail["weak_questions"][0]["accuracy"], 0.0)
+
+    def test_unanswered_rows_do_not_lower_question_accuracy(self) -> None:
+        self.service.tables["attempt_answers"].append(
+            {"tenant_id": "tenant-a", "attempt_id": "attempt-a2", "question_id": "question-a2", "student_answer": None, "is_correct": False}
+        )
+
+        detail = asyncio.run(admin_quiz_set_detail("set-a", self.profile))
+
+        weak = {row["question_id"]: row for row in detail["weak_questions"]}
+        self.assertEqual(weak["question-a2"]["answered"], 1)
 
     def test_teacher_analytics_aggregates_activity_and_weighted_accuracy(self) -> None:
         result = asyncio.run(admin_teacher_analytics(self.profile))

@@ -42,6 +42,12 @@ def erase_account_data(service, *, user_id: str, tenant_id: str) -> None:
             service, tenant_id=tenant_id, document_ids=document_ids, strict=True
         )
 
+    # Paper attempts hold frozen answer keys and the student's submitted work.
+    # Erase them before the Auth identity/profile cascade as with other activity.
+    service.table("paper_attempts").delete().eq("tenant_id", tenant_id).eq(
+        "student_id", user_id
+    ).execute()
+
     service.rpc(
         "anonymize_account_data",
         {"p_user_id": user_id, "p_tenant_id": tenant_id},
