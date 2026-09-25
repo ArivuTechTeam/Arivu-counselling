@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 
 import { Button } from "@/components/ui/button";
 import { ErrorCard } from "@/components/ui/error-card";
@@ -16,6 +16,7 @@ import { useDashboardIdentity } from "@/components/shared/dashboard-identity-con
 import { statusLabel, variantLabel } from "@/lib/format";
 import {
   DocumentFigure,
+  Batch,
   QuizSetDetail,
   ReviewQuestion,
   ScoringPolicy,
@@ -27,6 +28,7 @@ import {
   duplicateQuizSet,
   listScoringPolicies,
   setQuizScoringPolicy,
+  listEligibleBatches,
 } from "@/lib/api";
 
 type ReviewFilter =
@@ -72,6 +74,8 @@ function StatusFilter({
 
 export default function ReviewDetailPage({ params }: { params: { id: string } }) {
   const router = useRouter();
+  const pathname = usePathname();
+  const publishedView = pathname.startsWith("/dashboard/teacher/published-quizzes/");
   const { features } = useDashboardIdentity();
   const { notify } = useToast();
   const [detail, setDetail] = useState<QuizSetDetail | null>(null);
@@ -80,6 +84,10 @@ export default function ReviewDetailPage({ params }: { params: { id: string } })
   const copyKey = useRef<string | null>(null);
   const [copying, setCopying] = useState(false);
   const [publishing, setPublishing] = useState(false);
+  const [batches, setBatches] = useState<Batch[]>([]);
+  const [selectedBatches, setSelectedBatches] = useState<string[]>([]);
+  const [batchesLoading, setBatchesLoading] = useState(false);
+  const [batchesError, setBatchesError] = useState<string | null>(null);
   const [approving, setApproving] = useState(false);
   const [archiving, setArchiving] = useState(false);
   const [activeQuestionId, setActiveQuestionId] = useState<string | null>(null);
@@ -88,6 +96,12 @@ export default function ReviewDetailPage({ params }: { params: { id: string } })
   const [savingPolicy, setSavingPolicy] = useState(false);
   // One-shot spark burst on the big "win" actions (publish / approve-all).
   const [celebrate, setCelebrate] = useState(false);
+
+  useEffect(() => {
+    setBatches([]);
+    setSelectedBatches([]);
+    setBatchesError(null);
+  }, [params.id]);
 
   useEffect(() => {
     try {
@@ -107,6 +121,23 @@ export default function ReviewDetailPage({ params }: { params: { id: string } })
       // Filtering remains usable without session storage.
     }
   }, [params.id]);
+
+  useEffect(() => {
+    if (!features.batches || detail?.status !== "draft") return;
+    let cancelled = false;
+    setBatchesLoading(true);
+    setBatchesError(null);
+    listEligibleBatches(params.id)
+      .then((rows) => { if (!cancelled) setBatches(rows); })
+      .catch((reason) => { if (!cancelled) setBatchesError(reason instanceof Error ? reason.message : "Could not load eligible batches."); })
+      .finally(() => { if (!cancelled) setBatchesLoading(false); });
+    return () => { cancelled = true; };
+  }, [detail?.status, features.batches, params.id]);
+
+  useEffect(() => {
+    if (detail?.status === "published" && !publishedView) router.replace(`/dashboard/teacher/published-quizzes/${params.id}`);
+    if (detail && detail.status !== "published" && publishedView) router.replace(`/dashboard/teacher/review/${params.id}`);
+  }, [detail, params.id, publishedView, router]);
 
   useEffect(() => {
     if (!features.scoring_policies) return;
@@ -222,7 +253,11 @@ export default function ReviewDetailPage({ params }: { params: { id: string } })
     setError(null);
     setPublishing(true);
     try {
-      const s = await publishQuizSet(params.id, detail?.publication_token);
+      if (features.batches && selectedBatches.length === 0) {
+        setError("Select at least one batch before publishing this quiz.");
+        return;
+      }
+      const s = await publishQuizSet(params.id, detail?.publication_token, features.batches ? selectedBatches : undefined);
       setDetail((d) => d ? {
         ...d, status: s.status,
         release_locked: d.reuse_enabled ? true : d.release_locked,
@@ -232,6 +267,7 @@ export default function ReviewDetailPage({ params }: { params: { id: string } })
       } : d);
       celebrateBurst();
       notify("🎉 Quiz published — students can now see it", "success");
+      router.replace(`/dashboard/teacher/published-quizzes/${params.id}`);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Publish failed");
     } finally {
@@ -350,10 +386,10 @@ export default function ReviewDetailPage({ params }: { params: { id: string } })
           <div className="flex flex-wrap items-center justify-between gap-3 border-b px-4 py-3 sm:px-5">
             <div className="min-w-0">
               <Link
-                href="/dashboard/teacher/review"
+                href={publishedView ? "/dashboard/teacher/published-quizzes" : "/dashboard/teacher/review"}
                 className="inline-flex items-center gap-1 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
               >
-                ← Review queue
+                ← {publishedView ? "Published quizzes" : "Review queue"}
               </Link>
               <div className="mt-1 flex min-w-0 items-center gap-2">
                 <h1 className="truncate text-xl font-semibold tracking-tight">
@@ -461,7 +497,7 @@ export default function ReviewDetailPage({ params }: { params: { id: string } })
           <Button
             size="sm"
             onClick={handlePublish}
-            disabled={publishing || copying || detail.status === "published" || detail.status === "archived" || unresolved > 0}
+            disabled={publishing || copying || detail.status === "published" || detail.status === "archived" || unresolved > 0 || (features.batches && (batchesLoading || !!batchesError || selectedBatches.length === 0))}
             title={
               unresolved > 0
                 ? `Review ${unresolved} remaining question${unresolved === 1 ? "" : "s"} before publishing`
@@ -481,6 +517,26 @@ export default function ReviewDetailPage({ params }: { params: { id: string } })
 
       {error && (
         <p className="text-sm text-destructive">{error}</p>
+      )}
+      {features.batches && detail.status === "draft" && (
+        <section className="rounded-xl border bg-card p-4" aria-label="Assign batches before publishing">
+          <h2 className="font-semibold">Assign to batches</h2>
+          <p className="mt-1 text-sm text-muted-foreground">Choose the batches that can take this quiz. Only these batches will see it after publication.</p>
+          {batchesLoading ? <p className="mt-3 text-sm">Loading eligible batches…</p> : batchesError ? (
+            <p role="alert" className="mt-3 text-sm text-destructive">{batchesError}</p>
+          ) : batches.length === 0 ? (
+            <p className="mt-3 text-sm text-muted-foreground">No eligible batches are available. Ask your institution admin to create or assign an active batch for this course and level.</p>
+          ) : (
+            <div className="mt-3 flex flex-wrap gap-2">
+              {batches.map((batch) => (
+                <label key={batch.id} className="inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-sm">
+                  <input type="checkbox" checked={selectedBatches.includes(batch.id)} onChange={(event) => setSelectedBatches((current) => event.target.checked ? [...current, batch.id] : current.filter((id) => id !== batch.id))} />
+                  {batch.name}
+                </label>
+              ))}
+            </div>
+          )}
+        </section>
       )}
       {/* A concise import receipt only when some candidates were skipped, so the
           review stays focused on the questions. The verbose source-inventory /

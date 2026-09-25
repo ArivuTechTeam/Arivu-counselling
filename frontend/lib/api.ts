@@ -920,9 +920,9 @@ export const deleteOwnAccount = () =>
     confirmation: "DELETE",
   });
 
-export const publishQuizSet = (id: string, publicationToken?: string) =>
+export const publishQuizSet = (id: string, publicationToken?: string, batchIds?: string[]) =>
   jsonRequest<QuizSetSummary>(`/api/v1/quiz-sets/${id}/publish`, "POST",
-    publicationToken ? { publication_token: publicationToken } : undefined);
+    publicationToken ? { publication_token: publicationToken, ...(batchIds ? { batch_ids: batchIds } : {}) } : undefined);
 
 export const duplicateQuizSet = (id: string, title: string, requestKey: string) =>
   jsonRequest<{ quiz_set_id: string; replayed: boolean }>(`/api/v1/quiz-sets/${id}/duplicate`, "POST",
@@ -2547,7 +2547,7 @@ export type FacultyJob = {
   phase: string;
   attempts: number;
   error_message: string | null;
-  result: { quiz_set_id: string } | null;
+  result: { quiz_set_id: string; quiz_status?: string | null } | null;
   created_at: string;
 };
 

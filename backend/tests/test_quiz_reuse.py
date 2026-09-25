@@ -4,7 +4,7 @@ from uuid import uuid4
 import pytest
 from fastapi import HTTPException
 
-from app.api.quiz import CopyQuizRequest, duplicate_quiz_set, get_quiz_set, publish_quiz_set
+from app.api.quiz import CopyQuizRequest, PublishQuizRequest, duplicate_quiz_set, get_quiz_set, publish_quiz_set
 from app.api.questions import QuestionEdit, edit_question, _assert_teacher_question
 from app.lib.auth import CurrentProfile
 from app.services.quiz_reuse import rpc
@@ -54,6 +54,63 @@ def test_publication_requires_loaded_revision():
         with pytest.raises(HTTPException) as error:
             publish_quiz_set("quiz", PROFILE)
     assert error.value.status_code == 409
+
+
+def test_batch_publication_uses_atomic_rpc_for_eligible_managed_batch():
+    batch = uuid4()
+    profile = PROFILE.model_copy(update={"tenant_feature_flags": {"batches": True}})
+    with patch("app.services.quiz_reuse.enabled", return_value=True), \
+         patch("app.api.quiz.get_service_client"), \
+         patch("app.api.quiz._teacher_quiz_set", return_value={"id": "quiz", "subject_id": "subject"}), \
+         patch("app.api.quiz._quiz_academic_scope", return_value=("course", "level")), \
+         patch("app.api.quiz._managed_batch_ids", return_value={str(batch)}), \
+         patch("app.api.quiz._require_batches_enabled"), \
+         patch("app.api.quiz.select_all_in", return_value=[{"id": str(batch)}]), \
+         patch("app.api.quiz.get_quiz_set_detail", return_value={"variants": []}), \
+         patch("app.services.quiz_reuse.rpc", return_value={"id": "quiz", "status": "published"}) as atomic, \
+         patch("app.api.quiz.snapshot_published_pyq"):
+        result = publish_quiz_set("quiz", profile, PublishQuizRequest(publication_token="token", batch_ids=[batch]))
+    assert result["status"] == "published"
+    assert atomic.call_args.args[1] == "publish_quiz_to_batches_atomic"
+    assert atomic.call_args.kwargs["p_batch_ids"] == [str(batch)]
+    assert atomic.call_args.kwargs["p_require_managed"] is True
+
+
+def test_batch_publication_rejects_unmanaged_batch_before_rpc():
+    batch = uuid4()
+    profile = PROFILE.model_copy(update={"tenant_feature_flags": {"batches": True}})
+    with patch("app.services.quiz_reuse.enabled", return_value=True), \
+         patch("app.api.quiz.get_service_client"), \
+         patch("app.api.quiz._teacher_quiz_set", return_value={"id": "quiz", "subject_id": "subject"}), \
+         patch("app.api.quiz._quiz_academic_scope", return_value=("course", "level")), \
+         patch("app.api.quiz._managed_batch_ids", return_value=set()), \
+         patch("app.api.quiz._require_batches_enabled"), \
+         patch("app.services.quiz_reuse.rpc") as atomic:
+        with pytest.raises(HTTPException) as error:
+            publish_quiz_set("quiz", profile, PublishQuizRequest(publication_token="token", batch_ids=[batch]))
+    assert error.value.status_code == 403
+    atomic.assert_not_called()
+
+
+def test_batch_publication_rejects_student_before_database_access():
+    with patch("app.api.quiz.get_service_client") as client:
+        with pytest.raises(HTTPException) as error:
+            publish_quiz_set("quiz", CurrentProfile(user_id="student", tenant_id="tenant", role="student"),
+                             PublishQuizRequest(publication_token="token", batch_ids=[uuid4()]))
+    assert error.value.status_code == 403
+    client.assert_not_called()
+
+
+def test_batch_publication_rejects_quiz_outside_teacher_tenant():
+    service = Mock()
+    service.table.return_value.select.return_value.eq.return_value.eq.return_value.eq.return_value.maybe_single.return_value.execute.return_value.data = None
+    with patch("app.api.quiz.get_service_client", return_value=service), \
+         patch("app.services.quiz_reuse.rpc") as atomic:
+        with pytest.raises(HTTPException) as error:
+            publish_quiz_set("another-tenant-quiz", PROFILE,
+                             PublishQuizRequest(publication_token="token", batch_ids=[uuid4()]))
+    assert error.value.status_code == 404
+    atomic.assert_not_called()
 
 
 def test_rpc_does_not_disclose_database_error():
