@@ -92,6 +92,43 @@ class _Service:
     def table(self, name: str) -> _Query:
         return _Query(self, name)
 
+    def rpc(self, name: str, _params: dict):
+        if name != "teacher_class_overview_metrics":
+            raise AssertionError(f"Unexpected RPC: {name}")
+        students = [f"student-{i}" for i in range(7)]
+        payload = {
+            "class_accuracy": 20,
+            "students": 7,
+            "at_risk": 7,
+            "total_attempts": 7,
+            "accuracy_by_quiz": [],
+            "needs_attention": [
+                {
+                    "name": student,
+                    "initials": "S",
+                    "accuracy": 20,
+                    "note": "1 test · 20% avg",
+                }
+                for student in students[:6]
+            ],
+            "top_performers": [],
+            "pipeline": {
+                "pending_review": 0,
+                "approved": 0,
+                "rejected": 0,
+                "needs_edit": 0,
+            },
+            "activity_trend": [],
+            "score_distribution": [],
+            "content": {
+                "documents": 0,
+                "quiz_sets": 1,
+                "published": 1,
+                "drafts": 0,
+            },
+        }
+        return SimpleNamespace(execute=lambda: SimpleNamespace(data=payload))
+
 
 def _teacher() -> CurrentProfile:
     return CurrentProfile(user_id=TEACHER, tenant_id=TENANT, role="teacher")

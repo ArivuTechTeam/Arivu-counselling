@@ -128,10 +128,11 @@ migration-64-paper-knowledge-base.sql
 migration-65-paper-bank-safety.sql
 migration-66-paper-attempts.sql
 migration-67-atomic-batch-publication.sql
+migration-68-teacher-dashboard-aggregates.sql
 ```
 
 (Filenames above verified 2026-09-25 against `migrations/`, through migration
-67. Migrations 63–65 support the existing paper bank; migration 66 adds durable,
+68. Migrations 63–65 support the existing paper bank; migration 66 adds durable,
 private paper attempts. The operator reported migration 66 applied on 2026-09-25,
 but that has not been checked directly in the target Supabase project. Migration
 67 adds atomic publish-and-batch-assignment and **must be applied before deploying
@@ -142,6 +143,16 @@ live SQL or provider behavior.
 The batch-publication frontend calls a new `/publish-to-batches` API route so it
 fails closed against an older Railway API while Vercel updates after merge;
 deploy the API promptly after migration 67 and the main-branch merge.
+Migration 68 moves teacher class overview, subject metrics, chapter counts, and
+published-quiz summaries into tenant/actor/current-assignment-scoped database
+functions. The operator reported it applied on 2026-09-25, but the target
+project and live function privileges have not been checked independently.
+Confirm that inventory before deploying the A2 backend; otherwise those four
+faculty routes will fail if their RPCs do not exist. Run
+`scripts/test-teacher-dashboard-aggregates-db.mjs` locally and
+`scripts/teacher-dashboard-explain.sql` against staging, then compare the route
+contracts and latency before deployment. Migration 68 is additive and does not
+delete or rewrite application rows.
 Apply `migration-62-atomic-student-contact.sql` after migration 60 and
 before deploying the contact API that calls `submit_student_contact`; otherwise
 student submissions will return a temporary service error. Apply

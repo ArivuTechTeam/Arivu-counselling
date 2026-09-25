@@ -3,10 +3,36 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from typing import TypeVar
 
 
 POSTGREST_PAGE_SIZE = 500
 POSTGREST_FILTER_BATCH_SIZE = 100
+JsonContainer = TypeVar("JsonContainer", dict, list)
+
+
+def rpc_json_value(
+    service,
+    function_name: str,
+    params: dict,
+    expected_type: type[JsonContainer],
+) -> JsonContainer:
+    """Return a JSON object/array from a PostgREST RPC without shape guessing.
+
+    ``supabase-py`` normally returns a JSONB function result directly. Some
+    PostgREST/client combinations wrap a scalar result in a one-row/one-column
+    result, so accept that representation too and reject every other shape.
+    """
+    data = service.rpc(function_name, params).execute().data
+    if isinstance(data, list) and len(data) == 1 and isinstance(data[0], dict):
+        row = data[0]
+        if len(row) == 1:
+            value = next(iter(row.values()))
+            if isinstance(value, expected_type):
+                return value
+    if isinstance(data, expected_type):
+        return data
+    raise RuntimeError(f"{function_name} returned an invalid analytics payload")
 
 
 def select_all(

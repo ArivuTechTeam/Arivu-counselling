@@ -24,7 +24,7 @@ from app.lib.auth import CurrentProfile, get_current_profile
 from app.lib.role_checks import require_institution_admin, require_teacher
 from app.lib.api_errors import public_error
 from app.lib.supabase import get_service_client
-from app.lib.supabase_queries import select_all, select_all_in
+from app.lib.supabase_queries import rpc_json_value, select_all, select_all_in
 from app.services.catalog import (
     active_catalog_subject_ids,
     catalog_tree,
@@ -678,49 +678,16 @@ def list_chapters(
     service = get_service_client()
     _assert_teacher_subject(service, subject_id, profile)
 
-    chapters = (
-        service.table("chapters")
-        .select("id, name, order_index")
-        .eq("subject_id", subject_id)
-        .eq("tenant_id", profile.tenant_id)
-        .order("order_index")
-        .order("name")
-        .execute()
-        .data
-        or []
-    )
-    ids = [c["id"] for c in chapters]
-    quiz_counts: dict = {}
-    q_counts: dict = {}
-    if ids:
-        for r in (
-            service.table("quiz_sets")
-            .select("chapter_id")
-            .in_("chapter_id", ids)
-            .eq("tenant_id", profile.tenant_id)
-            .execute()
-            .data
-            or []
-        ):
-            quiz_counts[r["chapter_id"]] = quiz_counts.get(r["chapter_id"], 0) + 1
-        for r in (
-            service.table("questions")
-            .select("chapter_id")
-            .in_("chapter_id", ids)
-            .eq("tenant_id", profile.tenant_id)
-            .execute()
-            .data
-            or []
-        ):
-            q_counts[r["chapter_id"]] = q_counts.get(r["chapter_id"], 0) + 1
-    return [
+    return rpc_json_value(
+        service,
+        "teacher_chapter_metrics",
         {
-            **c,
-            "quiz_count": quiz_counts.get(c["id"], 0),
-            "question_count": q_counts.get(c["id"], 0),
-        }
-        for c in chapters
-    ]
+            "p_tenant": profile.tenant_id,
+            "p_teacher": profile.user_id,
+            "p_subject": subject_id,
+        },
+        list,
+    )
 
 
 @router.get("/teacher/subject-metrics")
@@ -737,191 +704,12 @@ def teacher_subject_metrics(
     RLS, and the numbers are gathered in bulk (no per-subject round trips).
     """
     require_teacher(profile, action="manage chapters")
-    service = get_service_client()
-    tenant = profile.tenant_id
-
-    assigned = sorted(teacher_subject_ids(service, profile))
-    if not assigned:
-        return []
-
-    subjects = select_all_in(
-        service,
-        "subjects",
-        "id, name, course_id, course_level_id",
-        in_column="id",
-        values=assigned,
-        configure=lambda query: query.eq("tenant_id", tenant),
+    return rpc_json_value(
+        get_service_client(),
+        "teacher_subject_metrics",
+        {"p_tenant": profile.tenant_id, "p_teacher": profile.user_id},
+        list,
     )
-
-    course_name: dict[str, str] = {}
-    course_ids = list({s["course_id"] for s in subjects if s.get("course_id")})
-    if course_ids:
-        for c in select_all_in(
-            service,
-            "courses",
-            "id, name",
-            in_column="id",
-            values=course_ids,
-            configure=lambda query: query.eq("tenant_id", tenant),
-        ):
-            course_name[c["id"]] = c["name"]
-
-    level_name: dict[str, str] = {}
-    level_ids = list(
-        {str(s["course_level_id"]) for s in subjects if s.get("course_level_id")}
-    )
-    if level_ids:
-        for level in select_all_in(
-            service,
-            "course_levels",
-            "id, name",
-            in_column="id",
-            values=level_ids,
-            configure=lambda query: query.eq("tenant_id", tenant),
-        ):
-            level_name[str(level["id"])] = level["name"]
-
-    # Chapters → per-subject count + a chapter→subject map for the question join.
-    chapter_subject: dict[str, str] = {}
-    chapters_per_subject: dict[str, int] = {}
-    for ch in select_all_in(
-        service,
-        "chapters",
-        "id, subject_id",
-        in_column="subject_id",
-        values=assigned,
-        configure=lambda query: query.eq("tenant_id", tenant),
-    ):
-        chapter_subject[ch["id"]] = ch["subject_id"]
-        chapters_per_subject[ch["subject_id"]] = (
-            chapters_per_subject.get(ch["subject_id"], 0) + 1
-        )
-
-    # Questions authored by this teacher (by chapter) → count + pending count.
-    questions_per_subject: dict[str, int] = {}
-    pending_per_subject: dict[str, int] = {}
-    needs_edit_per_subject: dict[str, int] = {}
-    chapter_ids = list(chapter_subject.keys())
-    if chapter_ids:
-        for q in select_all_in(
-            service,
-            "questions",
-            "id, chapter_id, review_status",
-            in_column="chapter_id",
-            values=chapter_ids,
-            configure=lambda query: query
-            .eq("tenant_id", tenant)
-            .eq("created_by", profile.user_id),
-        ):
-            sid = chapter_subject.get(q["chapter_id"])
-            if not sid:
-                continue
-            questions_per_subject[sid] = questions_per_subject.get(sid, 0) + 1
-            if q.get("review_status") == "pending_review":
-                pending_per_subject[sid] = pending_per_subject.get(sid, 0) + 1
-            elif q.get("review_status") == "needs_edit":
-                needs_edit_per_subject[sid] = needs_edit_per_subject.get(sid, 0) + 1
-
-    # Quiz sets → totals + status split, and a quizset→subject map.
-    quizset_subject: dict[str, str] = {}
-    quizzes_total: dict[str, int] = {}
-    quizzes_published: dict[str, int] = {}
-    quizzes_draft: dict[str, int] = {}
-    for qs in select_all_in(
-        service,
-        "quiz_sets",
-        "id, subject_id, status",
-        in_column="subject_id",
-        values=assigned,
-        configure=lambda query: query
-        .eq("tenant_id", tenant)
-        .eq("created_by", profile.user_id),
-    ):
-        sid = qs["subject_id"]
-        quizset_subject[qs["id"]] = sid
-        quizzes_total[sid] = quizzes_total.get(sid, 0) + 1
-        if qs.get("status") == "published":
-            quizzes_published[sid] = quizzes_published.get(sid, 0) + 1
-        elif qs.get("status") == "draft":
-            quizzes_draft[sid] = quizzes_draft.get(sid, 0) + 1
-
-    # Variants → variant→subject map + total marks (for score %).
-    variant_subject: dict[str, str] = {}
-    variant_marks: dict[str, float] = {}
-    quizset_ids = list(quizset_subject.keys())
-    if quizset_ids:
-        for v in select_all_in(
-            service,
-            "quiz_variants",
-            "id, quiz_set_id, total_marks",
-            in_column="quiz_set_id",
-            values=quizset_ids,
-            configure=lambda query: query.eq("tenant_id", tenant),
-        ):
-            sid = quizset_subject.get(v["quiz_set_id"])
-            if not sid:
-                continue
-            variant_subject[v["id"]] = sid
-            if v.get("total_marks"):
-                variant_marks[v["id"]] = float(v["total_marks"])
-
-    # Graded attempts → count, distinct students, and weighted score %.
-    attempts_per_subject: dict[str, int] = {}
-    students_per_subject: dict[str, set] = {}
-    score_sum: dict[str, float] = {}
-    maximum_sum: dict[str, float] = {}
-    variant_ids = list(variant_subject.keys())
-    if variant_ids:
-        for a in select_all_in(
-            service,
-            "quiz_attempts",
-            "id, variant_id, student_id, total_score",
-            in_column="variant_id",
-            values=variant_ids,
-            configure=lambda query: query
-            .eq("tenant_id", tenant)
-            .eq("status", "graded"),
-        ):
-            sid = variant_subject.get(a["variant_id"])
-            if not sid:
-                continue
-            attempts_per_subject[sid] = attempts_per_subject.get(sid, 0) + 1
-            students_per_subject.setdefault(sid, set()).add(a["student_id"])
-            marks = variant_marks.get(a["variant_id"])
-            score = a.get("total_score")
-            if score is not None and marks:
-                bounded_score = max(0.0, min(marks, float(score)))
-                score_sum[sid] = score_sum.get(sid, 0.0) + bounded_score
-                maximum_sum[sid] = maximum_sum.get(sid, 0.0) + marks
-
-    out: list[dict] = []
-    for s in sorted(subjects, key=lambda x: (x.get("name") or "").lower()):
-        sid = s["id"]
-        possible = maximum_sum.get(sid, 0.0)
-        earned = score_sum.get(sid, 0.0)
-        out.append(
-            {
-                "id": sid,
-                "name": s["name"],
-                "course_name": course_name.get(s.get("course_id"), ""),
-                "level_name": level_name.get(str(s.get("course_level_id") or ""), ""),
-                "chapters": chapters_per_subject.get(sid, 0),
-                "quizzes_total": quizzes_total.get(sid, 0),
-                "quizzes_published": quizzes_published.get(sid, 0),
-                "quizzes_draft": quizzes_draft.get(sid, 0),
-                "questions": questions_per_subject.get(sid, 0),
-                "pending_review": pending_per_subject.get(sid, 0),
-                "needs_edit": needs_edit_per_subject.get(sid, 0),
-                "attempts": attempts_per_subject.get(sid, 0),
-                "students": len(students_per_subject.get(sid, set())),
-                "avg_score_pct": round(earned / possible * 100, 1)
-                if possible
-                else None,
-                "score_earned": earned,
-                "score_possible": possible,
-            }
-        )
-    return out
 
 
 class ChapterCreate(BaseModel):

@@ -1,8 +1,8 @@
 # Scalability Release A and B Implementation README
 
-**Status:** Release A1 tooling implemented on branch
-`codex/release-a-a1-capacity-baseline`; staging execution is pending. Release
-A2 and later work has not started.
+**Status:** Release A1 tooling is implemented and pushed on its feature branch.
+Release A2 is implemented locally on `codex/release-a-a2-db-aggregation`.
+Staging execution remains pending for both; A3 and later work has not started.
 
 **Prepared:** 25 September 2026
 
@@ -416,6 +416,13 @@ non-sensitive summary values into the table below or a dated issue/PR:
 
 ### A2. Database-side aggregation for heavy dashboards
 
+**Implementation status (25 September 2026):** implemented on branch
+`codex/release-a-a2-db-aggregation` and not deployed. The operator reported
+migration 68 applied on 25 September 2026; that target project and live function
+inventory have not been checked independently. Isolated PostgreSQL
+contract/security tests pass; production-shaped staging plans and latency
+measurements remain required before A2 operational sign-off.
+
 **Why**
 
 Current teacher endpoints retrieve complete source datasets and aggregate in
@@ -451,6 +458,44 @@ return a compact result.
 - Every tenant-owned query is filtered by the verified tenant.
 - Reassigned teachers cannot retain access through an old quiz ID.
 - Query plans use expected indexes on the staging dataset.
+
+#### A2 implementation delivered
+
+| Artifact | What changed |
+|---|---|
+| `migrations/migration-68-teacher-dashboard-aggregates.sql` | Adds service-role-only, `SECURITY INVOKER` aggregate functions for class overview, subject metrics, chapter counts, and published-quiz summaries |
+| `backend/app/api/teacher.py` | Replaces the class-overview and published-quiz multi-table downloads with one compact RPC per request |
+| `backend/app/api/academics.py` | Replaces chapter counting and subject dashboard aggregation with scoped RPCs |
+| `backend/app/lib/supabase_queries.py` | Adds strict JSONB RPC response normalization for direct and PostgREST-wrapped results |
+| `scripts/test-teacher-dashboard-aggregates-db.mjs` | Applies migration 68 twice in isolated PostgreSQL and verifies totals, response contracts, tenant isolation, reassignment behavior, privileges, and expected indexes |
+| `scripts/teacher-dashboard-explain.sql` | Captures read-only staging `EXPLAIN (ANALYZE, BUFFERS)` evidence for all four functions |
+| Backend regression tests | Prove each route sends the verified tenant and actor to exactly one RPC and does not download raw dashboard tables |
+
+Every function checks that the actor is a teacher profile in the supplied
+tenant, joins through that teacher's current `teacher_subjects`, and repeats
+tenant predicates on operational tables. Quiz ownership by itself is not
+enough: after reassignment, former-subject aggregates return no rows. Function
+execution is revoked from `public`, `anon`, and `authenticated` and granted
+explicitly to `service_role`.
+
+Migration 68 is additive: it creates/replaces four functions and does not
+rewrite or delete application rows. Rollout order is migration 68, staging RPC
+and query-plan verification, then API deployment. For application rollback,
+redeploy the A1 backend; the unused functions may remain safely until a
+separately reviewed cleanup migration removes them.
+
+`migrations/schema.sql` is deliberately unchanged. This repository's bootstrap
+procedure runs `schema.sql` and then every numbered migration, and existing
+analytics functions from migration 36 are likewise retained in their numbered
+migration rather than duplicated in the baseline. Migration 68 follows that
+established analytics-function convention.
+
+The migration reuses the compound indexes introduced by migration 29 rather
+than adding speculative duplicates. Run
+`scripts/teacher-dashboard-explain.sql` against the A1 staging dataset and
+record scan types, buffers, rows removed, planning time, and execution time.
+Repository tests prove the expected indexes exist, but they do not claim which
+plans the hosted optimizer will choose at production row counts.
 
 ### A3. Cursor pagination and catalogue usability
 
@@ -1003,7 +1048,10 @@ decisions can use data from the first one to three months:
 - [x] Read-only route baseline and database-health report tooling are implemented.
 - [ ] The production-shaped dataset has been executed on isolated staging.
 - [ ] The staging capacity baseline and provider metrics are recorded.
-- [ ] Heavy teacher aggregates run in PostgreSQL and match current totals.
+- [x] Teacher aggregate functions, API integration, and isolated contract/security tests are implemented.
+- [x] The operator reported migration 68 applied on 25 September 2026.
+- [ ] Migration 68 and its function privileges are independently verified on the target project before deploying the A2 API.
+- [ ] Staging query plans and before/after latency are recorded on the A1 dataset.
 - [ ] Target large lists use bounded cursor pagination.
 - [ ] Student catalogue has meaningful filters and does not load everything.
 - [ ] Large-bank practice sampling is fair and indexed.
@@ -1038,7 +1086,7 @@ decisions can use data from the first one to three months:
 
 The plan is grounded in the following current repository areas:
 
-- `migrations/schema.sql` and numbered migrations through migration 67;
+- `migrations/schema.sql` and numbered migrations through migration 68;
 - `migrations/migration-29-staff-dashboard-performance.sql`;
 - `migrations/migration-36-super-admin-aggregates.sql`;
 - `migrations/migration-43-faculty-background-jobs.sql`;
