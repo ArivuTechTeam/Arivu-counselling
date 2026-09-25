@@ -63,7 +63,9 @@ export function FacultyTasks() {
               {job.error_message && <p className="text-muted-foreground">{job.error_message}</p>}
             </div>
             {job.status === "completed" && job.result?.quiz_set_id && (
-              <Link className="font-medium text-primary underline" href={`/dashboard/teacher/review/${job.result.quiz_set_id}`}>Open quiz</Link>
+              <Link className="font-medium text-primary underline" href={job.result.quiz_status === "published"
+                ? `/dashboard/teacher/published-quizzes/${job.result.quiz_set_id}`
+                : `/dashboard/teacher/review/${job.result.quiz_set_id}`}>Open quiz</Link>
             )}
             {["queued", "running"].includes(job.status) && (
               <Button size="sm" variant="outline" disabled={cancelling === job.id} onClick={() => cancel(job.id)}>

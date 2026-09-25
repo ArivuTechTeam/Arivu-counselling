@@ -13,6 +13,8 @@ MESSAGES = {
     "quiz_request_conflict": "This copy request belongs to different settings. Start a new copy.",
     "quiz_invalid_title": "Enter a quiz title between 1 and 200 characters.",
     "quiz_copy_size": "Duplicate a quiz containing between 1 and 500 questions.",
+    "quiz_invalid_batches": "Select active batches from this quiz's course and level.",
+    "quiz_batch_access": "You can publish only to batches you manage.",
 }
 
 
@@ -29,7 +31,7 @@ def rpc(service, name, profile, quiz_id, **extra):
     except Exception as exc:
         message = MESSAGES.get(getattr(exc, "message", ""))
         if message:
-            code = 404 if getattr(exc, "code", "") == "PT404" else 409
+            code = {"PT404": 404, "PT403": 403, "PT400": 400}.get(getattr(exc, "code", ""), 409)
             raise HTTPException(code, message) from exc
         raise HTTPException(503, "Quiz saving is temporarily unavailable. Check the quiz before retrying.") from exc
 

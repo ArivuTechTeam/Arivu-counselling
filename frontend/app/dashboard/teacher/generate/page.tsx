@@ -9,7 +9,7 @@ export default function GeneratePage() {
     <div className="mx-auto flex max-w-3xl flex-col gap-5">
       <PageHeader
         title="Create a quiz from study material"
-        description="Upload a PDF or DOCX, choose its subject and chapter, then let AI build a draft for you to review."
+        description="Upload a PDF or DOCX, choose its subject and chapter, then review the draft, assign batches, and publish."
         actions={
           <Link
             href="/dashboard/teacher/extract"

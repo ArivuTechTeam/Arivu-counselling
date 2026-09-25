@@ -127,17 +127,21 @@ migration-63-pyq.sql
 migration-64-paper-knowledge-base.sql
 migration-65-paper-bank-safety.sql
 migration-66-paper-attempts.sql
+migration-67-atomic-batch-publication.sql
 ```
 
 (Filenames above verified 2026-09-25 against `migrations/`, through migration
-66. Migrations 63–65 support the existing paper bank; migration 66 adds durable,
-private paper attempts and **must be applied before deploying the new paper-attempt
-API**. The operator reported migrations through 65 applied on 2026-09-25, but
-that has not been checked directly in the target Supabase project. Migration 66
-has not been reported applied. The migration-66 attempt change is API/frontend
-only; the existing paper-import worker is unchanged. Before rollout, run a
+67. Migrations 63–65 support the existing paper bank; migration 66 adds durable,
+private paper attempts. The operator reported migration 66 applied on 2026-09-25,
+but that has not been checked directly in the target Supabase project. Migration
+67 adds atomic publish-and-batch-assignment and **must be applied before deploying
+the batch-publication API**; it has not been reported applied. The change is
+API/frontend only; the existing paper-import worker is unchanged. Before rollout, run a
 staging paper-import/publish/student-grade drill. Repository tests cannot verify
 live SQL or provider behavior.
+The batch-publication frontend calls a new `/publish-to-batches` API route so it
+fails closed against an older Railway API while Vercel updates after merge;
+deploy the API promptly after migration 67 and the main-branch merge.
 Apply `migration-62-atomic-student-contact.sql` after migration 60 and
 before deploying the contact API that calls `submit_student_contact`; otherwise
 student submissions will return a temporary service error. Apply

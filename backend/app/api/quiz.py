@@ -45,6 +45,7 @@ from app.services.review import get_quiz_set_detail
 from app.services.topics import extract_topic_details
 from app.services.topic_capacity import selectable_topic_choices
 from app.services import quiz_reuse
+from app.api.assignments import _require_batches_enabled, _managed_batch_ids, _quiz_academic_scope
 from app.services.question_validation import validate_question_answer_shape
 
 router = APIRouter(prefix="/api/v1/quiz-sets", tags=["quiz"])
@@ -659,7 +660,7 @@ def generate_from_job(
 def _teacher_quiz_set(service, quiz_set_id: str, profile: CurrentProfile) -> dict:
     result = (
         service.table("quiz_sets")
-        .select("id")
+        .select("id, subject_id")
         .eq("id", quiz_set_id)
         .eq("tenant_id", profile.tenant_id)
         .eq("created_by", profile.user_id)
@@ -739,6 +740,7 @@ class CopyQuizRequest(BaseModel):
 
 class PublishQuizRequest(BaseModel):
     publication_token: str = Field(min_length=1, max_length=64)
+    batch_ids: list[UUID] | None = None
 
 
 @router.post("/{quiz_set_id}/duplicate", status_code=201)
@@ -765,9 +767,29 @@ def publish_quiz_set(
     require_teacher(profile, action="access quiz sets")
     service = get_service_client()
     _teacher_quiz_set(service, quiz_set_id, profile)
+    if body is not None and body.batch_ids is not None and not quiz_reuse.enabled(profile):
+        raise HTTPException(503, "Batch-restricted publishing is not available yet.")
     if quiz_reuse.enabled(profile):
         if body is None:
             raise HTTPException(409, "Refresh the quiz before publishing.")
+        if body.batch_ids is not None:
+            _require_batches_enabled(profile, legacy_master_check=True)
+            if not body.batch_ids or len(set(body.batch_ids)) != len(body.batch_ids):
+                raise HTTPException(400, "Select one or more distinct batches before publishing.")
+            quiz = _teacher_quiz_set(service, quiz_set_id, profile)
+            course_id, level_id = _quiz_academic_scope(service, quiz.get("subject_id"), profile.tenant_id)
+            if not course_id or not level_id:
+                raise HTTPException(400, "This quiz is not linked to a course level.")
+            requested_ids = {str(batch_id) for batch_id in body.batch_ids}
+            if profile.tenant_feature_flags is not None and requested_ids - _managed_batch_ids(service, profile):
+                raise HTTPException(403, "You can publish only to batches you manage.")
+            eligible = select_all_in(
+                service, "batches", "id", in_column="id", values=sorted(requested_ids),
+                configure=lambda query: query.eq("tenant_id", profile.tenant_id)
+                .eq("course_id", course_id).eq("course_level_id", level_id).eq("status", "active"),
+            )
+            if requested_ids != {str(row["id"]) for row in eligible}:
+                raise HTTPException(400, "Select active batches from this quiz's course and level.")
         detail = get_quiz_set_detail(quiz_set_id, profile.tenant_id)
         for variant in detail["variants"]:
             for question in variant["questions"]:
@@ -776,7 +798,14 @@ def publish_quiz_set(
                         validate_question_answer_shape(question["type"], question.get("options"), question.get("correct_answer"))
                     except ValueError as exc:
                         raise HTTPException(409, "Correct the answer configuration before publishing.") from exc
-        row = quiz_reuse.rpc(service, "publish_quiz_atomic", profile, quiz_set_id, p_token=body.publication_token)
+        if body.batch_ids is not None:
+            row = quiz_reuse.rpc(
+                service, "publish_quiz_to_batches_atomic", profile, quiz_set_id,
+                p_token=body.publication_token, p_batch_ids=[str(batch_id) for batch_id in body.batch_ids],
+                p_require_managed=profile.tenant_feature_flags is not None,
+            )
+        else:
+            row = quiz_reuse.rpc(service, "publish_quiz_atomic", profile, quiz_set_id, p_token=body.publication_token)
         snapshot_published_pyq(service, profile.tenant_id, quiz_set_id, profile.user_id)
         return {key: row.get(key) for key in ("id", "title", "status", "created_at", "published_at")}
     variants = select_all(
@@ -905,6 +934,18 @@ def publish_quiz_set(
         "created_at": row["created_at"],
         "published_at": row.get("published_at"),
     }
+
+
+@router.post("/{quiz_set_id}/publish-to-batches")
+def publish_quiz_set_to_batches(
+    quiz_set_id: str,
+    body: PublishQuizRequest,
+    profile: CurrentProfile = Depends(get_current_profile),
+) -> dict:
+    """Separate route fails closed when the frontend reaches an older API deployment."""
+    if not body.batch_ids:
+        raise HTTPException(400, "Select at least one batch before publishing.")
+    return publish_quiz_set(quiz_set_id, profile, body)
 
 
 @router.post("/{quiz_set_id}/archive")

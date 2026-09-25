@@ -12,6 +12,7 @@ from app.lib.supabase import get_service_client
 from app.services.faculty_jobs import PUBLIC_COLUMNS, enqueue, load_owned, public_job
 from app.services.quiz_generator_service import QuizGeneratorService
 from app.services.tenant_features import profile_feature_enabled, require_profile_feature
+from app.lib.supabase_queries import select_all_in
 
 router = APIRouter(prefix="/api/v1/faculty-jobs", tags=["faculty-jobs"])
 
@@ -37,10 +38,22 @@ def list_jobs(profile: CurrentProfile = Depends(get_current_profile)) -> dict:
     if not enabled:
         return {"enabled": False, "jobs": []}
     columns = PUBLIC_COLUMNS.replace("result,", "quiz_set_id:result->>quiz_set_id,")
-    rows = (get_service_client().table("faculty_jobs").select(columns)
+    service = get_service_client()
+    rows = (service.table("faculty_jobs").select(columns)
             .eq("tenant_id", profile.tenant_id).eq("created_by", profile.user_id)
             .order("created_at", desc=True).limit(50).execute().data or [])
-    return {"enabled": True, "jobs": [public_job(row) for row in rows]}
+    jobs = [public_job(row) for row in rows]
+    quiz_ids = sorted({job["result"]["quiz_set_id"] for job in jobs if job.get("result") and job["result"].get("quiz_set_id")})
+    if quiz_ids:
+        quizzes = select_all_in(
+            service, "quiz_sets", "id, status", in_column="id", values=quiz_ids,
+            configure=lambda query: query.eq("tenant_id", profile.tenant_id).eq("created_by", profile.user_id),
+        )
+        status_by_id = {str(quiz["id"]): quiz["status"] for quiz in quizzes}
+        for job in jobs:
+            if job.get("result"):
+                job["result"]["quiz_status"] = status_by_id.get(job["result"]["quiz_set_id"])
+    return {"enabled": True, "jobs": jobs}
 
 
 @router.post("", status_code=202)
