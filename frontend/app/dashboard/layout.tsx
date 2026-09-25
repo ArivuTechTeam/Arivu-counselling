@@ -6,12 +6,14 @@ import { SWRConfig } from "swr";
 
 import { DashboardShell } from "@/components/shared/dashboard-shell";
 import { DashboardIdentityProvider } from "@/components/shared/dashboard-identity-context";
+import { ExamShell } from "@/components/student/exam-shell";
 import { ErrorCard } from "@/components/ui/error-card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ToastProvider } from "@/components/ui/toast";
 import { getDashboardProfile, type DashboardProfile } from "@/lib/api";
 import { createClient } from "@/lib/supabase";
 import { safeDashboardNext } from "@/lib/safe-next";
+import { isStudentExamPath } from "@/lib/student-exam";
 import {
   clearDashboardBootstrap,
   dashboardContentState,
@@ -21,8 +23,8 @@ import {
 } from "@/lib/dashboard-bootstrap";
 
 /**
- * Wraps every /dashboard/* page in the ArivuPro shell (sidebar + topbar).
- * It reads the logged-in user's role to build the right sidebar nav.
+ * Verify every dashboard role and tenant before rendering its page. Active
+ * student attempts use a focused shell; other pages keep the full dashboard.
  */
 export default function DashboardLayout({
   children,
@@ -169,6 +171,34 @@ export default function DashboardLayout({
     );
   }
 
+  const content = contentState === "error" ? (
+    <div className="mx-auto flex min-h-[60vh] max-w-md items-center">
+      <ErrorCard
+        title="We couldn't open your dashboard"
+        message={bootstrapError ?? "Please try again."}
+        onRetry={() => setBootstrapAttempt((attempt) => attempt + 1)}
+        className="w-full"
+      />
+    </div>
+  ) : contentState === "content" ? (
+    children
+  ) : (
+    <div
+      className="mx-auto flex min-h-[60vh] w-full max-w-5xl flex-col gap-6"
+      aria-label="Loading dashboard"
+      aria-busy="true"
+    >
+      <Skeleton className="h-32 w-full rounded-2xl" />
+      <div className="grid gap-4 sm:grid-cols-3">
+        <Skeleton className="h-24 rounded-xl" />
+        <Skeleton className="h-24 rounded-xl" />
+        <Skeleton className="h-24 rounded-xl" />
+      </div>
+      <Skeleton className="h-64 w-full rounded-xl" />
+      <span className="sr-only">Loading your dashboard…</span>
+    </div>
+  );
+
   return (
     <SWRConfig
       value={{
@@ -186,40 +216,18 @@ export default function DashboardLayout({
           canChangePassword={canChangePassword}
           features={features}
         >
-          <DashboardShell
-            role={role}
-            email={email}
-            institution={institution}
-            mustChangePassword={mustChangePassword}
-          >
-            {contentState === "error" ? (
-              <div className="mx-auto flex min-h-[60vh] max-w-md items-center">
-                <ErrorCard
-                  title="We couldn't open your dashboard"
-                  message={bootstrapError ?? "Please try again."}
-                  onRetry={() => setBootstrapAttempt((attempt) => attempt + 1)}
-                  className="w-full"
-                />
-              </div>
-            ) : contentState === "content" ? (
-              children
-            ) : (
-              <div
-                className="mx-auto flex min-h-[60vh] w-full max-w-5xl flex-col gap-6"
-                aria-label="Loading dashboard"
-                aria-busy="true"
-              >
-                <Skeleton className="h-32 w-full rounded-2xl" />
-                <div className="grid gap-4 sm:grid-cols-3">
-                  <Skeleton className="h-24 rounded-xl" />
-                  <Skeleton className="h-24 rounded-xl" />
-                  <Skeleton className="h-24 rounded-xl" />
-                </div>
-                <Skeleton className="h-64 w-full rounded-xl" />
-                <span className="sr-only">Loading your dashboard…</span>
-              </div>
-            )}
-          </DashboardShell>
+          {isStudentExamPath(pathname) && !mustChangePassword ? (
+            <ExamShell institution={institution}>{content}</ExamShell>
+          ) : (
+            <DashboardShell
+              role={role}
+              email={email}
+              institution={institution}
+              mustChangePassword={mustChangePassword}
+            >
+              {content}
+            </DashboardShell>
+          )}
         </DashboardIdentityProvider>
       </ToastProvider>
     </SWRConfig>

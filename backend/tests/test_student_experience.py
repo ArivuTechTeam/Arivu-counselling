@@ -253,12 +253,14 @@ class StudentAnalyticsTests(unittest.TestCase):
                         "attempt_id": "a1",
                         "tenant_id": "t1",
                         "question_id": "q-weak",
+                        "student_answer": "A",
                         "is_correct": False,
                     },
                     {
                         "attempt_id": "a1",
                         "tenant_id": "t1",
                         "question_id": "q-strong",
+                        "student_answer": "B",
                         "is_correct": True,
                     },
                 ],
@@ -341,18 +343,55 @@ class StudentAnalyticsTests(unittest.TestCase):
                     {"id": "p2", "tenant_id": "other", "student_id": "u1", "status": "graded"},
                 ],
                 "attempt_answers": [
-                    {"attempt_id": "a1", "tenant_id": "t1", "question_id": "q1", "is_correct": True},
-                    {"attempt_id": "a2", "tenant_id": "t1", "question_id": "q2", "is_correct": True},
+                    {"attempt_id": "a1", "tenant_id": "t1", "question_id": "q1", "student_answer": "A", "is_correct": True},
+                    {"attempt_id": "a2", "tenant_id": "t1", "question_id": "q2", "student_answer": "A", "is_correct": True},
                 ],
                 "practice_answers": [
-                    {"session_id": "p1", "tenant_id": "t1", "question_id": "q3", "is_correct": False},
-                    {"session_id": "p2", "tenant_id": "other", "question_id": "q4", "is_correct": True},
+                    {"session_id": "p1", "tenant_id": "t1", "question_id": "q3", "student_answer": "B", "is_correct": False},
+                    {"session_id": "p2", "tenant_id": "other", "question_id": "q4", "student_answer": "A", "is_correct": True},
                 ],
             }
         )
         answers, work_count = _student_graded_answers(service, "t1", "u1")
         self.assertEqual(work_count, 2)
         self.assertEqual({row["question_id"] for row in answers}, {"q1", "q3"})
+
+    def test_partial_attempt_counts_only_answered_questions(self) -> None:
+        service = MemoryService(
+            {
+                "quiz_attempts": [
+                    {"id": "a1", "tenant_id": "t1", "student_id": "u1", "status": "graded"},
+                    {"id": "a2", "tenant_id": "t1", "student_id": "u2", "status": "graded"},
+                ],
+                "practice_sessions": [
+                    {"id": "p1", "tenant_id": "t1", "student_id": "u1", "status": "graded"}
+                ],
+                "attempt_answers": [
+                    {
+                        "attempt_id": "a1",
+                        "tenant_id": "t1",
+                        "question_id": f"q{i}",
+                        "student_answer": "A" if i < 3 else None,
+                        "is_correct": i == 0,
+                    }
+                    for i in range(259)
+                ]
+                + [
+                    {"attempt_id": "a2", "tenant_id": "t1", "question_id": "other", "student_answer": "A", "is_correct": True}
+                ],
+                "practice_answers": [
+                    {"session_id": "p1", "tenant_id": "t1", "question_id": "practice", "student_answer": [], "is_correct": False}
+                ],
+                "questions": [],
+            }
+        )
+        with patch("app.api.student.get_service_client", return_value=service):
+            result = student_stats(profile())
+
+        self.assertEqual(result["questions_solved"], 3)
+        self.assertEqual(result["overall_accuracy"], 33)
+        self.assertEqual(result["quizzes_taken"], 2)
+        self.assertEqual(result["weak_areas"], [])
 
     def test_leaderboard_excludes_other_course_and_ambiguous_practice(self) -> None:
         service = MemoryService(
@@ -703,7 +742,7 @@ class PracticeAndRevisionFlowTests(unittest.TestCase):
                     {"id": "p1", "tenant_id": "t1", "student_id": "u1", "status": "graded"}
                 ],
                 "practice_answers": [
-                    {"session_id": "p1", "tenant_id": "t1", "question_id": "q1", "is_correct": False}
+                    {"session_id": "p1", "tenant_id": "t1", "question_id": "q1", "student_answer": "B", "is_correct": False}
                 ],
                 "questions": [{"id": "q1", "tenant_id": "t1", "chapter_id": "ch1", "topic_id": "tp1"}],
                 "chapters": [{"id": "ch1", "tenant_id": "t1", "subject_id": "s1", "name": "Numbers"}],
@@ -722,7 +761,7 @@ class PracticeAndRevisionFlowTests(unittest.TestCase):
                 {"id": "p2", "tenant_id": "t1", "student_id": "u1", "status": "graded"}
             )
             service.tables["practice_answers"].append(
-                {"session_id": "p2", "tenant_id": "t1", "question_id": "q1", "is_correct": False}
+                {"session_id": "p2", "tenant_id": "t1", "question_id": "q1", "student_answer": "B", "is_correct": False}
             )
             refreshed = revision_topics(profile())
             self.assertEqual(refreshed[0]["answered"], 2)

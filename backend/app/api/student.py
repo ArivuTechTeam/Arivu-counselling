@@ -885,11 +885,13 @@ def submit_attempt(
 def _student_graded_answers(
     service, tenant_id: str, student_id: str
 ) -> tuple[list[dict], int]:
-    """Return every graded answer for one student across both quiz engines.
+    """Return answered questions from graded work across both quiz engines.
 
     Teacher-published quizzes use quiz_attempts/attempt_answers; Smart Quiz,
     Daily, Exam, Challenge and Revision use practice_sessions/practice_answers.
     Student analytics must combine both or the dashboard contradicts History.
+    Grading stores rows for unanswered questions too, so those rows must not
+    count as solved or lower answer-based accuracy and topic mastery.
     """
     quiz_attempts = select_all(
         service,
@@ -915,7 +917,7 @@ def _student_graded_answers(
             select_all_in(
                 service,
                 "attempt_answers",
-                "question_id, is_correct",
+                "question_id, student_answer, is_correct",
                 in_column="attempt_id",
                 values=attempt_ids,
                 configure=lambda query: query.eq("tenant_id", tenant_id),
@@ -927,13 +929,14 @@ def _student_graded_answers(
             select_all_in(
                 service,
                 "practice_answers",
-                "question_id, is_correct",
+                "question_id, student_answer, is_correct",
                 in_column="session_id",
                 values=session_ids,
                 configure=lambda query: query.eq("tenant_id", tenant_id),
             )
         )
-    return answers, len(quiz_attempts) + len(practice_sessions)
+    answered = [a for a in answers if is_answered(a.get("student_answer"))]
+    return answered, len(quiz_attempts) + len(practice_sessions)
 
 
 @router.get("/student/stats")

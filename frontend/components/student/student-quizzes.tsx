@@ -33,7 +33,6 @@ type QuizItem = {
   attemptCount: number;
   attemptLimit: number;
   attemptsRemaining: number;
-  bestPct?: number | null;
 };
 
 /** "Accounting · Depreciation" (subject · chapter), skipping any that are missing. */
@@ -59,7 +58,6 @@ function flatten(quizzes: StudentQuiz[]): QuizItem[] {
         attemptCount: v.attempt_count,
         attemptLimit: v.attempt_limit,
         attemptsRemaining: v.attempts_remaining,
-        bestPct: v.best_pct,
       });
     }
   }
@@ -137,7 +135,7 @@ export function StudentQuizzes() {
           ) : toAttend.length === 0 ? (
             <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-dashed p-4">
               <p className="text-sm text-muted-foreground">
-                You&apos;re all caught up — keep practising with Topic Practice.
+                No new quizzes right now. You can retake a previous quiz or practise a topic.
               </p>
               <Button asChild size="sm" variant="outline">
                 <Link href="/dashboard/student/practice?mode=topic">Start Topic Practice</Link>
@@ -197,12 +195,12 @@ export function StudentQuizzes() {
         </CardContent>
       </Card>
 
-      {/* Completed — retake to improve the score */}
+      {/* Previously opened — some attempts may have ended without an answer */}
       {completed.length > 0 && (
         <Card className="animate-rise" style={{ animationDelay: "60ms" }}>
           <CardHeader>
-            <CardTitle>Completed quizzes</CardTitle>
-            <CardDescription>Retake any quiz to improve your score.</CardDescription>
+            <CardTitle>Quizzes you&apos;ve opened</CardTitle>
+            <CardDescription>Try one again to finish it or improve your score.</CardDescription>
           </CardHeader>
           <CardContent className="flex flex-col gap-2">
             {completed.map((i) => (
@@ -217,7 +215,6 @@ export function StudentQuizzes() {
                   <p className="truncate text-xs text-muted-foreground">
                     {topicLine(i) ? `${topicLine(i)} · ` : ""}
                     {variantLabel(i.variantType)}
-                    {i.bestPct != null ? ` · best ${i.bestPct}%` : ""}
                     {` · ${i.attemptsRemaining} attempt${i.attemptsRemaining === 1 ? "" : "s"} left`}
                   </p>
                 </div>
@@ -231,7 +228,7 @@ export function StudentQuizzes() {
                     ? "Starting…"
                     : i.attemptsRemaining === 0
                       ? "Limit reached"
-                      : "Retake"}
+                      : "Try again"}
                 </Button>
               </div>
             ))}

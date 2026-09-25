@@ -3,7 +3,6 @@ import { PUBLIC_ENV } from "@/lib/public-env";
 import { safeDashboardNext } from "@/lib/safe-next";
 
 let sessionExpiryRedirectStarted = false;
-let latestBearerToken: string | null = null;
 
 // Base URL of the FastAPI backend (from .env.local).
 const API_BASE = PUBLIC_ENV.apiBaseUrl;
@@ -189,7 +188,6 @@ async function authHeader(): Promise<Record<string, string>> {
     data: { session },
   } = await supabase.auth.getSession();
   const token = session?.access_token;
-  latestBearerToken = token ?? null;
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
@@ -1184,29 +1182,10 @@ export async function finalizeAttemptForExit(
     method: "POST",
     headers: { "Content-Type": "application/json", ...headers },
     body: JSON.stringify({ answers, finalize_reason: "left" }),
-    keepalive: true,
   });
-  if (!res.ok && res.status !== 400) {
+  if (!res.ok) {
     await apiError(res, "The attempt could not be finalized.");
   }
-}
-
-/** Best-effort keepalive used only after the browser confirms a real page exit. */
-export function finalizeAttemptOnUnload(
-  id: string,
-  source: "quiz" | "practice",
-  answers: ExitAnswer[],
-): void {
-  if (!latestBearerToken) return;
-  void fetch(exitSubmitUrl(id, source), {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${latestBearerToken}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ answers, finalize_reason: "left" }),
-    keepalive: true,
-  });
 }
 export const savePracticeProgress = (
   id: string,
