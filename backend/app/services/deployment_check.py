@@ -64,6 +64,13 @@ def inspect_deployment(service, settings, migration_dir: Path) -> dict:
     if getattr(settings, "commerce_pack_enabled", False):
         probe("paper_profiles_schema", "paper_profiles",
               "id,tenant_id,course_id,course_level_id,exam_body,level,paper,assessment_year,framework")
+    if getattr(settings, "paper_bank_enabled", False):
+        probe("paper_question_columns", "questions",
+              "id,paper_type,paper_year,paper_exam,paper_source_note,model_answer,answer_summary")
+        probe("paper_bank_schema", "paper_questions",
+              "id,tenant_id,paper_type,subject_id,chapter_id,year,exam,type,content_hash")
+        probe("paper_bank_sources", "paper_question_sources",
+              "tenant_id,paper_question_id,source_quiz_set_id,origin_question_id")
 
     files = sorted(path.name for path in migration_dir.glob("migration-*.sql"))
     checks.append({"name": "runtime_evidence", "status": "unverified",

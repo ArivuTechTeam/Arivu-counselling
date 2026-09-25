@@ -78,6 +78,7 @@ def get_quiz_set_detail(quiz_set_id: str, tenant_id: str) -> dict:
                     "source_page_start, source_page_end, grounding_confidence, "
                     "verification_status, verification_warnings, source, confidence_score, extraction_job_id, figure_id"
                     + (",content_version,release_locked,source_quiz_id,origin_question_id" if reuse_enabled() else "")
+                    + (",paper_type,paper_year,paper_exam,model_answer" if getattr(get_settings(), "paper_bank_enabled", False) else "")
                 )
                 .in_("id", question_ids)
                 .eq("tenant_id", tenant_id)

@@ -87,7 +87,10 @@ generate from topic names alone.
 Generated questions are validated for schema, requested type/count distribution,
 answer shape, topic grounding, and source support. They are persisted as
 `pending_review`; faculty approval remains mandatory before students can see
-them. Student grading is deterministic and never calls an LLM.
+them. Ordinary quiz grading is deterministic and never calls an LLM. The
+separately gated paper bank uses a bounded, quota-limited AI call only for
+descriptive student answers, after teacher approval; objective answers remain
+deterministic.
 
 ## 5. Durable retry and refresh behavior
 

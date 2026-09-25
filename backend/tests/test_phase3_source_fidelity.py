@@ -108,6 +108,7 @@ def test_mixed_pdf_includes_scan_in_visual_processing():
         raw, _ = _extract_document_content(content=b"fixture", ext="pdf")
     vision.assert_called_once_with(
         "application/pdf", b"fixture", tenant_id=None, document_id=None, job_id=None,
+        paper_mode=False,
     )
     text_model.assert_not_called()
     assert raw["source_manifest"]["sparse_pages"] == [2, 3, 4]

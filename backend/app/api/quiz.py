@@ -24,6 +24,7 @@ from app.lib.supabase import get_service_client
 from app.lib.supabase_queries import select_all, select_all_in
 from app.services.blueprint import generate_blueprint_quiz
 from app.services.events import QUESTION_APPROVED, QUIZ_PUBLISHED, log_event, log_events, make_event
+from app.services.pyq_snapshot import snapshot_published_pyq
 from app.services.generation import generate_quiz
 from app.services.generation_jobs import (
     create_final_generation_job,
@@ -776,6 +777,7 @@ def publish_quiz_set(
                     except ValueError as exc:
                         raise HTTPException(409, "Correct the answer configuration before publishing.") from exc
         row = quiz_reuse.rpc(service, "publish_quiz_atomic", profile, quiz_set_id, p_token=body.publication_token)
+        snapshot_published_pyq(service, profile.tenant_id, quiz_set_id, profile.user_id)
         return {key: row.get(key) for key in ("id", "title", "status", "created_at", "published_at")}
     variants = select_all(
         service,
@@ -886,6 +888,7 @@ def publish_quiz_set(
     )
     if not updated.data:
         raise HTTPException(status_code=404, detail="Quiz set not found.")
+    snapshot_published_pyq(service, profile.tenant_id, quiz_set_id, profile.user_id)
     log_event(
         tenant_id=profile.tenant_id,
         event_type=QUIZ_PUBLISHED,

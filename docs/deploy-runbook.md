@@ -122,10 +122,20 @@ migration-59-personal-data-minimization.sql
 migration-60-student-contact.sql
 migration-61-extended-question-types.sql
 migration-62-atomic-student-contact.sql
+migration-63-pyq.sql
+migration-64-paper-knowledge-base.sql
+migration-65-paper-bank-safety.sql
 ```
 
-(Filenames above verified 2026-09-24 against `migrations/`, through migration
-62. Apply `migration-62-atomic-student-contact.sql` after migration 60 and
+(Filenames above verified 2026-09-25 against `migrations/`, through migration
+65. Apply migrations 63, 64, and 65 in order
+after migration 62 before setting `PAPER_BANK_ENABLED=true` or deploying a
+backend configured with that flag. The paper bank also needs a coordinated API
+and worker rollout. Migration 65 installs atomic snapshot replacement and the
+descriptive-grading quota. Keep the flag off until the migrations are confirmed
+on the target Supabase project and a staging paper-import/publish/student-grade
+drill succeeds; repository tests cannot verify live SQL or provider behavior.
+Apply `migration-62-atomic-student-contact.sql` after migration 60 and
 before deploying the contact API that calls `submit_student_contact`; otherwise
 student submissions will return a temporary service error. Apply
 `migration-61-extended-question-types.sql` after migrations 59 and 60
@@ -307,6 +317,8 @@ there is no per-institution feature setup.
 |---|---|
 | `FACULTY_JOBS_ENABLED` | `true` after the worker service is running |
 | `EXTENDED_QUESTION_TYPES_ENABLED` | `false` until migration 61 and a coordinated API/worker rollout are verified; then enable only if the institution-facing feature is intended |
+| `PAPER_BANK_ENABLED` | `false` until migrations 63–65, the API and worker rollout, and paper-bank grading and snapshot checks are verified |
+| `RATE_LIMIT_PAPER_GRADING_PER_HOUR` | `10` paid descriptive grading attempts per student per rolling hour (requires migration 65) |
 | `QUIZ_REUSE_ENABLED` | `true` |
 | `BATCHES_ENABLED` | `true` |
 | `SCORING_POLICIES_ENABLED` | `true` |

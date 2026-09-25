@@ -118,6 +118,13 @@ const NAV: Record<string, NavItem[]> = {
       icon: Clock,
     },
     {
+      label: "Paper bank",
+      href: "/dashboard/teacher/paper-bank",
+      section: "Content",
+      icon: BookOpen,
+      feature: "paper_bank",
+    },
+    {
       label: "Class monitor",
       href: "/dashboard/teacher/class-monitor",
       section: "Monitoring",
@@ -276,6 +283,13 @@ const NAV: Record<string, NavItem[]> = {
       href: "/dashboard/student/challenge",
       section: "Practice",
       icon: UserCheck,
+    },
+    {
+      label: "Mock Test & PYQ",
+      href: "/dashboard/student/pyq",
+      section: "Practice",
+      icon: FileText,
+      feature: "paper_bank",
     },
     {
       label: "Leaderboard",

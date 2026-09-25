@@ -344,6 +344,13 @@ export function QuestionReviewCard({
             {question.marks} {question.marks === 1 ? "mark" : "marks"}
           </span>
         )}
+        {question.paper_type && (
+          <span className="rounded-full border border-amber-300 bg-amber-50 px-2.5 py-0.5 text-xs font-semibold uppercase text-amber-700">
+            {question.paper_type}
+            {question.paper_year ? ` · ${question.paper_year}` : ""}
+            {question.paper_exam ? ` · ${question.paper_exam}` : ""}
+          </span>
+        )}
         <span className="ml-auto">
           <StatusBadge status={question.review_status} pop={flash !== null} />
         </span>
@@ -363,6 +370,12 @@ export function QuestionReviewCard({
           <p className="mb-3 text-[15px] font-medium leading-relaxed text-foreground">
             {question.question_text}
           </p>
+          {question.type === "descriptive" && question.model_answer && (
+            <div className="mb-3 rounded-lg border border-input bg-muted/30 p-3 text-sm">
+              <p className="mb-1 text-xs font-semibold uppercase text-muted-foreground">Model answer</p>
+              <p className="whitespace-pre-wrap text-foreground/90">{question.model_answer}</p>
+            </div>
+          )}
           <fieldset disabled={question.release_locked}><FigureControls
             question={question}
             documentFigures={documentFigures}
