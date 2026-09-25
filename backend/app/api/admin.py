@@ -48,6 +48,34 @@ ADMIN_DIRECTORY_PAGE_SIZE = 100
 ADMIN_QUIZ_SET_PAGE_SIZE_MAX = 100
 INSTITUTION_LOGO_MAX_BYTES = 1024 * 1024
 INSTITUTION_LOGO_TYPES = {"image/png": "png", "image/jpeg": "jpg"}
+INSTITUTION_SUBDOMAIN_MAX_LENGTH = 63
+
+
+def _normalize_institution_subdomain(value: str) -> str:
+    subdomain = value.strip().lower()
+    if not subdomain:
+        raise HTTPException(
+            status_code=400,
+            detail="Institution access URL is required.",
+        )
+    if (
+        len(subdomain) > INSTITUTION_SUBDOMAIN_MAX_LENGTH
+        or not all(
+            character in "abcdefghijklmnopqrstuvwxyz0123456789-"
+            for character in subdomain
+        )
+        or not subdomain[0].isalnum()
+        or not subdomain[-1].isalnum()
+        or "--" in subdomain
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Access URL must use lowercase letters, numbers, "
+                "and single internal hyphens only."
+            ),
+        )
+    return subdomain
 
 
 def _signed_logo_url(path: object) -> str | None:
@@ -2408,6 +2436,10 @@ class TenantUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     name: str | None = None
+    subdomain: str | None = Field(
+        default=None,
+        max_length=INSTITUTION_SUBDOMAIN_MAX_LENGTH,
+    )
     plan_tier: Literal["free", "starter", "growth", "enterprise"] | None = None
     is_active: bool | None = None
     logo_data: str | None = Field(default=None, max_length=1_500_000)
@@ -2499,7 +2531,7 @@ def onboard_institution(
     )
 
     name = body.name.strip()
-    subdomain = body.subdomain.strip().lower()
+    subdomain = _normalize_institution_subdomain(body.subdomain)
     if not name or not subdomain:
         raise HTTPException(status_code=400, detail="Name and subdomain are required.")
     supplied_admin_fields = [
@@ -2514,15 +2546,6 @@ def onboard_institution(
         )
     if body.admin_password:
         _validate_temporary_password(body.admin_password)
-    if (
-        not all(c.isalnum() or c == "-" for c in subdomain)
-        or not subdomain[0].isalnum()
-        or not subdomain[-1].isalnum()
-    ):
-        raise HTTPException(
-            status_code=400,
-            detail="Subdomain must use letters, numbers, and internal hyphens only.",
-        )
     taken = (
         service.table("tenants").select("id").eq("subdomain", subdomain).execute().data
         or []
@@ -2705,19 +2728,42 @@ def update_institution(
         changes["name"] = changes["name"].strip()
         if not changes["name"]:
             raise HTTPException(status_code=400, detail="Institution name is required.")
+    if "subdomain" in changes:
+        changes["subdomain"] = _normalize_institution_subdomain(
+            changes["subdomain"]
+        )
     if not changes and logo is None:
         raise HTTPException(status_code=400, detail="Choose at least one field to update.")
 
     service = get_service_client()
     existing = (
         service.table("tenants")
-        .select("id, logo_url, logo_filename, primary_color, feature_flags")
+        .select(
+            "id, subdomain, logo_url, logo_filename, primary_color, feature_flags"
+        )
         .eq("id", tenant_id)
         .maybe_single()
         .execute()
     )
     if existing is None or not existing.data:
         raise HTTPException(status_code=404, detail="Institution not found.")
+    if (
+        "subdomain" in changes
+        and changes["subdomain"] != existing.data.get("subdomain")
+    ):
+        duplicate = (
+            service.table("tenants")
+            .select("id")
+            .eq("subdomain", changes["subdomain"])
+            .execute()
+            .data
+            or []
+        )
+        if duplicate:
+            raise HTTPException(
+                status_code=409,
+                detail="That institution access URL is already in use.",
+            )
     previous_logo_path = existing.data.get("logo_url")
     new_logo_path: str | None = None
     if logo is not None:
