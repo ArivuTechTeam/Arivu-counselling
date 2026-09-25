@@ -18,6 +18,9 @@ code remains the final source of truth.
 - [`dashboard-state-persistence.md`](dashboard-state-persistence.md) — what UI
   state survives a refresh and what must never be stored.
 - [`personal-data-audit.md`](personal-data-audit.md) — personal-data handling.
+- [`SCALABILITY-RELEASE-A-B-README.md`](SCALABILITY-RELEASE-A-B-README.md) —
+  current 10-institution scalability plan, A1 capacity tooling/runbook, release
+  gates, and the boundary between implemented tooling and pending staging proof.
 
 ## Historical material
 

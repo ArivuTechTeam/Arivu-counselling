@@ -1,0 +1,78 @@
+{
+  "version": 1,
+  "name": "release-a-read-baseline",
+  "routes": [
+    {
+      "name": "health",
+      "method": "GET",
+      "path": "/health",
+      "role": "public",
+      "weight": 1,
+      "p95_target_ms": 500
+    },
+    {
+      "name": "student-quiz-catalogue",
+      "method": "GET",
+      "path": "/api/v1/quizzes",
+      "role": "student",
+      "weight": 4,
+      "p95_target_ms": 800
+    },
+    {
+      "name": "student-stats",
+      "method": "GET",
+      "path": "/api/v1/student/stats",
+      "role": "student",
+      "weight": 2,
+      "p95_target_ms": 500
+    },
+    {
+      "name": "teacher-class-overview",
+      "method": "GET",
+      "path": "/api/v1/teacher/class-overview",
+      "role": "teacher",
+      "weight": 2,
+      "p95_target_ms": 2000
+    },
+    {
+      "name": "teacher-subject-metrics",
+      "method": "GET",
+      "path": "/api/v1/teacher/subject-metrics",
+      "role": "teacher",
+      "weight": 2,
+      "p95_target_ms": 2000
+    },
+    {
+      "name": "teacher-published-quizzes",
+      "method": "GET",
+      "path": "/api/v1/teacher/published-quizzes",
+      "role": "teacher",
+      "weight": 1,
+      "p95_target_ms": 2000
+    },
+    {
+      "name": "institution-overview",
+      "method": "GET",
+      "path": "/api/v1/admin/overview",
+      "role": "institution_admin",
+      "weight": 1,
+      "p95_target_ms": 2000
+    },
+    {
+      "name": "platform-stats",
+      "method": "GET",
+      "path": "/api/v1/platform/stats",
+      "role": "super_admin",
+      "weight": 1,
+      "p95_target_ms": 2000
+    },
+    {
+      "name": "worker-health",
+      "method": "GET",
+      "path": "/api/v1/platform/worker-health",
+      "role": "super_admin",
+      "weight": 1,
+      "p95_target_ms": 500
+    }
+  ]
+}
