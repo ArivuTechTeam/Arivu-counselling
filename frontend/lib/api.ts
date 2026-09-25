@@ -1977,6 +1977,7 @@ export const onboardInstitution = (input: OnboardInstitutionInput) =>
 
 export type InstitutionUpdateInput = {
   name?: string;
+  subdomain?: string;
   plan_tier?: "free" | "starter" | "growth" | "enterprise";
   is_active?: boolean;
   logo_data?: string;
