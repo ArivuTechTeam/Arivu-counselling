@@ -743,10 +743,9 @@ export default function UsersPage() {
           onClose={() => !savingSubjects && setManageTeacher(null)}
           ariaLabelledBy="teacher-edit-title"
           closeOnBackdrop={!savingSubjects}
-          contentClassName="animate-rise flex max-h-[90vh] w-full max-w-lg flex-col rounded-2xl border border-border bg-card shadow-2xl"
+          contentClassName="animate-rise flex max-h-[calc(100dvh-2rem)] w-full max-w-lg flex-col overflow-hidden rounded-2xl border border-border bg-card shadow-2xl"
         >
-          <div>
-            <div className="flex items-start justify-between gap-3 border-b p-5">
+            <div className="flex shrink-0 items-start justify-between gap-3 border-b p-5">
               <div>
                 <h3 id="teacher-edit-title" className="text-base font-bold text-foreground">
                   Edit teacher
@@ -765,7 +764,7 @@ export default function UsersPage() {
               </button>
             </div>
 
-            <div className="flex-1 overflow-y-auto p-5">
+            <div className="min-h-0 flex-1 overflow-y-auto p-5">
               {loadingSubjects ? (
                 <SkeletonList rows={4} />
               ) : courses.length === 0 ? (
@@ -842,7 +841,7 @@ export default function UsersPage() {
               )}
             </div>
 
-            <div className="flex justify-end gap-2 border-t p-4">
+            <div className="flex shrink-0 justify-end gap-2 border-t p-4">
               <button
                 type="button"
                 onClick={() => setManageTeacher(null)}
@@ -858,7 +857,6 @@ export default function UsersPage() {
                 {savingSubjects ? "Saving…" : "Save changes"}
               </Button>
             </div>
-          </div>
         </Dialog>
       )}
 
