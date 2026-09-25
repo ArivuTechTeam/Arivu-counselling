@@ -35,7 +35,7 @@
 
 ## 1. Executive Summary
 
-The ArivuPro Quiz Platform is a **multi-tenant SaaS web application** that lets coaching institutions turn teaching material into reviewed, student-ready quizzes using AI. A teacher uploads a PDF/DOCX; the system extracts the text, generates objective questions for teacher review, and publishes approved work for students. The base generator supports five objective question types; migration 61 adds three extended objective types behind `EXTENDED_QUESTION_TYPES_ENABLED`. `descriptive` remains outside automatic grading. Students use Topic Practice and Mock Exam within Practice & Mock Tests, plus daily challenges, leaderboards, and Challenge a Friend.
+The ArivuPro Quiz Platform is a **multi-tenant SaaS web application** that lets coaching institutions turn teaching material into reviewed, student-ready quizzes using AI. A teacher uploads a PDF/DOCX; the system extracts the text, generates objective questions for teacher review, and publishes approved work for students. The base generator supports five objective question types; migration 61 adds three extended objective types behind `EXTENDED_QUESTION_TYPES_ENABLED`. The separately flagged PYQ/MTP/RTP paper bank can also grade descriptive student answers with AI; standard quiz/practice grading remains deterministic. Students use Topic Practice and Mock Exam within Practice & Mock Tests, plus daily challenges, leaderboards, and Challenge a Friend.
 
 **Architecturally**, it is a classic three-tier system built on managed cloud services:
 
@@ -48,7 +48,7 @@ The ArivuPro Quiz Platform is a **multi-tenant SaaS web application** that lets 
 
 **Commercial status:** the product and its multi-tenant foundation are complete and live, but **billing/subscription enforcement is intentionally not yet built** (deferred to Phase 2). The database contains inert "scaffolding" (plan tiers, prices, usage counters) that no code currently enforces. See §12 and §14.
 
-**Cost profile:** text stages now prefer DeepSeek, topic analysis is normally one bounded call, and selected source ranges are reused for generation. One local 300-page analysis + generation + verification run was about **₹5**; this is measured evidence, not a guaranteed price. Grading, analytics, and quiz-taking use no AI. See §11.
+**Cost profile:** text stages now prefer DeepSeek, topic analysis is normally one bounded call, and selected source ranges are reused for generation. One local 300-page analysis + generation + verification run was about **₹5**; this is measured evidence, not a guaranteed price. Standard objective grading, analytics, and quiz-taking use no AI, but paper-bank descriptive grading uses a paid provider call subject to a per-student rolling-hour limit. See §11.
 
 ---
 
@@ -332,6 +332,8 @@ Guards: **public** / **student** / **staff** (teacher+admin+super) / **admin** (
 
 **Practice** (`/api/v1`) — `/practice/sessions` (start/get/submit), bookmarks, `/daily` + `/daily/start`, `/exam/config` + `/exam/start`, `/leaderboard` (all student).
 
+**Paper bank** (`/api/v1/papers`) — when `PAPER_BANK_ENABLED` is on, publishing approved PYQ/MTP/RTP questions attempts an atomic sync into a tenant- and subject-scoped `paper_questions` bank; a sync failure leaves the previous bank entries intact and does not undo quiz publication. Students select a paper type and subject for a random set; objective answers use deterministic grading, while descriptive answers are checked against stored key points by the DeepSeek-first AI grader. This is separate from normal quiz attempts and does not persist a student's paper-bank answer. The teacher upload/worker path also reads the flag; migrations 63–65 are required. See `docs/deploy-runbook.md` for rollout evidence and remaining live checks.
+
 **Challenge** (`/api/v1`) — `/challenges` (create), `/challenges/join`
 (tenant/course-scoped friendly-code lookup), `/challenges/{token}` (hub),
 `/challenges/{token}/accept` (student).
@@ -380,10 +382,10 @@ Guards: **public** / **student** / **staff** (teacher+admin+super) / **admin** (
 
 ## 7. Database Schema
 
-PostgreSQL on Supabase. The repository contains `migrations/schema.sql` plus migrations 01, 02, and 04–61 (inventory verified 2026-09-24). There is no migration 03; migration 04 removed the abandoned seed-library feature. The incremental files remain required for an existing database. Apply migrations once, in numeric order, using `docs/deploy-runbook.md`; repository presence does not prove production application state.
+PostgreSQL on Supabase. The repository contains `migrations/schema.sql` plus migrations 01, 02, and 04–65 (inventory verified 2026-09-25). There is no migration 03; migration 04 removed the abandoned seed-library feature. The incremental files remain required for an existing database. Apply migrations once, in numeric order, using `docs/deploy-runbook.md`; repository presence does not prove production application state. The operator reported migration 65 applied, but the target database was not checked directly in this documentation pass.
 
 ### 7.1 Enums
-`user_role` (super_admin, institution_admin, teacher, student) · `question_type` (mcq_single, mcq_multi, numerical, true_false, fill_blank, descriptive; migration 61 adds assertion_reason, mrm, matching) · `question_source` (ai_generated, manual) · `review_status` (pending_review, approved, rejected, needs_edit) · `document_status` · `job_status` · `variant_type` (theory, practical, mixed) · `quiz_status` (draft, published, archived) · `attempt_status` (in_progress, submitted, graded, abandoned). The three extended types are produced only when their backend flag is enabled; descriptive is not auto-graded.
+`user_role` (super_admin, institution_admin, teacher, student) · `question_type` (mcq_single, mcq_multi, numerical, true_false, fill_blank, descriptive; migration 61 adds assertion_reason, mrm, matching) · `question_source` (ai_generated, manual) · `review_status` (pending_review, approved, rejected, needs_edit) · `document_status` · `job_status` · `variant_type` (theory, practical, mixed) · `quiz_status` (draft, published, archived) · `attempt_status` (in_progress, submitted, graded, abandoned). The three extended objective types are produced only when their backend flag is enabled. Descriptive grading is available only in the separately flagged paper-bank flow, not standard quiz/practice grading.
 
 ### 7.2 Tables by domain
 
@@ -397,6 +399,7 @@ PostgreSQL on Supabase. The repository contains `migrations/schema.sql` plus mig
 - `documents` — uploaded files (storage path, type, status).
 - `ai_extraction_jobs` — one row per AI processing run on a document (history for reprocessing).
 - `questions` — the question bank: type, text, `options` (jsonb), `correct_answer` (jsonb), explanation, difficulty, marks, `source`, `review_status`, `topic_id`, verbatim source evidence/page provenance, grounding confidence, verification status/warnings, and a (currently unused) `embedding` vector column.
+- `paper_questions` — approved, answerable PYQ/MTP/RTP questions frozen at publication; tenant/subject scoped and synchronized atomically by migration 65's RPC.
 - `quiz_sets` → `quiz_variants` → `quiz_variant_questions` — one upload produces a set; a set has variants (by cognitive level); a variant links to ordered questions.
 
 **Student activity**
@@ -510,8 +513,10 @@ and application queries scope every tenant-owned read/write to one institution.
 | 60 student-contact | Adds the private student feedback and support inbox. |
 | 61 extended-question-types | Adds assertion–reason, multiple-response (`mrm`), and matching enum values for flag-gated objective questions. |
 | 62 atomic-student-contact | Serializes each student's request cooldown and insert in one service-role-only database function. |
+| 63–64 paper bank | Adds paper metadata and the tenant-scoped PYQ/MTP/RTP `paper_questions` bank. |
+| 65 paper-bank-safety | Makes paper-question snapshot replacement atomic and adds the descriptive-grading quota. |
 
-> **Repository inventory verified 2026-09-24:** migrations 13–62 above are
+> **Repository inventory verified 2026-09-25:** migrations 13–65 above are
 > recorded in this table. Migration 59 was reported applied by the operator;
 > a read-only production check confirmed that its AI-log raw-payload columns
 > are absent, but did not prove the complete migration history.
@@ -558,7 +563,7 @@ Teacher reviews → approve/edit/reject/regenerate → PUBLISH  →  visible to 
 - **Blueprint generation** is a richer variant with two modes (verified 2026-09-15 — the per-topic mode is new since 7 September): the original **weighted mode** has the teacher extract topics, assign each a priority (High/Med/Low), and set overall per-type counts; the system converts priorities to a weighted mix (~70% to priority topics, 3:2:1 by weight) and tags each generated question with its topic. The newer **per-topic mode** instead has the teacher set exact per-topic, per-question-type counts directly — no weight math, no "general" coverage, and the quiz is built only from the topics the teacher listed. See `docs/llm-prompts.md` §2 for both prompt shapes.
 - **Current document-analysis path:** the Generate Quiz wizard uses a durable analysis job. A reliable typed-PDF outline can be built locally without AI; otherwise the universal analyzer represents all source locations in one bounded DeepSeek-first call and validates/evidence-grounds the hierarchy locally. Persisted chunked map/reduce is a compatibility fallback, not the default based solely on document length. Final generation uses selected source ranges and a durable job. See `docs/current-ai-document-workflow.md` and `docs/chunked-generation-architecture.md`.
 
-### 8.2 Grading (deterministic — no AI)
+### 8.2 Standard quiz and practice grading (deterministic — no AI)
 `grade_answer(question, student_answer)` returns `(is_correct, marks_awarded)`:
 - **mcq_single / true_false:** exact match of the chosen option id.
 - **mcq_multi:** **all-or-nothing** — the selected set must equal the correct set.
@@ -568,7 +573,7 @@ Teacher reviews → approve/edit/reject/regenerate → PUBLISH  →  visible to 
 - **matching:** every left-to-right pair must match.
 - **numerical:** correct if `|answer − value| ≤ tolerance`.
 - **fill_blank:** normalized text match (lowercase, trimmed) against any accepted answer.
-- **No answer / unknown type:** scored wrong (fail-closed). Grading uses **no AI**, so it is instant and free.
+- **No answer / unknown type:** scored wrong (fail-closed). This standard path uses **no AI**, so it is instant and free. Paper-bank descriptive answers follow a separate AI-grading path (`services/descriptive_grader.py`): a complete response is required, at least 90% key-point coverage earns full marks, and provider failure returns a retryable error rather than zero marks.
 
 ### 8.3 The practice engine (shared modes)
 A single pattern powers Topic Practice, Mock Exam, Daily Challenge,
@@ -635,8 +640,8 @@ SUPABASE (dashboard-configured): Postgres + Auth + Storage — settings apply in
 - `GEMINI_API_KEY` (+ optional `GEMINI_MODEL`, `GEMINI_FALLBACK_MODEL`, `GEMINI_BLUEPRINT_MODEL`, `GEMINI_BASE_URL`)
 - Stage routing: `AI_FALLBACK_PROVIDER`, `TOPIC_ANALYSIS_PROVIDER`, `QUIZ_GENERATION_PROVIDER`, `TYPED_QUIZ_EXTRACTION_PROVIDER`, `QUESTION_VERIFICATION_PROVIDER`, `QUESTION_REGENERATION_PROVIDER`, and `VISION_EXTRACTION_PROVIDER` (must remain `gemini`)
 - Large-document generation and extraction tuning (safe code defaults; see `backend/.env.example` for the full, commented list): `GENERATION_MAX_TEXT_CHARS`, `CHUNKING_TRIGGER_CHARS`, `GENERATION_CHUNK_CHARS`, `GENERATION_CHUNK_OVERLAP_CHARS`, `GENERATION_CHUNK_MIN_CHARS`, `GENERATION_CHUNK_CONCURRENCY`, `GENERATION_MAP_MAX_OUTPUT_TOKENS`, `GENERATION_LARGE_REQUEST_TIMEOUT_SECONDS`, `GENERATION_PROFILE_MAX_CHARS`, `GENERATION_CHUNK_STUCK_SECONDS`, `GEMINI_VISION_TIMEOUT_SECONDS`, `GEMINI_EXTRACTION_MAX_OUTPUT_TOKENS`, `EXTRACTION_TEXT_CHUNK_CHARS`, `EXTRACTION_CHUNK_CONCURRENCY`.
-- The seven `RATE_LIMIT_*_PER_HOUR` endpoint rate limits (six AI actions plus
-  friend-challenge joins), `STUDENT_QUIZ_ATTEMPT_LIMIT`,
+- The eight `RATE_LIMIT_*_PER_HOUR` endpoint rate limits (seven AI actions,
+  including paper-bank descriptive grading, plus friend-challenge joins), `STUDENT_QUIZ_ATTEMPT_LIMIT`,
   `DAILY_CHALLENGE_TIMEZONE`, and `CHALLENGE_EXPIRY_DAYS` — see the "AI rate
   limits" section of `CLAUDE.md` for defaults
 
@@ -659,8 +664,9 @@ Email confirmation and password-reset emails require a custom SMTP provider (e.g
   topics.
 - DeepSeek thinking is disabled by default. Invalid output uses a controlled
   Gemini fallback, which is logged and can raise the total.
-- Student quiz-taking, deterministic grading, analytics, leaderboards, and
-  practice selection do not call an LLM.
+- Standard student quiz-taking, deterministic objective grading, analytics,
+  leaderboards, and practice selection do not call an LLM. Paper-bank
+  descriptive submissions are the exception and use a capped provider call.
 
 ### 11.2 Accounting source of truth
 
@@ -745,7 +751,8 @@ This is the biggest missing block for a "real SaaS":
 ### 14.3 Product enhancements (from scope + observed opportunities)
 - **Custom-domain tenancy** beyond the current path/query-based institution context.
 - **Question dedup** using the existing `embedding` column (semantic similarity).
-- **PYQ (past-year-questions) ingestion** — the deterministic parser exists but is unwired.
+- **Legacy PYQ parser evaluation** — the deterministic parser remains unwired;
+  the live paper-bank path uses `quiz_extraction.py` instead.
 - **Adaptive difficulty** and a full **AI Tutor chat** experience.
 - **Excel import/export**, richer analytics, and a **revision scheduler** (spaced repetition).
 - **Email/notifications** (SMTP + digests) and in-app announcements.

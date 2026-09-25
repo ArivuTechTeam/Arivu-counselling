@@ -172,7 +172,7 @@ export function QuizExtractor() {
       if ("background_job" in res) {
         setBusy(false);
         window.dispatchEvent(new Event("faculty-job-queued"));
-        notify("Import queued. You can leave this page and open the finished draft from Recent tasks.", "success");
+        notify("Import queued. You can leave this page and open the quiz from Recent tasks when it is ready.", "success");
         return;
       }
       notify(

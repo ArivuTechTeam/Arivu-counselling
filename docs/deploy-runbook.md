@@ -43,9 +43,10 @@ them in the Supabase dashboard for the exact project used by production.
 
 Merge your work to `main` first (see `docs/merge-workflow.md`).
 
-- **Frontend (Vercel):** builds automatically from GitHub via Vercel's
-  standard integration (not independently re-verified this session — confirm
-  in the Vercel dashboard if unsure).
+- **Frontend (Vercel):** builds automatically from GitHub after a PR merges to
+  `main`. GitHub's Vercel status for merge commit `bf01a95` reported
+  "Deployment has completed" on 2026-09-25; the production `/login` page
+  returned HTTP 200. That check did not exercise an authenticated page.
 - **Backend (Railway): does NOT auto-deploy from GitHub.** Confirmed
   2026-09-04 via `railway status --json` → the service's `"source"` field is
   `null`. Merging to `main` alone does nothing to the backend — after
@@ -132,9 +133,11 @@ migration-65-paper-bank-safety.sql
 after migration 62 before setting `PAPER_BANK_ENABLED=true` or deploying a
 backend configured with that flag. The paper bank also needs a coordinated API
 and worker rollout. Migration 65 installs atomic snapshot replacement and the
-descriptive-grading quota. Keep the flag off until the migrations are confirmed
-on the target Supabase project and a staging paper-import/publish/student-grade
-drill succeeds; repository tests cannot verify live SQL or provider behavior.
+descriptive-grading quota. The operator reported migrations through 65 applied
+on 2026-09-25, but this has not been checked directly in the target Supabase
+project. The recommended gate is a staging paper-import/publish/student-grade
+drill before production activation; that drill was not evidenced in the
+2026-09-25 rollout. Repository tests cannot verify live SQL or provider behavior.
 Apply `migration-62-atomic-student-contact.sql` after migration 60 and
 before deploying the contact API that calls `submit_student_contact`; otherwise
 student submissions will return a temporary service error. Apply
@@ -300,16 +303,20 @@ afterward. Do not mistake an API `/health` response for worker readiness; use
 the super-admin `/api/v1/platform/worker-health` check and a small queued-job
 smoke test. The obsolete retention cron is not a companion service.
 
-**Observed 2026-09-24:** the worker's latest successful deployment preceded
-the API deployment that day. Railway status alone does not prove the two are
-running the same code revision. Before a worker-sensitive release, compare the
-deployed revisions or redeploy both from the same verified commit; do not infer
-worker compatibility from the API health check.
+**Observed 2026-09-25:** API and worker were both uploaded from local commit
+`7cb7e51` and Railway reported SUCCESS for both. After the operator set
+`PAPER_BANK_ENABLED=true` on both services, both had a further SUCCESS
+deployment (`7d716dd9` API and `ec9dabf0` worker are deployment ID prefixes,
+not Git revisions). The API `/health` returned HTTP 200. Authenticated
+`/api/v1/platform/worker-health`, a queued-job smoke test, and the paper-bank
+import/publish/student-grade flow were not verified. Railway status alone does
+not prove worker readiness or the code revision of later redeployments.
 
 ### Advanced feature master switches
 
-Set the following on the API service. Set `FACULTY_JOBS_ENABLED=true` on the
-worker too. These are deployment-wide emergency switches. With migration 58,
+Set the following on the API service. Set `FACULTY_JOBS_ENABLED=true` and
+`PAPER_BANK_ENABLED` on the worker too: worker paper extraction reads the latter
+at startup. These are deployment-wide emergency switches. With migration 58,
 every institution receives the complete commerce feature set automatically;
 there is no per-institution feature setup.
 
@@ -317,7 +324,7 @@ there is no per-institution feature setup.
 |---|---|
 | `FACULTY_JOBS_ENABLED` | `true` after the worker service is running |
 | `EXTENDED_QUESTION_TYPES_ENABLED` | `false` until migration 61 and a coordinated API/worker rollout are verified; then enable only if the institution-facing feature is intended |
-| `PAPER_BANK_ENABLED` | `false` until migrations 63–65, the API and worker rollout, and paper-bank grading and snapshot checks are verified |
+| `PAPER_BANK_ENABLED` | Code default `false`; recommended `false` until migrations 63–65, coordinated API/worker rollout, and paper-bank grading and snapshot checks are verified. Observed `true` on both production Railway services 2026-09-25; the end-to-end checks remain outstanding. |
 | `RATE_LIMIT_PAPER_GRADING_PER_HOUR` | `10` paid descriptive grading attempts per student per rolling hour (requires migration 65) |
 | `QUIZ_REUSE_ENABLED` | `true` |
 | `BATCHES_ENABLED` | `true` |
@@ -385,6 +392,11 @@ startup in `backend/app/lib/config.py` with safe code defaults. See
 `docs/chunked-generation-architecture.md` for what each one tunes; set them
 explicitly in Railway only if the defaults need overriding.
 
+Changing `PAPER_BANK_ENABLED` requires redeploying/restarting both the API and
+worker; `app/lib/config.py` reads it at process startup. It is server-only,
+not a `NEXT_PUBLIC_*` frontend variable. `PYQ_ENABLED` remains a legacy alias
+in code; use `PAPER_BANK_ENABLED` for new configuration.
+
 **Deploying a change (Railway):** merge to `main` first, then run
 `scripts/deploy.sh` from `main` (or `railway up backend --path-as-root
 --service quiz-generator` directly) — merging alone does not deploy, see
@@ -401,6 +413,12 @@ Notes/gotchas below.
 
 - **Root directory:** `frontend`
 - **Framework:** Next.js (auto-detected) · Build: `next build`
+
+The institution-admin teacher editor now keeps Save/Cancel visible while its
+subject list scrolls (`frontend/app/dashboard/institution-admin/users/page.tsx`,
+merged in PR #59). Vercel completed deployment for merge commit `bf01a95` on
+2026-09-25. The public `/login` page returned HTTP 200; the authenticated
+editor was not browser-tested after deployment.
 
 **Environment variables** (from `frontend/.env.local.example`):
 
@@ -444,6 +462,12 @@ hostname changes, then restart or redeploy the backend.
 7. If durable faculty jobs are enabled, check worker health separately and
    submit one small teacher generation/import job; verify it progresses from
    queued to a completed review draft.
+8. If `PAPER_BANK_ENABLED=true`, import a small PYQ/MTP/RTP paper as a teacher,
+   approve and publish its questions, then use a student in the same subject to
+   start and submit a paper attempt. Include an objective and a descriptive
+   question; confirm the snapshot exists and any provider failure is retryable.
+9. As an institution admin, open Edit teacher with a long subject list and
+   verify Save/Cancel remain visible while the subjects scroll.
 
 If a page 500s, check the backend logs and that all env vars are set + migrations run.
 

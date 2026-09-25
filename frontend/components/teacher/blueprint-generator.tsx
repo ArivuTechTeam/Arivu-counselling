@@ -574,7 +574,7 @@ export function BlueprintGenerator() {
       if ("background_job" in res) {
         setGenerating(false);
         notify(
-          "Generation queued. You can leave this page and open the finished draft from Recent tasks.",
+          "Generation queued. You can leave this page and open the quiz from Recent tasks when it is ready.",
           "success",
         );
         return;
