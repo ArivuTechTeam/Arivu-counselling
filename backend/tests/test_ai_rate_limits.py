@@ -147,6 +147,7 @@ class RateLimitConfigurationTests(unittest.TestCase):
             "RATE_LIMIT_QUESTION_EXPLAIN_PER_HOUR": "15",
             "RATE_LIMIT_QUIZ_EXTRACTION_PER_HOUR": "16",
             "RATE_LIMIT_CHALLENGE_JOIN_PER_HOUR": "17",
+            "RATE_LIMIT_PAPER_GRADING_PER_HOUR": "18",
             "STUDENT_QUIZ_ATTEMPT_LIMIT": "7",
             "CHALLENGE_EXPIRY_DAYS": "45",
             "DEEPSEEK_MAX_OUTPUT_TOKENS": "8192",
@@ -161,6 +162,7 @@ class RateLimitConfigurationTests(unittest.TestCase):
         self.assertEqual(settings.rate_limit_question_explain_per_hour, 15)
         self.assertEqual(settings.rate_limit_quiz_extraction_per_hour, 16)
         self.assertEqual(settings.rate_limit_challenge_join_per_hour, 17)
+        self.assertEqual(settings.rate_limit_paper_grading_per_hour, 18)
         self.assertEqual(settings.student_quiz_attempt_limit, 7)
         self.assertEqual(settings.challenge_expiry_days, 45)
         self.assertEqual(settings.deepseek_max_output_tokens, 65536)

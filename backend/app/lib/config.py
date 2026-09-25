@@ -130,7 +130,7 @@ class Settings:
         # storage, review, publish, and the student dashboard are byte-identical.
         # When on (and the teacher opts in per upload), extraction classifies the
         # paper, published questions are snapshotted into the paper_questions bank,
-        # and students get the "Mock Test & PYQ" surface. Requires migrations 63-64.
+        # and students get the "Mock Test & PYQ" surface. Requires migrations 63-65.
         # PYQ_ENABLED is accepted as a legacy alias during the transition.
         self.paper_bank_enabled = _boolean("PAPER_BANK_ENABLED", False) or _boolean(
             "PYQ_ENABLED", False
@@ -386,6 +386,9 @@ class Settings:
         )
         self.rate_limit_challenge_join_per_hour = _positive_int(
             "RATE_LIMIT_CHALLENGE_JOIN_PER_HOUR", 30
+        )
+        self.rate_limit_paper_grading_per_hour = _positive_int(
+            "RATE_LIMIT_PAPER_GRADING_PER_HOUR", 10
         )
 
         # Maximum starts per student for the same published quiz variant.

@@ -7,8 +7,14 @@ columns are written.
 from __future__ import annotations
 
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
+
+from fastapi import HTTPException
+
+from app.api import pyq as papers
+from app.lib.auth import CurrentProfile
 
 from app.services import pyq_snapshot as snap
 from app.services.pyq_snapshot import _content_hash, _is_answerable, snapshot_published_pyq
@@ -88,18 +94,10 @@ class InsertFieldsTests(unittest.TestCase):
 
 
 class _Query:
-    def __init__(self, inserted, deleted, result=None):
-        self._inserted, self._deleted, self._result = inserted, deleted, result
+    def __init__(self, result=None):
+        self._result = result
 
     def select(self, *_a, **_k):
-        return self
-
-    def delete(self):
-        self._deleted.append(True)
-        return self
-
-    def insert(self, row):
-        self._inserted.append(row)
         return self
 
     def eq(self, *_a, **_k):
@@ -113,13 +111,21 @@ class _Query:
 
 
 class _Service:
-    def __init__(self, inserted, deleted, quiz_set):
-        self._inserted, self._deleted, self._quiz_set = inserted, deleted, quiz_set
+    def __init__(self, quiz_set, *, rpc_error=None):
+        self._quiz_set = quiz_set
+        self.rpc_error = rpc_error
+        self.rpc_calls = []
 
     def table(self, name):
         if name == "quiz_sets":
-            return _Query(self._inserted, self._deleted, self._quiz_set)
-        return _Query(self._inserted, self._deleted, None)
+            return _Query(self._quiz_set)
+        raise AssertionError("Snapshot must not write tables outside its RPC")
+
+    def rpc(self, name, payload):
+        self.rpc_calls.append((name, payload))
+        if self.rpc_error:
+            raise self.rpc_error
+        return _Query(len(payload["p_rows"]))
 
 
 class SnapshotTests(unittest.TestCase):
@@ -131,31 +137,42 @@ class SnapshotTests(unittest.TestCase):
     ]
 
     def _run(self, enabled):
-        inserted, deleted = [], []
-        service = _Service(inserted, deleted, {"id": "qs1", "subject_id": "subj1", "document_id": "doc1"})
+        service = _Service({"id": "qs1", "subject_id": "subj1", "document_id": "doc1"})
         with patch.object(snap, "get_settings", return_value=SimpleNamespace(paper_bank_enabled=enabled)), \
              patch.object(snap, "select_all", return_value=[{"id": "v1"}]), \
              patch.object(snap, "select_all_in", side_effect=[[{"question_id": "1"}, {"question_id": "2"}, {"question_id": "3"}, {"question_id": "4"}], self.QUESTIONS]):
             added = snapshot_published_pyq(service, "t1", "qs1", "actor1")
-        return added, inserted
+        return added, service.rpc_calls
 
     def test_disabled_is_noop(self):
-        added, inserted = self._run(False)
+        added, calls = self._run(False)
         self.assertEqual(added, 0)
-        self.assertEqual(inserted, [])
+        self.assertEqual(calls, [])
 
     def test_only_approved_answerable_paper_snapshotted(self):
-        added, inserted = self._run(True)
+        added, calls = self._run(True)
         self.assertEqual(added, 1)
-        self.assertEqual(len(inserted), 1)
-        row = inserted[0]
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0][0], "sync_paper_questions")
+        row = calls[0][1]["p_rows"][0]
         self.assertEqual(row["origin_question_id"], "1")
         self.assertEqual(row["paper_type"], "pyq")
-        self.assertEqual(row["subject_id"], "subj1")
+        self.assertEqual(calls[0][1]["p_tenant_id"], "t1")
         self.assertEqual(row["chapter_id"], "ch1")
         self.assertEqual(row["year"], "2019")
         self.assertEqual(row["exam"], "CA")
         self.assertIn("content_hash", row)
+
+    def test_rpc_failure_does_not_delete_bank_rows(self):
+        service = _Service(
+            {"id": "qs1", "subject_id": "subj1", "document_id": "doc1"},
+            rpc_error=RuntimeError("database unavailable"),
+        )
+        with patch.object(snap, "get_settings", return_value=SimpleNamespace(paper_bank_enabled=True)), \
+             patch.object(snap, "select_all", return_value=[]):
+            self.assertEqual(snapshot_published_pyq(service, "t1", "qs1", "actor1"), 0)
+        self.assertEqual(len(service.rpc_calls), 1)
+        self.assertEqual(service.rpc_calls[0][1]["p_rows"], [])
 
 
 class DescriptiveTests(unittest.TestCase):
@@ -220,11 +237,120 @@ class DescriptiveGraderTests(unittest.TestCase):
         with patch.object(dg, "complete_json_with_fallback", side_effect=AssertionError("should not call")):
             self.assertFalse(dg.grade_descriptive(items)["q1"])
 
-    def test_ai_failure_marks_pending_not_raise(self):
+    def test_ai_failure_requires_retry_instead_of_zero_marks(self):
         from app.services import descriptive_grader as dg
         items = [{"question_id": "q1", "answer_summary": "k", "student_answer": "ans"}]
         with patch.object(dg, "complete_json_with_fallback", side_effect=RuntimeError("down")):
-            self.assertFalse(dg.grade_descriptive(items)["q1"])  # best-effort, no raise
+            with self.assertRaises(dg.DescriptiveGradingUnavailable):
+                dg.grade_descriptive(items)
+
+    def test_incomplete_or_invalid_ai_grades_require_retry(self):
+        from app.services import descriptive_grader as dg
+        items = [{"question_id": "q1", "answer_summary": "k", "student_answer": "ans"}]
+        for response in ({"grades": []}, {"grades": [{"id": "q1", "coverage": "NaN"}]},
+                         {"grades": [{"id": "other", "coverage": 95}]}):
+            with self.subTest(response=response), patch.object(
+                dg, "complete_json_with_fallback", return_value=(response, "deepseek")
+            ):
+                with self.assertRaises(dg.DescriptiveGradingUnavailable):
+                    dg.grade_descriptive(items)
+
+
+class PaperSubmitSafetyTests(unittest.TestCase):
+    PROFILE = CurrentProfile(user_id="student1", tenant_id="tenant1", role="student")
+    DESCRIPTIVE = {
+        "id": "q1", "subject_id": "subj1", "type": "descriptive",
+        "question_text": "Explain X", "options": None, "correct_answer": None,
+        "explanation": None, "marks": 5, "model_answer": "Model",
+        "answer_summary": "Key points",
+    }
+
+    def _patches(self, row):
+        return (
+            patch.object(papers, "get_settings", return_value=SimpleNamespace(
+                paper_bank_enabled=True, rate_limit_paper_grading_per_hour=10,
+            )),
+            patch.object(papers, "get_service_client", return_value=object()),
+            patch.object(papers, "enrolled_subject_ids", return_value={"subj1"}),
+            patch.object(papers, "select_all_in", return_value=[row]),
+        )
+
+    def test_descriptive_uses_separate_quota(self):
+        from contextlib import ExitStack
+
+        with ExitStack() as stack:
+            for setting in self._patches(self.DESCRIPTIVE):
+                stack.enter_context(setting)
+            limit = stack.enter_context(patch.object(papers, "enforce_ai_rate_limit"))
+            stack.enter_context(patch.object(papers, "grade_descriptive", return_value={"q1": True}))
+            result = papers.paper_submit(
+                papers.SubmitRequest(answers=[papers.SubmittedAnswer(
+                    question_id="q1", student_answer="My explanation"
+                )]), self.PROFILE,
+            )
+        self.assertEqual(result["score"], 5)
+        self.assertEqual(limit.call_args.kwargs["endpoint"], "descriptive_grading")
+        self.assertEqual(limit.call_args.kwargs["hourly_limit"], 10)
+
+    def test_quota_or_provider_failure_does_not_return_zero_scorecard(self):
+        from contextlib import ExitStack
+        from app.services.descriptive_grader import DescriptiveGradingUnavailable
+
+        body = papers.SubmitRequest(answers=[papers.SubmittedAnswer(
+            question_id="q1", student_answer="My explanation"
+        )])
+        with ExitStack() as stack:
+            for setting in self._patches(self.DESCRIPTIVE):
+                stack.enter_context(setting)
+            stack.enter_context(patch.object(
+                papers, "enforce_ai_rate_limit", side_effect=HTTPException(429, "Quota reached")
+            ))
+            grade = stack.enter_context(patch.object(papers, "grade_descriptive"))
+            with self.assertRaises(HTTPException) as error:
+                papers.paper_submit(body, self.PROFILE)
+            self.assertEqual(error.exception.status_code, 429)
+            grade.assert_not_called()
+
+        with ExitStack() as stack:
+            for setting in self._patches(self.DESCRIPTIVE):
+                stack.enter_context(setting)
+            stack.enter_context(patch.object(papers, "enforce_ai_rate_limit"))
+            stack.enter_context(patch.object(
+                papers, "grade_descriptive", side_effect=DescriptiveGradingUnavailable()
+            ))
+            with self.assertRaises(HTTPException) as error:
+                papers.paper_submit(body, self.PROFILE)
+            self.assertEqual(error.exception.status_code, 503)
+            self.assertIn("not scored", error.exception.detail)
+
+    def test_objective_answer_does_not_consume_ai_quota(self):
+        from contextlib import ExitStack
+
+        row = dict(self.DESCRIPTIVE, type="mcq_single", correct_answer="a")
+        with ExitStack() as stack:
+            for setting in self._patches(row):
+                stack.enter_context(setting)
+            limit = stack.enter_context(patch.object(papers, "enforce_ai_rate_limit"))
+            result = papers.paper_submit(
+                papers.SubmitRequest(answers=[papers.SubmittedAnswer(
+                    question_id="q1", student_answer="a"
+                )]), self.PROFILE,
+            )
+        self.assertEqual(result["score"], 5)
+        limit.assert_not_called()
+
+
+class PaperSafetyMigrationTests(unittest.TestCase):
+    def test_rpc_is_transactional_and_service_role_only(self):
+        sql = (Path(__file__).resolve().parents[2]
+               / "migrations/migration-65-paper-bank-safety.sql").read_text().lower()
+        self.assertIn("create table if not exists public.paper_question_sources", sql)
+        self.assertIn("create or replace function public.sync_paper_questions", sql)
+        self.assertIn("security invoker", sql)
+        self.assertIn("set search_path = ''", sql)
+        self.assertIn("from public, anon, authenticated", sql)
+        self.assertIn("to service_role", sql)
+        self.assertIn("descriptive_grading", sql)
 
 
 if __name__ == "__main__":

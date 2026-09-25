@@ -5,15 +5,16 @@ student's answer to the model answer's key points (the `answer_summary` captured
 extraction). A student who covers >= 90% of the key points earns the full marks,
 else zero - the threshold the TL chose.
 
-Batched: one AI call grades every descriptive answer in an attempt. Best-effort:
-if the grader is unavailable, descriptive answers are marked "not passed" (0) rather
-than failing the whole scorecard, so the student still gets their objective score.
+Batched: one AI call grades every descriptive answer in an attempt. A provider
+failure or incomplete response must not turn a potentially correct answer into
+zero marks; the caller returns a retryable error instead.
 """
 
 from __future__ import annotations
 
 import json
 import logging
+from math import isfinite
 
 from app.services.ai_call_logging import ai_call_context
 from app.services.llm.structured import complete_json_with_fallback
@@ -21,6 +22,10 @@ from app.services.llm.structured import complete_json_with_fallback
 logger = logging.getLogger(__name__)
 
 PASS_THRESHOLD = 90
+
+
+class DescriptiveGradingUnavailable(RuntimeError):
+    """The provider did not return a complete, trustworthy grading result."""
 
 _SYSTEM = """You are a strict but fair exam grader for descriptive / subjective answers.
 For each item you get KEY POINTS a correct answer must contain (the model summary) and
@@ -61,14 +66,26 @@ def grade_descriptive(items: list[dict], *, tenant_id: str | None = None) -> dic
             data, _provider = complete_json_with_fallback(
                 _SYSTEM, _user_prompt(gradeable), preferred_provider="deepseek"
             )
-        for grade in (data.get("grades") or []) if isinstance(data, dict) else []:
+        grades = data.get("grades") if isinstance(data, dict) else None
+        if not isinstance(grades, list) or len(grades) != len(gradeable):
+            raise ValueError("Incomplete descriptive grades")
+        expected_ids = {it["question_id"] for it in gradeable}
+        seen_ids: set[str] = set()
+        for grade in grades:
+            if not isinstance(grade, dict):
+                raise ValueError("Invalid descriptive grade")
             qid = grade.get("id")
             try:
                 coverage = float(grade.get("coverage"))
             except (TypeError, ValueError):
-                coverage = 0.0
-            if qid in passed:
-                passed[qid] = coverage >= PASS_THRESHOLD
-    except Exception:  # noqa: BLE001 - grading is best-effort; never break the scorecard
-        logger.warning("Descriptive grading unavailable; marking descriptive as pending.")
+                raise ValueError("Invalid descriptive coverage") from None
+            if qid not in expected_ids or qid in seen_ids or not isfinite(coverage) or not 0 <= coverage <= 100:
+                raise ValueError("Unexpected descriptive grade")
+            seen_ids.add(qid)
+            passed[qid] = coverage >= PASS_THRESHOLD
+        if seen_ids != expected_ids:
+            raise ValueError("Missing descriptive grade")
+    except Exception as exc:  # noqa: BLE001 - never mistake provider failure for a wrong answer
+        logger.warning("Descriptive grading unavailable (%s)", type(exc).__name__)
+        raise DescriptiveGradingUnavailable from exc
     return passed

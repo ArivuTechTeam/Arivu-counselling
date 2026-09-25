@@ -21,8 +21,9 @@ from app.lib.config import get_settings
 from app.lib.role_checks import require_staff
 from app.lib.supabase import get_service_client
 from app.lib.supabase_queries import select_all, select_all_in
-from app.services.descriptive_grader import grade_descriptive
+from app.services.descriptive_grader import DescriptiveGradingUnavailable, grade_descriptive
 from app.services.grading import grade_answer
+from app.services.rate_limit import DESCRIPTIVE_GRADING, enforce_ai_rate_limit
 from app.services.selector import enrolled_subject_ids
 
 router = APIRouter(prefix="/api/v1/papers", tags=["papers"])
@@ -249,10 +250,29 @@ def paper_submit(
         for qid in ids
         if qid in by_id and by_id[qid].get("type") == "descriptive"
     ]
-    descriptive_pass = (
-        grade_descriptive(descriptive_items, tenant_id=profile.tenant_id)
-        if descriptive_items else {}
-    )
+    for item in descriptive_items:
+        answer = item.get("student_answer")
+        if answer is not None and (not isinstance(answer, str) or len(answer) > 2000):
+            raise HTTPException(400, "Descriptive answers must be text of at most 2,000 characters.")
+    gradeable_items = [
+        item for item in descriptive_items
+        if isinstance(item.get("student_answer"), str) and item["student_answer"].strip()
+    ]
+    descriptive_pass: dict[str, bool] = {}
+    if gradeable_items:
+        enforce_ai_rate_limit(
+            profile=profile,
+            endpoint=DESCRIPTIVE_GRADING,
+            hourly_limit=get_settings().rate_limit_paper_grading_per_hour,
+            action_label="descriptive grading",
+        )
+        try:
+            descriptive_pass = grade_descriptive(descriptive_items, tenant_id=profile.tenant_id)
+        except DescriptiveGradingUnavailable as exc:
+            raise HTTPException(
+                503,
+                "Descriptive grading is temporarily unavailable. Your answers were not scored; please retry.",
+            ) from exc
 
     results: list[dict] = []
     score = 0.0

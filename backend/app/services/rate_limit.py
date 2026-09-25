@@ -19,6 +19,7 @@ QUESTION_REGENERATE = "question_regenerate"
 QUESTION_EXPLAIN = "question_explain"
 QUIZ_EXTRACTION = "quiz_extraction"
 CHALLENGE_JOIN = "challenge_join"
+DESCRIPTIVE_GRADING = "descriptive_grading"
 
 
 def enforce_rate_limit(

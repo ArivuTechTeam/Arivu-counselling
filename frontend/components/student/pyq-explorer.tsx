@@ -319,6 +319,7 @@ function AnswerInput({
     return (
       <textarea
         className={`${field} min-h-28 py-2`}
+        maxLength={2000}
         value={(value as string) ?? ""}
         onChange={(e) => onChange(e.target.value)}
         placeholder="Write your answer…"

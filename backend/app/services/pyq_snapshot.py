@@ -1,9 +1,8 @@
-"""Snapshot approved PYQ into the student-facing library (Phase 1 / PYQ-C).
+"""Synchronize approved paper questions into the student-facing bank.
 
 At publish time each approved is_pyq question of a set is frozen into
-`paper_questions`: subject-scoped (for student delivery), de-duplicated (same
-content + year + exam is one entry per tenant), and completeness-gated (a PYQ
-with no valid answer stays in the quiz but never enters the student pool).
+`paper_questions`: subject/chapter-scoped, de-duplicated, and completeness-gated.
+The database RPC replaces one quiz's source links in a single transaction.
 
 Best-effort: a snapshot failure must never break publishing.
 """
@@ -54,57 +53,54 @@ def _is_answerable(question: dict) -> bool:
 
 
 def snapshot_published_pyq(service, tenant_id: str, quiz_set_id: str, actor_id: str) -> int:
-    """Freeze the approved is_pyq questions of a just-published set into the PYQ
-    library. Returns the number added. Never raises."""
+    """Atomically synchronize this published quiz's approved paper questions.
+
+    Returns the number of linked questions. A failed RPC leaves the previous
+    bank entries intact and never undoes the already-completed quiz publish.
+    """
     if not getattr(get_settings(), "paper_bank_enabled", False):
         return 0
     try:
         qset = (
-            service.table("quiz_sets").select("id, subject_id, document_id")
+            service.table("quiz_sets").select("id, subject_id")
             .eq("id", quiz_set_id).eq("tenant_id", tenant_id).maybe_single().execute().data
         )
         subject_id = (qset or {}).get("subject_id")
         if not qset or not subject_id:
             return 0  # no subject to scope PYQ to (student delivery is subject-wise)
 
-        # Re-snapshot this quiz from scratch, so edits / un-marking / rejections
-        # since the last publish are reflected. Other quizzes' entries are untouched.
-        service.table("paper_questions").delete() \
-            .eq("tenant_id", tenant_id).eq("source_quiz_set_id", quiz_set_id).execute()
-
         variants = select_all(
             service, "quiz_variants", "id",
             configure=lambda q: q.eq("quiz_set_id", quiz_set_id).eq("tenant_id", tenant_id),
         )
         variant_ids = [v["id"] for v in variants]
-        if not variant_ids:
-            return 0
-        links = select_all_in(
-            service, "quiz_variant_questions", "question_id",
-            in_column="variant_id", values=variant_ids,
-            configure=lambda q: q.eq("tenant_id", tenant_id),
-        )
-        question_ids = list({str(link["question_id"]) for link in links})
-        if not question_ids:
-            return 0
-        questions = select_all_in(
-            service, "questions",
-            "id, type, question_text, options, correct_answer, explanation, marks, "
-            "paper_type, paper_year, paper_exam, chapter_id, model_answer, answer_summary, review_status",
-            in_column="id", values=question_ids,
-            configure=lambda q: q.eq("tenant_id", tenant_id),
+        question_ids: list[str] = []
+        if variant_ids:
+            links = select_all_in(
+                service, "quiz_variant_questions", "question_id",
+                in_column="variant_id", values=variant_ids,
+                configure=lambda q: q.eq("tenant_id", tenant_id),
+            )
+            question_ids = list({str(link["question_id"]) for link in links})
+        questions = (
+            select_all_in(
+                service, "questions",
+                "id, type, question_text, options, correct_answer, explanation, marks, "
+                "paper_type, paper_year, paper_exam, chapter_id, model_answer, answer_summary, review_status",
+                in_column="id", values=question_ids,
+                configure=lambda q: q.eq("tenant_id", tenant_id),
+            )
+            if question_ids else []
         )
 
-        added = 0
+        rows: list[dict] = []
         for q in questions:
             if q.get("review_status") != "approved" or not q.get("paper_type"):
                 continue
             if not _is_answerable(q):
                 continue  # completeness gate: never show an ungradeable paper to a student
-            row = {
-                "tenant_id": tenant_id,
+            rows.append({
                 "paper_type": q.get("paper_type"),
-                "subject_id": subject_id,
                 "chapter_id": q.get("chapter_id"),
                 "year": q.get("paper_year") or None,
                 "exam": q.get("paper_exam") or None,
@@ -118,16 +114,14 @@ def snapshot_published_pyq(service, tenant_id: str, quiz_set_id: str, actor_id: 
                 "marks": q.get("marks") or 1,
                 "content_hash": _content_hash(q),
                 "origin_question_id": q.get("id"),
-                "source_quiz_set_id": quiz_set_id,
-                "source_document_id": (qset or {}).get("document_id"),
-                "created_by": actor_id,
-            }
-            try:
-                service.table("paper_questions").insert(row).execute()
-                added += 1
-            except Exception:  # noqa: BLE001 - unique index => already in the library (dedup)
-                pass
-        return added
-    except Exception:  # noqa: BLE001 - snapshot is best-effort; never break publish
-        logger.warning("PYQ snapshot failed for quiz_set %s", quiz_set_id)
+            })
+        result = service.rpc("sync_paper_questions", {
+            "p_tenant_id": tenant_id,
+            "p_quiz_set_id": quiz_set_id,
+            "p_actor_id": actor_id,
+            "p_rows": rows,
+        }).execute()
+        return int(result.data)
+    except Exception as exc:  # noqa: BLE001 - preserve the published quiz
+        logger.warning("Paper bank sync failed (%s)", type(exc).__name__)
         return 0
