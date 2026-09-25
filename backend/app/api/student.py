@@ -75,6 +75,7 @@ class TakingQuestionOut(StudentResponse):
     options: Any = None
     marks: float | None = None
     suggested_seconds: int | None = None
+    figure_id: str | None = None
 
 
 class AttemptInProgressOut(StudentResponse):
