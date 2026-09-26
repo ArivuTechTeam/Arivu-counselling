@@ -30,7 +30,7 @@ from app.services.events import QUESTION_GENERATED, log_events, make_event
 from app.services.extraction import extract_text_with_pages, require_readable_generation_pages
 from app.services.llm.base import LLMError
 from app.services.llm.structured import complete_json_with_fallback
-from app.services.ai_call_logging import ai_call_context
+from app.services.ai_call_logging import ai_call_context, track_quiz_workflow
 from app.services.question_validation import (
     validate_question_answer_shape,
     validate_question_presentation,
@@ -347,6 +347,7 @@ def _attach_source_figures(service, tenant_id: str, source_document_id, result) 
         logger.warning("Figure attachment step skipped")
 
 
+@track_quiz_workflow("generation")
 def generate_blueprint_quiz(
     *,
     document_id: str,
@@ -415,6 +416,7 @@ def generate_blueprint_quiz(
     )
 
 
+@track_quiz_workflow("generation")
 def generate_and_persist_from_material(
     *,
     service,

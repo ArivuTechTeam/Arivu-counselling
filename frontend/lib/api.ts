@@ -2171,6 +2171,11 @@ export const getAiMonitoring = () =>
 
 // --- Super-admin: metadata-only AI API observability ---
 export type ApiCallLog = {
+  id: string;
+  tenant_id: string | null;
+  document_id: string | null;
+  job_id: string | null;
+  workflow_id: string | null;
   call_type: string;
   provider: "gemini" | "deepseek";
   model: string;
@@ -2189,6 +2194,8 @@ export type ApiCallLog = {
 export type ApiCallLogPage = { items: ApiCallLog[]; page: number; page_size: number; total: number };
 export type ApiLogFilters = {
   page?: number; page_size?: number;
+  tenant_id?: string; document_id?: string;
+  workflow_id?: string; legacy_only?: boolean; unlinked_only?: boolean; platform_only?: boolean;
   call_type?: string; provider?: string; status?: string; date_from?: string; date_to?: string;
 };
 export function listApiLogs(filters: ApiLogFilters = {}) {
@@ -2197,6 +2204,31 @@ export function listApiLogs(filters: ApiLogFilters = {}) {
     if (value !== undefined && value !== "") params.set(key, String(value));
   }
   return jsonRequest<ApiCallLogPage>(`/api/v1/platform/api-logs?${params}`, "GET");
+}
+
+export type QuizCostSummary = {
+  group_key: string; workflow_id: string | null; tenant_id: string | null;
+  document_id: string | null; quiz_set_id: string | null;
+  quiz_title: string | null;
+  kind: "generation" | "extraction" | "legacy" | "unlinked";
+  status: "running" | "completed" | "failed" | "historical";
+  started_at: string; last_call_at: string;
+  call_count: number; error_count: number; unpriced_calls: number;
+  cost_usd: number | null; cost_inr: number | null;
+  input_tokens: number; output_tokens: number; thinking_tokens: number; cached_tokens: number;
+  provider_latency_ms: number;
+  stages: { call_type: string; calls: number; cost_usd: number | null }[];
+};
+export type QuizCostPage = {
+  items: QuizCostSummary[]; total: number; cost_usd: number | null;
+  call_count: number; unpriced_calls: number; page: number; page_size: number;
+};
+export function listQuizCostWorkflows(filters: ApiLogFilters & { kind?: string } = {}) {
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(filters)) {
+    if (value !== undefined && value !== "") params.set(key, String(value));
+  }
+  return jsonRequest<QuizCostPage>(`/api/v1/platform/api-log-workflows?${params}`, "GET");
 }
 
 // --- Super-admin: institution admins ---

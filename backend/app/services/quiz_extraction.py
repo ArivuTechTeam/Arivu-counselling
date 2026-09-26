@@ -40,7 +40,8 @@ from app.services.extraction_prompts import (
     extraction_system,
 )
 from app.services.generation import GeneratedQuestion
-from app.services.ai_call_logging import ai_call_context
+from app.services.ai_call_logging import ai_call_context, track_quiz_workflow
+from contextvars import copy_context
 from app.services.llm import LLMError
 from app.services.llm.structured import (
     complete_json_with_fallback,
@@ -309,15 +310,14 @@ def _text_extract(
     with ThreadPoolExecutor(max_workers=workers) as pool:
         # map preserves input order; any chunk that still fails after its retry
         # raises here, which cleanly aborts the whole job (no partial quiz).
-        pairs = list(
-            pool.map(
-                lambda chunk: _extract_text_chunk(
+        pairs = [
+            future.result() for future in [
+                pool.submit(copy_context().run, _extract_text_chunk,
                     chunk, tenant_id=tenant_id, document_id=document_id,
                     job_id=job_id, pyq_context=pyq_context, paper_mode=paper_mode,
-                ),
-                chunks,
-            )
-        )
+                ) for chunk in chunks
+            ]
+        ]
 
     merged = _merge_questions([raw for raw, _ in pairs])
     provider = pairs[0][1] if pairs else "text"
@@ -395,6 +395,7 @@ def _extract_document_content(
     raise ValueError(f"Unsupported file type for extraction: {ext or 'unknown'}")
 
 
+@track_quiz_workflow("extraction")
 def extract_quiz(
     *,
     document_id: str,

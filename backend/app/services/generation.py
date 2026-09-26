@@ -22,7 +22,7 @@ from app.lib.storage import download_bytes
 from app.lib.supabase import get_service_client
 from app.services.extraction import ExtractedText, extract_text_with_pages
 from app.services.llm import LLMError, complete_with_fallback
-from app.services.ai_call_logging import ai_call_context
+from app.services.ai_call_logging import ai_call_context, track_quiz_workflow
 from app.services.quiz_prompts import build_system_prompt, build_user_prompt
 from app.services.question_validation import (
     validate_question_answer_shape,
@@ -105,6 +105,7 @@ def _parse_and_validate_generated_quiz(
     return questions
 
 
+@track_quiz_workflow("generation")
 def generate_quiz(
     *,
     document_id: str,

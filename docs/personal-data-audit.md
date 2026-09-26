@@ -65,6 +65,16 @@ Firebase, AWS application SDK, or card processor is present in this repository.
 - Super admins receive institution-admin names/emails, platform aggregates, and
   each institution's operational Course → Level → Subject offering tree/counts.
   Their support inbox includes only platform-routed student feedback and app bugs.
+  The AI API logs page also receives opaque call/tenant/document/job identifiers
+  for paper grouping, filtering and safe metadata drill-down. Uploaded filenames,
+  raw prompts and provider responses are excluded; legacy error text is replaced
+  with a generic provider-failure message. Migration 73 adds metadata-only
+  generation/import run IDs, status and a link to the resulting quiz. The admin
+  summary joins the quiz title for identification without copying it into logs.
+  Run totals aggregate all matching calls across pages. Historical calls without
+  a run ID remain explicit legacy paper totals, never guessed per-quiz costs.
+  The editable INR conversion is a view estimate; call details separately show
+  the originally recorded INR cost. Missing usage/pricing is marked incomplete.
 - Opaque record UUIDs remain in responses only where the client needs them for
   navigation, registration, updates, deletion or drill-down. The public
   institution-branding response includes a tenant UUID solely to scope its

@@ -21,6 +21,23 @@ worker (`quiz-generator-worker`). They share one Supabase project.
 
 ## Deployment security gates
 
+### AI quiz cost tracking (migration 73)
+
+Apply `migration-73-ai-quiz-cost-workflows.sql` after migration 72 before
+deploying the API/frontend cost-run view. It adds private metadata-only
+`ai_quiz_workflows`, a nullable log workflow reference and the
+service-role-only `ai_quiz_cost_page` aggregate. Deploy both API and worker
+to attribute new synchronous and queued runs. Local Docker's API does not
+auto-reload: restart it after migration/code changes; restart the worker too
+if its profile is enabled. Never rebuild historical runs by timestamp guesses.
+
+Run `node scripts/test-ai-quiz-cost-workflows-db.mjs` for isolated SQL
+aggregation, pagination, unknown-price and privilege checks. No live database
+or provider billing has been checked by that script. Verify one authorized
+generation/import run on staging before rollout, including a fallback/retry,
+and confirm its quiz link, stage totals and filter behavior. Costs represent
+best-effort recorded usage estimates, not the provider's authoritative invoice.
+
 Do not release until the target Supabase project has been checked directly:
 
 - Enable SSL Enforcement and database Network Restrictions in Supabase.
@@ -133,6 +150,7 @@ migration-69-cursor-pagination.sql
 migration-70-fair-practice-selection.sql
 migration-71-query-plan-indexes.sql
 migration-72-atomic-quiz-persistence.sql
+migration-73-ai-quiz-cost-workflows.sql
 ```
 
 (Filenames above verified 2026-09-26 against `migrations/`, through migration
