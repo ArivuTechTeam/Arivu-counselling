@@ -91,6 +91,66 @@ class Service:
     def table(self, name):
         return Query(self, name)
 
+    def rpc(self, name, params):
+        if name != "persist_generated_quiz":
+            raise AssertionError(f"Unexpected RPC: {name}")
+        payload = deepcopy(params["p_payload"])
+        service = self
+
+        class AtomicPersistence:
+            def execute(self):
+                quiz = service.table("quiz_sets").insert({
+                    "tenant_id": params["p_tenant"],
+                    "created_by": params["p_actor"],
+                    "document_id": payload.get("document_id"),
+                    "subject_id": payload.get("subject_id"),
+                    "chapter_id": payload.get("chapter_id"),
+                    "title": payload["title"],
+                    "status": "draft",
+                }).execute().data[0]
+                variant = service.table("quiz_variants").insert({
+                    "tenant_id": params["p_tenant"],
+                    "quiz_set_id": quiz["id"],
+                    "variant_type": payload["variant_type"],
+                    "total_marks": sum(q.get("marks", 1) for q in payload["questions"]),
+                }).execute().data[0]
+                stored = []
+                for index, question in enumerate(payload["questions"]):
+                    row = service.table("questions").insert({
+                        **question,
+                        "tenant_id": params["p_tenant"],
+                        "created_by": params["p_actor"],
+                        "chapter_id": payload.get("chapter_id"),
+                        "extraction_job_id": payload.get("extraction_job_id"),
+                        "source": payload["source"],
+                        "review_status": "pending_review",
+                        "confidence_score": question.get("confidence"),
+                    }).execute().data[0]
+                    service.table("quiz_variant_questions").insert({
+                        "tenant_id": params["p_tenant"],
+                        "variant_id": variant["id"],
+                        "question_id": row["id"],
+                        "order_index": index,
+                    }).execute()
+                    stored.append(row)
+                if payload.get("extraction_job_id"):
+                    service.table("ai_extraction_jobs").update({
+                        "status": "succeeded",
+                        "raw_output": payload.get("extraction_raw_output"),
+                        "model_used": payload.get("provider"),
+                        "overall_confidence": payload.get("overall_confidence"),
+                    }).eq("id", payload["extraction_job_id"]).eq(
+                        "tenant_id", params["p_tenant"]
+                    ).execute()
+                return SimpleNamespace(data={
+                    "quiz_set_id": quiz["id"],
+                    "variant_id": variant["id"],
+                    "provider": payload.get("provider"),
+                    "questions": stored,
+                })
+
+        return AtomicPersistence()
+
 
 def candidate(**changes):
     return {"type": "mcq_single", "question_text": "Which statement is correct?",

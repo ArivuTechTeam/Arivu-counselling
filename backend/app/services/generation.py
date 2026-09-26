@@ -29,6 +29,7 @@ from app.services.question_validation import (
     validate_question_presentation,
 )
 from app.services.question_verification import verify_generated_questions
+from app.services.quiz_persistence import persist_generated_quiz
 from app.services.source_material import render_extracted_material
 from app.services.teacher_access import teacher_has_subject
 
@@ -196,101 +197,26 @@ def generate_quiz(
     ):
         verification = verify_generated_questions(questions, material)
 
-    # 5) Store: quiz_set -> variant -> questions (all pending review).
-    quiz_set = (
-        service.table("quiz_sets")
-        .insert(
-            {
-                "tenant_id": profile.tenant_id,
-                "chapter_id": doc_row.get("chapter_id"),
-                "subject_id": subject_id,
-                "document_id": document_id,  # link back to the source upload
-                "title": f"{doc_row.get('original_filename', 'Quiz')} — {cognitive_level}",
-                "status": "draft",
-                "created_by": profile.user_id,
-            }
-        )
-        .execute()
+    # 5) One database call owns the set, variant, question, and link transaction.
+    return persist_generated_quiz(
+        service,
+        tenant_id=profile.tenant_id,
+        actor_id=profile.user_id,
+        payload={
+            "chapter_id": doc_row.get("chapter_id"),
+            "subject_id": subject_id,
+            "document_id": document_id,
+            "title": f"{doc_row.get('original_filename', 'Quiz')} — {cognitive_level}",
+            "variant_type": cognitive_level,
+            "source": "ai_generated",
+            "provider": provider,
+            "questions": [
+                {
+                    **question.model_dump(),
+                    "verification_status": check.status,
+                    "verification_warnings": check.warnings,
+                }
+                for question, check in zip(questions, verification, strict=True)
+            ],
+        },
     )
-    quiz_set_id = quiz_set.data[0]["id"]
-
-    stored: list[dict] = []
-    created_question_ids: list[str] = []
-    try:
-        total_marks = sum(q.marks for q in questions)
-        variant = (
-            service.table("quiz_variants")
-            .insert(
-                {
-                    "tenant_id": profile.tenant_id,
-                    "quiz_set_id": quiz_set_id,
-                    "variant_type": cognitive_level,
-                    "total_marks": total_marks,
-                }
-            )
-            .execute()
-        )
-        variant_id = variant.data[0]["id"]
-
-        for index, q in enumerate(questions):
-            verified = verification[index]
-            question_row = (
-                service.table("questions")
-                .insert(
-                    {
-                        "tenant_id": profile.tenant_id,
-                        "chapter_id": doc_row.get("chapter_id"),
-                        "type": q.type,
-                        "question_text": q.question_text,
-                        "options": q.options,
-                        "correct_answer": q.correct_answer,
-                        "explanation": q.explanation,
-                        "difficulty": q.difficulty,
-                        "marks": q.marks,
-                        "source_excerpt": q.source_excerpt,
-                        "source_page_start": q.source_page_start,
-                        "source_page_end": q.source_page_end,
-                        "grounding_confidence": q.grounding_confidence,
-                        "verification_status": verified.status,
-                        "verification_warnings": verified.warnings,
-                        "source": "ai_generated",
-                        "review_status": "pending_review",
-                        "created_by": profile.user_id,
-                    }
-                )
-                .execute()
-            )
-            question_id = question_row.data[0]["id"]
-            created_question_ids.append(question_id)
-            service.table("quiz_variant_questions").insert(
-                {
-                    "tenant_id": profile.tenant_id,
-                    "variant_id": variant_id,
-                    "question_id": question_id,
-                    "order_index": index,
-                }
-            ).execute()
-            stored.append({
-                "id": question_id,
-                **q.model_dump(),
-                "verification_status": verified.status,
-                "verification_warnings": verified.warnings,
-            })
-    except Exception:
-        # Compensate across PostgREST calls so failed generations do not leave
-        # visible draft sets or orphaned questions.
-        service.table("quiz_sets").delete().eq("id", quiz_set_id).eq(
-            "tenant_id", profile.tenant_id
-        ).eq("created_by", profile.user_id).execute()
-        if created_question_ids:
-            service.table("questions").delete().in_("id", created_question_ids).eq(
-                "tenant_id", profile.tenant_id
-            ).eq("created_by", profile.user_id).execute()
-        raise
-
-    return {
-        "quiz_set_id": quiz_set_id,
-        "variant_id": variant_id,
-        "provider": provider,
-        "questions": stored,
-    }

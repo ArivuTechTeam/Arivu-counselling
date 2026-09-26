@@ -131,10 +131,12 @@ migration-67-atomic-batch-publication.sql
 migration-68-teacher-dashboard-aggregates.sql
 migration-69-cursor-pagination.sql
 migration-70-fair-practice-selection.sql
+migration-71-query-plan-indexes.sql
+migration-72-atomic-quiz-persistence.sql
 ```
 
 (Filenames above verified 2026-09-26 against `migrations/`, through migration
-70. Migrations 63–65 support the existing paper bank; migration 66 adds durable,
+72. Migrations 63–65 support the existing paper bank; migration 66 adds durable,
 private paper attempts. The operator reported migration 66 applied on 2026-09-25,
 but that has not been checked directly in the target Supabase project. Migration
 67 adds atomic publish-and-batch-assignment and **must be applied before deploying
@@ -186,7 +188,19 @@ lock timeout makes it fail safely instead of waiting indefinitely. Run
 migration with the same fake staging tenant/question IDs, save both outputs,
 and compare scan type, rows removed, buffers, planning time, and execution time.
 Then run the A1 write/load scenario and Supabase performance/security advisors.
-Migration 71 has not been applied to a hosted project as of 2026-09-26.
+The operator reported migration 71 applied on 2026-09-26, but its hosted query
+plans, write-load impact, and advisor results have not been independently
+verified.
+Migration 72 replaces the remaining synchronous per-row generated/imported
+quiz writes with one service-role-only transaction. Apply it after migration 71
+and before deploying the A6 API and worker together; otherwise generation and
+extraction routes that call `persist_generated_quiz` will fail closed. Run
+`scripts/test-atomic-quiz-persistence-db.mjs` and
+`scripts/test-faculty-jobs-db.mjs` locally, inspect the function privileges,
+then smoke-test legacy generation, blueprint generation, extraction, and a
+durable lost-response retry on staging. The migration is additive and does not
+rewrite existing content. Migration 72 has not been reported applied as of
+2026-09-26.
 Apply `migration-62-atomic-student-contact.sql` after migration 60 and
 before deploying the contact API that calls `submit_student_contact`; otherwise
 student submissions will return a temporary service error. Apply

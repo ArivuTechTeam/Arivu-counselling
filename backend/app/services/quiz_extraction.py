@@ -46,6 +46,7 @@ from app.services.llm.structured import (
     complete_json_with_fallback,
     gemini_json_multimodal,
 )
+from app.services.quiz_persistence import persist_generated_quiz
 from app.services.teacher_access import teacher_has_subject
 
 logger = logging.getLogger(__name__)
@@ -471,8 +472,6 @@ def extract_quiz(
     )
     job_id = job.data[0]["id"]
 
-    quiz_set_id: str | None = None
-    created_question_ids: list[str] = []
     try:
         # 3) Extract typed PDF/DOCX locally then use the text router. Only scans
         # and images go through Gemini vision.
@@ -497,127 +496,58 @@ def extract_quiz(
             round(sum(confidences) / len(confidences), 3) if confidences else None
         )
 
-        # 5) Persist: quiz_set -> variant -> questions (pending review) -> links.
-        quiz_set = (
-            service.table("quiz_sets")
-            .insert(
-                {
-                    "tenant_id": profile.tenant_id,
-                    "chapter_id": chapter_id,
-                    "subject_id": subject_id,
-                    "document_id": document_id,  # link back to the source upload
-                    "title": chapter_name,
-                    "status": "draft",
-                    "created_by": profile.user_id,
-                }
-            )
-            .execute()
-        )
-        quiz_set_id = quiz_set.data[0]["id"]
-
-        total_marks = sum(q.marks for q in questions)
-        variant = (
-            service.table("quiz_variants")
-            .insert(
-                {
-                    "tenant_id": profile.tenant_id,
-                    "quiz_set_id": quiz_set_id,
-                    "variant_type": "mixed",
-                    "total_marks": total_marks,
-                }
-            )
-            .execute()
-        )
-        variant_id = variant.data[0]["id"]
-
-        stored: list[dict] = []
-        for index, q in enumerate(questions):
-            question_row = (
-                service.table("questions")
-                .insert(
-                    {
-                        "tenant_id": profile.tenant_id,
-                        "chapter_id": chapter_id,
-                        "type": q.type,
-                        "question_text": q.question_text,
-                        "options": q.options,
-                        "correct_answer": q.correct_answer,
-                        **pyq_insert_fields(q, paper_mode),
-                        "difficulty": q.difficulty,
-                        "marks": q.marks,
-                        "source": "extracted",
-                        "review_status": "pending_review",
-                        "confidence_score": q.confidence,
-                        "source_excerpt": q.source_excerpt,
-                        "source_page_start": q.source_page_start,
-                        "source_page_end": q.source_page_end,
-                        "verification_status": "needs_teacher_review",
-                        "verification_warnings": q.verification_warnings,
-                        "extraction_job_id": job_id,
-                        "created_by": profile.user_id,
-                    }
-                )
-                .execute()
-            )
-            question_id = question_row.data[0]["id"]
-            created_question_ids.append(question_id)
-            service.table("quiz_variant_questions").insert(
-                {
-                    "tenant_id": profile.tenant_id,
-                    "variant_id": variant_id,
-                    "question_id": question_id,
-                    "order_index": index,
-                }
-            ).execute()
-            stored.append({"id": question_id, **q.model_dump()})
-
-        # 6) Close the job as succeeded.
-        service.table("ai_extraction_jobs").update(
-            {
-                "status": "succeeded",
-                "raw_output": {**raw, "import_summary": import_summary},
-                "model_used": provider,
+        # 5) One transaction commits content and closes the extraction receipt.
+        result = persist_generated_quiz(
+            service,
+            tenant_id=profile.tenant_id,
+            actor_id=profile.user_id,
+            payload={
+                "chapter_id": chapter_id,
+                "subject_id": subject_id,
+                "document_id": document_id,
+                "extraction_job_id": job_id,
+                "title": chapter_name,
+                "variant_type": "mixed",
+                "source": "extracted",
+                "provider": provider,
+                "import_summary": import_summary,
                 "overall_confidence": overall_confidence,
-                "completed_at": _now(),
-            }
-        ).eq("id", job_id).eq("tenant_id", profile.tenant_id).execute()
-
+                "extraction_raw_output": {
+                    **raw,
+                    "import_summary": import_summary,
+                },
+                "questions": [
+                    {
+                        **question.model_dump(),
+                        **pyq_insert_fields(question, paper_mode),
+                        "verification_status": "needs_teacher_review",
+                        "verification_warnings": question.verification_warnings,
+                    }
+                    for question in questions
+                ],
+            },
+        )
         return {
-            "quiz_set_id": quiz_set_id,
-            "variant_id": variant_id,
+            **result,
             "provider": provider,
             "extraction_job_id": job_id,
-            "extracted": len(stored),
+            "extracted": len(questions),
             "skipped": skipped,
             "import_summary": import_summary,
             "overall_confidence": overall_confidence,
-            "questions": stored,
         }
 
     except Exception as exc:  # noqa: BLE001
         logger.warning("Quiz extraction failed (%s)", type(exc).__name__)
-        # Compensate across PostgREST calls: no orphaned draft sets/questions.
-        if quiz_set_id:
-            (
-                service.table("quiz_sets")
-                .delete()
-                .eq("id", quiz_set_id)
-                .eq("tenant_id", profile.tenant_id)
-                .execute()
-            )
-        if created_question_ids:
-            (
-                service.table("questions")
-                .delete()
-                .in_("id", created_question_ids)
-                .eq("tenant_id", profile.tenant_id)
-                .execute()
-            )
+        # Content writes are owned by one database transaction. Only a still-
+        # running audit row is marked failed; a committed receipt is immutable.
         service.table("ai_extraction_jobs").update(
             {
                 "status": "failed",
                 "error_message": "Quiz extraction failed.",
                 "completed_at": _now(),
             }
-        ).eq("id", job_id).eq("tenant_id", profile.tenant_id).execute()
+        ).eq("id", job_id).eq("tenant_id", profile.tenant_id).eq(
+            "status", "running"
+        ).execute()
         raise

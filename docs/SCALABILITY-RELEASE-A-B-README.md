@@ -1,10 +1,10 @@
 # Scalability Release A and B Implementation README
 
-**Status:** Release A1 through A4 are implemented on their feature branches.
-The operator reported migrations 68 through 70 applied; the target project has
-not been independently inspected. Release A5 is implemented locally on
-`release-a-a5-query-plan-indexes`. Production-shaped staging plan evidence and
-capacity sign-off remain pending.
+**Status:** Release A1 through A5 are implemented on their feature branches.
+The operator reported migrations 68 through 71 applied; the target project has
+not been independently inspected. Release A6 is implemented locally on
+`release-a-a6-atomic-persistence`; migration 72 has not been applied. Production-
+shaped staging evidence and capacity sign-off remain pending.
 
 **Prepared:** 25 September 2026
 
@@ -774,6 +774,44 @@ require compensating cleanup when a later write fails.
 - Generated questions remain pending review.
 - Insert round trips are materially reduced and measured.
 
+#### A6 implementation delivered
+
+The three remaining synchronous writers now send one bounded JSON payload to
+the service-role-only `persist_generated_quiz` function. PostgreSQL validates
+tenant, teacher, source-document, subject-assignment, and chapter ownership,
+then creates the draft set, variant, questions, ordered links, and optional
+extraction receipt in one transaction. Questions are always written as
+`pending_review`; callers cannot override that status. Payloads are capped at
+1,000 questions in both application and database code.
+
+The durable faculty worker continues to use the existing lease-fenced
+`finish_faculty_job` transaction from migration 43. Its stable completed-job
+receipt makes a lost-response retry return the original quiz IDs rather than
+creating duplicate content. A6 deliberately preserves that stronger job
+contract instead of routing durable completion through a less specific RPC.
+
+| Path | Content persistence before A6 | Content persistence after A6 |
+|---|---:|---:|
+| Legacy document generation, `N` questions | `2 + 2N` Data API writes | 1 RPC |
+| Blueprint generation, `N` questions | at least `2 + 2N`, plus chapter/topic writes | 1 RPC including chapter/topic work |
+| Quiz extraction after its audit row is opened, `N` questions | `3 + 2N` writes | 1 RPC including the success receipt |
+
+At 300 questions, the main generation path falls from 602 content-write round
+trips to one; extraction falls from 603 post-provider writes to one. This is a
+round-trip reduction measurement, not a hosted latency or throughput result.
+
+| Artifact | Evidence |
+|---|---|
+| `migrations/migration-72-atomic-quiz-persistence.sql` | Defines the bounded, transactional, service-role-only commit function |
+| `backend/app/services/quiz_persistence.py` | Enforces the application bound and requires a database commit receipt |
+| generation, blueprint, and extraction services | Replace per-row writes and compensating cleanup with the one RPC |
+| `scripts/test-atomic-quiz-persistence-db.mjs` | Verifies rerunnable DDL, rollback after a late invalid question, extraction-receipt rollback, tenant denial, pending review, totals/order, paper metadata, and browser-role denial |
+| `scripts/test-faculty-jobs-db.mjs` | Preserves durable replay idempotency, lease fencing, atomic rollback, and pending-review evidence |
+
+Migration 72 must be applied after migration 71 and before deploying the A6
+API/worker code. Hosted migration/function privileges and staging latency are
+not yet independently verified.
+
 ### A7. Realistic load, failure, and isolation verification
 
 **Why**
@@ -1172,8 +1210,10 @@ decisions can use data from the first one to three months:
 - [x] The operator reported migration 70 applied on 26 September 2026.
 - [ ] Migration 70 and its selector privileges/indexes are independently verified on the target project.
 - [x] Added A5 indexes have isolated 20,002-row before/after plan evidence.
+- [x] The operator reported migration 71 applied on 26 September 2026.
 - [ ] A5 indexes have production-shaped staging plans, acceptable write-load results, and advisor review.
-- [ ] Generated quiz persistence is atomic or safely batched/idempotent.
+- [x] Generated quiz persistence is atomic; durable retries remain lease-fenced and idempotent in repository code and isolated database tests.
+- [ ] Migration 72 and its service-role-only privilege are applied and independently verified on the target project.
 - [ ] 200 expected-concurrency scenario passes.
 - [ ] 500 stress-concurrency scenario fails safely or passes.
 - [ ] Tenant/role/direct-ID security suites pass.
