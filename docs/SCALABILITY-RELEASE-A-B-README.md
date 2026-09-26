@@ -10,6 +10,15 @@ the 10-institution capacity target can be called proven.
 
 **Prepared:** 25 September 2026
 
+**Latest deployment evidence (26 September 2026):** PR #65 was merged to
+`main` as `6dd08cd`; the main-branch repository checks and Vercel production
+status passed. Railway API deployment
+`a4daadf2-d2f2-4dba-99d3-4ef7cde68c7c` succeeded and `/health` returned HTTP
+200. The worker was not redeployed because that remediation changed no worker
+runtime code or shared job contract; its last observed successful deployment
+remains `8dfc43bc`. No new migration was required or applied. This deployment
+evidence does not close the isolated-staging capacity gates below.
+
 **Initial planning horizon:** first 10 institutions
 
 **Owners:** ArivuPro engineering team
@@ -1243,7 +1252,8 @@ decisions can use data from the first one to three months:
 - [x] Repository tenant/role/direct-ID security suites pass.
 - [ ] Worker restart and recovery tests pass.
 - [x] API and worker deployment requirements are documented.
-- [x] Matching production API and worker revisions are deployed and a queued-worker smoke test passed.
+- [x] Compatible Release A API and worker runtime code is deployed and a queued-worker smoke test passed; the latest API-only remediation deployment did not require a worker rebuild.
+- [x] PR #65/main `6dd08cd` passed repository checks, Vercel production deployment, Railway API deployment, and public API/frontend smoke checks.
 - [x] Remaining capacity limits are recorded honestly.
 
 ### Release B

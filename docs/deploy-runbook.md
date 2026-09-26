@@ -8,13 +8,13 @@ worker (`quiz-generator-worker`). They share one Supabase project.
 > Backend note: there is no `vercel.json`, so the FastAPI backend is **not**
 > set up for Vercel serverless. It runs on a host that runs `uvicorn` directly
 > (zero adapter work) — **Render** and **Railway** both work; **confirmed live
-> on Railway as of 2026-09-24** (verified via the Railway CLI: service
+> on Railway as of 2026-09-26** (verified via the Railway CLI: service
 > `quiz-generator`, project `quiz-generator`, environment `production`, domain
 > `quiz-generator-production-7461.up.railway.app`). Render remains a valid
 > alternative if you're setting this up fresh, but isn't what's deployed today.
 > The frontend goes on Vercel.
 
-> **Production service inventory (verified 2026-09-24):** only
+> **Production service inventory (last verified 2026-09-26):** only
 > `quiz-generator` and `quiz-generator-worker` remain. The old daily
 > `quiz-generator-retention` service was deleted after migration 59 removed the
 > raw AI-log columns it cleaned. Do not recreate that cron for this schema.
@@ -91,9 +91,10 @@ them in the Supabase dashboard for the exact project used by production.
 Merge your work to `main` first (see `docs/merge-workflow.md`).
 
 - **Frontend (Vercel):** builds automatically from GitHub after a PR merges to
-  `main`. GitHub's Vercel status for merge commit `bf01a95` reported
-  "Deployment has completed" on 2026-09-25; the production `/login` page
-  returned HTTP 200. That check did not exercise an authenticated page.
+  `main`. PR #65 produced merge commit `6dd08cd`; GitHub's Vercel production
+  status reported success on 2026-09-26. The production institution login
+  route returned HTTP 200 with the expected security headers. That check did
+  not exercise an authenticated role journey.
 - **Backend (Railway): does NOT auto-deploy from GitHub.** Confirmed
   2026-09-04 via `railway status --json` → the service's `"source"` field is
   `null`. Merging to `main` alone does nothing to the backend — after
@@ -424,14 +425,16 @@ afterward. Do not mistake an API `/health` response for worker readiness; use
 the super-admin `/api/v1/platform/worker-health` check and a small queued-job
 smoke test. The obsolete retention cron is not a companion service.
 
-**Observed 2026-09-26:** the production API deployment (`39eb02fc` prefix) and
-worker deployment (`8dfc43bc` prefix) both reported SUCCESS/RUNNING from the
-Release A backend tree represented by commit `bff02bb`; current `main`
-`93e2e3f` differs only in frontend code. The API `/health` and production schema
-preflight passed. A live queued 10-question generation completed through the
-worker and recorded its workflow plus provider-call costs. This proves bounded
-queue execution, not restart recovery, paper-bank grading, 200/500-user
-capacity, or backup restoration.
+**Observed 2026-09-26:** API deployment
+`a4daadf2-d2f2-4dba-99d3-4ef7cde68c7c`, uploaded from a clean `main` worktree
+at `6dd08cd`, reported `SUCCESS`; the production `/health` endpoint returned
+HTTP 200. The worker was deliberately not redeployed because PR #65 changed no
+worker runtime code or shared job contract, so its last observed successful
+deployment remains `8dfc43bc`. No migration was required or applied for PR
+#65. Earlier Release A verification passed production schema preflight and a
+live queued 10-question generation through that worker, recording its workflow
+and provider-call costs. API health does not prove worker readiness, restart
+recovery, paper-bank grading, 200/500-user capacity, or backup restoration.
 
 ### Advanced feature master switches
 
@@ -535,11 +538,15 @@ Notes/gotchas below.
 - **Root directory:** `frontend`
 - **Framework:** Next.js (auto-detected) · Build: `next build`
 
-The institution-admin teacher editor now keeps Save/Cancel visible while its
+The institution-admin teacher editor keeps Save/Cancel visible while its
 subject list scrolls (`frontend/app/dashboard/institution-admin/users/page.tsx`,
-merged in PR #59). Vercel completed deployment for merge commit `bf01a95` on
-2026-09-25. The public `/login` page returned HTTP 200; the authenticated
-editor was not browser-tested after deployment.
+merged in PR #59). The security/test remediation in PR #65 upgraded the
+frontend to Next.js `15.5.26`, added the public Playwright smoke suite, and was
+merged as `6dd08cd`. Vercel reported the production deployment successful on
+2026-09-26. The institution login route returned HTTP 200 with CSP, HSTS,
+`X-Content-Type-Options: nosniff`, and clickjacking protection, without an
+`X-Powered-By` header. Authenticated role journeys were not rerun after this
+deployment and remain a manual post-deploy check.
 
 **Environment variables** (from `frontend/.env.local.example`):
 

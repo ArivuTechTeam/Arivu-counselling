@@ -39,7 +39,7 @@ The ArivuPro Quiz Platform is a **multi-tenant SaaS web application** that lets 
 
 **Architecturally**, it is a classic three-tier system built on managed cloud services:
 
-- **Frontend:** Next.js 14 (React, TypeScript, Tailwind) → deployed on **Vercel**.
+- **Frontend:** Next.js 15 (React 19, TypeScript, Tailwind) → deployed on **Vercel**.
 - **Backend:** FastAPI (Python) REST API and a separate durable faculty-job worker → independently deployed on **Railway**.
 - **Data & Auth:** **Supabase** (managed PostgreSQL + Auth + Storage).
 - **AI:** **DeepSeek** is the primary LLM for text workflows, with **Google Gemini** as the automatic fallback and the vision provider for scanned/image documents.
@@ -88,7 +88,7 @@ The application has one authoritative profile table (`profiles`) linked 1:1 to S
                                                    │  HTTPS (browser)
                                                    ▼
                         ┌──────────────────────────────────────────────┐
-                        │   FRONTEND  —  Next.js 14 (React/TS/Tailwind) │
+                        │   FRONTEND  —  Next.js 15 (React/TS/Tailwind) │
                         │   Hosted on VERCEL                            │
                         │   • Role-gated dashboard shell                │
                         │   • Talks to backend via REST (Bearer JWT)    │
@@ -126,7 +126,7 @@ an HTTP endpoint and is deployed independently of the API. The obsolete
 
 ```mermaid
 flowchart TD
-    U["Users<br/>(4 roles)"] -->|HTTPS| FE["Frontend<br/>Next.js 14 on Vercel"]
+    U["Users<br/>(4 roles)"] -->|HTTPS| FE["Frontend<br/>Next.js 15 on Vercel"]
     FE -->|"REST + Bearer JWT"| BE["API<br/>FastAPI on Railway"]
     FE -->|"Auth only (sign in/up)"| SB_AUTH["Supabase Auth"]
     BE -->|"tenant-scoped data + faculty queue"| SB_DB[("Supabase PostgreSQL<br/>+ Row-Level Security")]
@@ -148,11 +148,12 @@ flowchart TD
 
 | Layer | Technology | Version / detail | Hosting |
 |---|---|---|---|
-| Frontend framework | Next.js (App Router) | 14.2.35 | Vercel |
+| Frontend framework | Next.js (App Router) | 15.5.26 | Vercel |
+| Frontend runtime | React / React DOM | 19.3.0 | Vercel |
 | Frontend language | TypeScript | 5.x | — |
 | Styling | Tailwind CSS + shadcn/ui (Radix) | 3.4.1 | — |
 | Charts / effects | Recharts, GSAP, html-to-image, @react-pdf/renderer | — | — |
-| Package manager | pnpm | — | — |
+| Package manager | pnpm | 11.25.0 | — |
 | Backend framework | FastAPI | 0.141.1 | Railway |
 | Backend server | Uvicorn | 0.52.1 | — |
 | Backend language | Python | 3.12 (Docker image) | — |
@@ -172,7 +173,7 @@ flowchart TD
 ## 5. Frontend Architecture
 
 ### 5.1 Structure & rendering model
-Next.js 14 **App Router**. Almost all dashboard pages are client components (`"use client"`) that fetch data at runtime from the backend. There is **no server-side rendering of business data** — the browser holds a Supabase session and calls the FastAPI API with the session's JWT.
+Next.js 15 **App Router**. Almost all dashboard pages are client components (`"use client"`) that fetch data at runtime from the backend. There is **no server-side rendering of business data** — the browser holds a Supabase session and calls the FastAPI API with the session's JWT.
 
 ### 5.2 Routing map (by role)
 

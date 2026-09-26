@@ -22,6 +22,27 @@ code remains the final source of truth.
   current 10-institution scalability plan, A1 capacity tooling/runbook, release
   gates, and the boundary between implemented tooling and pending staging proof.
 
+## Current production snapshot
+
+Verified on 26 September 2026:
+
+- PR #65 was merged to `main` at `6dd08cd`. The resulting GitHub `Repository
+  checks` run passed, including database migration harnesses, backend tests,
+  frontend audit/lint/unit/build checks, and the public Playwright smoke suite.
+- Vercel reported a successful production deployment for `6dd08cd`. The public
+  institution login route returned HTTP 200 with the expected CSP, HSTS,
+  clickjacking, MIME-sniffing, and framework-header protections.
+- Railway API deployment `a4daadf2-d2f2-4dba-99d3-4ef7cde68c7c` reported
+  `SUCCESS`, and `/health` returned HTTP 200. The worker was not redeployed in
+  that operation because the merged remediation did not change worker runtime
+  code or its job contract; its last observed deployment remains `8dfc43bc`.
+- The operator reported migrations through 73 applied. PR #65 required no new
+  database migration, and none was applied as part of this deployment.
+
+This snapshot proves deployment and basic public availability, not the open
+authenticated-role, worker-recovery, backup/restore, or 200/500-user capacity
+checks. Use the deploy runbook and Release A checklist for those gates.
+
 ## Historical material
 
 Files under `akbar_changelog/` and `pavyaa_changelog/` are dated records. Their
