@@ -38,7 +38,10 @@ def profile(*, features=None) -> CurrentProfile:
 
 def test_sampler_sends_actor_scope_filters_and_random_seek_key() -> None:
     service = RpcService([{"question_ids": ["q-1", "q-2"], "available": 2}])
-    with patch("app.services.selector.random.randrange", return_value=12345):
+    with patch(
+        "app.services.tenant_features.get_settings",
+        return_value=SimpleNamespace(batches_enabled=True),
+    ), patch("app.services.selector.random.randrange", return_value=12345):
         ids = select_question_ids(
             service,
             profile(features={"batches": True}),
