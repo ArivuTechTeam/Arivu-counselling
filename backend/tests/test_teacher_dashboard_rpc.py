@@ -61,16 +61,24 @@ def test_class_overview_uses_one_tenant_actor_scoped_rpc() -> None:
 
 def test_published_monitor_uses_one_tenant_actor_scoped_rpc() -> None:
     payload = {"quizzes": [{"id": "quiz-1"}]}
-    service = _Service({"teacher_published_quiz_metrics": payload})
+    service = _Service({"teacher_published_quiz_metrics_page": payload})
 
     with patch("app.api.teacher.get_service_client", return_value=service):
         result = asyncio.run(published_quiz_monitor(_teacher()))
 
-    assert result == payload
+    assert result == {**payload, "next_cursor": None}
     assert service.calls == [
         (
-            "teacher_published_quiz_metrics",
-            {"p_tenant": TENANT, "p_teacher": TEACHER},
+            "teacher_published_quiz_metrics_page",
+            {
+                "p_tenant": TENANT,
+                "p_teacher": TEACHER,
+                "p_limit": 26,
+                "p_before_at": None,
+                "p_before_id": None,
+                "p_subject": None,
+                "p_search": None,
+            },
         )
     ]
 

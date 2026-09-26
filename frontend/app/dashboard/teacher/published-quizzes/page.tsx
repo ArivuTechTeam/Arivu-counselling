@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useState } from "react";
 import { EmptyState } from "@/components/ui/empty-state";
 import { ErrorCard } from "@/components/ui/error-card";
 import { PageHeader } from "@/components/ui/page-header";
@@ -16,11 +17,13 @@ function dateLabel(value: string | null) {
 }
 
 export default function PublishedQuizzesPage() {
-  const { data, error, mutate } = useTeacherPublishedQuizzes();
+  const [query, setQuery] = useState("");
+  const { data, error, mutate, hasMore, loadMore, isLoadingMore } = useTeacherPublishedQuizzes({ query: query.trim() || undefined });
   const quizzes = data?.quizzes ?? [];
   return (
     <div className="mx-auto flex max-w-6xl flex-col gap-6">
       <PageHeader title="Published quizzes" description="Monitor attendance and results for every quiz your students can take." />
+      <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search published quizzes…" aria-label="Search published quizzes" className="h-11 rounded-xl border border-input bg-background px-4 text-sm shadow-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/20" />
       {error ? <ErrorCard message={error.message} onRetry={() => void mutate()} /> : !data ? <SkeletonList rows={5} /> : quizzes.length === 0 ? (
         <EmptyState icon={<Inbox />} title="No published quizzes" message="Publish a reviewed quiz to start monitoring student performance." action={<Link href="/dashboard/teacher/review" className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground">Open review queue</Link>} />
       ) : (
@@ -58,6 +61,11 @@ export default function PublishedQuizzesPage() {
               <p className="mt-4 text-xs text-muted-foreground">Highest {quiz.highest_accuracy}% · Lowest {quiz.lowest_accuracy}%</p>
             </article>
           ))}
+          {hasMore && (
+            <button type="button" onClick={() => void loadMore()} disabled={isLoadingMore} className="justify-self-center rounded-lg border border-input px-4 py-2 text-sm font-medium hover:border-primary/50 disabled:opacity-60">
+              {isLoadingMore ? "Loading…" : "Load more quizzes"}
+            </button>
+          )}
         </div>
       )}
     </div>

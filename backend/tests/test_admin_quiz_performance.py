@@ -106,7 +106,7 @@ class _Query:
         self.table = table
         self.filters: list[tuple[str, object]] = []
         self.in_filters: list[tuple[str, set[object]]] = []
-        self.ordering: tuple[str, bool] | None = None
+        self.ordering: list[tuple[str, bool]] = []
         self.select_str: str | None = None
         self.range_bounds: tuple[int, int] | None = None
 
@@ -124,7 +124,17 @@ class _Query:
         return self
 
     def order(self, column: str, desc: bool = False):
-        self.ordering = (column, desc)
+        self.ordering.append((column, desc))
+        return self
+
+    def limit(self, value: int):
+        self.row_limit = value
+        return self
+
+    def ilike(self, *_args):
+        return self
+
+    def or_(self, *_args):
         return self
 
     def range(self, start: int, end: int):
@@ -137,13 +147,13 @@ class _Query:
             rows = [row for row in rows if row.get(column) == value]
         for column, values in self.in_filters:
             rows = [row for row in rows if row.get(column) in values]
-        if self.ordering:
-            column, desc = self.ordering
+        for column, desc in reversed(self.ordering):
             rows.sort(key=lambda row: row.get(column) or "", reverse=desc)
         total = len(rows)
         if self.range_bounds:
             start, end = self.range_bounds
             rows = rows[start : end + 1]
+        rows = rows[: getattr(self, "row_limit", len(rows))]
         if self.select_str:
             embeds = _parse_embeds(self.select_str)
             if embeds:
@@ -230,7 +240,7 @@ class AdminQuizPerformanceTests(unittest.TestCase):
         self.patch.stop()
 
     def test_summary_aggregates_weighted_accuracy_reviews_and_attempts(self) -> None:
-        rows = asyncio.run(admin_quiz_sets(self.profile))
+        rows = asyncio.run(admin_quiz_sets(self.profile)).items
 
         self.assertEqual(len(rows), 1)
         quiz = rows[0]
@@ -253,11 +263,11 @@ class AdminQuizPerformanceTests(unittest.TestCase):
             }
         )
 
-        first = asyncio.run(admin_quiz_sets(self.profile, page=1, page_size=1))
-        second = asyncio.run(admin_quiz_sets(self.profile, page=2, page_size=1))
+        with patch("app.api.admin.encode_cursor", return_value="next-page"):
+            first = asyncio.run(admin_quiz_sets(self.profile, page_size=1))
 
-        self.assertEqual([row.id for row in first], ["set-a"])
-        self.assertEqual([row.id for row in second], ["set-a-older"])
+        self.assertEqual([row.id for row in first.items], ["set-a"])
+        self.assertEqual(first.next_cursor, "next-page")
 
     def test_detail_returns_breakdowns_students_and_weak_questions(self) -> None:
         detail = asyncio.run(admin_quiz_set_detail("set-a", self.profile))
@@ -301,8 +311,8 @@ class AdminQuizPerformanceTests(unittest.TestCase):
         self.assertEqual(inactive.total_attempts, 0)
 
     def test_quiz_set_teacher_filter_cannot_cross_tenants(self) -> None:
-        own_rows = asyncio.run(admin_quiz_sets(self.profile, teacher_id="teacher-a"))
-        other_rows = asyncio.run(admin_quiz_sets(self.profile, teacher_id="teacher-b"))
+        own_rows = asyncio.run(admin_quiz_sets(self.profile, teacher_id="teacher-a")).items
+        other_rows = asyncio.run(admin_quiz_sets(self.profile, teacher_id="teacher-b")).items
 
         self.assertEqual([row.id for row in own_rows], ["set-a"])
         self.assertEqual(other_rows, [])
@@ -363,7 +373,7 @@ class AdminQuizPerformanceTests(unittest.TestCase):
         stats = institution_stats(self.profile)
         overview = asyncio.run(institution_overview(self.profile))
         analytics = asyncio.run(institution_analytics(self.profile))
-        quizzes = asyncio.run(admin_quiz_sets(self.profile))
+        quizzes = asyncio.run(admin_quiz_sets(self.profile)).items
 
         self.assertEqual(stats["teachers"], len(teachers.items))
         self.assertEqual(stats["teachers"], overview["teachers"])

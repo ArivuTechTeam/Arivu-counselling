@@ -302,6 +302,11 @@ export type DocumentOut = {
   created_at: string;
 };
 
+export type CursorPage<T> = {
+  items: T[];
+  next_cursor: string | null;
+};
+
 export type UploadResult = {
   document: DocumentOut;
   text_preview: string;
@@ -423,9 +428,11 @@ export async function extractQuiz(
 }
 
 /** List the documents uploaded within the caller's tenant. */
-export async function listDocuments(): Promise<DocumentOut[]> {
+export async function listDocuments(cursor?: string): Promise<CursorPage<DocumentOut>> {
   const headers = await authHeader();
-  const res = await apiFetch(`${API_BASE}/api/v1/documents`, { headers });
+  const params = new URLSearchParams({ page_size: "100" });
+  if (cursor) params.set("cursor", cursor);
+  const res = await apiFetch(`${API_BASE}/api/v1/documents?${params}`, { headers });
   if (!res.ok) {
     return apiError(res, "We couldn't load your documents. Please try again.");
   }
@@ -450,9 +457,14 @@ export type DocumentLogItem = {
 };
 
 /** The teacher's own uploaded documents, newest first (for the Document Log). */
-export async function listDocumentLog(): Promise<DocumentLogItem[]> {
+export type DocumentLogFilters = { cursor?: string; query?: string; status?: string };
+export async function listDocumentLog(filters: DocumentLogFilters = {}): Promise<CursorPage<DocumentLogItem>> {
   const headers = await authHeader();
-  const res = await apiFetch(`${API_BASE}/api/v1/documents/log`, { headers });
+  const params = new URLSearchParams();
+  if (filters.cursor) params.set("cursor", filters.cursor);
+  if (filters.query) params.set("q", filters.query);
+  if (filters.status) params.set("status_filter", filters.status);
+  const res = await apiFetch(`${API_BASE}/api/v1/documents/log?${params}`, { headers });
   if (!res.ok) {
     return apiError(res, "We couldn't load your document log. Please try again.");
   }
@@ -786,24 +798,14 @@ export const submitPaperAttempt = (
   answers: { question_id: string; student_answer: unknown }[],
 ) => jsonRequest<PaperScorecard>("/api/v1/papers/submit", "POST", { attempt_id: attemptId, answers });
 
-async function listBoundedPages<T>(
-  path: string,
-  extraParams?: URLSearchParams,
-): Promise<T[]> {
-  const pageSize = 100;
-  const items: T[] = [];
-  for (let page = 1; ; page += 1) {
-    const params = new URLSearchParams(extraParams);
-    params.set("page", String(page));
-    params.set("page_size", String(pageSize));
-    const batch = await jsonRequest<T[]>(`${path}?${params.toString()}`, "GET");
-    items.push(...batch);
-    if (batch.length < pageSize) return items;
-  }
-}
-
-export const listQuizSets = (archived = false) =>
-  listBoundedPages<QuizSetSummary>("/api/v1/quiz-sets", new URLSearchParams({ archived: String(archived) }));
+export const listQuizSets = (archived = false, cursor?: string) => {
+  const params = new URLSearchParams({ archived: String(archived) });
+  if (cursor) params.set("cursor", cursor);
+  return jsonRequest<CursorPage<QuizSetSummary>>(
+    `/api/v1/quiz-sets?${params}`,
+    "GET",
+  );
+};
 
 export const restoreQuizSet = (id: string) =>
   jsonRequest<QuizSetSummary>(`/api/v1/quiz-sets/${id}/restore`, "POST");
@@ -1026,8 +1028,22 @@ export function consumePrimedAttemptState(attemptId: string): AttemptState | nul
   return state;
 }
 
-export const listStudentQuizzes = () =>
-  jsonRequest<StudentQuiz[]>("/api/v1/quizzes", "GET");
+export type StudentQuizFilters = {
+  cursor?: string;
+  subjectId?: string;
+  chapterId?: string;
+  assignment?: "all" | "course" | "assigned";
+  query?: string;
+};
+export const listStudentQuizzes = (filters: StudentQuizFilters = {}) => {
+  const params = new URLSearchParams();
+  if (filters.cursor) params.set("cursor", filters.cursor);
+  if (filters.subjectId) params.set("subject_id", filters.subjectId);
+  if (filters.chapterId) params.set("chapter_id", filters.chapterId);
+  if (filters.assignment) params.set("assignment", filters.assignment);
+  if (filters.query) params.set("q", filters.query);
+  return jsonRequest<CursorPage<StudentQuiz>>(`/api/v1/quizzes?${params}`, "GET");
+};
 
 export type WeakArea = { topic: string; accuracy: number; attempted: number };
 export type StudentStats = {
@@ -1102,8 +1118,23 @@ export type AttemptHistoryItem = {
 };
 
 /** The student's past graded attempts, newest first. */
-export const listStudentAttempts = () =>
-  jsonRequest<AttemptHistoryItem[]>("/api/v1/student/attempts", "GET");
+export type StudentAttemptFilters = {
+  cursor?: string;
+  subjectId?: string;
+  chapterId?: string;
+  source?: "all" | "quiz" | "practice";
+};
+export const listStudentAttempts = (filters: StudentAttemptFilters = {}) => {
+  const params = new URLSearchParams();
+  if (filters.cursor) params.set("cursor", filters.cursor);
+  if (filters.subjectId) params.set("subject_id", filters.subjectId);
+  if (filters.chapterId) params.set("chapter_id", filters.chapterId);
+  if (filters.source) params.set("source", filters.source);
+  return jsonRequest<CursorPage<AttemptHistoryItem>>(
+    `/api/v1/student/attempts?${params}`,
+    "GET",
+  );
+};
 
 export const startAttempt = async (variantId: string) => {
   const state = await jsonRequest<AttemptInProgress>("/api/v1/attempts", "POST", {
@@ -2304,9 +2335,19 @@ export type PublishedQuizMonitor = {
     total_attempts: number; average_accuracy: number; highest_accuracy: number;
     lowest_accuracy: number; last_activity: string | null;
   }[];
+  next_cursor: string | null;
 };
-export const getPublishedQuizMonitor = () =>
-  jsonRequest<PublishedQuizMonitor>("/api/v1/teacher/published-quizzes", "GET");
+export type PublishedQuizFilters = { cursor?: string; subjectId?: string; query?: string };
+export const getPublishedQuizMonitor = (filters: PublishedQuizFilters = {}) => {
+  const params = new URLSearchParams();
+  if (filters.cursor) params.set("cursor", filters.cursor);
+  if (filters.subjectId) params.set("subject_id", filters.subjectId);
+  if (filters.query) params.set("q", filters.query);
+  return jsonRequest<PublishedQuizMonitor>(
+    `/api/v1/teacher/published-quizzes?${params}`,
+    "GET",
+  );
+};
 
 // Full report for one student (teacher, from Class monitor).
 export type StudentReport = {
@@ -2342,10 +2383,24 @@ export type AdminQuizSet = {
     needs_edit: number;
   };
 };
-export const getAdminQuizSets = (teacherId?: string) => {
+export type AdminQuizSetFilters = {
+  teacherId?: string;
+  courseId?: string;
+  status?: string;
+  query?: string;
+  cursor?: string;
+};
+export const getAdminQuizSets = (filters: AdminQuizSetFilters = {}) => {
   const params = new URLSearchParams();
-  if (teacherId) params.set("teacher_id", teacherId);
-  return listBoundedPages<AdminQuizSet>("/api/v1/admin/quiz-sets", params);
+  if (filters.teacherId) params.set("teacher_id", filters.teacherId);
+  if (filters.courseId) params.set("course_id", filters.courseId);
+  if (filters.status) params.set("status_filter", filters.status);
+  if (filters.query) params.set("q", filters.query);
+  if (filters.cursor) params.set("cursor", filters.cursor);
+  return jsonRequest<CursorPage<AdminQuizSet>>(
+    `/api/v1/admin/quiz-sets?${params}`,
+    "GET",
+  );
 };
 
 export type TeacherAnalyticsSummary = {

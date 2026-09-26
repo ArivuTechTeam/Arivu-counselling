@@ -1,6 +1,7 @@
 "use client";
 
 import useSWR from "swr";
+import useSWRInfinite from "swr/infinite";
 
 import {
   getAdminQuizSets,
@@ -19,6 +20,8 @@ import {
   listUsers,
   listSubjectMetrics,
   listTenants,
+  DocumentLogFilters,
+  PublishedQuizFilters,
 } from "@/lib/api";
 
 // Stable, role-scoped keys let pages reuse fresh data when users navigate back
@@ -47,7 +50,21 @@ export function useInstitutionAnalytics() {
 }
 
 export function useInstitutionQuizSets() {
-  return useSWR(STAFF_QUERY_KEYS.institutionQuizSets, () => getAdminQuizSets());
+  const query = useSWRInfinite(
+    (index, previous) => {
+      if (index > 0 && !previous?.next_cursor) return null;
+      return [STAFF_QUERY_KEYS.institutionQuizSets, previous?.next_cursor ?? ""] as const;
+    },
+    ([, cursor]) => getAdminQuizSets({ cursor: cursor || undefined }),
+  );
+  const pages = query.data;
+  return {
+    ...query,
+    data: pages?.flatMap((page) => page.items),
+    hasMore: Boolean(pages?.at(-1)?.next_cursor),
+    loadMore: () => query.setSize((size) => size + 1),
+    isLoadingMore: Boolean(query.isValidating && pages),
+  };
 }
 
 export function useInstitutionTeacherAnalytics() {
@@ -69,8 +86,23 @@ export function useTeacherMonitor() {
   return useSWR(STAFF_QUERY_KEYS.teacherMonitor, getClassMonitor);
 }
 
-export function useTeacherPublishedQuizzes() {
-  return useSWR(STAFF_QUERY_KEYS.teacherPublishedQuizzes, getPublishedQuizMonitor);
+export function useTeacherPublishedQuizzes(filters: Omit<PublishedQuizFilters, "cursor"> = {}) {
+  const filterKey = JSON.stringify(filters);
+  const query = useSWRInfinite(
+    (index, previous) => {
+      if (index > 0 && !previous?.next_cursor) return null;
+      return [STAFF_QUERY_KEYS.teacherPublishedQuizzes, filterKey, previous?.next_cursor ?? ""] as const;
+    },
+    ([, , cursor]) => getPublishedQuizMonitor({ ...filters, cursor: cursor || undefined }),
+  );
+  const pages = query.data;
+  return {
+    ...query,
+    data: pages ? { quizzes: pages.flatMap((page) => page.quizzes), next_cursor: pages.at(-1)?.next_cursor ?? null } : undefined,
+    hasMore: Boolean(pages?.at(-1)?.next_cursor),
+    loadMore: () => query.setSize((size) => size + 1),
+    isLoadingMore: Boolean(query.isValidating && pages),
+  };
 }
 
 export function useTeacherSubjectMetrics() {
@@ -78,12 +110,41 @@ export function useTeacherSubjectMetrics() {
 }
 
 export function useTeacherQuizSets(archived = false) {
-  return useSWR(archived ? `${STAFF_QUERY_KEYS.teacherQuizSets}:archived` : STAFF_QUERY_KEYS.teacherQuizSets,
-    () => listQuizSets(archived));
+  const rootKey = archived ? `${STAFF_QUERY_KEYS.teacherQuizSets}:archived` : STAFF_QUERY_KEYS.teacherQuizSets;
+  const query = useSWRInfinite(
+    (index, previous) => {
+      if (index > 0 && !previous?.next_cursor) return null;
+      return [rootKey, previous?.next_cursor ?? ""] as const;
+    },
+    ([, cursor]) => listQuizSets(archived, cursor || undefined),
+  );
+  const pages = query.data;
+  return {
+    ...query,
+    data: pages?.flatMap((page) => page.items),
+    hasMore: Boolean(pages?.at(-1)?.next_cursor),
+    loadMore: () => query.setSize((size) => size + 1),
+    isLoadingMore: Boolean(query.isValidating && pages),
+  };
 }
 
-export function useTeacherDocumentLog() {
-  return useSWR(STAFF_QUERY_KEYS.teacherDocumentLog, listDocumentLog);
+export function useTeacherDocumentLog(filters: Omit<DocumentLogFilters, "cursor"> = {}) {
+  const filterKey = JSON.stringify(filters);
+  const query = useSWRInfinite(
+    (index, previous) => {
+      if (index > 0 && !previous?.next_cursor) return null;
+      return [STAFF_QUERY_KEYS.teacherDocumentLog, filterKey, previous?.next_cursor ?? ""] as const;
+    },
+    ([, , cursor]) => listDocumentLog({ ...filters, cursor: cursor || undefined }),
+  );
+  const pages = query.data;
+  return {
+    ...query,
+    data: pages?.flatMap((page) => page.items),
+    hasMore: Boolean(pages?.at(-1)?.next_cursor),
+    loadMore: () => query.setSize((size) => size + 1),
+    isLoadingMore: Boolean(query.isValidating && pages),
+  };
 }
 
 export function usePlatformOverview() {

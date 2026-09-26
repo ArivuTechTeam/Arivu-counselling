@@ -23,6 +23,13 @@ from pydantic import BaseModel
 from starlette.concurrency import run_in_threadpool
 
 from app.lib.auth import CurrentProfile, get_current_profile
+from app.lib.pagination import (
+    DEFAULT_PAGE_SIZE,
+    bounded_page_size,
+    decode_cursor,
+    descending_page,
+    split_page,
+)
 from app.lib.role_checks import require_teacher
 from app.lib.storage import download_bytes, signed_url, upload_bytes
 from app.lib.supabase import get_service_client
@@ -58,6 +65,11 @@ class DocumentOut(BaseModel):
     created_at: str
 
 
+class DocumentPage(BaseModel):
+    items: list[DocumentOut]
+    next_cursor: str | None = None
+
+
 class UploadResult(BaseModel):
     document: DocumentOut
     text_preview: str
@@ -89,6 +101,11 @@ class DocumentLogItem(BaseModel):
     #   "failed"     - the last extraction (or upload) failed; safe to retry
     #   "none"       - nothing has been generated/extracted yet
     quiz_status: str = "none"
+
+
+class DocumentLogPage(BaseModel):
+    items: list[DocumentLogItem]
+    next_cursor: str | None = None
 
 
 class DocumentFileUrl(BaseModel):
@@ -356,23 +373,36 @@ def check_duplicate(
     return DuplicateCheckResult(duplicate=False)
 
 
-@router.get("", response_model=list[DocumentOut])
+@router.get("", response_model=DocumentPage)
 def list_documents(
     profile: CurrentProfile = Depends(get_current_profile),
-) -> list[DocumentOut]:
+    cursor: str | None = None,
+    page_size: int = DEFAULT_PAGE_SIZE,
+    q: str = "",
+) -> DocumentPage:
     require_teacher(profile, action="upload documents")
+    page_size = bounded_page_size(page_size)
+    normalized_query = q.strip()
+    if len(normalized_query) > 100:
+        raise HTTPException(status_code=400, detail="Search text is too long.")
     service = get_service_client()
-    rows = select_all(
-        service,
-        "documents",
-        "id, original_filename, file_type, status, created_at",
-        configure=lambda query: query.eq(
-            "tenant_id", profile.tenant_id
-        ).eq("uploaded_by", profile.user_id),
-        order_column="created_at",
-        order_desc=True,
+    query = (
+        service.table("documents")
+        .select("id, original_filename, file_type, status, created_at")
+        .eq("tenant_id", profile.tenant_id)
+        .eq("uploaded_by", profile.user_id)
+        .neq("status", "archived")
     )
-    return [
+    if normalized_query:
+        query = query.ilike("original_filename", f"%{normalized_query}%")
+    rows = (
+        descending_page(query, "created_at", page_size, decode_cursor(cursor))
+        .execute()
+        .data
+        or []
+    )
+    page_rows, next_cursor = split_page(rows, page_size, timestamp_key="created_at")
+    return DocumentPage(items=[
         DocumentOut(
             id=r["id"],
             original_filename=r.get("original_filename"),
@@ -380,35 +410,51 @@ def list_documents(
             status=r["status"],
             created_at=str(r["created_at"]),
         )
-        for r in rows
-        if r.get("status") != "archived"
-    ]
+        for r in page_rows
+    ], next_cursor=next_cursor)
 
 
-@router.get("/log", response_model=list[DocumentLogItem])
+@router.get("/log", response_model=DocumentLogPage)
 def document_log(
     profile: CurrentProfile = Depends(get_current_profile),
-) -> list[DocumentLogItem]:
+    cursor: str | None = None,
+    page_size: int = DEFAULT_PAGE_SIZE,
+    status_filter: str | None = None,
+    q: str = "",
+) -> DocumentLogPage:
     """The teacher's Document Log: their own uploads, newest first, with the
     subject/chapter each was filed under when that is recorded."""
     require_teacher(profile, action="upload documents")
+    page_size = bounded_page_size(page_size)
+    normalized_query = q.strip()
+    if len(normalized_query) > 100:
+        raise HTTPException(status_code=400, detail="Search text is too long.")
+    if status_filter and status_filter not in {"uploaded", "extracting", "completed", "failed"}:
+        raise HTTPException(status_code=400, detail="Invalid document status filter.")
     service = get_service_client()
 
     # Own uploads only, tenant-scoped. Both filters are required — the service
     # client bypasses RLS, so isolation lives here.
-    docs = select_all(
-        service,
-        "documents",
-        "id, original_filename, file_type, status, created_at, chapter_id",
-        configure=lambda query: query.eq("tenant_id", profile.tenant_id).eq(
-            "uploaded_by", profile.user_id
-        ),
-        order_column="created_at",
-        order_desc=True,
+    query = (
+        service.table("documents")
+        .select("id, original_filename, file_type, status, created_at, chapter_id")
+        .eq("tenant_id", profile.tenant_id)
+        .eq("uploaded_by", profile.user_id)
+        .neq("status", "archived")
     )
-    docs = [doc for doc in docs if doc.get("status") != "archived"]
+    if status_filter:
+        query = query.eq("status", status_filter)
+    if normalized_query:
+        query = query.ilike("original_filename", f"%{normalized_query}%")
+    docs = (
+        descending_page(query, "created_at", page_size, decode_cursor(cursor))
+        .execute()
+        .data
+        or []
+    )
+    docs, next_cursor = split_page(docs, page_size, timestamp_key="created_at")
     if not docs:
-        return []
+        return DocumentLogPage(items=[], next_cursor=None)
 
     # Resolve subject + chapter names for docs that carry a chapter, in bulk
     # (no per-row query). Every lookup stays tenant-scoped.
@@ -505,7 +551,7 @@ def document_log(
                 quiz_status=_quiz_status(d["id"], d["status"]),
             )
         )
-    return items
+    return DocumentLogPage(items=items, next_cursor=next_cursor)
 
 
 @router.post("/{document_id}/archive", response_model=ArchivedDocumentOut)

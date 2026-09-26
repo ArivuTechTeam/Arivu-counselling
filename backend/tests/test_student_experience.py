@@ -107,6 +107,11 @@ class MemoryService:
     def table(self, name: str) -> MemoryQuery:
         return MemoryQuery([dict(row) for row in self.tables.get(name, [])])
 
+    def rpc(self, name: str, _params: dict):
+        if name != "student_attempt_history_page":
+            raise AssertionError(name)
+        return SimpleNamespace(execute=lambda: SimpleNamespace(data=_history_rows(self.tables)))
+
 
 class MutableQuery:
     def __init__(self, service: "MutableService", table: str) -> None:
@@ -210,6 +215,38 @@ class MutableService:
     def table(self, name: str) -> MutableQuery:
         self.calls.append(name)
         return MutableQuery(self, name)
+
+def _history_rows(tables: dict[str, list[dict]]) -> list[dict]:
+    variants = {row["id"]: row for row in tables.get("quiz_variants", [])}
+    sets = {row["id"]: row for row in tables.get("quiz_sets", [])}
+    chapters = {row["id"]: row for row in tables.get("chapters", [])}
+    rows: list[dict] = []
+    for attempt in tables.get("quiz_attempts", []):
+        if attempt.get("student_id") != "u1" or attempt.get("status") != "graded":
+            continue
+        variant = variants.get(attempt.get("variant_id"), {})
+        quiz = sets.get(variant.get("quiz_set_id"), {})
+        rows.append({
+            "attempt_id": attempt["id"], "quiz_title": quiz.get("title", "Quiz"),
+            "variant_id": attempt.get("variant_id"), "variant_type": variant.get("variant_type"),
+            "subject_id": quiz.get("subject_id"), "chapter_id": quiz.get("chapter_id"),
+            "total_score": attempt.get("total_score"), "max_score": variant.get("total_marks"),
+            "submitted_at": attempt.get("submitted_at"), "source": "quiz",
+        })
+    for session in tables.get("practice_sessions", []):
+        if session.get("student_id") != "u1" or session.get("status") != "graded" or session.get("mode") == "challenge":
+            continue
+        chapter = chapters.get(session.get("chapter_id"), {})
+        mode = str(session.get("mode") or "practice").replace("_", " ").title()
+        rows.append({
+            "attempt_id": session["id"], "quiz_title": f"{mode} practice",
+            "variant_id": None, "variant_type": session.get("mode"),
+            "subject_id": session.get("subject_id") or chapter.get("subject_id"),
+            "chapter_id": session.get("chapter_id"), "total_score": session.get("total_score"),
+            "max_score": session.get("max_score"), "submitted_at": session.get("submitted_at"),
+            "source": "practice",
+        })
+    return sorted(rows, key=lambda row: row.get("submitted_at") or "", reverse=True)
 
 
 class GradingTests(unittest.TestCase):
@@ -326,10 +363,10 @@ class StudentAnalyticsTests(unittest.TestCase):
         with patch("app.api.student.get_service_client", return_value=service):
             history = student_attempts(profile())
 
-        self.assertEqual(len(history), 1)
-        self.assertEqual(history[0]["source"], "practice")
-        self.assertEqual(history[0]["subject_id"], "subject-1")
-        self.assertEqual(history[0]["chapter_id"], "chapter-1")
+        self.assertEqual(len(history.items), 1)
+        self.assertEqual(history.items[0].source, "practice")
+        self.assertEqual(history.items[0].subject_id, "subject-1")
+        self.assertEqual(history.items[0].chapter_id, "chapter-1")
 
     def test_quiz_and_practice_answers_are_combined_and_scoped(self) -> None:
         service = MemoryService(
@@ -529,6 +566,10 @@ class QuizAttemptFlowTests(unittest.TestCase):
             patch("app.api.student.get_service_client", return_value=service),
             patch("app.api.student.log_event"),
             patch(
+                "app.api.student.rpc_json_value",
+                side_effect=lambda *_args, **_kwargs: _history_rows(service.tables),
+            ),
+            patch(
                 "app.api.student.get_settings",
                 return_value=SimpleNamespace(student_quiz_attempt_limit=2),
             ),
@@ -599,10 +640,10 @@ class QuizAttemptFlowTests(unittest.TestCase):
             reviewed = get_attempt(attempt_id, profile())
             self.assertEqual(reviewed["total_score"], 4.0)
             history = student_attempts(profile())
-            self.assertEqual(history[0]["attempt_id"], attempt_id)
-            self.assertEqual(history[0]["variant_id"], "v1")
-            self.assertEqual(history[0]["subject_id"], "s1")
-            self.assertIsNone(history[0]["chapter_id"])
+            self.assertEqual(history.items[0].attempt_id, attempt_id)
+            self.assertEqual(history.items[0].variant_id, "v1")
+            self.assertEqual(history.items[0].subject_id, "s1")
+            self.assertIsNone(history.items[0].chapter_id)
 
             service.tables["questions"][0].update(
                 {
@@ -685,6 +726,10 @@ class PracticeAndRevisionFlowTests(unittest.TestCase):
         with (
             patch("app.api.practice.get_service_client", return_value=service),
             patch("app.api.student.get_service_client", return_value=service),
+            patch(
+                "app.api.student.rpc_json_value",
+                side_effect=lambda *_args, **_kwargs: _history_rows(service.tables),
+            ),
         ):
             listed_subjects = practice_subjects(profile())
             self.assertEqual(
@@ -731,9 +776,9 @@ class PracticeAndRevisionFlowTests(unittest.TestCase):
             self.assertEqual(result["total_score"], 3.0)
             self.assertEqual([row["is_correct"] for row in result["results"]], [True, True])
             history = student_attempts(profile())
-            self.assertEqual(history[0]["attempt_id"], session_id)
-            self.assertIsNone(history[0]["subject_id"])
-            self.assertEqual(history[0]["source"], "practice")
+            self.assertEqual(history.items[0].attempt_id, session_id)
+            self.assertIsNone(history.items[0].subject_id)
+            self.assertEqual(history.items[0].source, "practice")
 
     def test_revised_topic_returns_after_new_weak_work(self) -> None:
         service = MutableService(

@@ -33,7 +33,7 @@ export function QuizSetList() {
   const [actionError, setActionError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const { mutate: refreshCache } = useSWRConfig();
-  const { data: sets = null, error, mutate } = useTeacherQuizSets(archived);
+  const { data: sets = null, error, mutate, hasMore, loadMore, isLoadingMore } = useTeacherQuizSets(archived);
 
   async function restore(id: string) {
     setRestoring(id);
@@ -127,6 +127,13 @@ export function QuizSetList() {
               </Button>}
               </div>
             ))}
+            {hasMore && (
+              <div className="flex justify-center p-4">
+                <Button variant="outline" onClick={() => void loadMore()} disabled={isLoadingMore}>
+                  {isLoadingMore ? "Loading…" : "Load more quizzes"}
+                </Button>
+              </div>
+            )}
           </div>
         )}
       </CardContent>

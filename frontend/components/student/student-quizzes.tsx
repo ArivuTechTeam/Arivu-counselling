@@ -66,7 +66,14 @@ function flatten(quizzes: StudentQuiz[]): QuizItem[] {
 
 export function StudentQuizzes() {
   const router = useRouter();
-  const { data: quizzes = null, error: loadError, mutate } = useStudentQuizzes();
+  const {
+    data: quizzes = null,
+    error: loadError,
+    mutate,
+    hasMore,
+    loadMore,
+    isLoadingMore,
+  } = useStudentQuizzes();
   const [actionError, setActionError] = useState<string | null>(null);
   const [starting, setStarting] = useState<string | null>(null);
   const [pending, setPending] = useState<QuizItem | null>(null);
@@ -108,7 +115,7 @@ export function StudentQuizzes() {
           <CardTitle>Quizzes to take</CardTitle>
           <CardDescription>
             {toAttend.length > 0
-              ? `You have ${toAttend.length} quiz${
+              ? `You have ${toAttend.length} loaded quiz${
                   toAttend.length === 1 ? "" : "zes"
                 } waiting — pick one to start.`
               : "Quizzes assigned to your course appear here."}
@@ -234,6 +241,11 @@ export function StudentQuizzes() {
             ))}
           </CardContent>
         </Card>
+      )}
+      {loaded && hasMore && (
+        <Button variant="outline" onClick={() => void loadMore()} disabled={isLoadingMore}>
+          {isLoadingMore ? "Loading…" : "Load more quizzes"}
+        </Button>
       )}
       <AttemptReadiness
         open={pending !== null}

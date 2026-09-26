@@ -15,6 +15,7 @@ import asyncio
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from app.lib.auth import CurrentProfile, get_current_profile
+from app.lib.pagination import DEFAULT_PAGE_SIZE, bounded_page_size, decode_cursor, encode_cursor
 from app.lib.supabase import get_service_client
 from app.lib.supabase_queries import rpc_json_value, select_all, select_all_in
 from app.services.attempt_timing import is_answered
@@ -179,17 +180,47 @@ async def quiz_set_performance(
 @router.get("/teacher/published-quizzes")
 async def published_quiz_monitor(
     profile: CurrentProfile = Depends(get_current_profile),
+    cursor: str | None = None,
+    page_size: int = DEFAULT_PAGE_SIZE,
+    subject_id: str | None = None,
+    q: str = "",
 ) -> dict:
-    """Compact performance metrics for every published quiz owned by a teacher."""
+    """One bounded page of published-quiz metrics owned by the teacher."""
     if profile.role != "teacher":
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Teachers only.")
-    return await asyncio.to_thread(
+    page_size = bounded_page_size(page_size)
+    page_cursor = decode_cursor(cursor)
+    normalized_query = q.strip()
+    if len(normalized_query) > 100:
+        raise HTTPException(status_code=400, detail="Search text is too long.")
+    payload = await asyncio.to_thread(
         rpc_json_value,
         get_service_client(),
-        "teacher_published_quiz_metrics",
-        {"p_tenant": profile.tenant_id, "p_teacher": profile.user_id},
+        "teacher_published_quiz_metrics_page",
+        {
+            "p_tenant": profile.tenant_id,
+            "p_teacher": profile.user_id,
+            "p_limit": page_size + 1,
+            "p_before_at": page_cursor.occurred_at.isoformat() if page_cursor else None,
+            "p_before_id": page_cursor.row_id if page_cursor else None,
+            "p_subject": subject_id,
+            "p_search": normalized_query or None,
+        },
         dict,
     )
+    quizzes = payload.get("quizzes")
+    if not isinstance(quizzes, list):
+        raise RuntimeError("teacher_published_quiz_metrics_page returned an invalid payload")
+    has_more = len(quizzes) > page_size
+    items = quizzes[:page_size]
+    next_cursor = (
+        encode_cursor(items[-1]["_cursor_at"], items[-1]["id"])
+        if has_more and items
+        else None
+    )
+    for item in items:
+        item.pop("_cursor_at", None)
+    return {"quizzes": items, "next_cursor": next_cursor}
 
 
 @router.get("/teacher/class-monitor")

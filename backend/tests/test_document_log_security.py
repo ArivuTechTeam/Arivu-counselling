@@ -31,11 +31,22 @@ class RecordingQuery:
         self.filters.append((column, value))
         return self
 
+    def neq(self, column: str, value: object):
+        self.filters.append((f"!{column}", value))
+        return self
+
+    def ilike(self, *_args):
+        return self
+
     def in_(self, column: str, values: list[str]):
         self.filters.append((column, tuple(values)))
         return self
 
     def order(self, *_args, **_kwargs):
+        return self
+
+    def limit(self, value: int):
+        self.row_limit = value
         return self
 
     def maybe_single(self):
@@ -44,7 +55,11 @@ class RecordingQuery:
 
     def execute(self):
         self.service.calls.append((self.table, tuple(self.filters)))
-        rows = self.service.rows.get(self.table, [])
+        rows = list(self.service.rows.get(self.table, []))
+        for column, value in self.filters:
+            if column.startswith("!"):
+                rows = [row for row in rows if row.get(column[1:]) != value]
+        rows = rows[: getattr(self, "row_limit", len(rows))]
         return SimpleNamespace(data=(rows[0] if rows else None) if self.single else rows)
 
 
@@ -86,8 +101,8 @@ class DocumentLogSecurityTests(unittest.TestCase):
         with patch("app.api.documents.get_service_client", return_value=service):
             result = document_log(teacher_profile())
 
-        self.assertEqual(result[0].quiz_status, "draft")
-        self.assertEqual(result[0].subject_name, "Mathematics")
+        self.assertEqual(result.items[0].quiz_status, "draft")
+        self.assertEqual(result.items[0].subject_name, "Mathematics")
         for table in ("documents", "chapters", "subjects", "quiz_sets", "ai_extraction_jobs"):
             self.assertTrue(service.filters_for(table), table)
             self.assertTrue(

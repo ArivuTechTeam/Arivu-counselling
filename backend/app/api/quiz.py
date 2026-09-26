@@ -20,6 +20,7 @@ from app.lib.auth import CurrentProfile, get_current_profile
 from app.lib.role_checks import require_teacher
 from app.lib.api_errors import public_error
 from app.lib.config import get_settings
+from app.lib.pagination import DEFAULT_PAGE_SIZE, bounded_page_size, decode_cursor, descending_page, split_page
 from app.lib.supabase import get_service_client
 from app.lib.supabase_queries import select_all, select_all_in
 from app.services.blueprint import generate_blueprint_quiz
@@ -54,9 +55,6 @@ CORE_TYPES = {"mcq_single", "mcq_multi", "true_false", "numerical", "fill_blank"
 # Extended objective types (Phase 6.4). Only selectable when the flag is on, so
 # with it off the allowed set is exactly CORE_TYPES and generation is unchanged.
 EXTENDED_TYPES = {"assertion_reason", "mrm", "matching"}
-QUIZ_SET_PAGE_SIZE_MAX = 100
-
-
 def allowed_question_types() -> set[str]:
     """The question types a teacher may request. Extended types are added only
     when EXTENDED_QUESTION_TYPES_ENABLED is on; otherwise this is CORE_TYPES."""
@@ -675,22 +673,14 @@ def _teacher_quiz_set(service, quiz_set_id: str, profile: CurrentProfile) -> dic
 @router.get("")
 def list_quiz_sets(
     profile: CurrentProfile = Depends(get_current_profile),
-    page: int = 1,
-    page_size: int = 50,
+    cursor: str | None = None,
+    page_size: int = DEFAULT_PAGE_SIZE,
     archived: bool = False,
-) -> list[dict]:
+) -> dict:
     """List one bounded page of the teacher's quiz sets, newest first."""
     require_teacher(profile, action="access quiz sets")
-    if page < 1 or page_size < 1 or page_size > QUIZ_SET_PAGE_SIZE_MAX:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "page must be positive and page_size must be between 1 and "
-                f"{QUIZ_SET_PAGE_SIZE_MAX}."
-            ),
-        )
+    page_size = bounded_page_size(page_size)
     service = get_service_client()
-    start = (page - 1) * page_size
     query = (
         service.table("quiz_sets")
         .select("id, title, status, created_at, published_at")
@@ -699,14 +689,13 @@ def list_quiz_sets(
     )
     query = query.eq("status", "archived") if archived else query.neq("status", "archived")
     rows = (
-        query
-        .order("created_at", desc=True)
-        .range(start, start + page_size - 1)
+        descending_page(query, "created_at", page_size, decode_cursor(cursor))
         .execute()
         .data
         or []
     )
-    return rows
+    items, next_cursor = split_page(rows, page_size, timestamp_key="created_at")
+    return {"items": items, "next_cursor": next_cursor}
 
 
 @router.get("/{quiz_set_id}")

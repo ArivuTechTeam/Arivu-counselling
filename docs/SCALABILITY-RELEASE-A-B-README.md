@@ -1,8 +1,9 @@
 # Scalability Release A and B Implementation README
 
-**Status:** Release A1 tooling is implemented and pushed on its feature branch.
-Release A2 is implemented locally on `codex/release-a-a2-db-aggregation`.
-Staging execution remains pending for both; A3 and later work has not started.
+**Status:** Release A1 and A2 are implemented and pushed on their feature
+branches. Release A3 is implemented locally on
+`codex/release-a-a3-cursor-pagination` and awaits review. Staging execution
+remains pending; A4 and later work has not started.
 
 **Prepared:** 25 September 2026
 
@@ -499,6 +500,12 @@ plans the hosted optimizer will choose at production row counts.
 
 ### A3. Cursor pagination and catalogue usability
 
+**Implementation status (26 September 2026):** implemented locally on branch
+`codex/release-a-a3-cursor-pagination` and not deployed. Migration 69 has not
+been applied to any hosted project. Its functions, privileges, indexes, and
+consecutive-page contracts pass in isolated PostgreSQL; production-shaped
+staging query plans and latency evidence remain required before sign-off.
+
 **Why**
 
 The database may return thousands of rows successfully while the API response
@@ -543,6 +550,33 @@ expensive as page number grows.
   dataset.
 - Direct ID routes still repeat authorization checks.
 - A student sees only enrolled and, where applicable, assigned content.
+
+#### A3 implementation delivered
+
+| Artifact | What changed |
+|---|---|
+| `migrations/migration-69-cursor-pagination.sql` | Adds composite keyset indexes plus service-role-only pages for the student catalogue, student history, and teacher published metrics |
+| `backend/app/lib/pagination.py` | Adds strict opaque `(timestamp, UUID)` cursors, page-size enforcement, and PostgREST keyset helpers |
+| Student APIs | Published quizzes and combined quiz/practice history now return bounded pages with subject, chapter, assignment, source, and search filters |
+| Faculty APIs | Published monitoring, active/archive quiz queues, document selection, and document history return bounded pages; direct detail routes are unchanged |
+| Admin API | Institution quiz browsing now uses a created-at cursor with teacher, course, status, and title filters applied before embedded detail loading |
+| Frontend query hooks and pages | Replaces fetch-all loops with incremental SWR pages and explicit Load More, loading, empty, error, search, and status controls |
+| `scripts/test-cursor-pagination-db.mjs` | Applies migration 69 twice in isolated PostgreSQL and verifies stable continuation, tenant/actor isolation, privileges, contracts, and index creation |
+
+The default page is 25 rows and the hard server maximum is 100. Cursors are
+opaque base64url payloads validated as an absolute timestamp plus UUID. List
+routes use `(created_at, id)` or `(submitted_at, id)` descending order so equal
+timestamps remain deterministic. Student catalogue authorization is repeated
+inside PostgreSQL across profile role, tenant, course/level enrollment, active
+batch membership, active assignment, and availability windows. Direct-ID
+attempt, quiz, performance, archive, and document routes keep their existing
+tenant/actor authorization rather than trusting catalogue visibility.
+
+Migration 69 is additive and does not rewrite or delete application rows. The
+required rollout order is migration 68, migration 69, isolated/staging RPC
+checks, API deployment, then frontend deployment. Rolling the application back
+is safe because the new functions and indexes may remain unused; dropping them
+is unnecessary during an incident rollback.
 
 ### A4. Scalable and fair practice selection
 
@@ -1052,8 +1086,9 @@ decisions can use data from the first one to three months:
 - [x] The operator reported migration 68 applied on 25 September 2026.
 - [ ] Migration 68 and its function privileges are independently verified on the target project before deploying the A2 API.
 - [ ] Staging query plans and before/after latency are recorded on the A1 dataset.
-- [ ] Target large lists use bounded cursor pagination.
-- [ ] Student catalogue has meaningful filters and does not load everything.
+- [x] Target large lists use bounded cursor pagination in repository code.
+- [x] Student catalogue has meaningful filters and does not load everything.
+- [ ] Migration 69 is applied and independently verified on the target project.
 - [ ] Large-bank practice sampling is fair and indexed.
 - [ ] Added indexes have before/after plan evidence.
 - [ ] Generated quiz persistence is atomic or safely batched/idempotent.
@@ -1086,7 +1121,7 @@ decisions can use data from the first one to three months:
 
 The plan is grounded in the following current repository areas:
 
-- `migrations/schema.sql` and numbered migrations through migration 68;
+- `migrations/schema.sql` and numbered migrations through migration 69;
 - `migrations/migration-29-staff-dashboard-performance.sql`;
 - `migrations/migration-36-super-admin-aggregates.sql`;
 - `migrations/migration-43-faculty-background-jobs.sql`;

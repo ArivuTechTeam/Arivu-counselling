@@ -27,6 +27,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.lib.auth import CurrentProfile, get_current_profile
+from app.lib.pagination import DEFAULT_PAGE_SIZE, bounded_page_size, decode_cursor, descending_page, encode_cursor
 from app.lib.role_checks import require_institution_admin, require_super_admin
 from app.lib.api_errors import auth_provisioning_error, public_error
 from app.lib.supabase import get_service_client
@@ -46,7 +47,6 @@ router = APIRouter(prefix="/api/v1", tags=["admin"])
 AUTH_USERS_PAGE_SIZE = 1000
 POSTGREST_PAGE_SIZE = 1000
 ADMIN_DIRECTORY_PAGE_SIZE = 100
-ADMIN_QUIZ_SET_PAGE_SIZE_MAX = 100
 INSTITUTION_LOGO_MAX_BYTES = 1024 * 1024
 INSTITUTION_LOGO_TYPES = {"image/png": "png", "image/jpeg": "jpg"}
 INSTITUTION_SUBDOMAIN_MAX_LENGTH = 63
@@ -3120,13 +3120,22 @@ class AdminQuizSet(BaseModel):
     review_status: ReviewStatusCounts
 
 
-@router.get("/admin/quiz-sets", response_model=list[AdminQuizSet])
+class AdminQuizSetPage(BaseModel):
+    items: list[AdminQuizSet]
+    next_cursor: str | None = None
+
+
+@router.get("/admin/quiz-sets", response_model=AdminQuizSetPage)
 async def admin_quiz_sets(
     profile: CurrentProfile = Depends(get_current_profile),
+    quiz_set_id: str | None = None,
     teacher_id: str | None = None,
-    page: int = 1,
-    page_size: int = 50,
-) -> list[AdminQuizSet]:
+    course_id: str | None = None,
+    status_filter: str | None = None,
+    q: str = "",
+    cursor: str | None = None,
+    page_size: int = DEFAULT_PAGE_SIZE,
+) -> AdminQuizSetPage:
     """
     Every quiz set in the institution, enriched with course/subject/teacher and a
     question/review counts and graded-attempt performance.
@@ -3136,23 +3145,22 @@ async def admin_quiz_sets(
     every join server-side in one request.
     """
     require_institution_admin(profile)
-    if page < 1 or page_size < 1 or page_size > ADMIN_QUIZ_SET_PAGE_SIZE_MAX:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "page must be positive and page_size must be between 1 and "
-                f"{ADMIN_QUIZ_SET_PAGE_SIZE_MAX}."
-            ),
-        )
+    page_size = bounded_page_size(page_size)
+    page_cursor = decode_cursor(cursor)
+    normalized_query = q.strip()
+    if len(normalized_query) > 100:
+        raise HTTPException(status_code=400, detail="Search text is too long.")
+    if status_filter and status_filter not in {"draft", "published", "archived"}:
+        raise HTTPException(status_code=400, detail="Invalid quiz status filter.")
     t = profile.tenant_id
-    start = (page - 1) * page_size
 
     def _fetch(client):
+        subject_join = "subjects!inner" if course_id else "subjects"
         q = (
             client.table("quiz_sets")
             .select(
                 "id, title, status, subject_id, created_by, created_at, published_at, "
-                "subjects(name, course_id, courses(name)), "
+                f"{subject_join}(name, course_id, courses(name)), "
                 "profiles!quiz_sets_created_by_fkey(full_name), "
                 "quiz_variants(id, total_marks, "
                 "quiz_variant_questions(question_id, questions(review_status)), "
@@ -3162,15 +3170,24 @@ async def admin_quiz_sets(
         )
         if teacher_id:
             q = q.eq("created_by", teacher_id)
+        if quiz_set_id:
+            q = q.eq("id", quiz_set_id)
+        if course_id:
+            q = q.eq("subjects.course_id", course_id)
+        if status_filter:
+            q = q.eq("status", status_filter)
+        if normalized_query:
+            q = q.ilike("title", f"%{normalized_query}%")
         return (
-            q.order("created_at", desc=True)
-            .range(start, start + page_size - 1)
+            descending_page(q, "created_at", page_size, page_cursor)
             .execute()
             .data
             or []
         )
 
     sets = await asyncio.to_thread(lambda: _fetch(get_service_client()))
+    has_more = len(sets) > page_size
+    sets = sets[:page_size]
 
     out: list[AdminQuizSet] = []
     for s in sets:
@@ -3232,7 +3249,12 @@ async def admin_quiz_sets(
                 ),
             )
         )
-    return out
+    next_cursor = (
+        encode_cursor(sets[-1]["created_at"], sets[-1]["id"])
+        if has_more and sets
+        else None
+    )
+    return AdminQuizSetPage(items=out, next_cursor=next_cursor)
 
 
 class TeacherAnalyticsDetail(BaseModel):
@@ -3441,7 +3463,9 @@ async def admin_quiz_set_detail(
     # This summary lookup doesn't depend on anything below — and is itself
     # already a single embedded query — so let it run concurrently with this
     # endpoint's own query instead of blocking on it up front.
-    summary_task = asyncio.create_task(admin_quiz_sets(profile))
+    summary_task = asyncio.create_task(
+        admin_quiz_sets(profile, quiz_set_id=quiz_set_id, page_size=1)
+    )
 
     def _fetch(client):
         return (
@@ -3506,10 +3530,8 @@ async def admin_quiz_set_detail(
         key=lambda row: row.get("submitted_at") or "", reverse=True
     )
 
-    summary = next(
-        (row for row in await summary_task if row.id == quiz_set_id),
-        None,
-    )
+    summary_page = await summary_task
+    summary = next((row for row in summary_page.items if row.id == quiz_set_id), None)
     if summary is None:
         raise HTTPException(status_code=404, detail="Quiz set not found.")
 

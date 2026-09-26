@@ -129,10 +129,11 @@ migration-65-paper-bank-safety.sql
 migration-66-paper-attempts.sql
 migration-67-atomic-batch-publication.sql
 migration-68-teacher-dashboard-aggregates.sql
+migration-69-cursor-pagination.sql
 ```
 
-(Filenames above verified 2026-09-25 against `migrations/`, through migration
-68. Migrations 63–65 support the existing paper bank; migration 66 adds durable,
+(Filenames above verified 2026-09-26 against `migrations/`, through migration
+69. Migrations 63–65 support the existing paper bank; migration 66 adds durable,
 private paper attempts. The operator reported migration 66 applied on 2026-09-25,
 but that has not been checked directly in the target Supabase project. Migration
 67 adds atomic publish-and-batch-assignment and **must be applied before deploying
@@ -153,6 +154,14 @@ faculty routes will fail if their RPCs do not exist. Run
 `scripts/teacher-dashboard-explain.sql` against staging, then compare the route
 contracts and latency before deployment. Migration 68 is additive and does not
 delete or rewrite application rows.
+Migration 69 adds bounded cursor-page functions and supporting composite
+indexes for Release A3. Apply it after migration 68 and before deploying the A3
+API; otherwise the student catalogue, student history, and teacher published
+monitor routes will fail when their page RPCs are missing. Run
+`scripts/test-cursor-pagination-db.mjs` locally, verify function privileges and
+query plans against staging, then deploy the API before the frontend response
+contract change. Migration 69 is additive and has not been applied to a hosted
+project as of 2026-09-26.
 Apply `migration-62-atomic-student-contact.sql` after migration 60 and
 before deploying the contact API that calls `submit_student_contact`; otherwise
 student submissions will return a temporary service error. Apply

@@ -42,6 +42,16 @@ class _Query:
     def order(self, *_args, **_kwargs):
         return self
 
+    def limit(self, value: int):
+        self.row_limit = value
+        return self
+
+    def or_(self, *_args):
+        return self
+
+    def ilike(self, *_args):
+        return self
+
     def maybe_single(self):
         self.single = True
         return self
@@ -59,6 +69,7 @@ class _Query:
         if self.range_bounds:
             start, end = self.range_bounds
             matches = matches[start : end + 1]
+        matches = matches[: getattr(self, "row_limit", len(matches))]
         if self.payload is not None:
             for row in matches:
                 row.update(self.payload)
@@ -92,7 +103,7 @@ class TeacherContentArchiveTests(unittest.TestCase):
             "quiz_attempts": [{"id": "a1", "score": 8}],
         })
         with patch("app.api.quiz.get_service_client", return_value=service):
-            self.assertEqual([r["id"] for r in list_quiz_sets(_teacher(), archived=True)], ["archived"])
+            self.assertEqual([r["id"] for r in list_quiz_sets(_teacher(), archived=True)["items"]], ["archived"])
             for inaccessible in ("foreign", "colleague"):
                 with self.assertRaises(HTTPException) as raised:
                     restore_quiz_set(inaccessible, _teacher())
@@ -103,8 +114,8 @@ class TeacherContentArchiveTests(unittest.TestCase):
             result = restore_quiz_set("archived", _teacher())
             self.assertEqual(result["status"], "draft")
             self.assertIsNone(result["published_at"])
-            self.assertEqual(list_quiz_sets(_teacher(), archived=True), [])
-            self.assertEqual({r["id"] for r in list_quiz_sets(_teacher())}, {"archived", "active"})
+            self.assertEqual(list_quiz_sets(_teacher(), archived=True)["items"], [])
+            self.assertEqual({r["id"] for r in list_quiz_sets(_teacher())["items"]}, {"archived", "active"})
         self.assertEqual(service.db["questions"], [{"id": "q1", "review_status": "approved"}])
         self.assertEqual(service.db["quiz_attempts"], [{"id": "a1", "score": 8}])
         self.assertEqual(service.db["quiz_sets"][1]["status"], "published")
@@ -122,12 +133,14 @@ class TeacherContentArchiveTests(unittest.TestCase):
                 "published_at": None,
             },
         ]})
-        with patch("app.api.quiz.get_service_client", return_value=service):
-            first = list_quiz_sets(_teacher(), page=1, page_size=1)
-            second = list_quiz_sets(_teacher(), page=2, page_size=1)
+        with (
+            patch("app.api.quiz.get_service_client", return_value=service),
+            patch("app.lib.pagination.encode_cursor", return_value="next-page"),
+        ):
+            first = list_quiz_sets(_teacher(), page_size=1)
 
-        self.assertEqual([row["id"] for row in first], ["set1"])
-        self.assertEqual([row["id"] for row in second], ["set2"])
+        self.assertEqual([row["id"] for row in first["items"]], ["set1"])
+        self.assertEqual(first["next_cursor"], "next-page")
 
     def test_document_archive_is_owner_scoped_and_hidden_from_list(self) -> None:
         service = _Service({"documents": [{
@@ -140,7 +153,7 @@ class TeacherContentArchiveTests(unittest.TestCase):
             visible = list_documents(_teacher())
 
         self.assertEqual(result["status"], "archived")
-        self.assertEqual(visible, [])
+        self.assertEqual(visible.items, [])
         self.assertEqual(service.db["documents"][0]["status"], "archived")
 
     def test_document_archive_rejects_another_tenant(self) -> None:
@@ -170,7 +183,7 @@ class TeacherContentArchiveTests(unittest.TestCase):
 
         self.assertEqual(result["status"], "archived")
         self.assertIsNone(result["published_at"])
-        self.assertEqual(visible, [])
+        self.assertEqual(visible["items"], [])
         self.assertEqual(service.db["quiz_attempts"], [{"id": "attempt1", "tenant_id": "t1"}])
 
 

@@ -1,9 +1,9 @@
 "use client";
 
 import useSWR from "swr";
+import useSWRInfinite from "swr/infinite";
 
 import {
-  AttemptHistoryItem,
   BookmarkedQuestion,
   ChallengeInfo,
   DailyInfo,
@@ -11,7 +11,6 @@ import {
   Leaderboard,
   MyChallenge,
   RevisionTopic,
-  StudentQuiz,
   StudentStats,
   WeakAnalysis,
   getChallenge,
@@ -26,6 +25,8 @@ import {
   listPracticeSubjects,
   listStudentAttempts,
   listStudentQuizzes,
+  StudentAttemptFilters,
+  StudentQuizFilters,
 } from "@/lib/api";
 
 export const STUDENT_QUIZZES_KEY = "student:quiz-catalog";
@@ -42,8 +43,23 @@ export const STUDENT_MY_CHALLENGES_KEY = "student:my-challenges";
 export const STUDENT_PRACTICE_SUBJECTS_KEY = "student:practice-subjects";
 
 /** One shared catalog request for Dashboard, Subjects, Smart Quiz and Challenge. */
-export function useStudentQuizzes() {
-  return useSWR<StudentQuiz[]>(STUDENT_QUIZZES_KEY, listStudentQuizzes);
+export function useStudentQuizzes(filters: Omit<StudentQuizFilters, "cursor"> = {}) {
+  const filterKey = JSON.stringify(filters);
+  const query = useSWRInfinite(
+    (index, previous) => {
+      if (index > 0 && !previous?.next_cursor) return null;
+      return [STUDENT_QUIZZES_KEY, filterKey, previous?.next_cursor ?? ""] as const;
+    },
+    ([, , cursor]) => listStudentQuizzes({ ...filters, cursor: cursor || undefined }),
+  );
+  const pages = query.data;
+  return {
+    ...query,
+    data: pages?.flatMap((page) => page.items),
+    hasMore: Boolean(pages?.at(-1)?.next_cursor),
+    loadMore: () => query.setSize((size) => size + 1),
+    isLoadingMore: Boolean(query.isValidating && pages),
+  };
 }
 
 /** Enrolled subjects for self-serve practice, independent of published quizzes. */
@@ -55,11 +71,26 @@ export function useStudentStats() {
   return useSWR<StudentStats>(STUDENT_STATS_KEY, getStudentStats);
 }
 
-export function useStudentAttempts(enabled = true) {
-  return useSWR<AttemptHistoryItem[]>(
-    enabled ? STUDENT_ATTEMPTS_KEY : null,
-    listStudentAttempts,
+export function useStudentAttempts(
+  enabled = true,
+  filters: Omit<StudentAttemptFilters, "cursor"> = {},
+) {
+  const filterKey = JSON.stringify(filters);
+  const query = useSWRInfinite(
+    (index, previous) => {
+      if (!enabled || (index > 0 && !previous?.next_cursor)) return null;
+      return [STUDENT_ATTEMPTS_KEY, filterKey, previous?.next_cursor ?? ""] as const;
+    },
+    ([, , cursor]) => listStudentAttempts({ ...filters, cursor: cursor || undefined }),
   );
+  const pages = query.data;
+  return {
+    ...query,
+    data: pages?.flatMap((page) => page.items),
+    hasMore: Boolean(pages?.at(-1)?.next_cursor),
+    loadMore: () => query.setSize((size) => size + 1),
+    isLoadingMore: Boolean(query.isValidating && pages),
+  };
 }
 
 export function useStudentWeakAnalysis() {

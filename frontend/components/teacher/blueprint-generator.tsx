@@ -264,7 +264,7 @@ export function BlueprintGenerator() {
 
   useEffect(() => {
     listDocuments()
-      .then((docs) => setDocuments(docs.filter((d) => d.status === "completed")))
+      .then((page) => setDocuments(page.items.filter((d) => d.status === "completed")))
       .catch((e) => setError(e.message));
   }, []);
 
