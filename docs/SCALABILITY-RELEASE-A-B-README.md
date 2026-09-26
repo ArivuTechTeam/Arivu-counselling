@@ -648,9 +648,12 @@ requires an active membership and assignment inside their validity windows.
 Migration 70 is additive, but its one-time backfill updates every existing
 question to assign a sampling key and builds three indexes. Run it first on
 production-shaped staging and schedule the hosted migration during a low-write
-window. The rollout order is migration 70, isolated/staging contract and plan
-checks, API deployment, then practice/challenge smoke tests. Rolling the API
-back to A3 leaves the new column, function, and indexes unused and safe.
+window. The backfill temporarily disables only the Migration 51 released-question
+guard while the migration transaction holds the table lock, then re-enables it
+before continuing; the isolated test proves locked content remains immutable
+afterward. The rollout order is migration 70, isolated/staging contract and
+plan checks, API deployment, then practice/challenge smoke tests. Rolling the
+API back to A3 leaves the new column, function, and indexes unused and safe.
 
 ### A5. Query-plan-driven compound indexes
 

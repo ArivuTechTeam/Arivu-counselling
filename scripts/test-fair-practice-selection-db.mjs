@@ -37,7 +37,9 @@ await db.exec(`
     id uuid primary key default gen_random_uuid(), tenant_id uuid not null,
     chapter_id uuid, type public.question_type not null,
     difficulty text default 'medium',
-    review_status public.review_status not null default 'pending_review'
+    review_status public.review_status not null default 'pending_review',
+    release_locked boolean not null default false,
+    content_version bigint not null default 1
   );
   create table public.quiz_sets (
     id uuid primary key, tenant_id uuid not null, subject_id uuid,
@@ -60,6 +62,29 @@ await db.exec(`
     quiz_set_id uuid not null, batch_id uuid not null, status text not null,
     available_from timestamptz, available_to timestamptz
   );
+
+  create or replace function public.guard_released_question() returns trigger
+  language plpgsql set search_path=public as $$
+  begin
+    if tg_op='DELETE' then
+      if old.release_locked then
+        raise exception 'quiz_locked' using errcode='PT409';
+      end if;
+      return old;
+    end if;
+    if old.release_locked and (
+      (to_jsonb(new)-array['created_by','reviewed_by','origin_question_id','source_quiz_id','content_version'])
+      is distinct from
+      (to_jsonb(old)-array['created_by','reviewed_by','origin_question_id','source_quiz_id','content_version'])
+    ) then
+      raise exception 'quiz_locked' using errcode='PT409';
+    end if;
+    new.content_version := old.content_version + 1;
+    return new;
+  end $$;
+  create trigger guard_released_question
+    before update or delete on public.questions
+    for each row execute function public.guard_released_question();
 `);
 
 const ids = {
@@ -116,18 +141,31 @@ await db.query(
   "insert into chapters(id,tenant_id,subject_id,name) values($1,$2,$3,'Other tenant')",
   [ids.otherTenantChapter, ids.otherTenant, ids.unenrolledSubject],
 );
-await db.query(`insert into questions(tenant_id,chapter_id,type,difficulty,review_status)
-  values($1,$2,'mcq_single','medium','approved')`,
+await db.query(`insert into questions(
+  tenant_id,chapter_id,type,difficulty,review_status,release_locked
+)
+  values($1,$2,'mcq_single','medium','approved',true)`,
   [ids.tenant, ids.preexistingChapter]);
 
 await db.exec(migration);
 await db.exec(migration);
 
 const preexisting = await db.query(
-  "select sampling_key is not null as filled from questions where chapter_id=$1",
+  `select sampling_key is not null as filled, content_version
+   from questions where chapter_id=$1`,
   [ids.preexistingChapter],
 );
 assert.equal(preexisting.rows[0].filled, true);
+assert.equal(Number(preexisting.rows[0].content_version), 1);
+const trigger = await db.query(`select tgenabled
+  from pg_trigger
+  where tgrelid='public.questions'::regclass
+    and tgname='guard_released_question'`);
+assert.equal(trigger.rows[0].tgenabled, "O");
+await assert.rejects(
+  db.query("update questions set difficulty='hard' where chapter_id=$1", [ids.preexistingChapter]),
+  /quiz_locked/,
+);
 
 await db.query(`insert into questions(
   tenant_id,chapter_id,type,difficulty,review_status,sampling_key

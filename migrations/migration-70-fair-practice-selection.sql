@@ -7,9 +7,19 @@ begin;
 alter table public.questions
   add column if not exists sampling_key bigint;
 
+-- Migration 51 blocks every ordinary update to released questions. This
+-- backfill changes only internal sampling metadata. ALTER TABLE holds the table
+-- lock for this transaction, so no concurrent application write can pass while
+-- the named user trigger is disabled. Any failure rolls this state back.
+alter table public.questions
+  disable trigger guard_released_question;
+
 update public.questions
 set sampling_key = floor(random() * 9223372036854775807::double precision)::bigint
 where sampling_key is null;
+
+alter table public.questions
+  enable trigger guard_released_question;
 
 alter table public.questions
   alter column sampling_key set default

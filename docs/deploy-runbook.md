@@ -169,7 +169,10 @@ after migration 69 and before deploying the A4 API; the new selector calls
 `select_practice_question_ids_page` and will fail closed if the RPC is missing.
 The migration backfills every existing question with a stable sampling key, so
 test its duration on production-shaped staging and run it during a low-write
-window. Run `scripts/test-fair-practice-selection-db.mjs` locally and
+window. During that transaction it temporarily disables only the named
+Migration 51 released-question guard, performs the metadata backfill under the
+table lock, and re-enables the guard before continuing. Run
+`scripts/test-fair-practice-selection-db.mjs` locally and
 `scripts/fair-practice-selection-explain.sql` on staging, then smoke-test Smart
 Practice, chapter practice, exam type mixes, and batch-restricted challenges.
 Migration 70 has not been applied to a hosted project as of 2026-09-26.
