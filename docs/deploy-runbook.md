@@ -130,10 +130,11 @@ migration-66-paper-attempts.sql
 migration-67-atomic-batch-publication.sql
 migration-68-teacher-dashboard-aggregates.sql
 migration-69-cursor-pagination.sql
+migration-70-fair-practice-selection.sql
 ```
 
 (Filenames above verified 2026-09-26 against `migrations/`, through migration
-69. Migrations 63–65 support the existing paper bank; migration 66 adds durable,
+70. Migrations 63–65 support the existing paper bank; migration 66 adds durable,
 private paper attempts. The operator reported migration 66 applied on 2026-09-25,
 but that has not been checked directly in the target Supabase project. Migration
 67 adds atomic publish-and-batch-assignment and **must be applied before deploying
@@ -160,8 +161,18 @@ API; otherwise the student catalogue, student history, and teacher published
 monitor routes will fail when their page RPCs are missing. Run
 `scripts/test-cursor-pagination-db.mjs` locally, verify function privileges and
 query plans against staging, then deploy the API before the frontend response
-contract change. Migration 69 is additive and has not been applied to a hosted
-project as of 2026-09-26.
+contract change. The operator reported migration 69 applied on 2026-09-26, but
+the target project and live function privileges have not been checked
+independently.
+Migration 70 adds indexed random-key practice selection for Release A4. Apply it
+after migration 69 and before deploying the A4 API; the new selector calls
+`select_practice_question_ids_page` and will fail closed if the RPC is missing.
+The migration backfills every existing question with a stable sampling key, so
+test its duration on production-shaped staging and run it during a low-write
+window. Run `scripts/test-fair-practice-selection-db.mjs` locally and
+`scripts/fair-practice-selection-explain.sql` on staging, then smoke-test Smart
+Practice, chapter practice, exam type mixes, and batch-restricted challenges.
+Migration 70 has not been applied to a hosted project as of 2026-09-26.
 Apply `migration-62-atomic-student-contact.sql` after migration 60 and
 before deploying the contact API that calls `submit_student_contact`; otherwise
 student submissions will return a temporary service error. Apply

@@ -1,9 +1,10 @@
 # Scalability Release A and B Implementation README
 
-**Status:** Release A1 and A2 are implemented and pushed on their feature
-branches. Release A3 is implemented locally on
-`codex/release-a-a3-cursor-pagination` and awaits review. Staging execution
-remains pending; A4 and later work has not started.
+**Status:** Release A1 through A3 are implemented on their feature branches.
+The operator reported migrations 68 and 69 applied; the target project has not
+been independently inspected. Release A4 is implemented locally on
+`release-a-a4-fair-practice-selection`. Production-shaped staging and
+capacity sign-off remain pending.
 
 **Prepared:** 25 September 2026
 
@@ -418,7 +419,7 @@ non-sensitive summary values into the table below or a dated issue/PR:
 ### A2. Database-side aggregation for heavy dashboards
 
 **Implementation status (25 September 2026):** implemented on branch
-`codex/release-a-a2-db-aggregation` and not deployed. The operator reported
+`release-a-a2-db-aggregation` and not deployed. The operator reported
 migration 68 applied on 25 September 2026; that target project and live function
 inventory have not been checked independently. Isolated PostgreSQL
 contract/security tests pass; production-shaped staging plans and latency
@@ -500,11 +501,12 @@ plans the hosted optimizer will choose at production row counts.
 
 ### A3. Cursor pagination and catalogue usability
 
-**Implementation status (26 September 2026):** implemented locally on branch
-`codex/release-a-a3-cursor-pagination` and not deployed. Migration 69 has not
-been applied to any hosted project. Its functions, privileges, indexes, and
-consecutive-page contracts pass in isolated PostgreSQL; production-shaped
-staging query plans and latency evidence remain required before sign-off.
+**Implementation status (26 September 2026):** implemented and pushed on branch
+`release-a-a3-cursor-pagination` and not deployed. The operator reported
+migration 69 applied on 26 September 2026; the target project and live function
+privileges have not been checked independently. Its functions, privileges,
+indexes, and consecutive-page contracts pass in isolated PostgreSQL;
+production-shaped staging query plans and latency evidence remain required.
 
 **Why**
 
@@ -580,6 +582,12 @@ is unnecessary during an incident rollback.
 
 ### A4. Scalable and fair practice selection
 
+**Implementation status (26 September 2026):** implemented locally on branch
+`release-a-a4-fair-practice-selection`. Migration 70 has not been applied
+to a hosted project and no API or worker has been deployed. Isolated PostgreSQL
+coverage/security checks pass; staging query plans and latency remain required
+for operational sign-off.
+
 **Why**
 
 The current selector reads no more than 2,000 eligible rows and shuffles in
@@ -613,6 +621,36 @@ bank; that sorts large eligible sets and becomes expensive.
 - Type counts and maximum question counts remain correct.
 - No pending, rejected, wrong-tenant, unenrolled, draft, archived, or
   unavailable batch question is returned.
+
+#### A4 implementation delivered
+
+| Artifact | What changed |
+|---|---|
+| `migrations/migration-70-fair-practice-selection.sql` | Adds a stable non-negative sampling key, partial composite seek indexes, a question-link lookup index, and a service-role-only selector RPC |
+| `backend/app/services/selector.py` | Replaces the 2,000-row fetch-and-shuffle with bounded random-key RPC seeks and preserves exact per-type selection with a total ceiling of 100 |
+| `scripts/test-fair-practice-selection-db.mjs` | Applies migration 70 twice and proves wrap-around, coverage beyond 2,000 rows, type/difficulty filters, tenant/enrollment/review/publication/batch isolation, privileges, and indexes |
+| `scripts/fair-practice-selection-explain.sql` | Provides a read-only staging timing and index-inventory check for general and type-specific selection |
+| Backend regression tests | Validate RPC scope, batch feature propagation, response-contract rejection, type counts, and the maximum exam size |
+
+Each question receives one stable random `bigint` key. A request chooses a
+random starting key, seeks forward through the indexed eligible scope, and
+wraps once only when the first seek cannot fill the requested page. The
+database returns at most 100 IDs and does not use `ORDER BY random()` or return
+the whole eligible bank to Python.
+
+Authorization is repeated inside the function even though the backend uses the
+service role: the actor must be a student in the supplied tenant, the question
+must belong to the student's enrolled course/level, and the row must be
+approved. Standalone approved bank questions remain available. Linked questions
+require a published quiz; when batches are enabled, assigned content additionally
+requires an active membership and assignment inside their validity windows.
+
+Migration 70 is additive, but its one-time backfill updates every existing
+question to assign a sampling key and builds three indexes. Run it first on
+production-shaped staging and schedule the hosted migration during a low-write
+window. The rollout order is migration 70, isolated/staging contract and plan
+checks, API deployment, then practice/challenge smoke tests. Rolling the API
+back to A3 leaves the new column, function, and indexes unused and safe.
 
 ### A5. Query-plan-driven compound indexes
 
@@ -1088,8 +1126,10 @@ decisions can use data from the first one to three months:
 - [ ] Staging query plans and before/after latency are recorded on the A1 dataset.
 - [x] Target large lists use bounded cursor pagination in repository code.
 - [x] Student catalogue has meaningful filters and does not load everything.
-- [ ] Migration 69 is applied and independently verified on the target project.
-- [ ] Large-bank practice sampling is fair and indexed.
+- [x] The operator reported migration 69 applied on 26 September 2026.
+- [ ] Migration 69 and its function privileges are independently verified on the target project.
+- [x] Large-bank practice sampling is fair and indexed in repository code and isolated PostgreSQL checks.
+- [ ] Migration 70 is applied and independently verified on the target project.
 - [ ] Added indexes have before/after plan evidence.
 - [ ] Generated quiz persistence is atomic or safely batched/idempotent.
 - [ ] 200 expected-concurrency scenario passes.
@@ -1121,7 +1161,7 @@ decisions can use data from the first one to three months:
 
 The plan is grounded in the following current repository areas:
 
-- `migrations/schema.sql` and numbered migrations through migration 69;
+- `migrations/schema.sql` and numbered migrations through migration 70;
 - `migrations/migration-29-staff-dashboard-performance.sql`;
 - `migrations/migration-36-super-admin-aggregates.sql`;
 - `migrations/migration-43-faculty-background-jobs.sql`;

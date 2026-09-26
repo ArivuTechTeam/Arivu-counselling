@@ -15,14 +15,13 @@ from __future__ import annotations
 import random
 
 from app.lib.auth import CurrentProfile
-from app.lib.supabase_queries import select_all_in
 from app.lib.config import get_settings
+from app.lib.supabase_queries import rpc_json_value, select_all_in
 from app.services.tenant_features import profile_feature_enabled
 
-# Absolute ceiling on how many questions one selection scans / returns.
 # 100 covers a full-length exam (e.g. CA Foundation 100Q); shorter modes cap lower.
-_MAX_POOL = 2000
 _MAX_COUNT = 100
+_MAX_SAMPLE_KEY = 9223372036854775807
 SELECTABLE_QUESTION_TYPES = (
     "mcq_single",
     "mcq_multi",
@@ -99,14 +98,7 @@ def _accessible_published_set_ids(service, published_rows, tenant_id, profile) -
     items never leak into another batch's practice pool. With BATCHES_ENABLED off
     (or no profile) this is every published set, i.e. the current behavior.
     """
-    batches_enabled = bool(
-        profile
-        and (
-            getattr(get_settings(), "batches_enabled", False)
-                if getattr(profile, "tenant_feature_flags", None) is None
-            else profile_feature_enabled(profile, "batches")
-        )
-    )
+    batches_enabled = _batches_enabled(profile)
     if not batches_enabled:
         return {row["id"] for row in published_rows}
     from app.services.batch_access import assigned_quiz_ids
@@ -120,6 +112,64 @@ def _accessible_published_set_ids(service, published_rows, tenant_id, profile) -
         if (row.get("audience_mode") or "legacy_course") == "legacy_course"
         or row["id"] in accessible_assigned
     }
+
+
+def _batches_enabled(profile: CurrentProfile | None) -> bool:
+    return bool(
+        profile
+        and (
+            getattr(get_settings(), "batches_enabled", False)
+            if getattr(profile, "tenant_feature_flags", None) is None
+            else profile_feature_enabled(profile, "batches")
+        )
+    )
+
+
+def _sample_practice_question_ids(
+    service,
+    profile: CurrentProfile,
+    *,
+    count: int,
+    subject_id: str | None,
+    chapter_id: str | None,
+    difficulty: str | None,
+    question_type: str | None,
+) -> tuple[list[str], int]:
+    """Run one indexed random-key seek and validate its compact RPC result."""
+    requested = max(1, min(int(count), _MAX_COUNT))
+    payload = rpc_json_value(
+        service,
+        "select_practice_question_ids_page",
+        {
+            "p_tenant": profile.tenant_id,
+            "p_student": profile.user_id,
+            "p_limit": requested,
+            "p_start_key": random.randrange(_MAX_SAMPLE_KEY + 1),
+            "p_batches_enabled": _batches_enabled(profile),
+            "p_subject": subject_id,
+            "p_chapter": chapter_id,
+            "p_difficulty": difficulty,
+            "p_question_type": question_type,
+        },
+        dict,
+    )
+    raw_ids = payload.get("question_ids")
+    available = payload.get("available")
+    if (
+        not isinstance(raw_ids, list)
+        or any(not isinstance(question_id, str) for question_id in raw_ids)
+        or isinstance(available, bool)
+        or not isinstance(available, int)
+    ):
+        raise RuntimeError(
+            "select_practice_question_ids_page returned an invalid payload"
+        )
+    ids = list(dict.fromkeys(raw_ids))
+    if len(ids) != len(raw_ids) or len(ids) > requested or available != len(ids):
+        raise RuntimeError(
+            "select_practice_question_ids_page returned an invalid selection"
+        )
+    return ids, available
 
 
 def _released_practice_ids(
@@ -180,50 +230,17 @@ def select_question_ids(
     Scope: chapter (if given) -> subject (if given) -> all enrolled subjects.
     Returns [] if the student isn't allowed the target or nothing matches.
     """
-    tenant_id = profile.tenant_id
     count = max(1, min(count, _MAX_COUNT))
-    allowed = enrolled_subject_ids(service, profile)
-    if not allowed:
-        return []
-
-    # Resolve the chapter scope, enforcing enrolment the whole way down.
-    if chapter_id:
-        chap = (
-            service.table("chapters")
-            .select("subject_id")
-            .eq("id", chapter_id)
-            .eq("tenant_id", tenant_id)
-            .maybe_single()
-            .execute()
-        )
-        if chap is None or not chap.data or chap.data["subject_id"] not in allowed:
-            return []
-        chapter_ids = [chapter_id]
-    elif subject_id:
-        if subject_id not in allowed:
-            return []
-        chapter_ids = _chapter_ids(service, [subject_id], tenant_id)
-    else:
-        chapter_ids = _chapter_ids(service, list(allowed), tenant_id)
-
-    if not chapter_ids:
-        return []
-
-    q = (
-        service.table("questions")
-        .select("id")
-        .eq("tenant_id", tenant_id)
-        .eq("review_status", "approved")
-        .in_("chapter_id", chapter_ids)
+    ids, _available = _sample_practice_question_ids(
+        service,
+        profile,
+        count=count,
+        subject_id=subject_id,
+        chapter_id=chapter_id,
+        difficulty=difficulty,
+        question_type=None,
     )
-    if difficulty:
-        q = q.eq("difficulty", difficulty)
-
-    rows = q.limit(_MAX_POOL).execute().data or []
-    released = _released_practice_ids(service, [r["id"] for r in rows], tenant_id, profile=profile)
-    ids = [r["id"] for r in rows if r["id"] in released]
-    random.shuffle(ids)
-    return ids[:count]
+    return ids
 
 
 def select_question_ids_by_type(
@@ -234,49 +251,31 @@ def select_question_ids_by_type(
     type_counts: dict[str, int],
 ) -> tuple[list[str], dict[str, int]]:
     """Select an exact randomized mix without silently substituting types."""
-    tenant_id = profile.tenant_id
-    allowed = enrolled_subject_ids(service, profile)
-    if not allowed or (subject_id and subject_id not in allowed):
-        return [], {question_type: 0 for question_type in type_counts}
-
-    chapter_ids = _chapter_ids(
-        service, [subject_id] if subject_id else list(allowed), tenant_id
-    )
-    if not chapter_ids:
-        return [], {question_type: 0 for question_type in type_counts}
-
     requested_types = [
         question_type for question_type, count in type_counts.items() if count > 0
     ]
     if not requested_types:
         return [], {}
-    rows = (
-        service.table("questions")
-        .select("id, type")
-        .eq("tenant_id", tenant_id)
-        .eq("review_status", "approved")
-        .in_("chapter_id", chapter_ids)
-        .in_("type", requested_types)
-        .limit(_MAX_POOL)
-        .execute()
-        .data
-        or []
-    )
-    released = _released_practice_ids(service, [row["id"] for row in rows], tenant_id, profile=profile)
-    pools = {question_type: [] for question_type in requested_types}
-    for row in rows:
-        if row["id"] not in released:
-            continue
-        question_type = row.get("type")
-        if question_type in pools:
-            pools[question_type].append(row["id"])
 
     selected: list[str] = []
     availability: dict[str, int] = {}
+    remaining = _MAX_COUNT
     for question_type in requested_types:
-        pool = pools[question_type]
-        random.shuffle(pool)
-        availability[question_type] = len(pool)
-        selected.extend(pool[: type_counts[question_type]])
+        requested = min(max(int(type_counts[question_type]), 0), remaining)
+        if requested == 0:
+            availability[question_type] = 0
+            continue
+        ids, available = _sample_practice_question_ids(
+            service,
+            profile,
+            count=requested,
+            subject_id=subject_id,
+            chapter_id=None,
+            difficulty=None,
+            question_type=question_type,
+        )
+        availability[question_type] = available
+        selected.extend(ids)
+        remaining -= requested
     random.shuffle(selected)
     return selected, availability

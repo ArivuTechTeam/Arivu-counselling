@@ -216,6 +216,85 @@ class MutableService:
         self.calls.append(name)
         return MutableQuery(self, name)
 
+    def rpc(self, name: str, params: dict):
+        if name == "create_limited_quiz_attempt":
+            self.calls.append("quiz_attempts")
+            attempt_id = f"quiz_attempts-{self.next_id}"
+            self.next_id += 1
+            self.tables.setdefault("quiz_attempts", []).append(
+                {
+                    "id": attempt_id,
+                    "tenant_id": params["p_tenant_id"],
+                    "variant_id": params["p_variant_id"],
+                    "student_id": params["p_student_id"],
+                    "status": "in_progress",
+                    "started_at": params["p_started_at"],
+                    "question_snapshot": params["p_question_snapshot"],
+                    "scoring_policy_snapshot": params.get(
+                        "p_scoring_policy_snapshot"
+                    ),
+                }
+            )
+            return SimpleNamespace(execute=lambda: SimpleNamespace(data=attempt_id))
+        if name != "select_practice_question_ids_page":
+            raise AssertionError(name)
+        enrollments = [
+            row
+            for row in self.tables.get("enrollments", [])
+            if row.get("tenant_id") == params["p_tenant"]
+            and row.get("profile_id") == params["p_student"]
+        ]
+        levels = {
+            (row.get("course_id"), row.get("course_level_id"))
+            for row in enrollments
+        }
+        subject_ids = {
+            row["id"]
+            for row in self.tables.get("subjects", [])
+            if row.get("tenant_id") == params["p_tenant"]
+            and any(
+                row.get("course_id") == course_id
+                and (level_id is None or row.get("course_level_id") == level_id)
+                for course_id, level_id in levels
+            )
+        }
+        chapters = {
+            row["id"]: row
+            for row in self.tables.get("chapters", [])
+            if row.get("tenant_id") == params["p_tenant"]
+            and row.get("subject_id") in subject_ids
+        }
+        rows = [
+            row
+            for row in self.tables.get("questions", [])
+            if row.get("tenant_id") == params["p_tenant"]
+            and row.get("review_status") == "approved"
+            and row.get("chapter_id") in chapters
+            and (
+                params.get("p_subject") is None
+                or chapters[row["chapter_id"]].get("subject_id")
+                == params["p_subject"]
+            )
+            and (
+                params.get("p_chapter") is None
+                or row.get("chapter_id") == params["p_chapter"]
+            )
+            and (
+                params.get("p_difficulty") is None
+                or row.get("difficulty") == params["p_difficulty"]
+            )
+            and (
+                params.get("p_question_type") is None
+                or row.get("type") == params["p_question_type"]
+            )
+        ][: params["p_limit"]]
+        payload = {
+            "question_ids": [row["id"] for row in rows],
+            "available": len(rows),
+        }
+        return SimpleNamespace(execute=lambda: SimpleNamespace(data=payload))
+
+
 def _history_rows(tables: dict[str, list[dict]]) -> list[dict]:
     variants = {row["id"]: row for row in tables.get("quiz_variants", [])}
     sets = {row["id"]: row for row in tables.get("quiz_sets", [])}

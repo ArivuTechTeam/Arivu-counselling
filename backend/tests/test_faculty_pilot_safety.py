@@ -196,25 +196,28 @@ def test_bulk_approval_refuses_release_locked_questions():
 
 
 @pytest.mark.parametrize("typed", [False, True])
-def test_practice_excludes_draft_and_archived_questions_but_keeps_published_and_standalone_bank(typed):
-    service = Service({
-        "enrollments": [{"profile_id": "student-1", "tenant_id": "tenant-1", "course_id": "course-1"}],
-        "subjects": [{"id": "subject-1", "course_id": "course-1", "tenant_id": "tenant-1"}],
-        "chapters": [{"id": "chapter-1", "subject_id": "subject-1", "tenant_id": "tenant-1"}],
-        "questions": [{"id": name, "chapter_id": "chapter-1", "tenant_id": "tenant-1",
-                       "review_status": "approved", "type": "mcq_single"}
-                      for name in ["draft", "archived", "published", "standalone"]],
-        "quiz_variant_questions": [{"id": name, "question_id": name, "variant_id": name, "tenant_id": "tenant-1"}
-                                   for name in ["draft", "archived", "published"]],
-        "quiz_variants": [{"id": name, "quiz_set_id": name, "tenant_id": "tenant-1"}
-                          for name in ["draft", "archived", "published"]],
-        "quiz_sets": [{"id": name, "status": name, "tenant_id": "tenant-1"}
-                      for name in ["draft", "archived", "published"]],
-    })
+def test_practice_selection_uses_the_bounded_database_sampler(typed):
+    service = Service({})
     student = CurrentProfile(user_id="student-1", tenant_id="tenant-1", role="student")
-    if typed:
-        ids, available = select_question_ids_by_type(service, student, subject_id="subject-1", type_counts={"mcq_single": 10})
-        assert available == {"mcq_single": 2}
-    else:
-        ids = select_question_ids(service, student, subject_id="subject-1", count=10)
+    with patch(
+        "app.services.selector._sample_practice_question_ids",
+        return_value=(["published", "standalone"], 2),
+    ) as sample:
+        if typed:
+            ids, available = select_question_ids_by_type(
+                service,
+                student,
+                subject_id="subject-1",
+                type_counts={"mcq_single": 10},
+            )
+            assert available == {"mcq_single": 2}
+        else:
+            ids = select_question_ids(
+                service, student, subject_id="subject-1", count=10
+            )
     assert set(ids) == {"published", "standalone"}
+    assert sample.call_count == 1
+    assert sample.call_args.kwargs["count"] == 10
+    assert sample.call_args.kwargs["question_type"] == (
+        "mcq_single" if typed else None
+    )
