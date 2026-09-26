@@ -201,6 +201,14 @@ then smoke-test legacy generation, blueprint generation, extraction, and a
 durable lost-response retry on staging. The migration is additive and does not
 rewrite existing content. Migration 72 has not been reported applied as of
 2026-09-26.
+Release A7 adds no migration and authorizes no production load test. After
+migration 72 and matching API/worker revisions are verified on isolated
+staging, follow `docs/a7-capacity-verification.md`. Its write profile consumes
+attempts for 200 or 500 disposable students, so it must never use production
+accounts or the production API. Save the read/write JSON reports, both SQL
+reports, worker recovery evidence, and infrastructure metrics before capacity
+sign-off.
+
 Apply `migration-62-atomic-student-contact.sql` after migration 60 and
 before deploying the contact API that calls `submit_student_contact`; otherwise
 student submissions will return a temporary service error. Apply

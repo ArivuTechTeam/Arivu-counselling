@@ -1,10 +1,11 @@
 # Scalability Release A and B Implementation README
 
-**Status:** Release A1 through A5 are implemented on their feature branches.
+**Status:** Release A1 through A6 are implemented on their feature branches.
 The operator reported migrations 68 through 71 applied; the target project has
-not been independently inspected. Release A6 is implemented locally on
-`release-a-a6-atomic-persistence`; migration 72 has not been applied. Production-
-shaped staging evidence and capacity sign-off remain pending.
+not been independently inspected, and migration 72 has not been reported
+applied. Release A7 verification tooling is implemented locally on
+`release-a-a7-load-verification`. Production-shaped staging evidence and
+capacity sign-off remain pending.
 
 **Prepared:** 25 September 2026
 
@@ -845,6 +846,25 @@ tests so AI cost and nondeterminism do not hide database behavior.
 - Worker restart/recovery tests preserve jobs.
 - Capacity results and known limits are recorded before deployment approval.
 
+#### A7 implementation delivered
+
+A7 adds a guarded, metrics-only write-workflow runner alongside the existing
+read-only A1 runner. Expected and stress profiles require 200 and 500 unique
+disposable staging students. Each student browses the catalogue, completes a
+quiz start/autosave/submit/read sequence, and completes the equivalent practice
+sequence. The runner keeps tokens, IDs, response bodies, and answers out of its
+report and refuses the configured production hostname.
+
+`scripts/a7-integrity-report.sql` independently checks the load window for
+answer-count mismatches, answer rows on open sessions, duplicates, cross-tenant
+links, and expired worker leases. `docs/a7-capacity-verification.md` binds the
+read/write reports, database health, worker restart drill, transient-failure
+checks, and direct-ID isolation checks into one repeatable sign-off procedure.
+
+This implementation makes A7 executable; it does not claim that 200 or 500
+hosted users have passed. Those checklist items remain open until the isolated
+staging runs and infrastructure measurements are saved.
+
 ---
 
 ## 6. Release B — structural scale and content lifecycle
@@ -1214,6 +1234,7 @@ decisions can use data from the first one to three months:
 - [ ] A5 indexes have production-shaped staging plans, acceptable write-load results, and advisor review.
 - [x] Generated quiz persistence is atomic; durable retries remain lease-fenced and idempotent in repository code and isolated database tests.
 - [ ] Migration 72 and its service-role-only privilege are applied and independently verified on the target project.
+- [x] Guarded A7 expected/stress workflow tooling and post-load integrity audit are implemented.
 - [ ] 200 expected-concurrency scenario passes.
 - [ ] 500 stress-concurrency scenario fails safely or passes.
 - [ ] Tenant/role/direct-ID security suites pass.
