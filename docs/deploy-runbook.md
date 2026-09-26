@@ -175,7 +175,18 @@ table lock, and re-enables the guard before continuing. Run
 `scripts/test-fair-practice-selection-db.mjs` locally and
 `scripts/fair-practice-selection-explain.sql` on staging, then smoke-test Smart
 Practice, chapter practice, exam type mixes, and batch-restricted challenges.
-Migration 70 has not been applied to a hosted project as of 2026-09-26.
+The operator reported migration 70 applied on 2026-09-26, but the target
+project, selector privileges, and indexes have not been independently verified.
+Migration 71 adds the two question-first answer indexes validated for Release
+A5 and removes two indexes made redundant by the existing answer uniqueness
+constraints. Apply it after migration 70 during a low-write window: its regular
+index builds allow reads but block writes to each answer table, and a five-second
+lock timeout makes it fail safely instead of waiting indefinitely. Run
+`scripts/query-plan-indexes-explain.sql` immediately before and after the
+migration with the same fake staging tenant/question IDs, save both outputs,
+and compare scan type, rows removed, buffers, planning time, and execution time.
+Then run the A1 write/load scenario and Supabase performance/security advisors.
+Migration 71 has not been applied to a hosted project as of 2026-09-26.
 Apply `migration-62-atomic-student-contact.sql` after migration 60 and
 before deploying the contact API that calls `submit_student_contact`; otherwise
 student submissions will return a temporary service error. Apply

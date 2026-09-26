@@ -1,9 +1,9 @@
 # Scalability Release A and B Implementation README
 
-**Status:** Release A1 through A3 are implemented on their feature branches.
-The operator reported migrations 68 and 69 applied; the target project has not
-been independently inspected. Release A4 is implemented locally on
-`release-a-a4-fair-practice-selection`. Production-shaped staging and
+**Status:** Release A1 through A4 are implemented on their feature branches.
+The operator reported migrations 68 through 70 applied; the target project has
+not been independently inspected. Release A5 is implemented locally on
+`release-a-a5-query-plan-indexes`. Production-shaped staging plan evidence and
 capacity sign-off remain pending.
 
 **Prepared:** 25 September 2026
@@ -582,11 +582,11 @@ is unnecessary during an incident rollback.
 
 ### A4. Scalable and fair practice selection
 
-**Implementation status (26 September 2026):** implemented locally on branch
-`release-a-a4-fair-practice-selection`. Migration 70 has not been applied
-to a hosted project and no API or worker has been deployed. Isolated PostgreSQL
-coverage/security checks pass; staging query plans and latency remain required
-for operational sign-off.
+**Implementation status (26 September 2026):** implemented on branch
+`release-a-a4-fair-practice-selection`. The operator reported migration 70
+applied, but the target project has not been independently inspected and no API
+or worker has been deployed. Isolated PostgreSQL coverage/security checks pass;
+staging query plans and latency remain required for operational sign-off.
 
 **Why**
 
@@ -702,6 +702,43 @@ These are investigation candidates, not approved migration SQL.
 - No index is added merely because a column looks important.
 - Foreign-key delete/cascade and join paths are covered where necessary.
 - Write throughput remains acceptable after index additions.
+
+#### A5 implementation delivered
+
+Repository query review rejected four speculative additions because A3/A4
+already provide stronger indexes for the same left-edge filters and ordering:
+the proposed `questions`, both `quiz_sets`, and `practice_sessions` indexes.
+Adding them again would increase storage and write amplification without a new
+access path.
+
+The remaining two observed queries are the graded-question authorization
+lookups in `backend/app/services/student_access.py`. They filter answer rows by
+exact `question_id` and `tenant_id`, then return `attempt_id` or `session_id`.
+Migration 71 therefore adds these covering key paths:
+
+```text
+attempt_answers  (question_id, tenant_id) INCLUDE (attempt_id)
+practice_answers (question_id, tenant_id) INCLUDE (session_id)
+```
+
+Putting `question_id` first also covers the foreign-key lookup PostgreSQL uses
+when a referenced question is updated or deleted. The migration removes
+`idx_answers_attempt` and `idx_practice_answers_session`: each duplicated the
+left edge of the table's existing unique `(attempt_id, question_id)` or
+`(session_id, question_id)` index. The answer tables therefore gain the needed
+question-first path without increasing their index count.
+
+| Artifact | Evidence |
+|---|---|
+| `migrations/migration-71-query-plan-indexes.sql` | Adds only the two validated question-first indexes, removes two proven redundant indexes, and uses a five-second lock timeout |
+| `scripts/test-query-plan-indexes-db.mjs` | Seeds 20,002 rows per answer path including a cross-tenant collision, records local before/after `EXPLAIN (ANALYZE, BUFFERS)`, proves the optimizer selects each new index, verifies idempotency, tenant-scoped result correctness, and preservation of unique indexes |
+| `scripts/query-plan-indexes-explain.sql` | Read-only, guarded staging capture for the exact application queries before and after migration 71 |
+| `docs/a5-query-plan-evidence.md` | Preserves the isolated 20,002-row before/after plans, limitations, and remaining hosted evidence |
+
+Local embedded PostgreSQL plan evidence is a contract check, not hosted
+capacity proof. A5 remains operationally incomplete until the same staging
+query IDs are captured before/after on the A1 production-shaped dataset, write
+load remains acceptable, and Supabase advisors are reviewed.
 
 ### A6. Batch and atomic persistence for generated content
 
@@ -1132,8 +1169,10 @@ decisions can use data from the first one to three months:
 - [x] The operator reported migration 69 applied on 26 September 2026.
 - [ ] Migration 69 and its function privileges are independently verified on the target project.
 - [x] Large-bank practice sampling is fair and indexed in repository code and isolated PostgreSQL checks.
-- [ ] Migration 70 is applied and independently verified on the target project.
-- [ ] Added indexes have before/after plan evidence.
+- [x] The operator reported migration 70 applied on 26 September 2026.
+- [ ] Migration 70 and its selector privileges/indexes are independently verified on the target project.
+- [x] Added A5 indexes have isolated 20,002-row before/after plan evidence.
+- [ ] A5 indexes have production-shaped staging plans, acceptable write-load results, and advisor review.
 - [ ] Generated quiz persistence is atomic or safely batched/idempotent.
 - [ ] 200 expected-concurrency scenario passes.
 - [ ] 500 stress-concurrency scenario fails safely or passes.
