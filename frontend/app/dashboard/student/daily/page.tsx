@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 
 import {
@@ -12,6 +12,8 @@ import {
 } from "@/components/ui/card";
 import { PageHeader } from "@/components/ui/page-header";
 import { ErrorCard } from "@/components/ui/error-card";
+import { SparkBurst } from "@/components/ui/spark-burst";
+import { MiniBar } from "@/components/ui/allocation-meter";
 import { AttemptReadiness } from "@/components/student/attempt-readiness";
 import { startDaily } from "@/lib/api";
 import { useStudentDaily } from "@/lib/student-queries";
@@ -40,6 +42,29 @@ export default function DailyPage() {
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [showReadiness, setShowReadiness] = useState(false);
+  const [celebrate, setCelebrate] = useState(false);
+
+  // Celebrate once when today's challenge pushes the streak to a new high.
+  useEffect(() => {
+    if (!info?.done_today || !info.streak) return;
+    const key = "daily-celebrated-streak";
+    let stored = 0;
+    try {
+      stored = Number(window.localStorage.getItem(key) || 0);
+    } catch {
+      /* storage may be unavailable */
+    }
+    if (info.streak > stored) {
+      setCelebrate(true);
+      try {
+        window.localStorage.setItem(key, String(info.streak));
+      } catch {
+        /* ignore */
+      }
+      const t = window.setTimeout(() => setCelebrate(false), 1200);
+      return () => window.clearTimeout(t);
+    }
+  }, [info?.done_today, info?.streak]);
 
   async function start() {
     setBusy(true);
@@ -117,6 +142,7 @@ export default function DailyPage() {
         style={{ background: "linear-gradient(135deg, var(--tenant-sidebar-start, #1a6942), var(--tenant-primary-dark, #15603d), var(--tenant-primary-deep, #0f4e33))" }}
       >
         <div className="pointer-events-none absolute -right-16 -top-16 h-56 w-56 animate-pulse rounded-full bg-white/10 blur-3xl" />
+        {celebrate && <SparkBurst count={24} />}
 
         <div className="relative flex flex-wrap items-center justify-between gap-6">
           {/* Current streak */}
@@ -201,6 +227,29 @@ export default function DailyPage() {
           </div>
         </div>
       </div>
+
+      {/* Streak milestone progress */}
+      {(() => {
+        const MILES = [3, 5, 7, 14, 30, 50, 100];
+        const next = MILES.find((m) => m > info.streak) ?? info.streak + 50;
+        const left = next - info.streak;
+        return (
+          <div className="animate-rise rounded-2xl border bg-card p-4 shadow-sm">
+            <div className="flex items-center justify-between">
+              <p className="text-sm font-semibold">Next milestone</p>
+              <span className="text-xs font-medium tabular-nums text-muted-foreground">
+                {info.streak} / {next} days
+              </span>
+            </div>
+            <MiniBar value={info.streak} max={next} tone="amber" className="mt-2" />
+            <p className="mt-1.5 text-xs text-muted-foreground">
+              {left <= 0
+                ? "Milestone reached! 🎉"
+                : `${left} more day${left === 1 ? "" : "s"} to hit a ${next}-day streak 🔥`}
+            </p>
+          </div>
+        );
+      })()}
 
       {/* Today's action */}
       <Card className="animate-rise">

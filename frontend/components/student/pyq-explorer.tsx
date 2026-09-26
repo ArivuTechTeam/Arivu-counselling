@@ -16,10 +16,18 @@ import {
 } from "@/lib/api";
 import { formatAnswerValue, typeLabel } from "@/lib/format";
 
-const TYPES: { key: PaperType; label: string; blurb: string }[] = [
-  { key: "pyq", label: "PYQ", blurb: "Previous-year questions" },
-  { key: "mtp", label: "MTP", blurb: "Mock test papers" },
-  { key: "rtp", label: "RTP", blurb: "Revision test papers" },
+const TYPES: {
+  key: PaperType;
+  label: string;
+  full: string;
+  blurb: string;
+  icon: string;
+  activeCls: string;
+  accent: string;
+}[] = [
+  { key: "pyq", label: "PYQ", full: "Previous-Year Questions", blurb: "Real questions from past exams", icon: "📜", activeCls: "border-amber-400 bg-amber-50", accent: "text-amber-700" },
+  { key: "mtp", label: "MTP", full: "Mock Test Papers", blurb: "Full-length exam simulations", icon: "📝", activeCls: "border-sky-400 bg-sky-50", accent: "text-sky-700" },
+  { key: "rtp", label: "RTP", full: "Revision Test Papers", blurb: "Quick revision before exams", icon: "🔁", activeCls: "border-violet-400 bg-violet-50", accent: "text-violet-700" },
 ];
 
 const card = "rounded-xl border bg-card p-4 shadow-sm transition-colors hover:border-primary/40";
@@ -125,21 +133,31 @@ export function PyqExplorer() {
         </p>
       </div>
 
-      {/* Type tabs */}
-      <div className="flex gap-2">
-        {TYPES.map((t) => (
-          <button
-            key={t.key}
-            type="button"
-            onClick={() => setType(t.key)}
-            className={`rounded-lg border px-4 py-2 text-sm font-medium transition-colors ${
-              type === t.key ? "border-primary bg-primary/5 text-primary" : "border-input hover:bg-accent"
-            }`}
-            title={t.blurb}
-          >
-            {t.label}
-          </button>
-        ))}
+      {/* Paper-type taxonomy — pick a bucket */}
+      <div className="grid gap-2 sm:grid-cols-3">
+        {TYPES.map((t) => {
+          const active = type === t.key;
+          return (
+            <button
+              key={t.key}
+              type="button"
+              onClick={() => setType(t.key)}
+              aria-pressed={active}
+              className={`flex items-start gap-3 rounded-xl border p-3 text-left transition-colors ${
+                active ? `${t.activeCls} shadow-sm` : "border-input hover:bg-accent"
+              }`}
+            >
+              <span aria-hidden className="text-2xl leading-none">{t.icon}</span>
+              <div className="min-w-0">
+                <p className={`text-sm font-bold ${active ? t.accent : "text-foreground"}`}>
+                  {t.label}
+                </p>
+                <p className="text-xs font-medium text-foreground/80">{t.full}</p>
+                <p className="mt-0.5 text-[11px] text-muted-foreground">{t.blurb}</p>
+              </div>
+            </button>
+          );
+        })}
       </div>
 
       {Err}

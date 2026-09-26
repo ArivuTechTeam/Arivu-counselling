@@ -82,6 +82,10 @@ export default function ReviewDetailPage({ params }: { params: { id: string } })
   const [documentFigures, setDocumentFigures] = useState<DocumentFigure[]>([]);
   const [error, setError] = useState<string | null>(null);
   const copyKey = useRef<string | null>(null);
+  // Keyboard filter shortcuts: a stable window listener calls the latest handler
+  // via this ref (the handler needs `chooseFilter`, which is defined after the
+  // early returns, so we can't reference it directly in the effect).
+  const keyHandlerRef = useRef<(e: KeyboardEvent) => void>(() => {});
   const [copying, setCopying] = useState(false);
   const [publishing, setPublishing] = useState(false);
   const [confirmPurge, setConfirmPurge] = useState(false);
@@ -186,6 +190,13 @@ export default function ReviewDetailPage({ params }: { params: { id: string } })
       cancelled = true;
     };
   }, [detail?.document_id]);
+
+  // One stable keydown listener that delegates to the latest handler.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => keyHandlerRef.current(e);
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   // Stable list for the blueprint panel (id + type), recomputed only when the
   // quiz detail changes — so reporting the selection back can't loop.
@@ -443,6 +454,27 @@ export default function ReviewDetailPage({ params }: { params: { id: string } })
     });
   }
 
+  // Filter shortcuts: A/P/R/E to filter by status, 0 for all. Ignored while
+  // typing in a field so it never fights with editing a question.
+  keyHandlerRef.current = (e: KeyboardEvent) => {
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    const el = e.target as HTMLElement | null;
+    const tag = el?.tagName;
+    if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || el?.isContentEditable) return;
+    const map: Record<string, ReviewFilter> = {
+      a: "approved",
+      p: "pending_review",
+      r: "rejected",
+      e: "needs_edit",
+      "0": "all",
+    };
+    const next = map[e.key.toLowerCase()];
+    if (next) {
+      e.preventDefault();
+      chooseFilter(next);
+    }
+  };
+
   return (
     <div className="mx-auto flex h-full max-w-7xl flex-col gap-4">
       <div className="sticky top-0 z-[9] -mx-1 bg-background/95 px-1 pb-3 backdrop-blur supports-[backdrop-filter]:bg-background/85">
@@ -514,6 +546,12 @@ export default function ReviewDetailPage({ params }: { params: { id: string } })
                 active={reviewFilter === "rejected"}
                 onClick={() => chooseFilter("rejected")}
               />
+              <span
+                className="ml-1 hidden shrink-0 select-none items-center self-center rounded-md border border-dashed border-input px-2 text-[10px] font-medium text-muted-foreground lg:inline-flex"
+                title="Keyboard: A approved · P pending · R rejected · E needs edit · 0 all"
+              >
+                ⌨ A / P / R / E / 0
+              </span>
             </div>
 
             <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">

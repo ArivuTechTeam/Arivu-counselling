@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 
 import { EmptyState } from "@/components/ui/empty-state";
 import { Inbox } from "@/components/ui/icons";
+import { MiniSparkline } from "@/components/ui/mini-sparkline";
 import { AttemptHistoryItem } from "@/lib/api";
 import { practiceTitle, variantLabel } from "@/lib/format";
 
@@ -31,8 +32,46 @@ export function AttemptHistoryList({
     }
   }, [items]);
 
+  // Score trajectory over the most recent attempts (chronological, oldest→newest).
+  const recent = items
+    .filter((a) => a.total_score != null && a.max_score)
+    .slice(0, 10);
+  const trendVals = [...recent]
+    .reverse()
+    .map((a) => Math.round((a.total_score! / a.max_score!) * 100));
+  const delta = trendVals.length >= 2 ? trendVals[trendVals.length - 1] - trendVals[0] : 0;
+  const avg = trendVals.length
+    ? Math.round(trendVals.reduce((s, v) => s + v, 0) / trendVals.length)
+    : 0;
+  const best = trendVals.length ? Math.max(...trendVals) : 0;
+
   return (
     <div className="flex flex-col gap-4">
+      {trendVals.length >= 2 && (
+        <div className="flex flex-wrap items-center justify-between gap-4 rounded-2xl border bg-card p-4 shadow-sm">
+          <div className="min-w-0">
+            <p className="text-[11px] font-semibold uppercase tracking-widest text-muted-foreground">
+              Score trend
+            </p>
+            <p className="mt-1 text-sm font-medium text-foreground">
+              {delta > 0
+                ? `📈 Improving — up ${delta}% across your last ${trendVals.length}`
+                : delta < 0
+                  ? `📉 Down ${-delta}% recently — time to revise`
+                  : "Holding steady"}
+            </p>
+            <p className="text-xs text-muted-foreground">
+              Average {avg}% · Best {best}%
+            </p>
+          </div>
+          <MiniSparkline
+            values={trendVals}
+            tone={delta >= 0 ? "emerald" : "rose"}
+            width={160}
+            height={44}
+          />
+        </div>
+      )}
       {items.length === 0 ? (
         <EmptyState
           icon={<Inbox />}

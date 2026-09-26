@@ -22,6 +22,7 @@ import { useStudentQuizzes } from "@/lib/student-queries";
 type QuizItem = {
   setId: string;
   title: string;
+  publishedAt?: string | null;
   subjectName?: string | null;
   chapterName?: string | null;
   variantId: string;
@@ -41,6 +42,13 @@ function topicLine(i: QuizItem): string {
   return [i.subjectName, i.chapterName].filter(Boolean).join(" · ");
 }
 
+/** Colour for a best-score badge: red < 40, amber < 70, green otherwise. */
+function bestTone(pct: number): string {
+  if (pct < 40) return "border-rose-300 bg-rose-50 text-rose-700";
+  if (pct < 70) return "border-amber-300 bg-amber-50 text-amber-700";
+  return "border-emerald-300 bg-emerald-50 text-emerald-700";
+}
+
 function flatten(quizzes: StudentQuiz[]): QuizItem[] {
   const items: QuizItem[] = [];
   for (const q of quizzes) {
@@ -48,6 +56,7 @@ function flatten(quizzes: StudentQuiz[]): QuizItem[] {
       items.push({
         setId: q.id,
         title: q.title,
+        publishedAt: q.published_at,
         subjectName: q.subject_name,
         chapterName: q.chapter_name,
         variantId: v.id,
@@ -72,6 +81,9 @@ export function StudentQuizzes() {
   const [actionError, setActionError] = useState<string | null>(null);
   const [starting, setStarting] = useState<string | null>(null);
   const [pending, setPending] = useState<QuizItem | null>(null);
+  const [search, setSearch] = useState("");
+  const [subject, setSubject] = useState("all");
+  const [sort, setSort] = useState<"newest" | "title" | "attempts">("newest");
 
   async function start() {
     if (!pending) return;
@@ -87,8 +99,24 @@ export function StudentQuizzes() {
   }
 
   const items = quizzes ? flatten(quizzes) : [];
-  const toAttend = items.filter((i) => !i.attempted);
-  const completed = items.filter((i) => i.attempted);
+  const subjects = Array.from(
+    new Set(items.map((i) => i.subjectName).filter(Boolean)),
+  ) as string[];
+  const term = search.trim().toLowerCase();
+  const filterActive = term !== "" || subject !== "all";
+  const sortFn = (a: QuizItem, b: QuizItem) =>
+    sort === "title"
+      ? a.title.localeCompare(b.title)
+      : sort === "attempts"
+        ? b.attemptsRemaining - a.attemptsRemaining
+        : (b.publishedAt ?? "").localeCompare(a.publishedAt ?? "");
+  const filtered = items.filter((i) => {
+    const matchesSubject = subject === "all" || i.subjectName === subject;
+    const hay = `${i.title} ${i.subjectName ?? ""} ${i.chapterName ?? ""}`.toLowerCase();
+    return matchesSubject && (term === "" || hay.includes(term));
+  });
+  const toAttend = filtered.filter((i) => !i.attempted).sort(sortFn);
+  const completed = filtered.filter((i) => i.attempted).sort(sortFn);
   const loaded = quizzes !== null;
 
   if (loadError) {
@@ -103,6 +131,39 @@ export function StudentQuizzes() {
   return (
     <div className="flex flex-col gap-6">
       {actionError && <p className="text-sm text-red-600">{actionError}</p>}
+
+      {/* Search / filter / sort — appears once there are quizzes to sift */}
+      {loaded && items.length > 0 && (
+        <div className="flex flex-wrap items-center gap-2">
+          <input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search quizzes…"
+            className="h-9 min-w-[180px] flex-1 rounded-md border border-input bg-background px-3 text-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+          />
+          {subjects.length > 1 && (
+            <select
+              value={subject}
+              onChange={(e) => setSubject(e.target.value)}
+              className="h-9 rounded-md border border-input bg-background px-2 text-sm text-foreground"
+            >
+              <option value="all">All subjects</option>
+              {subjects.map((s) => (
+                <option key={s} value={s}>{s}</option>
+              ))}
+            </select>
+          )}
+          <select
+            value={sort}
+            onChange={(e) => setSort(e.target.value as typeof sort)}
+            className="h-9 rounded-md border border-input bg-background px-2 text-sm text-foreground"
+          >
+            <option value="newest">Newest</option>
+            <option value="title">Title A–Z</option>
+            <option value="attempts">Attempts left</option>
+          </select>
+        </div>
+      )}
 
       {/* Quizzes to attend — the first thing a student should see */}
       <Card className="animate-rise">
@@ -135,14 +196,32 @@ export function StudentQuizzes() {
               </div>
             </div>
           ) : toAttend.length === 0 ? (
-            <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-dashed p-4">
-              <p className="text-sm text-muted-foreground">
-                You&apos;re all caught up — keep practising with Topic Practice.
-              </p>
-              <Button asChild size="sm" variant="outline">
-                <Link href="/dashboard/student/practice?mode=topic">Start Topic Practice</Link>
-              </Button>
-            </div>
+            filterActive ? (
+              <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-dashed p-4">
+                <p className="text-sm text-muted-foreground">
+                  No quizzes to take match your search.
+                </p>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => {
+                    setSearch("");
+                    setSubject("all");
+                  }}
+                >
+                  Clear filters
+                </Button>
+              </div>
+            ) : (
+              <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-dashed p-4">
+                <p className="text-sm text-muted-foreground">
+                  You&apos;re all caught up — keep practising with Topic Practice.
+                </p>
+                <Button asChild size="sm" variant="outline">
+                  <Link href="/dashboard/student/practice?mode=topic">Start Topic Practice</Link>
+                </Button>
+              </div>
+            )
           ) : (
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               {toAttend.map((i) => (
@@ -208,16 +287,23 @@ export function StudentQuizzes() {
             {completed.map((i) => (
               <div
                 key={i.variantId}
-                className="flex items-center justify-between gap-3 rounded-lg border p-3"
+                className="flex items-center gap-3 rounded-lg border p-3"
               >
-                <div className="min-w-0">
+                {i.bestPct != null && (
+                  <div
+                    className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-full border-2 text-xs font-bold tabular-nums ${bestTone(i.bestPct)}`}
+                    title="Your best score"
+                  >
+                    {i.bestPct}%
+                  </div>
+                )}
+                <div className="min-w-0 flex-1">
                   <p className="truncate text-sm font-medium text-foreground">
                     {i.title}
                   </p>
                   <p className="truncate text-xs text-muted-foreground">
                     {topicLine(i) ? `${topicLine(i)} · ` : ""}
                     {variantLabel(i.variantType)}
-                    {i.bestPct != null ? ` · best ${i.bestPct}%` : ""}
                     {` · ${i.attemptsRemaining} attempt${i.attemptsRemaining === 1 ? "" : "s"} left`}
                   </p>
                 </div>
