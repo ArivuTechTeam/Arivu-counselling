@@ -57,7 +57,7 @@ function LogDetail({ data, inrPerUsd, onClose }: {
         ["View estimate INR", money(data.cost_usd === null ? null : data.cost_usd * inrPerUsd, "INR")],
         ["Recorded INR", money(data.cost_inr, "INR")],
         ["Call ID", data.id], ["Tenant ID", data.tenant_id ?? "Unlinked"],
-        ["Paper ID", data.document_id ?? "Unlinked"], ["Job ID", data.job_id ?? "Unlinked"],
+        ["Document ID", data.document_id ?? "Not recorded"], ["Job ID", data.job_id ?? "Not recorded"],
       ].map(([label, value]) => <div key={label} className="rounded-xl border bg-muted/30 p-3">
         <dt className="text-xs text-muted-foreground">{label}</dt><dd className="mt-1 break-all font-medium">{value}</dd>
       </div>)}
@@ -197,7 +197,7 @@ export default function ApiLogsPage() {
       {filterError && <p role="alert" className="mb-3 text-sm text-rose-600">{filterError}</p>}
       <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-6">
         {!grouped && <label className="text-xs font-medium">Call type<input value={draft.call_type ?? ""} onChange={event => setDraft({ ...draft, call_type: event.target.value })} className="mt-1 h-9 w-full rounded-md border border-input bg-background px-2 text-sm" /></label>}
-        {([['tenant_id', 'Tenant ID'], ['document_id', 'Paper ID']] as const).map(([key, label]) => <label key={key} className="text-xs font-medium">{label}<input value={(draft[key] as string) ?? ''} onChange={e => setDraft({ ...draft, [key]: e.target.value })} className="mt-1 h-9 w-full rounded-md border border-input bg-background px-2 text-sm" /></label>)}
+        {([['tenant_id', 'Institution ID'], ['document_id', 'Document ID']] as const).map(([key, label]) => <label key={key} className="text-xs font-medium">{label}<input value={(draft[key] as string) ?? ''} onChange={e => setDraft({ ...draft, [key]: e.target.value })} className="mt-1 h-9 w-full rounded-md border border-input bg-background px-2 text-sm" /></label>)}
         <label className="text-xs font-medium">Provider<select value={draft.provider ?? ''} onChange={e => setDraft({ ...draft, provider: e.target.value })} className="mt-1 h-9 w-full rounded-md border border-input bg-background px-2 text-sm"><option value="">All</option><option value="gemini">Gemini</option><option value="deepseek">DeepSeek</option></select></label>
         <label className="text-xs font-medium">Status<select value={draft.status ?? ''} onChange={e => setDraft({ ...draft, status: e.target.value })} className="mt-1 h-9 w-full rounded-md border border-input bg-background px-2 text-sm"><option value="">All</option><option value="success">Success</option><option value="error">Error</option></select></label>
         <label className="text-xs font-medium">From date<input type="date" value={draft.date_from ?? ''} onChange={e => setDraft({ ...draft, date_from: e.target.value })} className="mt-1 h-9 w-full rounded-md border border-input bg-background px-2 text-sm" /></label>
@@ -205,7 +205,7 @@ export default function ApiLogsPage() {
         <button onClick={apply} className="mt-5 h-9 rounded-md bg-primary px-3 text-sm font-medium text-primary-foreground">Apply filters</button>
         <button onClick={() => { setDraft({}); setFilters({ page: 1, page_size: 50 }); setFilterError(null); setSelectedCall(null); }} className="mt-5 h-9 rounded-md border px-3 text-sm">Clear filters</button>
       </div>
-      <div className="mt-4 flex gap-2"><button onClick={() => setGrouped(true)} className={`rounded-full px-3 py-1.5 text-sm ${grouped ? 'bg-primary text-primary-foreground' : 'border border-input'}`}>Quiz costs</button><button onClick={() => setGrouped(false)} className={`rounded-full px-3 py-1.5 text-sm ${!grouped ? 'bg-primary text-primary-foreground' : 'border border-input'}`}>Flat calls</button></div>
+      <div className="mt-4 flex gap-2"><button onClick={() => setGrouped(true)} className={`rounded-full px-3 py-1.5 text-sm ${grouped ? 'bg-primary text-primary-foreground' : 'border border-input'}`}>Costs by activity</button><button onClick={() => setGrouped(false)} className={`rounded-full px-3 py-1.5 text-sm ${!grouped ? 'bg-primary text-primary-foreground' : 'border border-input'}`}>Individual AI requests</button></div>
       <p className="mt-2 text-xs text-muted-foreground">Date filters use UTC days; call timestamps are displayed in IST.</p>
     </div>
     {grouped ? <QuizCostWorkflows key={JSON.stringify(filters)} filters={filters} inrPerUsd={inrPerUsd} onView={setSelectedCall} />
