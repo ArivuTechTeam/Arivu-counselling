@@ -1,11 +1,12 @@
 # Scalability Release A and B Implementation README
 
-**Status:** Release A1 through A6 are implemented on their feature branches.
-The operator reported migrations 68 through 71 applied; the target project has
-not been independently inspected, and migration 72 has not been reported
-applied. Release A7 verification tooling is implemented locally on
-`release-a-a7-load-verification`. Production-shaped staging evidence and
-capacity sign-off remain pending.
+**Status:** Release A1 through A7 are merged to `main`; the operator reported
+migrations 68 through 73 applied. The production API and worker passed schema
+preflight, and a live queued 10-question generation completed with persisted AI
+request/cost attribution. Repository contract, security, database, backend,
+and frontend tests pass. Production-shaped isolated-staging load, query-plan,
+worker-restart, backup/restore, and capacity evidence remain required before
+the 10-institution capacity target can be called proven.
 
 **Prepared:** 25 September 2026
 
@@ -1233,14 +1234,17 @@ decisions can use data from the first one to three months:
 - [x] The operator reported migration 71 applied on 26 September 2026.
 - [ ] A5 indexes have production-shaped staging plans, acceptable write-load results, and advisor review.
 - [x] Generated quiz persistence is atomic; durable retries remain lease-fenced and idempotent in repository code and isolated database tests.
-- [ ] Migration 72 and its service-role-only privilege are applied and independently verified on the target project.
+- [x] The operator reported migrations 72 and 73 applied on 26 September 2026.
+- [x] Production schema preflight passed and a live queued 10-question generation exercised atomic persistence plus AI workflow/cost attribution.
+- [ ] Migration 72/73 function privileges are independently inventoried on the target project.
 - [x] Guarded A7 expected/stress workflow tooling and post-load integrity audit are implemented.
 - [ ] 200 expected-concurrency scenario passes.
 - [ ] 500 stress-concurrency scenario fails safely or passes.
-- [ ] Tenant/role/direct-ID security suites pass.
+- [x] Repository tenant/role/direct-ID security suites pass.
 - [ ] Worker restart and recovery tests pass.
-- [ ] API and worker deployment requirements are documented.
-- [ ] Remaining capacity limits are recorded honestly.
+- [x] API and worker deployment requirements are documented.
+- [x] Matching production API and worker revisions are deployed and a queued-worker smoke test passed.
+- [x] Remaining capacity limits are recorded honestly.
 
 ### Release B
 
@@ -1264,7 +1268,7 @@ decisions can use data from the first one to three months:
 
 The plan is grounded in the following current repository areas:
 
-- `migrations/schema.sql` and numbered migrations through migration 70;
+- `migrations/schema.sql` and numbered migrations through migration 73;
 - `migrations/migration-29-staff-dashboard-performance.sql`;
 - `migrations/migration-36-super-admin-aggregates.sql`;
 - `migrations/migration-43-faculty-background-jobs.sql`;
@@ -1284,9 +1288,10 @@ The plan is grounded in the following current repository areas:
 - `docs/architecture-scalability-plan.md` as an older draft whose claims were
   rechecked rather than copied as current truth.
 
-This review was repository-only. It did not run SQL against the live Supabase
-project, inspect live table sizes/query plans, change Railway resources, or run
-a production load test.
+The original review was repository-only. Subsequent Release A verification ran
+production schema preflight and one bounded queued-generation smoke test. It
+still did not inspect live table sizes/query plans, run backup restoration, run
+the 200/500-user workload, or change Railway/Supabase capacity.
 
 ---
 

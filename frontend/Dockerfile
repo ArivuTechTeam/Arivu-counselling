@@ -1,14 +1,14 @@
 # ---- deps: install packages with pnpm, pinned to the committed lockfile ----
 FROM node:22-alpine AS deps
 WORKDIR /app
-RUN corepack enable && corepack prepare pnpm@9 --activate
-COPY package.json pnpm-lock.yaml ./
+RUN corepack enable && corepack prepare pnpm@11.25.0 --activate
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 RUN pnpm install --frozen-lockfile
 
 # ---- builder: build the Next.js app ----
 FROM node:22-alpine AS builder
 WORKDIR /app
-RUN corepack enable && corepack prepare pnpm@9 --activate
+RUN corepack enable && corepack prepare pnpm@11.25.0 --activate
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 
@@ -27,7 +27,7 @@ RUN pnpm build
 # ---- runner: serve the production build ----
 FROM node:22-alpine AS runner
 WORKDIR /app
-RUN corepack enable && corepack prepare pnpm@9 --activate
+RUN corepack enable && corepack prepare pnpm@11.25.0 --activate
 ENV NODE_ENV=production
 
 COPY --from=builder /app/node_modules ./node_modules

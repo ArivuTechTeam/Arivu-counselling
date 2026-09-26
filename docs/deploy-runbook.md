@@ -21,6 +21,33 @@ worker (`quiz-generator-worker`). They share one Supabase project.
 
 ## Deployment security gates
 
+### Repository verification baseline
+
+- Keep the frontend on Next.js `15.5.26` or a later patched supported release.
+  CI runs `pnpm audit --prod --audit-level high`; a high/critical production
+  advisory blocks the repository check.
+- CI runs on pull requests, direct pushes to `main`, and manual dispatch. It
+  executes backend tests, all isolated database migration harnesses, frontend
+  lint/unit/build checks, and Chromium public-access/security-header smoke
+  tests.
+- The browser suite proves public login/legal routes, unauthenticated dashboard
+  redirection, and the response-header baseline. Authenticated student,
+  teacher, institution-admin, and super-admin browser journeys still require
+  disposable isolated-staging accounts; do not put production credentials in
+  GitHub Actions.
+- `X-Powered-By` is disabled. The current CSP retains `unsafe-inline` for
+  framework bootstrap/style compatibility. Moving to per-request nonces is a
+  separate architecture decision because it forces dynamic rendering and
+  removes normal static/CDN caching; test latency and cost before adopting it.
+- GitHub repository rules could not be independently enabled on the current
+  private-repository plan. Until required checks are available, treat a green
+  `Repository checks` run as a manual merge gate.
+
+Supabase SSL enforcement, network restrictions, Auth CAPTCHA/rate limits, and
+backup retention are provider settings, not source-controlled settings. Record
+dated dashboard evidence and complete a restore drill before capacity sign-off;
+repository tests cannot substitute for those checks.
+
 ### AI quiz cost tracking (migration 73)
 
 Apply `migration-73-ai-quiz-cost-workflows.sql` after migration 72 before
@@ -37,6 +64,9 @@ or provider billing has been checked by that script. Verify one authorized
 generation/import run on staging before rollout, including a fallback/retry,
 and confirm its quiz link, stage totals and filter behavior. Costs represent
 best-effort recorded usage estimates, not the provider's authoritative invoice.
+The operator reported migration 73 applied on 2026-09-26, and a bounded live
+queued-generation smoke test recorded one analysis request plus four workflow
+requests. Fallback/retry attribution remains an isolated-staging test case.
 
 Do not release until the target Supabase project has been checked directly:
 
@@ -154,7 +184,7 @@ migration-73-ai-quiz-cost-workflows.sql
 ```
 
 (Filenames above verified 2026-09-26 against `migrations/`, through migration
-72. Migrations 63–65 support the existing paper bank; migration 66 adds durable,
+73. Migrations 63–65 support the existing paper bank; migration 66 adds durable,
 private paper attempts. The operator reported migration 66 applied on 2026-09-25,
 but that has not been checked directly in the target Supabase project. Migration
 67 adds atomic publish-and-batch-assignment and **must be applied before deploying
@@ -217,8 +247,10 @@ extraction routes that call `persist_generated_quiz` will fail closed. Run
 `scripts/test-faculty-jobs-db.mjs` locally, inspect the function privileges,
 then smoke-test legacy generation, blueprint generation, extraction, and a
 durable lost-response retry on staging. The migration is additive and does not
-rewrite existing content. Migration 72 has not been reported applied as of
-2026-09-26.
+rewrite existing content. The operator reported migration 72 applied on
+2026-09-26. Production schema preflight passed and a bounded queued generation
+exercised the persistence RPC; retain an explicit privilege inventory and
+lost-response retry drill as staging evidence.
 Release A7 adds no migration and authorizes no production load test. After
 migration 72 and matching API/worker revisions are verified on isolated
 staging, follow `docs/a7-capacity-verification.md`. Its write profile consumes
@@ -392,14 +424,14 @@ afterward. Do not mistake an API `/health` response for worker readiness; use
 the super-admin `/api/v1/platform/worker-health` check and a small queued-job
 smoke test. The obsolete retention cron is not a companion service.
 
-**Observed 2026-09-25:** API and worker were both uploaded from local commit
-`7cb7e51` and Railway reported SUCCESS for both. After the operator set
-`PAPER_BANK_ENABLED=true` on both services, both had a further SUCCESS
-deployment (`7d716dd9` API and `ec9dabf0` worker are deployment ID prefixes,
-not Git revisions). The API `/health` returned HTTP 200. Authenticated
-`/api/v1/platform/worker-health`, a queued-job smoke test, and the paper-bank
-import/publish/student-grade flow were not verified. Railway status alone does
-not prove worker readiness or the code revision of later redeployments.
+**Observed 2026-09-26:** the production API deployment (`39eb02fc` prefix) and
+worker deployment (`8dfc43bc` prefix) both reported SUCCESS/RUNNING from the
+Release A backend tree represented by commit `bff02bb`; current `main`
+`93e2e3f` differs only in frontend code. The API `/health` and production schema
+preflight passed. A live queued 10-question generation completed through the
+worker and recorded its workflow plus provider-call costs. This proves bounded
+queue execution, not restart recovery, paper-bank grading, 200/500-user
+capacity, or backup restoration.
 
 ### Advanced feature master switches
 
