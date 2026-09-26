@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { use, useEffect, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { ErrorCard } from "@/components/ui/error-card";
@@ -10,14 +10,15 @@ import { TeacherQuizPerformance, getTeacherQuizPerformance } from "@/lib/api";
 
 const pct = (value: number | null) => value === null ? "—" : `${value}%`;
 
-export default function TeacherQuizPerformancePage({ params }: { params: { id: string } }) {
+export default function TeacherQuizPerformancePage({ params }: { params: Promise<{ id: string }> }) {
+  const { id } = use(params);
   const [report, setReport] = useState<TeacherQuizPerformance | null>(null);
   const [error, setError] = useState<string | null>(null);
   const load = () => {
     setError(null);
-    getTeacherQuizPerformance(params.id).then(setReport).catch((reason) => setError(reason.message));
+    getTeacherQuizPerformance(id).then(setReport).catch((reason) => setError(reason.message));
   };
-  useEffect(load, [params.id]);
+  useEffect(load, [id]);
   if (error) return <ErrorCard message={error} onRetry={load} />;
   if (!report) return <SkeletonCards count={4} />;
   const { summary } = report;

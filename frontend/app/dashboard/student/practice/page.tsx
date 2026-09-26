@@ -7,14 +7,15 @@ import { PageHeader } from "@/components/ui/page-header";
 
 type SearchParams = { mode?: string | string[]; institution?: string | string[] };
 
-export default function PracticeAndMockPage({
+export default async function PracticeAndMockPage({
   searchParams,
 }: {
-  searchParams?: SearchParams;
+  searchParams?: Promise<SearchParams>;
 }) {
-  const mode = searchParams?.mode === "mock" ? "mock" : "topic";
-  const institution = typeof searchParams?.institution === "string"
-    ? searchParams.institution
+  const resolvedSearchParams = await searchParams;
+  const mode = resolvedSearchParams?.mode === "mock" ? "mock" : "topic";
+  const institution = typeof resolvedSearchParams?.institution === "string"
+    ? resolvedSearchParams.institution
     : null;
   const modeHref = (nextMode: "topic" | "mock") => {
     const params = new URLSearchParams({ mode: nextMode });

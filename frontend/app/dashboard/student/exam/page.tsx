@@ -1,13 +1,14 @@
 import { redirect } from "next/navigation";
 
-export default function ExamRedirect({
+export default async function ExamRedirect({
   searchParams,
 }: {
-  searchParams?: { institution?: string | string[] };
+  searchParams?: Promise<{ institution?: string | string[] }>;
 }) {
+  const resolvedSearchParams = await searchParams;
   const params = new URLSearchParams({ mode: "mock" });
-  if (typeof searchParams?.institution === "string") {
-    params.set("institution", searchParams.institution);
+  if (typeof resolvedSearchParams?.institution === "string") {
+    params.set("institution", resolvedSearchParams.institution);
   }
   redirect(`/dashboard/student/practice?${params.toString()}`);
 }

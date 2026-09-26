@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { use, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 
@@ -72,7 +72,8 @@ function StatusFilter({
   );
 }
 
-export default function ReviewDetailPage({ params }: { params: { id: string } }) {
+export default function ReviewDetailPage({ params }: { params: Promise<{ id: string }> }) {
+  const { id } = use(params);
   const router = useRouter();
   const pathname = usePathname();
   const publishedView = pathname.startsWith("/dashboard/teacher/published-quizzes/");
@@ -101,12 +102,12 @@ export default function ReviewDetailPage({ params }: { params: { id: string } })
     setBatches([]);
     setSelectedBatches([]);
     setBatchesError(null);
-  }, [params.id]);
+  }, [id]);
 
   useEffect(() => {
     try {
       const saved = window.sessionStorage.getItem(
-        `teacher-review-filter:${params.id}`,
+        `teacher-review-filter:${id}`,
       );
       if (
         saved === "all" ||
@@ -120,24 +121,24 @@ export default function ReviewDetailPage({ params }: { params: { id: string } })
     } catch {
       // Filtering remains usable without session storage.
     }
-  }, [params.id]);
+  }, [id]);
 
   useEffect(() => {
     if (!features.batches || detail?.status !== "draft") return;
     let cancelled = false;
     setBatchesLoading(true);
     setBatchesError(null);
-    listEligibleBatches(params.id)
+    listEligibleBatches(id)
       .then((rows) => { if (!cancelled) setBatches(rows); })
       .catch((reason) => { if (!cancelled) setBatchesError(reason instanceof Error ? reason.message : "Could not load eligible batches."); })
       .finally(() => { if (!cancelled) setBatchesLoading(false); });
     return () => { cancelled = true; };
-  }, [detail?.status, features.batches, params.id]);
+  }, [detail?.status, features.batches, id]);
 
   useEffect(() => {
-    if (detail?.status === "published" && !publishedView) router.replace(`/dashboard/teacher/published-quizzes/${params.id}`);
-    if (detail && detail.status !== "published" && publishedView) router.replace(`/dashboard/teacher/review/${params.id}`);
-  }, [detail, params.id, publishedView, router]);
+    if (detail?.status === "published" && !publishedView) router.replace(`/dashboard/teacher/published-quizzes/${id}`);
+    if (detail && detail.status !== "published" && publishedView) router.replace(`/dashboard/teacher/review/${id}`);
+  }, [detail, id, publishedView, router]);
 
   useEffect(() => {
     if (!features.scoring_policies) return;
@@ -149,7 +150,7 @@ export default function ReviewDetailPage({ params }: { params: { id: string } })
     setSavingPolicy(true);
     setError(null);
     try {
-      const result = await setQuizScoringPolicy(params.id, policyId || null);
+      const result = await setQuizScoringPolicy(id, policyId || null);
       setDetail({ ...detail, scoring_policy_id: result.scoring_policy_id });
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Couldn't update scoring.");
@@ -165,7 +166,7 @@ export default function ReviewDetailPage({ params }: { params: { id: string } })
 
   function load() {
     setError(null);
-    getQuizSet(params.id)
+    getQuizSet(id)
       .then(setDetail)
       .catch((e) => setError(e.message));
   }
@@ -174,7 +175,7 @@ export default function ReviewDetailPage({ params }: { params: { id: string } })
     let cancelled = false;
     setError(null);
     setDetail(null);
-    getQuizSet(params.id)
+    getQuizSet(id)
       .then((result) => {
         if (!cancelled) setDetail(result);
       })
@@ -184,7 +185,7 @@ export default function ReviewDetailPage({ params }: { params: { id: string } })
     return () => {
       cancelled = true;
     };
-  }, [params.id]);
+  }, [id]);
 
   // Load the source document's figure catalog once, so each card can show its
   // attached figure and offer swap/add. Empty (or absent document) is fine.
@@ -235,12 +236,12 @@ export default function ReviewDetailPage({ params }: { params: { id: string } })
     if (!detail || copying) return;
     setCopying(true);
     setError(null);
-    const storageKey = `quiz-copy-intent:${params.id}`;
+    const storageKey = `quiz-copy-intent:${id}`;
     try { copyKey.current = window.sessionStorage.getItem(storageKey); } catch { /* retry still retains the in-memory key */ }
     copyKey.current ??= crypto.randomUUID();
     try { window.sessionStorage.setItem(storageKey, copyKey.current); } catch { /* storage may be unavailable */ }
     try {
-      const copied = await duplicateQuizSet(params.id, `Copy of ${detail.title}`.slice(0, 200), copyKey.current);
+      const copied = await duplicateQuizSet(id, `Copy of ${detail.title}`.slice(0, 200), copyKey.current);
       try { window.sessionStorage.removeItem(storageKey); } catch { /* copy already saved */ }
       copyKey.current = null;
       router.push(`/dashboard/teacher/review/${copied.quiz_set_id}`);
@@ -257,7 +258,7 @@ export default function ReviewDetailPage({ params }: { params: { id: string } })
         setError("Select at least one batch before publishing this quiz.");
         return;
       }
-      const s = await publishQuizSet(params.id, detail?.publication_token, features.batches ? selectedBatches : undefined);
+      const s = await publishQuizSet(id, detail?.publication_token, features.batches ? selectedBatches : undefined);
       setDetail((d) => d ? {
         ...d, status: s.status,
         release_locked: d.reuse_enabled ? true : d.release_locked,
@@ -267,7 +268,7 @@ export default function ReviewDetailPage({ params }: { params: { id: string } })
       } : d);
       celebrateBurst();
       notify("🎉 Quiz published — students can now see it", "success");
-      router.replace(`/dashboard/teacher/published-quizzes/${params.id}`);
+      router.replace(`/dashboard/teacher/published-quizzes/${id}`);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Publish failed");
     } finally {
@@ -279,9 +280,9 @@ export default function ReviewDetailPage({ params }: { params: { id: string } })
     setError(null);
     setApproving(true);
     try {
-      const { approved: count, skipped = 0 } = await approveAllQuestions(params.id);
+      const { approved: count, skipped = 0 } = await approveAllQuestions(id);
       if (skipped) setError(`${skipped} question(s) need an answer-format correction or changed during approval. Open them to check.`);
-      setDetail(await getQuizSet(params.id));
+      setDetail(await getQuizSet(id));
       celebrateBurst();
       notify(
         count > 0
@@ -304,7 +305,7 @@ export default function ReviewDetailPage({ params }: { params: { id: string } })
     setArchiving(true);
     setError(null);
     try {
-      await archiveQuizSet(params.id);
+      await archiveQuizSet(id);
       notify("Quiz archived", "success");
       router.push("/dashboard/teacher/review");
     } catch (e) {
@@ -362,7 +363,7 @@ export default function ReviewDetailPage({ params }: { params: { id: string } })
   function chooseFilter(filter: ReviewFilter) {
     setReviewFilter(filter);
     try {
-      window.sessionStorage.setItem(`teacher-review-filter:${params.id}`, filter);
+      window.sessionStorage.setItem(`teacher-review-filter:${id}`, filter);
     } catch {
       // Filtering remains usable without session storage.
     }
@@ -404,7 +405,7 @@ export default function ReviewDetailPage({ params }: { params: { id: string } })
               {copying ? "Copying..." : "Duplicate as draft"}
             </Button>}
             <QuestionPaperButtons
-              quizSetId={params.id}
+              quizSetId={id}
               title={detail.title}
               compact
             />
@@ -468,7 +469,7 @@ export default function ReviewDetailPage({ params }: { params: { id: string } })
             </label>
           )}
           {detail.status === "published" && (
-            <Link href={`/dashboard/teacher/performance/${params.id}`}>
+            <Link href={`/dashboard/teacher/performance/${id}`}>
               <Button size="sm" variant="outline">View performance</Button>
             </Link>
           )}
