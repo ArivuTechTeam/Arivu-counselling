@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { SparkBurst } from "@/components/ui/spark-burst";
+import { useDashboardIdentity } from "@/components/shared/dashboard-identity-context";
 import { formatAnswerValue, statusLabel, typeLabel } from "@/lib/format";
 import {
   DocumentFigure,
@@ -16,6 +17,7 @@ import {
   regenerateQuestion,
   rejectQuestion,
   setQuestionFigure,
+  unrejectQuestion,
 } from "@/lib/api";
 
 const CHOICE_TYPES = ["mcq_single", "mcq_multi", "true_false", "assertion_reason", "mrm"];
@@ -297,11 +299,20 @@ export function QuestionReviewCard({
     }
   }
 
+  const { features } = useDashboardIdentity();
+  // When purge mode is on, a reject is a reversible "mark for deletion": the
+  // question greys out and the Reject button becomes Un-reject. Deletion only
+  // happens later, at publish (with a confirm). Flag off => today's behavior.
+  const purgeMode = features?.rejected_purge ?? false;
+
   const correct = correctIds(question);
 
   const accent = ACCENT[question.review_status] ?? "#cbd5e1";
   const isApproved = question.review_status === "approved";
   const isRejected = question.review_status === "rejected";
+  // Grey ONLY the question body when it is marked rejected in purge mode; the
+  // action buttons stay fully interactive so a misclick can be undone.
+  const rejectedDim = isRejected && purgeMode;
   const flashClass =
     flash === "approve"
       ? "animate-approve"
@@ -367,7 +378,11 @@ export function QuestionReviewCard({
         />
       ) : (
         <>
-          <p className="mb-3 text-[15px] font-medium leading-relaxed text-foreground">
+          <p
+            className={`mb-3 text-[15px] font-medium leading-relaxed transition-colors ${
+              rejectedDim ? "text-muted-foreground/70 line-through decoration-1" : "text-foreground"
+            }`}
+          >
             {question.question_text}
           </p>
           {question.type === "descriptive" && question.model_answer && (
@@ -382,7 +397,11 @@ export function QuestionReviewCard({
             onChange={onChange}
           /></fieldset>
           {question.options && (
-            <div className="mb-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
+            <div
+              className={`mb-3 grid grid-cols-1 gap-2 sm:grid-cols-2 ${
+                rejectedDim ? "opacity-60" : ""
+              }`}
+            >
               {question.options.map((o) => {
                 const isCorrect = correct.includes(o.id);
                 return (
@@ -416,7 +435,7 @@ export function QuestionReviewCard({
               })}
             </div>
           )}
-          <p className="font-medium text-emerald-700">
+          <p className={`font-medium text-emerald-700 ${rejectedDim ? "opacity-60" : ""}`}>
             Answer: {formatAnswerValue(question.correct_answer)}
           </p>
           {question.explanation && (
@@ -491,19 +510,31 @@ export function QuestionReviewCard({
                 "Approve"
               )}
             </Button>
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => run("reject", () => rejectQuestion(question.id))}
-              disabled={!!busy || isRejected}
-              className={
-                isRejected
-                  ? "border-rose-300 bg-rose-50 text-rose-700 hover:bg-rose-50 disabled:opacity-100"
-                  : ""
-              }
-            >
-              {isRejected ? "Rejected" : busy === "reject" ? "Rejecting…" : "Reject"}
-            </Button>
+            {purgeMode && isRejected ? (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => run("unreject", () => unrejectQuestion(question.id))}
+                disabled={!!busy}
+                className="border-rose-300 bg-rose-50 text-rose-700 hover:bg-rose-100"
+              >
+                {busy === "unreject" ? "Un-rejecting…" : "Un-reject"}
+              </Button>
+            ) : (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => run("reject", () => rejectQuestion(question.id))}
+                disabled={!!busy || isRejected}
+                className={
+                  isRejected
+                    ? "border-rose-300 bg-rose-50 text-rose-700 hover:bg-rose-50 disabled:opacity-100"
+                    : ""
+                }
+              >
+                {isRejected ? "Rejected" : busy === "reject" ? "Rejecting…" : "Reject"}
+              </Button>
+            )}
             <Button
               size="sm"
               variant="outline"

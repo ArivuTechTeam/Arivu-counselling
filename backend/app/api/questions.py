@@ -26,6 +26,7 @@ from app.services.events import (
     QUESTION_EDITED,
     QUESTION_REGENERATED,
     QUESTION_REJECTED,
+    QUESTION_UNREJECTED,
     log_event,
 )
 from app.services.llm import LLMError
@@ -424,6 +425,27 @@ def reject_question(
     log_event(
         tenant_id=profile.tenant_id,
         event_type=QUESTION_REJECTED,
+        actor_id=profile.user_id,
+        actor_role=profile.role,
+        subject_type="question",
+        subject_id=question_id,
+    )
+    return result
+
+
+@router.post("/{question_id}/unreject", response_model=QuestionOut)
+def unreject_question(
+    question_id: str,
+    profile: CurrentProfile = Depends(get_current_profile),
+) -> dict:
+    """Undo a rejection: move a `rejected` question back to `pending_review` so it
+    is neither published nor purged. Mirrors reject and is only meaningful while
+    the quiz is still a reviewable draft."""
+    require_teacher(profile, action="review questions")
+    result = _set_review_status(question_id, profile, "pending_review")
+    log_event(
+        tenant_id=profile.tenant_id,
+        event_type=QUESTION_UNREJECTED,
         actor_id=profile.user_id,
         actor_role=profile.role,
         subject_type="question",

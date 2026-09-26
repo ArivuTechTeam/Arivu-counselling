@@ -6,6 +6,8 @@ import { useSWRConfig } from "swr";
 
 import { StudentDownloads } from "@/components/shared/pdf-buttons";
 import { QuestionFigure } from "@/components/student/question-figure";
+import { QuizAnalysisReport } from "@/components/student/quiz-analysis-report";
+import { ScratchPad } from "@/components/student/scratch-pad";
 import { downloadCardImage } from "@/lib/share-card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -103,6 +105,12 @@ export function QuizAttempt({
   const autoFiredRef = useRef(false);
   const answersRef = useRef(answers);
   answersRef.current = answers;
+  // Per-question time (seconds) tracked in the browser — powers the results
+  // "attempt quality" analysis. Not sent to the server. `visited` drives the
+  // 5-state palette (not-visited vs visited-but-unanswered).
+  const [questionTimes, setQuestionTimes] = useState<Record<string, number>>({});
+  const [visited, setVisited] = useState<Record<string, boolean>>({});
+  const [focusMode, setFocusMode] = useState(false);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -333,10 +341,33 @@ export function QuizAttempt({
     };
   }, [attemptId, invalidateStudentCaches, source, state]);
 
+  // Accumulate time-on-screen per question (client-side only) and flag it
+  // visited, for the results analysis + the 5-state palette.
+  useEffect(() => {
+    if (!state || state.status !== "in_progress") return;
+    const qid = (state as AttemptInProgress).questions[current]?.id;
+    if (!qid) return;
+    setVisited((v) => (v[qid] ? v : { ...v, [qid]: true }));
+    const start = Date.now();
+    return () => {
+      const elapsed = (Date.now() - start) / 1000;
+      if (elapsed > 0) {
+        setQuestionTimes((prev) => ({ ...prev, [qid]: (prev[qid] || 0) + elapsed }));
+      }
+    };
+  }, [state, current]);
+
   if (error && !state) return <ErrorCard message={error} onRetry={load} />;
   if (!state) return <QuestionPanelSkeleton />;
   if (state.status === "graded") {
-    return <Results result={state as AttemptResult} source={source} />;
+    return (
+      <Results
+        result={state as AttemptResult}
+        source={source}
+        questionTimes={questionTimes}
+        marked={marked}
+      />
+    );
   }
 
   const questions = (state as { questions: TakingQuestion[] }).questions;
@@ -452,7 +483,7 @@ export function QuizAttempt({
   const paletteLayout = getPaletteLayout(questions.length);
 
   return (
-    <div className={`grid gap-4 lg:items-start ${paletteLayout.pageColumns}`}>
+    <div className={`grid gap-4 lg:items-start ${focusMode ? "" : paletteLayout.pageColumns}`}>
       {/* Question panel — one at a time */}
       <div className="flex min-w-0 flex-1 flex-col gap-4">
         <div className="flex items-center justify-between gap-3 text-sm">
@@ -462,6 +493,14 @@ export function QuizAttempt({
           </span>
           <div className="flex items-center gap-3">
             <span className="text-muted-foreground">{answeredCount} answered</span>
+            <button
+              type="button"
+              onClick={() => setFocusMode((f) => !f)}
+              className="rounded-md border border-input px-2.5 py-1 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent"
+              title="Hide the question palette for a distraction-free view"
+            >
+              {focusMode ? "Show palette" : "Focus mode"}
+            </button>
           </div>
         </div>
 
@@ -559,8 +598,9 @@ export function QuizAttempt({
         {error && <p className="text-sm text-red-600">{error}</p>}
       </div>
 
-      {/* Question palette — attempted / current / remaining */}
-      <aside className="w-full lg:sticky lg:top-0">
+      {/* Question palette + rough work (hidden in focus mode) */}
+      {!focusMode && (
+      <aside className="flex w-full flex-col gap-4 lg:sticky lg:top-0">
         <div className="rounded-lg border bg-card p-3 shadow-sm sm:p-4">
           <div className="mb-2 flex items-center justify-between gap-3">
             <p className="text-[11px] font-semibold uppercase tracking-widest text-muted-foreground">
@@ -577,17 +617,22 @@ export function QuizAttempt({
               const ans = isAnswered(answers[qq.id]);
               const mk = marked[qq.id];
               const cur = i === current;
+              const seen = Boolean(visited[qq.id]) || cur;
               const base = mk
-                ? "bg-violet-500 text-white"
+                ? ans
+                  ? "bg-violet-500 text-white ring-1 ring-inset ring-emerald-300"
+                  : "bg-violet-500 text-white"
                 : ans
                   ? "bg-emerald-500 text-white"
-                  : "bg-muted text-muted-foreground hover:bg-accent";
+                  : seen
+                    ? "bg-rose-400 text-white"
+                    : "border border-input bg-background text-muted-foreground hover:bg-accent";
               return (
                 <button
                   key={qq.id}
                   type="button"
                   onClick={() => setCurrent(i)}
-                  aria-label={`Go to question ${i + 1}${ans ? ", answered" : ""}${mk ? ", marked for review" : ""}`}
+                  aria-label={`Go to question ${i + 1}${ans ? ", answered" : seen ? ", not answered" : ", not visited"}${mk ? ", marked for review" : ""}`}
                   aria-current={cur ? "step" : undefined}
                   className={`flex h-8 min-w-0 items-center justify-center rounded-md text-xs font-medium transition ${base} ${
                     cur ? "ring-2 ring-brand-600 ring-offset-1" : ""
@@ -601,8 +646,9 @@ export function QuizAttempt({
 
           <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1.5 text-[11px] text-muted-foreground">
             <Legend cls="bg-emerald-500" label="Answered" />
-            <Legend cls="bg-muted" label="Not answered" />
-            <Legend cls="bg-violet-500" label="Marked for review" />
+            <Legend cls="bg-rose-400" label="Not answered" />
+            <Legend cls="bg-violet-500" label="Marked" />
+            <Legend cls="border border-input bg-background" label="Not visited" />
           </div>
 
           <div className="mt-3 flex items-center gap-2 border-t pt-3">
@@ -620,7 +666,9 @@ export function QuizAttempt({
             </Button>
           </div>
         </div>
+        <ScratchPad storageKey={`scratch:${attemptId}`} />
       </aside>
+      )}
     </div>
   );
 }
@@ -823,12 +871,19 @@ function QuestionInput({
 function Results({
   result,
   source,
+  questionTimes = {},
+  marked = {},
 }: {
   result: AttemptResult;
   source: "quiz" | "practice";
+  questionTimes?: Record<string, number>;
+  marked?: Record<string, boolean>;
 }) {
   const [showCard, setShowCard] = useState(false);
+  const [filter, setFilter] = useState<"all" | "wrong" | "marked">("all");
   const correct = result.results.filter((q) => q.is_correct).length;
+  const wrongCount = result.results.filter((q) => !q.is_correct).length;
+  const markedCount = result.results.filter((q) => marked[q.id]).length;
   const pct =
     result.max_score > 0
       ? Math.round((result.total_score / result.max_score) * 100)
@@ -893,62 +948,131 @@ function Results({
         />
       )}
 
-      {result.results.map((q, i) => (
-        <div
-          key={q.id}
-          className={`rounded-md border bg-card p-4 text-sm ${
-            q.is_correct ? "border-emerald-300" : "border-rose-300"
-          }`}
-        >
-          <div className="mb-2 flex items-center justify-between gap-2">
-            <span className="font-semibold">Q{i + 1}</span>
-            <div className="flex items-center gap-2">
-              <BookmarkButton questionId={q.id} />
-              <span
-                className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium ${
-                  q.is_correct
-                    ? "bg-emerald-100 text-emerald-700"
-                    : "bg-rose-100 text-rose-700"
-                }`}
-              >
-                {q.is_correct ? <Check size={13} /> : <X size={13} />}
-                {q.is_correct ? "Correct" : "Incorrect"}
-              </span>
-            </div>
-          </div>
-          <p className="mb-3">{q.question_text}</p>
-          <QuestionFigure figureId={q.figure_id} />
+      <QuizAnalysisReport
+        results={result.results}
+        score={result.total_score}
+        maxScore={result.max_score}
+        times={questionTimes}
+      />
 
-          <div className="flex flex-col divide-y divide-border rounded-md border bg-muted/30">
-            <div className="flex flex-wrap gap-x-2 px-3 py-2">
-              <span className="shrink-0 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                Your answer
-              </span>
-              <span className="text-foreground">
-                {formatAnswerValue(q.student_answer)}
-              </span>
-            </div>
-            {!q.is_correct && (
-              <div className="flex flex-wrap gap-x-2 px-3 py-2">
-                <span className="shrink-0 text-xs font-semibold uppercase tracking-wide text-emerald-600">
-                  Correct answer
-                </span>
-                <span className="font-medium text-emerald-700">
-                  {formatAnswerValue(q.correct_answer)}
+      {/* What's next — turn the score into a next step */}
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border bg-card p-4 text-sm shadow-sm">
+        <p className="font-medium text-foreground">What&apos;s next?</p>
+        <div className="flex flex-wrap gap-2">
+          {wrongCount > 0 && (
+            <button
+              onClick={() => setFilter("wrong")}
+              className="rounded-md border border-input px-3 py-1.5 text-xs font-semibold transition-colors hover:bg-accent"
+            >
+              Review {wrongCount} mistake{wrongCount === 1 ? "" : "s"}
+            </button>
+          )}
+          <Link
+            href="/dashboard/student/subjects"
+            className="rounded-md border border-input px-3 py-1.5 text-xs font-semibold transition-colors hover:bg-accent"
+          >
+            Practice by subject
+          </Link>
+          <Link
+            href="/dashboard/student"
+            className="rounded-md bg-primary px-3 py-1.5 text-xs font-semibold text-primary-foreground transition-colors hover:bg-primary/90"
+          >
+            Back to dashboard
+          </Link>
+        </div>
+      </div>
+
+      {/* Solutions with a quick filter */}
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h3 className="text-sm font-semibold">Solutions</h3>
+        <div className="flex gap-1.5 text-xs">
+          {([
+            ["all", `All ${result.results.length}`],
+            ["wrong", `Incorrect ${wrongCount}`],
+            ["marked", `Marked ${markedCount}`],
+          ] as const).map(([key, label]) => (
+            <button
+              key={key}
+              onClick={() => setFilter(key)}
+              className={`rounded-md border px-2.5 py-1 font-medium transition-colors ${
+                filter === key
+                  ? "border-primary/40 bg-primary/10 text-primary"
+                  : "border-input text-muted-foreground hover:bg-accent"
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {result.results.map((q, i) => {
+        const shown =
+          filter === "all" ? true : filter === "wrong" ? !q.is_correct : Boolean(marked[q.id]);
+        if (!shown) return null;
+        const secs = questionTimes[q.id];
+        return (
+          <div
+            key={q.id}
+            className={`rounded-md border bg-card p-4 text-sm ${
+              q.is_correct ? "border-emerald-300" : "border-rose-300"
+            }`}
+          >
+            <div className="mb-2 flex items-center justify-between gap-2">
+              <span className="font-semibold">Q{i + 1}</span>
+              <div className="flex items-center gap-2">
+                {secs != null && (
+                  <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] font-medium tabular-nums text-muted-foreground">
+                    {Math.round(secs)}s
+                  </span>
+                )}
+                <BookmarkButton questionId={q.id} />
+                <span
+                  className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium ${
+                    q.is_correct
+                      ? "bg-emerald-100 text-emerald-700"
+                      : "bg-rose-100 text-rose-700"
+                  }`}
+                >
+                  {q.is_correct ? <Check size={13} /> : <X size={13} />}
+                  {q.is_correct ? "Correct" : "Incorrect"}
                 </span>
               </div>
-            )}
-            {!q.is_correct && q.explanation && (
+            </div>
+            <p className="mb-3">{q.question_text}</p>
+            <QuestionFigure figureId={q.figure_id} />
+
+            <div className="flex flex-col divide-y divide-border rounded-md border bg-muted/30">
               <div className="flex flex-wrap gap-x-2 px-3 py-2">
                 <span className="shrink-0 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                  Why
+                  Your answer
                 </span>
-                <span className="text-muted-foreground">{q.explanation}</span>
+                <span className="text-foreground">
+                  {formatAnswerValue(q.student_answer)}
+                </span>
               </div>
-            )}
+              {!q.is_correct && (
+                <div className="flex flex-wrap gap-x-2 px-3 py-2">
+                  <span className="shrink-0 text-xs font-semibold uppercase tracking-wide text-emerald-600">
+                    Correct answer
+                  </span>
+                  <span className="font-medium text-emerald-700">
+                    {formatAnswerValue(q.correct_answer)}
+                  </span>
+                </div>
+              )}
+              {q.explanation && (
+                <div className="flex flex-wrap gap-x-2 px-3 py-2">
+                  <span className="shrink-0 text-xs font-semibold uppercase tracking-wide text-primary">
+                    💡 Why
+                  </span>
+                  <span className="text-muted-foreground">{q.explanation}</span>
+                </div>
+              )}
+            </div>
           </div>
-        </div>
-      ))}
+        );
+      })}
     </div>
   );
 }

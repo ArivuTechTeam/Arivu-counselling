@@ -699,6 +699,16 @@ export type InstitutionFeatureFlags = {
   // present on the /me/profile response, optional here so the 6-key fallbacks
   // elsewhere remain valid.
   extended_question_types?: boolean;
+  // Purge-rejected-on-publish toggle; always present on /me/profile, optional
+  // here so the smaller fallbacks stay valid. When on, the review queue offers
+  // an un-reject toggle and publishing permanently deletes rejected questions.
+  rejected_purge?: boolean;
+  // Extraction blueprint toggle; always present on /me/profile, optional here.
+  // When on, the review page offers a panel to publish only a selected subset of
+  // extracted questions (range + per-type caps); the rest stay untouched.
+  extraction_blueprint?: boolean;
+  // Regenerate-whole-draft toggle; always present on /me/profile, optional here.
+  regenerate_set?: boolean;
 };
 
 export const getDashboardProfile = () =>
@@ -807,6 +817,10 @@ export const approveQuestion = (id: string, resolutionNote?: string) =>
 export const rejectQuestion = (id: string) =>
   jsonRequest<ReviewQuestion>(`/api/v1/questions/${id}/reject`, "POST");
 
+/** Undo a rejection: move a rejected question back to pending_review. */
+export const unrejectQuestion = (id: string) =>
+  jsonRequest<ReviewQuestion>(`/api/v1/questions/${id}/unreject`, "POST");
+
 /** Attach (or, with figureId=null, remove) a source-document figure on a question. */
 export const setQuestionFigure = (id: string, figureId: string | null) =>
   jsonRequest<ReviewQuestion>(`/api/v1/questions/${id}/figure`, "PUT", {
@@ -907,8 +921,21 @@ export const deleteOwnAccount = () =>
   });
 
 export const publishQuizSet = (id: string, publicationToken?: string) =>
-  jsonRequest<QuizSetSummary>(`/api/v1/quiz-sets/${id}/publish`, "POST",
+  jsonRequest<QuizSetSummary & { purged_rejected?: number }>(
+    `/api/v1/quiz-sets/${id}/publish`, "POST",
     publicationToken ? { publication_token: publicationToken } : undefined);
+
+/** Publish ONLY the selected subset of an extracted quiz (the blueprint). The
+ *  unselected questions are left untouched in the database. */
+export const blueprintPublish = (id: string, selectedQuestionIds: string[]) =>
+  jsonRequest<QuizSetSummary & { published_count: number; skipped: number }>(
+    `/api/v1/quiz-sets/${id}/blueprint-publish`, "POST",
+    { selected_question_ids: selectedQuestionIds });
+
+/** Regenerate every question in a draft quiz with a fresh AI version (same shape). */
+export const regenerateQuizSet = (id: string) =>
+  jsonRequest<{ regenerated: number; kept: number; total: number }>(
+    `/api/v1/quiz-sets/${id}/regenerate-all`, "POST");
 
 export const duplicateQuizSet = (id: string, title: string, requestKey: string) =>
   jsonRequest<{ quiz_set_id: string; replayed: boolean }>(`/api/v1/quiz-sets/${id}/duplicate`, "POST",

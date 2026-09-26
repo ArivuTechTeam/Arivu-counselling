@@ -82,6 +82,12 @@ class ValidationTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             validate_question_answer_shape("matching", bad, {"pairs": {"l1": "r1"}})
 
+    def test_descriptive_is_accepted_for_approval(self):
+        # Descriptive is AI-graded against the model answer, not shape-checked;
+        # it must pass validation so teachers can approve/publish it.
+        validate_question_answer_shape("descriptive", None, {"model_answer": "..."})
+        validate_question_answer_shape("descriptive", None, None)
+
 
 # --- deterministic grading (grade_answer / full-zero path) --------------------
 

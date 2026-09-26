@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import {
   Card,
@@ -11,6 +11,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { AllocationMeter } from "@/components/ui/allocation-meter";
 import { Dialog } from "@/components/ui/dialog";
 import { AlertTriangle, Check, Sparkles, Zap } from "@/components/ui/icons";
 import { useToast } from "@/components/ui/toast";
@@ -504,6 +505,18 @@ export function BlueprintGenerator() {
     0,
   );
   const selectedCount = selectedTopicNames.length;
+  // Per-type totals across every selected topic, for the live allocation meter.
+  const typeBreakdown = useMemo(() => {
+    const totals: Record<string, number> = {};
+    for (const counts of Object.values(topicCounts)) {
+      for (const [type, n] of Object.entries(counts)) {
+        if (n) totals[type] = (totals[type] || 0) + n;
+      }
+    }
+    return questionTypes
+      .filter((t) => totals[t.value])
+      .map((t) => ({ label: t.label, count: totals[t.value] }));
+  }, [topicCounts, questionTypes]);
   const normalizedTopicSearch = topicSearch.trim().toLocaleLowerCase();
   const visibleTopics = normalizedTopicSearch
     ? topics.filter(
@@ -1115,6 +1128,15 @@ export function BlueprintGenerator() {
             </CardDescription>
           </CardHeader>
           <CardContent className="flex flex-col gap-2">
+            {/* Sticky live meter: stays in view while the teacher scrolls the
+                topic list, so they always see how much of the target is assigned. */}
+            <div className="sticky top-0 z-10 -mx-1 bg-background/95 px-1 pb-1 pt-0.5 backdrop-blur supports-[backdrop-filter]:bg-background/80">
+              <AllocationMeter
+                allocated={allocated}
+                target={desiredTotal}
+                byType={typeBreakdown}
+              />
+            </div>
             {sourceQualityWarnings.length > 0 && (
               <div className="mb-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
                 <p className="font-semibold">Source note</p>

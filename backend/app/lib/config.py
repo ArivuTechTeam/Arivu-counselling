@@ -144,6 +144,25 @@ class Settings:
         self.extended_question_types_enabled = _boolean(
             "EXTENDED_QUESTION_TYPES_ENABLED", False
         )
+        # Regenerate an entire draft quiz in one action (reuses per-question
+        # regeneration, same shape). Off by default. Bounded set size + worker
+        # concurrency keep the synchronous request within time limits.
+        self.regenerate_set_enabled = _boolean("REGENERATE_SET_ENABLED", False)
+        self.regenerate_set_max_questions = _positive_int("REGENERATE_SET_MAX_QUESTIONS", 40)
+        self.regenerate_set_concurrency = _positive_int("REGENERATE_SET_CONCURRENCY", 5)
+        # Extraction blueprint. Off by default: publishing is unchanged and the
+        # blueprint panel is hidden. When on, after extraction the teacher can
+        # select a subset (positional range + per-type PYQ/MTP/RTP caps) to
+        # publish; the unselected questions are LEFT UNTOUCHED in the database
+        # (never rejected, never deleted) so they can be published later.
+        self.extraction_blueprint_enabled = _boolean("EXTRACTION_BLUEPRINT_ENABLED", False)
+        # Purge rejected questions at publish. Off by default: rejecting a
+        # question only soft-flags it (review_status='rejected'), exactly as
+        # today. When on, questions the teacher marked rejected are permanently
+        # deleted when the quiz is published (after a confirm), so they never
+        # linger in the bank and never reach Smart Quiz. A rejected question that
+        # was ever answered by a student is never deleted (history is protected).
+        self.rejected_purge_enabled = _boolean("REJECTED_PURGE_ENABLED", False)
         self.app_env: str = os.getenv("APP_ENV", "production").strip().lower()
         if self.app_env not in {"production", "development", "test"}:
             raise RuntimeError("APP_ENV must be production, development, or test.")

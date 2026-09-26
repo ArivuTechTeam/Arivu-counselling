@@ -9,6 +9,8 @@ regenerate_question  — ask the LLM to rewrite one question (same type/concept)
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
 from fastapi import HTTPException
 
 from app.lib.config import get_settings
@@ -133,52 +135,39 @@ def get_quiz_set_detail(quiz_set_id: str, tenant_id: str) -> dict:
     return {**qs.data, "variants": out_variants, "import_summaries": import_summaries}
 
 
-def _question_source_material(service, question: dict, tenant_id: str) -> str:
-    """Recover the material used to create a question, tenant-scoped throughout."""
-    link = (
-        service.table("quiz_variant_questions")
-        .select("variant_id")
-        .eq("question_id", question["id"])
-        .eq("tenant_id", tenant_id)
-        .maybe_single()
-        .execute()
-    )
-    if not link or not link.data:
-        raise RegenerationSourceError("Question source quiz was not found.")
-    variant = (
-        service.table("quiz_variants")
-        .select("quiz_set_id")
-        .eq("id", link.data["variant_id"])
-        .eq("tenant_id", tenant_id)
-        .maybe_single()
-        .execute()
-    )
-    if not variant or not variant.data:
-        raise RegenerationSourceError("Question source quiz was not found.")
-    quiz_set_id = question.get("source_quiz_id") or variant.data["quiz_set_id"]
-
+def _source_material_for_quiz_set(
+    service, quiz_set_id: str, tenant_id: str, fallback_topic_id: str | None = None
+) -> str:
+    """The material a whole quiz was built from — the blueprint selection for
+    large-document quizzes, otherwise the source document's text. Recovered once
+    and shared across every question in the set."""
     # Large-document generation stores the consolidated source plus the exact
-    # teacher selection. Re-render precisely that selection for regeneration.
-    job = (
+    # teacher selection. A quiz set can have MORE THAN ONE generation job
+    # (retries / re-analysis), so fetch them all and use the most recent one that
+    # actually carries a blueprint — never assume a single row.
+    jobs = (
         service.table("quiz_generation_jobs")
-        .select("master_blueprint,params")
+        .select("master_blueprint,params,created_at")
         .eq("quiz_set_id", quiz_set_id)
         .eq("tenant_id", tenant_id)
-        .maybe_single()
+        .order("created_at", desc=True)
         .execute()
+        .data
+        or []
     )
-    if job and job.data and job.data.get("master_blueprint"):
-        selected = (job.data.get("params") or {}).get("selected_topics") or []
+    job = next((row for row in jobs if row.get("master_blueprint")), None)
+    if job:
+        selected = (job.get("params") or {}).get("selected_topics") or []
         selected_names = {
             str(topic.get("name") or "").strip().casefold()
             for topic in selected
             if str(topic.get("name") or "").strip()
         }
-        if not selected_names and question.get("topic_id"):
+        if not selected_names and fallback_topic_id:
             topic = (
                 service.table("topics")
                 .select("name")
-                .eq("id", question["topic_id"])
+                .eq("id", fallback_topic_id)
                 .eq("tenant_id", tenant_id)
                 .maybe_single()
                 .execute()
@@ -186,7 +175,7 @@ def _question_source_material(service, question: dict, tenant_id: str) -> str:
             if topic and topic.data and topic.data.get("name"):
                 selected_names = {str(topic.data["name"]).strip().casefold()}
         material = render_blueprint_material(
-            job.data["master_blueprint"], selected_names or None
+            job["master_blueprint"], selected_names or None
         )
     else:
         quiz_set = (
@@ -230,25 +219,42 @@ def _question_source_material(service, question: dict, tenant_id: str) -> str:
     return material
 
 
-def regenerate_question(question_id: str, tenant_id: str) -> dict:
-    service = get_service_client()
-
-    row = (
-        service.table("questions")
-        .select(
-            "id,type,question_text,options,correct_answer,explanation,difficulty,"
-            "marks,topic_id" + (",source_quiz_id,content_version" if reuse_enabled() else "")
-        )
-        .eq("id", question_id)
+def _question_source_material(service, question: dict, tenant_id: str) -> str:
+    """Recover the material used to create a single question, tenant-scoped."""
+    link = (
+        service.table("quiz_variant_questions")
+        .select("variant_id")
+        .eq("question_id", question["id"])
         .eq("tenant_id", tenant_id)
         .maybe_single()
         .execute()
     )
-    if row is None or not row.data:
-        raise ValueError("Question not found.")
-    existing = row.data
-    source_material = _question_source_material(service, existing, tenant_id)
+    if not link or not link.data:
+        raise RegenerationSourceError("Question source quiz was not found.")
+    variant = (
+        service.table("quiz_variants")
+        .select("quiz_set_id")
+        .eq("id", link.data["variant_id"])
+        .eq("tenant_id", tenant_id)
+        .maybe_single()
+        .execute()
+    )
+    if not variant or not variant.data:
+        raise RegenerationSourceError("Question source quiz was not found.")
+    quiz_set_id = question.get("source_quiz_id") or variant.data["quiz_set_id"]
+    return _source_material_for_quiz_set(
+        service, quiz_set_id, tenant_id, question.get("topic_id")
+    )
 
+
+_REGEN_QUESTION_COLUMNS = (
+    "id,type,question_text,options,correct_answer,explanation,difficulty,marks,topic_id"
+)
+
+
+def _regenerate_row(service, existing: dict, source_material: str, tenant_id: str) -> dict:
+    """Regenerate ONE question given its row and the (already recovered) source
+    material. Shared by single-question and whole-set regeneration."""
     system = build_regen_system_prompt(
         existing["type"], existing.get("difficulty") or "medium"
     )
@@ -337,7 +343,7 @@ def regenerate_question(question_id: str, tenant_id: str) -> dict:
                 "reviewed_at": None,
             }
         )
-        .eq("id", question_id)
+        .eq("id", existing["id"])
         .eq("tenant_id", tenant_id)
     )
     if existing.get("content_version") is not None:
@@ -346,3 +352,90 @@ def regenerate_question(question_id: str, tenant_id: str) -> dict:
     if not updated.data:
         raise HTTPException(409, "This question changed during regeneration. Reload before trying again.")
     return updated.data[0]
+
+
+def regenerate_question(question_id: str, tenant_id: str) -> dict:
+    """Regenerate a single question in place (recovers its source, then rebuilds)."""
+    service = get_service_client()
+    columns = _REGEN_QUESTION_COLUMNS + (
+        ",source_quiz_id,content_version" if reuse_enabled() else ""
+    )
+    row = (
+        service.table("questions")
+        .select(columns)
+        .eq("id", question_id)
+        .eq("tenant_id", tenant_id)
+        .maybe_single()
+        .execute()
+    )
+    if row is None or not row.data:
+        raise ValueError("Question not found.")
+    existing = row.data
+    source_material = _question_source_material(service, existing, tenant_id)
+    return _regenerate_row(service, existing, source_material, tenant_id)
+
+
+def regenerate_quiz_set(
+    quiz_set_id: str, tenant_id: str, *, max_questions: int, concurrency: int
+) -> dict:
+    """Regenerate EVERY question in a draft quiz, same shape (type/difficulty).
+
+    The source material is recovered ONCE and reused, and questions are rebuilt
+    with bounded concurrency. Best-effort: a question that fails to regenerate
+    keeps its existing content. Returns {regenerated, kept, total}. Raises
+    ValueError when the set has too many questions for a single synchronous run.
+    """
+    service = get_service_client()
+    variants = (
+        service.table("quiz_variants").select("id")
+        .eq("quiz_set_id", quiz_set_id).eq("tenant_id", tenant_id)
+        .execute().data or []
+    )
+    variant_ids = [v["id"] for v in variants]
+    if not variant_ids:
+        return {"regenerated": 0, "kept": 0, "total": 0}
+    links = (
+        service.table("quiz_variant_questions").select("question_id")
+        .in_("variant_id", variant_ids).eq("tenant_id", tenant_id)
+        .execute().data or []
+    )
+    question_ids = list({link["question_id"] for link in links})
+    total = len(question_ids)
+    if total == 0:
+        return {"regenerated": 0, "kept": 0, "total": 0}
+    if total > max_questions:
+        raise ValueError(
+            f"This quiz has {total} questions; regenerate supports up to "
+            f"{max_questions} at once. Regenerate questions individually instead."
+        )
+
+    columns = _REGEN_QUESTION_COLUMNS + (
+        ",source_quiz_id,content_version" if reuse_enabled() else ""
+    )
+    rows = (
+        service.table("questions").select(columns)
+        .in_("id", question_ids).eq("tenant_id", tenant_id)
+        .execute().data or []
+    )
+    if not rows:
+        return {"regenerated": 0, "kept": 0, "total": total}
+
+    # Recover the shared source ONCE (not once per question) — a huge saving for
+    # document-backed quizzes that would otherwise re-download the file N times.
+    source_material = _source_material_for_quiz_set(
+        service, quiz_set_id, tenant_id, rows[0].get("topic_id")
+    )
+
+    regenerated = 0
+    with ThreadPoolExecutor(max_workers=max(1, concurrency)) as pool:
+        futures = [
+            pool.submit(_regenerate_row, service, row, source_material, tenant_id)
+            for row in rows
+        ]
+        for future in as_completed(futures):
+            try:
+                future.result()
+                regenerated += 1
+            except Exception:  # noqa: BLE001 — a failed question keeps its old content
+                pass
+    return {"regenerated": regenerated, "kept": total - regenerated, "total": total}

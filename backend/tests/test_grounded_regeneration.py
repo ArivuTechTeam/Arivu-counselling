@@ -31,6 +31,9 @@ class _Query:
         self.single = True
         return self
 
+    def order(self, *_a, **_kw):
+        return self
+
     def execute(self):
         rows = self.db.setdefault(self.table, [])
         matches = [row for row in rows if all(row.get(k) == v for k, v in self.filters)]
