@@ -10,6 +10,7 @@ await db.exec(`
   create role anon;
   create role authenticated;
   create role service_role bypassrls;
+  create type public.variant_type as enum ('theory', 'practical', 'mixed');
   create table public.tenants (id uuid primary key);
   create table public.profiles (id uuid primary key, tenant_id uuid not null, role text not null, full_name text);
   create table public.courses (id uuid primary key, tenant_id uuid not null, name text not null);
@@ -25,7 +26,7 @@ await db.exec(`
   );
   create table public.quiz_variants (
     id uuid primary key, tenant_id uuid not null, quiz_set_id uuid not null,
-    variant_type text not null, total_marks numeric, time_limit_minutes numeric
+    variant_type public.variant_type not null, total_marks numeric, time_limit_minutes numeric
   );
   create table public.questions (id uuid primary key, tenant_id uuid not null, type text not null, review_status text not null);
   create table public.quiz_variant_questions (id uuid primary key default gen_random_uuid(), tenant_id uuid not null, variant_id uuid not null, question_id uuid not null);
@@ -115,6 +116,7 @@ const history = (await db.query(`select public.student_attempt_history_page(
   $1::uuid,$2::uuid,10,null,null,'all',$3::uuid,null
 ) as value`, [ids.tenant, ids.student, ids.subject])).rows[0].value;
 assert.deepEqual(history.map(row => row.attempt_id), [ids.attempt1, ids.attempt2, ids.practice]);
+assert.deepEqual(history.map(row => row.variant_type), ["mixed", "mixed", "smart"]);
 const isolated = (await db.query(`select public.student_attempt_history_page(
   $1::uuid,$2::uuid,10,null,null,'all',null,null
 ) as value`, [ids.tenant, ids.otherStudent])).rows[0].value;

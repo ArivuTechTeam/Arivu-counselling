@@ -157,7 +157,7 @@ with actor as (
     and profile.role = 'student'
 ), history as (
   select attempt.id, quiz.title as quiz_title, attempt.variant_id,
-    variant.variant_type, quiz.subject_id, quiz.chapter_id,
+    variant.variant_type::text, quiz.subject_id, quiz.chapter_id,
     attempt.total_score, variant.total_marks as max_score,
     attempt.submitted_at, 'quiz'::text as source
   from public.quiz_attempts attempt
@@ -174,7 +174,7 @@ with actor as (
   union all
   select session.id,
     initcap(replace(coalesce(session.mode, 'practice'), '_', ' ')) || ' practice',
-    null::uuid, session.mode,
+    null::uuid, session.mode::text,
     coalesce(session.subject_id, chapter.subject_id), session.chapter_id,
     session.total_score, session.max_score, session.submitted_at, 'practice'::text
   from public.practice_sessions session
