@@ -6,7 +6,7 @@ import pytest
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
-from app.api.faculty_jobs import router
+from app.api.faculty_jobs import router, list_jobs
 from app.lib.auth import CurrentProfile, get_current_profile
 from app.services.blueprint import BPQuestion, BPQuiz, generate_and_persist_from_material
 from app.services.faculty_jobs import enqueue, load_owned, public_job
@@ -38,6 +38,19 @@ def test_public_status_does_not_expose_worker_token_request_or_source_content():
     visible = public_job(job(checkpoint={"source": "private"}, result={"quiz_set_id": "quiz", "questions": ["private"]}))
     assert "lease_token" not in visible and "request" not in visible and "checkpoint" not in visible
     assert visible["result"] == {"quiz_set_id": "quiz"}
+
+
+def test_recent_tasks_include_owned_quiz_publication_status():
+    service = Mock()
+    service.table.return_value.select.return_value.eq.return_value.eq.return_value.order.return_value.limit.return_value.execute.return_value.data = [
+        job(status="completed", result={"quiz_set_id": "quiz", "private": "never send"})
+    ]
+    with patch("app.api.faculty_jobs.get_settings", return_value=SETTINGS), \
+         patch("app.api.faculty_jobs.get_service_client", return_value=service), \
+         patch("app.api.faculty_jobs.select_all_in", return_value=[{"id": "quiz", "status": "published"}]) as select_quizzes:
+        response = list_jobs(PROFILE)
+    assert response["jobs"][0]["result"] == {"quiz_set_id": "quiz", "quiz_status": "published"}
+    assert select_quizzes.call_args.kwargs["values"] == ["quiz"]
 
 
 def test_same_import_intent_hash_ignores_temporary_upload_row_id():

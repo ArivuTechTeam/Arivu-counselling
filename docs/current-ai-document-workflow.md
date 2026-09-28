@@ -118,6 +118,16 @@ stored in Supabase job rows.
 
 ## 6. Cost controls and observability
 
+The migration-73 cost-run view attributes new synchronous and faculty-worker
+generation/import calls to separate runs, including verification/repair and
+provider fallback attempts. Worker retries reuse the faculty job UUID. Run
+summaries include all recorded calls matching the filters across call pages,
+and display the resulting quiz title/ID. Topic analysis is shared document
+preparation, not automatically charged to each quiz; later review/regeneration
+and historical records without run IDs remain separate legacy activity.
+Unknown price or missing usage is displayed as incomplete, not zero. Metadata
+logging is best effort, so these estimates are not a provider invoice.
+
 - Typed text is extracted locally; raw typed files are not sent to a vision
   model.
 - The normal large-document topic path is one bounded AI call rather than a call

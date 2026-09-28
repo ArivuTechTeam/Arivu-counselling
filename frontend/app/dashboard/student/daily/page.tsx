@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 
 import {
@@ -43,24 +43,14 @@ export default function DailyPage() {
   const [actionError, setActionError] = useState<string | null>(null);
   const [showReadiness, setShowReadiness] = useState(false);
   const [celebrate, setCelebrate] = useState(false);
+  const celebratedStreakRef = useRef(0);
 
   // Celebrate once when today's challenge pushes the streak to a new high.
   useEffect(() => {
     if (!info?.done_today || !info.streak) return;
-    const key = "daily-celebrated-streak";
-    let stored = 0;
-    try {
-      stored = Number(window.localStorage.getItem(key) || 0);
-    } catch {
-      /* storage may be unavailable */
-    }
-    if (info.streak > stored) {
+    if (info.streak > celebratedStreakRef.current) {
+      celebratedStreakRef.current = info.streak;
       setCelebrate(true);
-      try {
-        window.localStorage.setItem(key, String(info.streak));
-      } catch {
-        /* ignore */
-      }
       const t = window.setTimeout(() => setCelebrate(false), 1200);
       return () => window.clearTimeout(t);
     }

@@ -12,7 +12,7 @@ vi.mock("@/lib/safe-next", () => ({
   safeDashboardNext: (path: string) => path,
 }));
 
-import { ApiRequestError, getDashboardProfile } from "./api";
+import { ApiRequestError, finalizeAttemptForExit, getDashboardProfile } from "./api";
 
 describe("shared API errors used by all dashboard roles", () => {
   beforeEach(() => {
@@ -64,5 +64,16 @@ describe("shared API errors used by all dashboard roles", () => {
       expect(apiError.message).not.toContain("private");
       expect(apiError.message).not.toContain("reference");
     }
+  });
+
+  it("does not treat a rejected exit submission as a completed attempt", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(
+      JSON.stringify({ detail: "This attempt is still in progress." }),
+      { status: 400, headers: { "Content-Type": "application/json" } },
+    )));
+
+    await expect(finalizeAttemptForExit("attempt-1", "quiz", [])).rejects.toBeInstanceOf(
+      ApiRequestError,
+    );
   });
 });

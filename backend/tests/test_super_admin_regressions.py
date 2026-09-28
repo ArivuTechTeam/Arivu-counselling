@@ -411,6 +411,7 @@ class SuperAdminRegressionTests(unittest.TestCase):
                 "tenant-a",
                 TenantUpdate(
                     name="Renamed Institution",
+                    subdomain="  renamed-institution  ",
                     plan_tier="growth",
                     is_active=False,
                     primary_color="#7c3aed",
@@ -419,17 +420,70 @@ class SuperAdminRegressionTests(unittest.TestCase):
             )
 
         self.assertEqual(result["name"], "Renamed Institution")
+        self.assertEqual(result["subdomain"], "renamed-institution")
         self.assertEqual(result["plan_tier"], "growth")
         self.assertFalse(result["is_active"])
         self.assertEqual(result["primary_color"], "#7C3AED")
         stored = next(row for row in service.tables["tenants"] if row["id"] == "tenant-a")
         self.assertEqual(stored["name"], "Renamed Institution")
+        self.assertEqual(stored["subdomain"], "renamed-institution")
         self.assertFalse(stored["is_active"])
         self.assertEqual(stored["primary_color"], "#7C3AED")
 
     def test_tenant_brand_color_must_be_six_digit_hex(self) -> None:
         with self.assertRaises(ValidationError):
             TenantUpdate(primary_color="green")
+
+    def test_tenant_access_url_rejects_invalid_or_duplicate_slugs(self) -> None:
+        service = _ProvisionService()
+        service.tables["tenants"].append(
+            {
+                "id": "tenant-b",
+                "name": "Other Institution",
+                "subdomain": "already-used",
+                "is_active": True,
+            }
+        )
+
+        with patch("app.api.admin.get_service_client", return_value=service):
+            with self.assertRaises(HTTPException) as invalid:
+                update_institution(
+                    "tenant-a",
+                    TenantUpdate(subdomain="invalid--slug"),
+                    SUPER,
+                )
+            with self.assertRaises(HTTPException) as duplicate:
+                update_institution(
+                    "tenant-a",
+                    TenantUpdate(subdomain="already-used"),
+                    SUPER,
+                )
+
+        self.assertEqual(invalid.exception.status_code, 400)
+        self.assertEqual(duplicate.exception.status_code, 409)
+        stored = next(row for row in service.tables["tenants"] if row["id"] == "tenant-a")
+        self.assertEqual(stored["subdomain"], "existing")
+
+    def test_only_super_admin_can_change_tenant_access_url(self) -> None:
+        service = _ProvisionService()
+        institution_admin = CurrentProfile(
+            user_id="admin",
+            tenant_id="tenant-a",
+            role="institution_admin",
+        )
+
+        with (
+            patch("app.api.admin.get_service_client", return_value=service),
+            self.assertRaises(HTTPException) as caught,
+        ):
+            update_institution(
+                "tenant-a",
+                TenantUpdate(subdomain="renamed-institution"),
+                institution_admin,
+            )
+
+        self.assertEqual(caught.exception.status_code, 403)
+        self.assertEqual(service.tables["tenants"][0]["subdomain"], "existing")
 
     def test_replacing_tenant_logo_preserves_original_filename(self) -> None:
         service = _ProvisionService()

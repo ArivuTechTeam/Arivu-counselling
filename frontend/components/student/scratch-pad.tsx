@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 
 import { safeCalc } from "@/lib/safe-calc";
 
@@ -10,10 +10,11 @@ const PENS = ["#0f172a", "#2563eb", "#16a34a", "#dc2626"];
 /**
  * Rough-work companion, rendered INLINE in the quiz sidebar (under the question
  * palette) so it never covers the question navigation. Notes + a safe
- * Calculator + a freehand Draw pad. Notes persist per attempt in localStorage,
- * so whatever the student writes stays until they submit. Client-side only.
+ * Calculator + a freehand Draw pad. Notes live only in component memory and
+ * disappear when the attempt page closes or submits; rough work is never
+ * written to browser storage or sent to the API.
  */
-export function ScratchPad({ storageKey }: { storageKey: string }) {
+export function ScratchPad() {
   const [tab, setTab] = useState<"notes" | "calc" | "draw">("notes");
   const [openPanel, setOpenPanel] = useState(true);
   const [notes, setNotes] = useState("");
@@ -23,21 +24,8 @@ export function ScratchPad({ storageKey }: { storageKey: string }) {
   const drawingRef = useRef(false);
   const [pen, setPen] = useState(PENS[0]);
 
-  useEffect(() => {
-    try {
-      setNotes(window.localStorage.getItem(storageKey) || "");
-    } catch {
-      /* storage may be unavailable */
-    }
-  }, [storageKey]);
-
   function saveNotes(v: string) {
     setNotes(v);
-    try {
-      window.localStorage.setItem(storageKey, v);
-    } catch {
-      /* ignore */
-    }
   }
 
   function canvasXY(e: React.PointerEvent<HTMLCanvasElement>) {

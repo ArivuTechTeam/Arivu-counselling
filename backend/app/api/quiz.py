@@ -20,6 +20,7 @@ from app.lib.auth import CurrentProfile, get_current_profile
 from app.lib.role_checks import require_teacher
 from app.lib.api_errors import public_error
 from app.lib.config import get_settings
+from app.lib.pagination import DEFAULT_PAGE_SIZE, bounded_page_size, decode_cursor, descending_page, split_page
 from app.lib.supabase import get_service_client
 from app.lib.supabase_queries import select_all, select_all_in
 from app.services.blueprint import generate_blueprint_quiz
@@ -46,6 +47,7 @@ from app.services.review import get_quiz_set_detail
 from app.services.topics import extract_topic_details
 from app.services.topic_capacity import selectable_topic_choices
 from app.services import quiz_reuse
+from app.api.assignments import _require_batches_enabled, _managed_batch_ids, _quiz_academic_scope
 from app.services.question_validation import validate_question_answer_shape
 
 router = APIRouter(prefix="/api/v1/quiz-sets", tags=["quiz"])
@@ -54,9 +56,6 @@ CORE_TYPES = {"mcq_single", "mcq_multi", "true_false", "numerical", "fill_blank"
 # Extended objective types (Phase 6.4). Only selectable when the flag is on, so
 # with it off the allowed set is exactly CORE_TYPES and generation is unchanged.
 EXTENDED_TYPES = {"assertion_reason", "mrm", "matching"}
-QUIZ_SET_PAGE_SIZE_MAX = 100
-
-
 def allowed_question_types() -> set[str]:
     """The question types a teacher may request. Extended types are added only
     when EXTENDED_QUESTION_TYPES_ENABLED is on; otherwise this is CORE_TYPES."""
@@ -660,7 +659,7 @@ def generate_from_job(
 def _teacher_quiz_set(service, quiz_set_id: str, profile: CurrentProfile) -> dict:
     result = (
         service.table("quiz_sets")
-        .select("id")
+        .select("id, subject_id")
         .eq("id", quiz_set_id)
         .eq("tenant_id", profile.tenant_id)
         .eq("created_by", profile.user_id)
@@ -675,22 +674,14 @@ def _teacher_quiz_set(service, quiz_set_id: str, profile: CurrentProfile) -> dic
 @router.get("")
 def list_quiz_sets(
     profile: CurrentProfile = Depends(get_current_profile),
-    page: int = 1,
-    page_size: int = 50,
+    cursor: str | None = None,
+    page_size: int = DEFAULT_PAGE_SIZE,
     archived: bool = False,
-) -> list[dict]:
+) -> dict:
     """List one bounded page of the teacher's quiz sets, newest first."""
     require_teacher(profile, action="access quiz sets")
-    if page < 1 or page_size < 1 or page_size > QUIZ_SET_PAGE_SIZE_MAX:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "page must be positive and page_size must be between 1 and "
-                f"{QUIZ_SET_PAGE_SIZE_MAX}."
-            ),
-        )
+    page_size = bounded_page_size(page_size)
     service = get_service_client()
-    start = (page - 1) * page_size
     query = (
         service.table("quiz_sets")
         .select("id, title, status, created_at, published_at")
@@ -699,14 +690,13 @@ def list_quiz_sets(
     )
     query = query.eq("status", "archived") if archived else query.neq("status", "archived")
     rows = (
-        query
-        .order("created_at", desc=True)
-        .range(start, start + page_size - 1)
+        descending_page(query, "created_at", page_size, decode_cursor(cursor))
         .execute()
         .data
         or []
     )
-    return rows
+    items, next_cursor = split_page(rows, page_size, timestamp_key="created_at")
+    return {"items": items, "next_cursor": next_cursor}
 
 
 @router.get("/{quiz_set_id}")
@@ -740,11 +730,14 @@ class CopyQuizRequest(BaseModel):
 
 class PublishQuizRequest(BaseModel):
     publication_token: str = Field(min_length=1, max_length=64)
+    batch_ids: list[UUID] | None = None
 
 
 class BlueprintPublishRequest(BaseModel):
     # The exact question ids the teacher chose to publish (the blueprint result).
     selected_question_ids: list[str] = Field(default_factory=list)
+    publication_token: str = Field(min_length=1, max_length=64)
+    batch_ids: list[UUID] | None = None
 
 
 @router.post("/{quiz_set_id}/duplicate", status_code=201)
@@ -771,9 +764,29 @@ def publish_quiz_set(
     require_teacher(profile, action="access quiz sets")
     service = get_service_client()
     _teacher_quiz_set(service, quiz_set_id, profile)
+    if body is not None and body.batch_ids is not None and not quiz_reuse.enabled(profile):
+        raise HTTPException(503, "Batch-restricted publishing is not available yet.")
     if quiz_reuse.enabled(profile):
         if body is None:
             raise HTTPException(409, "Refresh the quiz before publishing.")
+        if body.batch_ids is not None:
+            _require_batches_enabled(profile, legacy_master_check=True)
+            if not body.batch_ids or len(set(body.batch_ids)) != len(body.batch_ids):
+                raise HTTPException(400, "Select one or more distinct batches before publishing.")
+            quiz = _teacher_quiz_set(service, quiz_set_id, profile)
+            course_id, level_id = _quiz_academic_scope(service, quiz.get("subject_id"), profile.tenant_id)
+            if not course_id or not level_id:
+                raise HTTPException(400, "This quiz is not linked to a course level.")
+            requested_ids = {str(batch_id) for batch_id in body.batch_ids}
+            if profile.tenant_feature_flags is not None and requested_ids - _managed_batch_ids(service, profile):
+                raise HTTPException(403, "You can publish only to batches you manage.")
+            eligible = select_all_in(
+                service, "batches", "id", in_column="id", values=sorted(requested_ids),
+                configure=lambda query: query.eq("tenant_id", profile.tenant_id)
+                .eq("course_id", course_id).eq("course_level_id", level_id).eq("status", "active"),
+            )
+            if requested_ids != {str(row["id"]) for row in eligible}:
+                raise HTTPException(400, "Select active batches from this quiz's course and level.")
         detail = get_quiz_set_detail(quiz_set_id, profile.tenant_id)
         for variant in detail["variants"]:
             for question in variant["questions"]:
@@ -782,7 +795,14 @@ def publish_quiz_set(
                         validate_question_answer_shape(question["type"], question.get("options"), question.get("correct_answer"))
                     except ValueError as exc:
                         raise HTTPException(409, "Correct the answer configuration before publishing.") from exc
-        row = quiz_reuse.rpc(service, "publish_quiz_atomic", profile, quiz_set_id, p_token=body.publication_token)
+        if body.batch_ids is not None:
+            row = quiz_reuse.rpc(
+                service, "publish_quiz_to_batches_atomic", profile, quiz_set_id,
+                p_token=body.publication_token, p_batch_ids=[str(batch_id) for batch_id in body.batch_ids],
+                p_require_managed=profile.tenant_feature_flags is not None,
+            )
+        else:
+            row = quiz_reuse.rpc(service, "publish_quiz_atomic", profile, quiz_set_id, p_token=body.publication_token)
         snapshot_published_pyq(service, profile.tenant_id, quiz_set_id, profile.user_id)
         published = {key: row.get(key) for key in ("id", "title", "status", "created_at", "published_at")}
         if get_settings().rejected_purge_enabled:
@@ -923,6 +943,18 @@ def publish_quiz_set(
     return result
 
 
+@router.post("/{quiz_set_id}/publish-to-batches")
+def publish_quiz_set_to_batches(
+    quiz_set_id: str,
+    body: PublishQuizRequest,
+    profile: CurrentProfile = Depends(get_current_profile),
+) -> dict:
+    """Separate route fails closed when the frontend reaches an older API deployment."""
+    if not body.batch_ids:
+        raise HTTPException(400, "Select at least one batch before publishing.")
+    return publish_quiz_set(quiz_set_id, profile, body)
+
+
 @router.post("/{quiz_set_id}/archive")
 def archive_quiz_set(
     quiz_set_id: str,
@@ -996,6 +1028,11 @@ def blueprint_publish(
     require_teacher(profile, action="access quiz sets")
     if not getattr(get_settings(), "extraction_blueprint_enabled", False):
         raise HTTPException(status_code=404, detail="Not found.")
+    if not quiz_reuse.enabled(profile):
+        raise HTTPException(
+            status_code=503,
+            detail="Blueprint publishing requires atomic quiz publication.",
+        )
     service = get_service_client()
     _teacher_quiz_set(service, quiz_set_id, profile)
 
@@ -1025,21 +1062,40 @@ def blueprint_publish(
         configure=lambda query: query.eq("tenant_id", profile.tenant_id),
     )
     ids_in_set = {str(link["question_id"]) for link in links}
-    selected_in_set = [qid for qid in selected if qid in ids_in_set]
-    if not selected_in_set:
+    if selected - ids_in_set:
         raise HTTPException(
             status_code=400,
-            detail="None of the selected questions belong to this quiz.",
+            detail="One or more selected questions do not belong to this quiz.",
         )
 
     from app.api.questions import _match_review_snapshot
     from app.services.question_validation import validate_question_answer_shape
 
-    rows = select_all_in(
-        service, "questions", "*", in_column="id", values=selected_in_set,
+    all_rows = select_all_in(
+        service, "questions", "*", in_column="id", values=sorted(ids_in_set),
         configure=lambda query: query.eq("tenant_id", profile.tenant_id)
         .eq("created_by", profile.user_id),
     )
+    if {str(row["id"]) for row in all_rows} != ids_in_set:
+        raise HTTPException(
+            status_code=409,
+            detail="One or more quiz questions are unavailable. Refresh and try again.",
+        )
+
+    already_approved_outside_selection = [
+        row for row in all_rows
+        if row.get("review_status") == "approved" and str(row["id"]) not in selected
+    ]
+    if already_approved_outside_selection:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Some questions outside this blueprint are already approved. "
+                "Move them back to review or include them before publishing."
+            ),
+        )
+
+    rows = [row for row in all_rows if str(row["id"]) in selected]
     # Approve every SELECTED question that can be approved; leave the rest of the
     # document alone. Already-approved stay approved; explicitly-rejected ones are
     # not silently revived; invalid answer shapes are skipped and reported.
@@ -1077,36 +1133,19 @@ def blueprint_publish(
             detail="None of the selected questions could be published. Check their answers.",
         )
 
-    # Denominator = only the selected+approved questions students will actually see.
-    marks_by_variant = {str(v): 0.0 for v in variant_ids}
-    row_by_id = {str(row["id"]): row for row in rows}
-    for link in links:
-        qid = str(link["question_id"])
-        if qid not in approved_ids:
-            continue
-        question = row_by_id.get(qid, {})
-        marks_by_variant[str(link["variant_id"])] += float(
-            link.get("marks_override") or question.get("marks") or 1
-        )
-    for variant_id, total_marks in marks_by_variant.items():
-        service.table("quiz_variants").update({"total_marks": total_marks}).eq(
-            "id", variant_id
-        ).eq("tenant_id", profile.tenant_id).execute()
-
-    updated_set = (
-        service.table("quiz_sets")
-        .update({
-            "status": "published",
-            "published_at": datetime.now(timezone.utc).isoformat(),
-        })
-        .eq("id", quiz_set_id)
-        .eq("tenant_id", profile.tenant_id)
-        .eq("created_by", profile.user_id)
-        .execute()
+    # Reuse the same atomic publication path as ordinary publishing. This keeps
+    # release locking, marks, publication tokens, and optional batch assignment
+    # consistent with the rest of the application. Because every approved
+    # question outside the selection was rejected above, students can receive
+    # only this blueprint's approved subset.
+    published = publish_quiz_set(
+        quiz_set_id,
+        profile,
+        PublishQuizRequest(
+            publication_token=body.publication_token,
+            batch_ids=body.batch_ids,
+        ),
     )
-    if not updated_set.data:
-        raise HTTPException(status_code=404, detail="Quiz set not found.")
-    snapshot_published_pyq(service, profile.tenant_id, quiz_set_id, profile.user_id)
     log_events([
         make_event(tenant_id=profile.tenant_id, event_type=QUESTION_APPROVED,
                    actor_id=profile.user_id, actor_role=profile.role,
@@ -1114,19 +1153,8 @@ def blueprint_publish(
                    metadata={"method": "blueprint"})
         for qid in newly_approved
     ])
-    log_event(
-        tenant_id=profile.tenant_id, event_type=QUIZ_PUBLISHED,
-        actor_id=profile.user_id, actor_role=profile.role,
-        subject_type="quiz_set", subject_id=quiz_set_id,
-        metadata={"method": "blueprint", "published_questions": len(approved_ids)},
-    )
-    row = updated_set.data[0]
     return {
-        "id": row["id"],
-        "title": row["title"],
-        "status": row["status"],
-        "created_at": row["created_at"],
-        "published_at": row.get("published_at"),
+        **published,
         "published_count": len(approved_ids),
         "skipped": skipped,
     }

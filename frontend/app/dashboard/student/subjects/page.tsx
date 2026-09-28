@@ -87,7 +87,19 @@ function buildTree(enrolledSubjects: PracticeSubject[], quizzes: StudentQuiz[]):
 
 export default function StudentSubjectsPage() {
   const router = useRouter();
-  const { data: quizzes = null, error: loadError, mutate } = useStudentQuizzes();
+  const [active, setActive] = useSessionStorageState<string | null>(
+    "student-subjects-active-subject",
+    null,
+    (value): value is string | null => value === null || typeof value === "string",
+  );
+  const {
+    data: quizzes = null,
+    error: loadError,
+    mutate,
+    hasMore: hasMoreQuizzes,
+    loadMore: loadMoreQuizzes,
+    isLoadingMore: isLoadingMoreQuizzes,
+  } = useStudentQuizzes(active && !active.startsWith("name:") ? { subjectId: active } : {});
   const {
     data: enrolledSubjects,
     error: subjectsError,
@@ -95,11 +107,6 @@ export default function StudentSubjectsPage() {
   } = usePracticeSubjects();
   const [actionError, setActionError] = useState<string | null>(null);
   const [starting, setStarting] = useState<string | null>(null);
-  const [active, setActive] = useSessionStorageState<string | null>(
-    "student-subjects-active-subject",
-    null,
-    (value): value is string | null => value === null || typeof value === "string",
-  );
   const [activeTab, setActiveTab] = useSessionStorageState<"available" | "history">(
     "student-subjects-tab",
     "available",
@@ -111,7 +118,13 @@ export default function StudentSubjectsPage() {
     data: attempts,
     error: attemptsError,
     mutate: mutateAttempts,
-  } = useStudentAttempts(active !== null && activeTab === "history");
+    hasMore: hasMoreAttempts,
+    loadMore: loadMoreAttempts,
+    isLoadingMore: isLoadingMoreAttempts,
+  } = useStudentAttempts(
+    active !== null && activeTab === "history",
+    active && !active.startsWith("name:") ? { subjectId: active } : {},
+  );
 
   const tree = useMemo(
     () => (quizzes && enrolledSubjects ? buildTree(enrolledSubjects, quizzes) : {}),
@@ -324,7 +337,17 @@ export default function StudentSubjectsPage() {
                 </CardContent>
               </Card>
             )}
+            {hasMoreAttempts && (
+              <button type="button" onClick={() => void loadMoreAttempts()} disabled={isLoadingMoreAttempts} className="self-center rounded-lg border border-input px-4 py-2 text-sm font-medium disabled:opacity-60">
+                {isLoadingMoreAttempts ? "Loading…" : "Load more history"}
+              </button>
+            )}
           </div>
+        )}
+        {activeTab === "available" && hasMoreQuizzes && (
+          <button type="button" onClick={() => void loadMoreQuizzes()} disabled={isLoadingMoreQuizzes} className="self-center rounded-lg border border-input px-4 py-2 text-sm font-medium disabled:opacity-60">
+            {isLoadingMoreQuizzes ? "Loading…" : "Load more quizzes"}
+          </button>
         )}
         <AttemptReadiness
           open={pending !== null}
@@ -397,6 +420,11 @@ export default function StudentSubjectsPage() {
             );
           })}
         </div>
+      )}
+      {quizzes !== null && hasMoreQuizzes && (
+        <button type="button" onClick={() => void loadMoreQuizzes()} disabled={isLoadingMoreQuizzes} className="self-center rounded-lg border border-input px-4 py-2 text-sm font-medium disabled:opacity-60">
+          {isLoadingMoreQuizzes ? "Loading…" : "Load more quizzes"}
+        </button>
       )}
     </div>
   );

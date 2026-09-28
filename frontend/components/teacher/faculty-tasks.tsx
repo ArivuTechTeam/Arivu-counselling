@@ -50,7 +50,7 @@ export function FacultyTasks() {
       <h2 className="font-semibold">Recent tasks</h2>
       <p className="mt-1 text-sm text-muted-foreground">
         Once generation or import is queued here, you can leave or refresh this page.
-        Return here to open the finished draft. Topic analysis still uses its existing workflow.
+        Return here to open the quiz when it is ready. Topic analysis still uses its existing workflow.
       </p>
       {error && <p role="alert" className="mt-2 text-sm text-destructive">{error}</p>}
       {!jobs.length && <p className="mt-2 text-sm text-muted-foreground">No background tasks yet.</p>}
@@ -63,7 +63,9 @@ export function FacultyTasks() {
               {job.error_message && <p className="text-muted-foreground">{job.error_message}</p>}
             </div>
             {job.status === "completed" && job.result?.quiz_set_id && (
-              <Link className="font-medium text-primary underline" href={`/dashboard/teacher/review/${job.result.quiz_set_id}`}>Review draft</Link>
+              <Link className="font-medium text-primary underline" href={job.result.quiz_status === "published"
+                ? `/dashboard/teacher/published-quizzes/${job.result.quiz_set_id}`
+                : `/dashboard/teacher/review/${job.result.quiz_set_id}`}>Open quiz</Link>
             )}
             {["queued", "running"].includes(job.status) && (
               <Button size="sm" variant="outline" disabled={cancelling === job.id} onClick={() => cancel(job.id)}>

@@ -13,7 +13,7 @@ import {
 
 function useCountUp(target: number, on: boolean, ms = 900) {
   const [v, setV] = useState(0);
-  const raf = useRef<number>();
+  const raf = useRef<number | null>(null);
   useEffect(() => {
     if (!on) return;
     const start = performance.now();
@@ -24,7 +24,7 @@ function useCountUp(target: number, on: boolean, ms = 900) {
     };
     raf.current = requestAnimationFrame(tick);
     return () => {
-      if (raf.current) cancelAnimationFrame(raf.current);
+      if (raf.current !== null) cancelAnimationFrame(raf.current);
     };
   }, [target, on, ms]);
   return v;

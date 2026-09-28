@@ -77,7 +77,14 @@ function flatten(quizzes: StudentQuiz[]): QuizItem[] {
 
 export function StudentQuizzes() {
   const router = useRouter();
-  const { data: quizzes = null, error: loadError, mutate } = useStudentQuizzes();
+  const {
+    data: quizzes = null,
+    error: loadError,
+    mutate,
+    hasMore,
+    loadMore,
+    isLoadingMore,
+  } = useStudentQuizzes();
   const [actionError, setActionError] = useState<string | null>(null);
   const [starting, setStarting] = useState<string | null>(null);
   const [pending, setPending] = useState<QuizItem | null>(null);
@@ -171,7 +178,7 @@ export function StudentQuizzes() {
           <CardTitle>Quizzes to take</CardTitle>
           <CardDescription>
             {toAttend.length > 0
-              ? `You have ${toAttend.length} quiz${
+              ? `You have ${toAttend.length} loaded quiz${
                   toAttend.length === 1 ? "" : "zes"
                 } waiting — pick one to start.`
               : "Quizzes assigned to your course appear here."}
@@ -276,12 +283,12 @@ export function StudentQuizzes() {
         </CardContent>
       </Card>
 
-      {/* Completed — retake to improve the score */}
+      {/* Previously opened — some attempts may have ended without an answer */}
       {completed.length > 0 && (
         <Card className="animate-rise" style={{ animationDelay: "60ms" }}>
           <CardHeader>
-            <CardTitle>Completed quizzes</CardTitle>
-            <CardDescription>Retake any quiz to improve your score.</CardDescription>
+            <CardTitle>Quizzes you&apos;ve opened</CardTitle>
+            <CardDescription>Try one again to finish it or improve your score.</CardDescription>
           </CardHeader>
           <CardContent className="flex flex-col gap-2">
             {completed.map((i) => (
@@ -317,12 +324,17 @@ export function StudentQuizzes() {
                     ? "Starting…"
                     : i.attemptsRemaining === 0
                       ? "Limit reached"
-                      : "Retake"}
+                      : "Try again"}
                 </Button>
               </div>
             ))}
           </CardContent>
         </Card>
+      )}
+      {loaded && hasMore && (
+        <Button variant="outline" onClick={() => void loadMore()} disabled={isLoadingMore}>
+          {isLoadingMore ? "Loading…" : "Load more quizzes"}
+        </Button>
       )}
       <AttemptReadiness
         open={pending !== null}

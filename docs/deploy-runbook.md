@@ -8,18 +8,76 @@ worker (`quiz-generator-worker`). They share one Supabase project.
 > Backend note: there is no `vercel.json`, so the FastAPI backend is **not**
 > set up for Vercel serverless. It runs on a host that runs `uvicorn` directly
 > (zero adapter work) — **Render** and **Railway** both work; **confirmed live
-> on Railway as of 2026-09-24** (verified via the Railway CLI: service
+> on Railway as of 2026-09-26** (verified via the Railway CLI: service
 > `quiz-generator`, project `quiz-generator`, environment `production`, domain
 > `quiz-generator-production-7461.up.railway.app`). Render remains a valid
 > alternative if you're setting this up fresh, but isn't what's deployed today.
 > The frontend goes on Vercel.
 
-> **Production service inventory (verified 2026-09-24):** only
+> **Production service inventory (last verified 2026-09-26):** only
 > `quiz-generator` and `quiz-generator-worker` remain. The old daily
 > `quiz-generator-retention` service was deleted after migration 59 removed the
 > raw AI-log columns it cleaned. Do not recreate that cron for this schema.
 
 ## Deployment security gates
+
+### Repository verification baseline
+
+- Keep the frontend on Next.js `15.5.26` or a later patched supported release.
+  CI runs `pnpm audit --prod --audit-level high`; a high/critical production
+  advisory blocks the repository check.
+- CI runs on pull requests, direct pushes to `main`, and manual dispatch. It
+  executes backend tests, all isolated database migration harnesses, frontend
+  lint/unit/build checks, and Chromium public-access/security-header smoke
+  tests.
+- The browser suite proves public login/legal routes, unauthenticated dashboard
+  redirection, and the response-header baseline. Authenticated student,
+  teacher, institution-admin, and super-admin browser journeys still require
+  disposable isolated-staging accounts; do not put production credentials in
+  GitHub Actions.
+- `X-Powered-By` is disabled. JavaScript uses a unique per-request CSP nonce
+  with `strict-dynamic`; `script-src` must never include `unsafe-inline` in
+  production. Inline style attributes remain allowed because tenant colours
+  and charts currently depend on them, but that permission cannot execute
+  JavaScript. Nonces force dynamic page rendering, so check Vercel latency and
+  invocation usage after deployment.
+- Browser auth remains per-tab in `sessionStorage`, which is required by the
+  current browser-to-Supabase/browser-to-FastAPI architecture. The nonce-based
+  script policy materially reduces the XSS path that could read those tokens.
+  Moving tokens to HttpOnly cookies would require a separate backend-for-
+  frontend auth redesign; do not claim that storage is HttpOnly today.
+- Free-text dashboard searches are sent in authenticated POST JSON bodies, not
+  query strings. This keeps names and search phrases out of browser history,
+  proxy access logs, referrer URLs, and screenshots. IDs, cursors, statuses,
+  and other non-free-text filters may remain in GET query strings.
+- GitHub repository rules could not be independently enabled on the current
+  private-repository plan. Until required checks are available, treat a green
+  `Repository checks` run as a manual merge gate.
+
+Supabase SSL enforcement, network restrictions, Auth CAPTCHA/rate limits, and
+backup retention are provider settings, not source-controlled settings. Record
+dated dashboard evidence and complete a restore drill before capacity sign-off;
+repository tests cannot substitute for those checks.
+
+### AI quiz cost tracking (migration 73)
+
+Apply `migration-73-ai-quiz-cost-workflows.sql` after migration 72 before
+deploying the API/frontend cost-run view. It adds private metadata-only
+`ai_quiz_workflows`, a nullable log workflow reference and the
+service-role-only `ai_quiz_cost_page` aggregate. Deploy both API and worker
+to attribute new synchronous and queued runs. Local Docker's API does not
+auto-reload: restart it after migration/code changes; restart the worker too
+if its profile is enabled. Never rebuild historical runs by timestamp guesses.
+
+Run `node scripts/test-ai-quiz-cost-workflows-db.mjs` for isolated SQL
+aggregation, pagination, unknown-price and privilege checks. No live database
+or provider billing has been checked by that script. Verify one authorized
+generation/import run on staging before rollout, including a fallback/retry,
+and confirm its quiz link, stage totals and filter behavior. Costs represent
+best-effort recorded usage estimates, not the provider's authoritative invoice.
+The operator reported migration 73 applied on 2026-09-26, and a bounded live
+queued-generation smoke test recorded one analysis request plus four workflow
+requests. Fallback/retry attribution remains an isolated-staging test case.
 
 Do not release until the target Supabase project has been checked directly:
 
@@ -43,9 +101,11 @@ them in the Supabase dashboard for the exact project used by production.
 
 Merge your work to `main` first (see `docs/merge-workflow.md`).
 
-- **Frontend (Vercel):** builds automatically from GitHub via Vercel's
-  standard integration (not independently re-verified this session — confirm
-  in the Vercel dashboard if unsure).
+- **Frontend (Vercel):** builds automatically from GitHub after a PR merges to
+  `main`. PR #65 produced merge commit `6dd08cd`; GitHub's Vercel production
+  status reported success on 2026-09-26. The production institution login
+  route returned HTTP 200 with the expected security headers. That check did
+  not exercise an authenticated role journey.
 - **Backend (Railway): does NOT auto-deploy from GitHub.** Confirmed
   2026-09-04 via `railway status --json` → the service's `"source"` field is
   `null`. Merging to `main` alone does nothing to the backend — after
@@ -125,19 +185,108 @@ migration-62-atomic-student-contact.sql
 migration-63-pyq.sql
 migration-64-paper-knowledge-base.sql
 migration-65-paper-bank-safety.sql
+migration-66-paper-attempts.sql
+migration-67-atomic-batch-publication.sql
+migration-68-teacher-dashboard-aggregates.sql
+migration-69-cursor-pagination.sql
+migration-70-fair-practice-selection.sql
+migration-71-query-plan-indexes.sql
+migration-72-atomic-quiz-persistence.sql
+migration-73-ai-quiz-cost-workflows.sql
+migration-74-role-aware-support.sql
 ```
 
-(Filenames above verified 2026-09-25 against `migrations/`, through migration
-65. Apply migrations 63, 64, and 65 in order
-after migration 62 before setting `PAPER_BANK_ENABLED=true` or deploying a
-backend configured with that flag. The paper bank also needs a coordinated API
-and worker rollout. Migration 65 installs atomic snapshot replacement and the
-descriptive-grading quota. Keep the flag off until the migrations are confirmed
-on the target Supabase project and a staging paper-import/publish/student-grade
-drill succeeds; repository tests cannot verify live SQL or provider behavior.
+(Filenames above verified 2026-09-26 against `migrations/`, through migration
+73. Migrations 63–65 support the existing paper bank; migration 66 adds durable,
+private paper attempts. The operator reported migration 66 applied on 2026-09-25,
+but that has not been checked directly in the target Supabase project. Migration
+67 adds atomic publish-and-batch-assignment and **must be applied before deploying
+the batch-publication API**; it has not been reported applied. The change is
+API/frontend only; the existing paper-import worker is unchanged. Before rollout, run a
+staging paper-import/publish/student-grade drill. Repository tests cannot verify
+live SQL or provider behavior.
+The batch-publication frontend calls a new `/publish-to-batches` API route so it
+fails closed against an older Railway API while Vercel updates after merge;
+deploy the API promptly after migration 67 and the main-branch merge.
+Migration 68 moves teacher class overview, subject metrics, chapter counts, and
+published-quiz summaries into tenant/actor/current-assignment-scoped database
+functions. The operator reported it applied on 2026-09-25, but the target
+project and live function privileges have not been checked independently.
+Confirm that inventory before deploying the A2 backend; otherwise those four
+faculty routes will fail if their RPCs do not exist. Run
+`scripts/test-teacher-dashboard-aggregates-db.mjs` locally and
+`scripts/teacher-dashboard-explain.sql` against staging, then compare the route
+contracts and latency before deployment. Migration 68 is additive and does not
+delete or rewrite application rows.
+Migration 69 adds bounded cursor-page functions and supporting composite
+indexes for Release A3. Apply it after migration 68 and before deploying the A3
+API; otherwise the student catalogue, student history, and teacher published
+monitor routes will fail when their page RPCs are missing. Run
+`scripts/test-cursor-pagination-db.mjs` locally, verify function privileges and
+query plans against staging, then deploy the API before the frontend response
+contract change. The operator reported migration 69 applied on 2026-09-26, but
+the target project and live function privileges have not been checked
+independently.
+Migration 70 adds indexed random-key practice selection for Release A4. Apply it
+after migration 69 and before deploying the A4 API; the new selector calls
+`select_practice_question_ids_page` and will fail closed if the RPC is missing.
+The migration backfills every existing question with a stable sampling key, so
+test its duration on production-shaped staging and run it during a low-write
+window. During that transaction it temporarily disables only the named
+Migration 51 released-question guard, performs the metadata backfill under the
+table lock, and re-enables the guard before continuing. Run
+`scripts/test-fair-practice-selection-db.mjs` locally and
+`scripts/fair-practice-selection-explain.sql` on staging, then smoke-test Smart
+Practice, chapter practice, exam type mixes, and batch-restricted challenges.
+The operator reported migration 70 applied on 2026-09-26, but the target
+project, selector privileges, and indexes have not been independently verified.
+Migration 71 adds the two question-first answer indexes validated for Release
+A5 and removes two indexes made redundant by the existing answer uniqueness
+constraints. Apply it after migration 70 during a low-write window: its regular
+index builds allow reads but block writes to each answer table, and a five-second
+lock timeout makes it fail safely instead of waiting indefinitely. Run
+`scripts/query-plan-indexes-explain.sql` immediately before and after the
+migration with the same fake staging tenant/question IDs, save both outputs,
+and compare scan type, rows removed, buffers, planning time, and execution time.
+Then run the A1 write/load scenario and Supabase performance/security advisors.
+The operator reported migration 71 applied on 2026-09-26, but its hosted query
+plans, write-load impact, and advisor results have not been independently
+verified.
+Migration 72 replaces the remaining synchronous per-row generated/imported
+quiz writes with one service-role-only transaction. Apply it after migration 71
+and before deploying the A6 API and worker together; otherwise generation and
+extraction routes that call `persist_generated_quiz` will fail closed. Run
+`scripts/test-atomic-quiz-persistence-db.mjs` and
+`scripts/test-faculty-jobs-db.mjs` locally, inspect the function privileges,
+then smoke-test legacy generation, blueprint generation, extraction, and a
+durable lost-response retry on staging. The migration is additive and does not
+rewrite existing content. The operator reported migration 72 applied on
+2026-09-26. Production schema preflight passed and a bounded queued generation
+exercised the persistence RPC; retain an explicit privilege inventory and
+lost-response retry drill as staging evidence.
+Release A7 adds no migration and authorizes no production load test. After
+migration 72 and matching API/worker revisions are verified on isolated
+staging, follow `docs/a7-capacity-verification.md`. Its write profile consumes
+attempts for 200 or 500 disposable students, so it must never use production
+accounts or the production API. Save the read/write JSON reports, both SQL
+reports, worker recovery evidence, and infrastructure metrics before capacity
+sign-off.
+
+Apply `migration-74-role-aware-support.sql` after migration 73 and before
+deploying the role-aware contact API. It preserves existing student requests,
+records their role as `student`, renames the owner column to `requester_id`, and
+adds the service-role-only `submit_contact_request` function. Its compatibility
+wrapper keeps old student submissions working during rollout, but the renamed
+owner column means request-history reads require the new API. Deploy the API
+immediately after the migration and before the frontend. Run
+`node scripts/test-role-aware-support-db.mjs`
+before deployment, then smoke-test one student, faculty, and institution-admin
+submission plus the super-admin reply/close flow. No worker deployment is
+required.
+
 Apply `migration-62-atomic-student-contact.sql` after migration 60 and
-before deploying the contact API that calls `submit_student_contact`; otherwise
-student submissions will return a temporary service error. Apply
+before deploying the original contact API that calls `submit_student_contact`;
+otherwise student submissions will return a temporary service error. Apply
 `migration-61-extended-question-types.sql` after migrations 59 and 60
 before enabling `EXTENDED_QUESTION_TYPES_ENABLED`. It adds three objective
 question-type enum values. `migration-60-student-contact.sql` creates the private
@@ -300,16 +449,22 @@ afterward. Do not mistake an API `/health` response for worker readiness; use
 the super-admin `/api/v1/platform/worker-health` check and a small queued-job
 smoke test. The obsolete retention cron is not a companion service.
 
-**Observed 2026-09-24:** the worker's latest successful deployment preceded
-the API deployment that day. Railway status alone does not prove the two are
-running the same code revision. Before a worker-sensitive release, compare the
-deployed revisions or redeploy both from the same verified commit; do not infer
-worker compatibility from the API health check.
+**Observed 2026-09-26:** API deployment
+`a4daadf2-d2f2-4dba-99d3-4ef7cde68c7c`, uploaded from a clean `main` worktree
+at `6dd08cd`, reported `SUCCESS`; the production `/health` endpoint returned
+HTTP 200. The worker was deliberately not redeployed because PR #65 changed no
+worker runtime code or shared job contract, so its last observed successful
+deployment remains `8dfc43bc`. No migration was required or applied for PR
+#65. Earlier Release A verification passed production schema preflight and a
+live queued 10-question generation through that worker, recording its workflow
+and provider-call costs. API health does not prove worker readiness, restart
+recovery, paper-bank grading, 200/500-user capacity, or backup restoration.
 
 ### Advanced feature master switches
 
-Set the following on the API service. Set `FACULTY_JOBS_ENABLED=true` on the
-worker too. These are deployment-wide emergency switches. With migration 58,
+Set the following on the API service. Set `FACULTY_JOBS_ENABLED=true` and
+`PAPER_BANK_ENABLED` on the worker too: worker paper extraction reads the latter
+at startup. These are deployment-wide emergency switches. With migration 58,
 every institution receives the complete commerce feature set automatically;
 there is no per-institution feature setup.
 
@@ -317,7 +472,7 @@ there is no per-institution feature setup.
 |---|---|
 | `FACULTY_JOBS_ENABLED` | `true` after the worker service is running |
 | `EXTENDED_QUESTION_TYPES_ENABLED` | `false` until migration 61 and a coordinated API/worker rollout are verified; then enable only if the institution-facing feature is intended |
-| `PAPER_BANK_ENABLED` | `false` until migrations 63–65, the API and worker rollout, and paper-bank grading and snapshot checks are verified |
+| `PAPER_BANK_ENABLED` | Code default `false`; observed `true` on both production Railway services 2026-09-25. Before deploying the new paper-attempt API, apply migration 66; verify paper start, incomplete-submit rejection, completed report, and retry behavior. The end-to-end checks remain outstanding. |
 | `RATE_LIMIT_PAPER_GRADING_PER_HOUR` | `10` paid descriptive grading attempts per student per rolling hour (requires migration 65) |
 | `QUIZ_REUSE_ENABLED` | `true` |
 | `BATCHES_ENABLED` | `true` |
@@ -385,6 +540,11 @@ startup in `backend/app/lib/config.py` with safe code defaults. See
 `docs/chunked-generation-architecture.md` for what each one tunes; set them
 explicitly in Railway only if the defaults need overriding.
 
+Changing `PAPER_BANK_ENABLED` requires redeploying/restarting both the API and
+worker; `app/lib/config.py` reads it at process startup. It is server-only,
+not a `NEXT_PUBLIC_*` frontend variable. `PYQ_ENABLED` remains a legacy alias
+in code; use `PAPER_BANK_ENABLED` for new configuration.
+
 **Deploying a change (Railway):** merge to `main` first, then run
 `scripts/deploy.sh` from `main` (or `railway up backend --path-as-root
 --service quiz-generator` directly) — merging alone does not deploy, see
@@ -401,6 +561,16 @@ Notes/gotchas below.
 
 - **Root directory:** `frontend`
 - **Framework:** Next.js (auto-detected) · Build: `next build`
+
+The institution-admin teacher editor keeps Save/Cancel visible while its
+subject list scrolls (`frontend/app/dashboard/institution-admin/users/page.tsx`,
+merged in PR #59). The security/test remediation in PR #65 upgraded the
+frontend to Next.js `15.5.26`, added the public Playwright smoke suite, and was
+merged as `6dd08cd`. Vercel reported the production deployment successful on
+2026-09-26. The institution login route returned HTTP 200 with CSP, HSTS,
+`X-Content-Type-Options: nosniff`, and clickjacking protection, without an
+`X-Powered-By` header. Authenticated role journeys were not rerun after this
+deployment and remain a manual post-deploy check.
 
 **Environment variables** (from `frontend/.env.local.example`):
 
@@ -444,6 +614,15 @@ hostname changes, then restart or redeploy the backend.
 7. If durable faculty jobs are enabled, check worker health separately and
    submit one small teacher generation/import job; verify it progresses from
    queued to a completed review draft.
+8. If `PAPER_BANK_ENABLED=true`, import a small PYQ/MTP/RTP paper as a teacher,
+   approve and publish its questions, then use a student in the same subject to
+   start a paper attempt. Confirm the taking response hides answer keys and an
+   incomplete submission is rejected. Answer every question and submit; only
+   then should the report show correct answers. Include an objective and a
+   descriptive question; confirm the snapshot exists and any provider failure
+   is retryable. Check that another student cannot load the attempt.
+9. As an institution admin, open Edit teacher with a long subject list and
+   verify Save/Cancel remain visible while the subjects scroll.
 
 If a page 500s, check the backend logs and that all env vars are set + migrations run.
 

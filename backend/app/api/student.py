@@ -15,16 +15,20 @@ from datetime import datetime, timezone
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.lib.auth import CurrentProfile, get_current_profile
 from app.lib.api_errors import public_error
 from app.lib.config import get_settings
+from app.lib.pagination import (
+    DEFAULT_PAGE_SIZE,
+    bounded_page_size,
+    decode_cursor,
+    encode_cursor,
+)
 from app.lib.supabase import get_service_client
-from app.lib.supabase_queries import select_all, select_all_in
+from app.lib.supabase_queries import rpc_json_value, select_all, select_all_in
 from app.services.attempt_timing import (
-    DEFAULT_PACING_SECONDS,
-    QUESTION_PACING_SECONDS,
     deadline_state,
     effective_time_limit_minutes,
     is_answered,
@@ -33,8 +37,7 @@ from app.services.attempt_timing import (
 )
 from app.services.events import ATTEMPT_SUBMITTED, log_event
 from app.services.scoring import normalize_policy, score
-from app.services.batch_access import assigned_quiz_ids, student_can_access_quiz
-from app.services.selector import enrolled_subject_ids
+from app.services.batch_access import student_can_access_quiz
 from app.services.tenant_features import profile_feature_enabled
 
 router = APIRouter(prefix="/api/v1", tags=["student"])
@@ -66,6 +69,38 @@ class StudentQuizOut(StudentResponse):
     subject_name: str | None = None
     chapter_name: str | None = None
     variants: list[StudentVariantOut]
+
+
+class StudentQuizPage(StudentResponse):
+    items: list[StudentQuizOut]
+    next_cursor: str | None = None
+
+
+class StudentQuizSearchRequest(StudentResponse):
+    cursor: str | None = None
+    page_size: int = DEFAULT_PAGE_SIZE
+    subject_id: str | None = None
+    chapter_id: str | None = None
+    assignment: Literal["all", "course", "assigned"] = "all"
+    query: str = Field(default="", max_length=100)
+
+
+class AttemptHistoryOut(StudentResponse):
+    attempt_id: str
+    quiz_title: str
+    variant_id: str | None = None
+    variant_type: str | None = None
+    subject_id: str | None = None
+    chapter_id: str | None = None
+    total_score: float | None = None
+    max_score: float | None = None
+    submitted_at: datetime
+    source: Literal["quiz", "practice"]
+
+
+class AttemptHistoryPage(StudentResponse):
+    items: list[AttemptHistoryOut]
+    next_cursor: str | None = None
 
 
 class TakingQuestionOut(StudentResponse):
@@ -169,34 +204,6 @@ def _attempt_questions(service, attempt: dict, tenant_id: str) -> list[dict]:
     return _ordered_approved_questions(service, attempt["variant_id"], tenant_id)
 
 
-def _approved_question_stats(
-    service, variant_ids: list[str], tenant_id: str
-) -> dict[str, dict[str, int]]:
-    """Count questions and derive their base duration in one round trip."""
-    if not variant_ids:
-        return {}
-    links = select_all_in(
-        service,
-        "quiz_variant_questions",
-        "variant_id, questions!inner(id, type)",
-        in_column="variant_id",
-        values=variant_ids,
-        configure=lambda query: query.eq("tenant_id", tenant_id).eq(
-            "questions.review_status", "approved"
-        ),
-    )
-    stats: dict[str, dict[str, int]] = {}
-    for link in links:
-        variant_id = link["variant_id"]
-        item = stats.setdefault(variant_id, {"count": 0, "seconds": 0})
-        question_type = (link.get("questions") or {}).get("type")
-        item["count"] += 1
-        item["seconds"] += QUESTION_PACING_SECONDS.get(
-            question_type, DEFAULT_PACING_SECONDS
-        )
-    return stats
-
-
 def _strip_answer(q: dict) -> dict:
     """What a student is allowed to SEE while taking — no correct_answer/why."""
     return {
@@ -235,193 +242,91 @@ def _quiz_title_for_variant(
     return "Quiz"
 
 
-@router.get("/quizzes", response_model=list[StudentQuizOut])
-def list_quizzes(profile: CurrentProfile = Depends(get_current_profile)) -> list[dict]:
+def list_quizzes(
+    profile: CurrentProfile = Depends(get_current_profile),
+    cursor: str | None = None,
+    page_size: int = DEFAULT_PAGE_SIZE,
+    subject_id: str | None = None,
+    chapter_id: str | None = None,
+    assignment: Literal["all", "course", "assigned"] = "all",
+    q: str = "",
+) -> StudentQuizPage:
     _require_student(profile)
-    service = get_service_client()
-    attempt_limit = get_settings().student_quiz_attempt_limit
-
-    # Resolve subjects through the student's course + level enrollment. This is
-    # the same authorization boundary used by Smart Quiz and attempt creation.
-    subject_ids = sorted(enrolled_subject_ids(service, profile))
-    if not subject_ids:
-        return []
-
+    page_size = bounded_page_size(page_size)
+    page_cursor = decode_cursor(cursor)
+    normalized_query = q.strip()
+    if len(normalized_query) > 100:
+        raise HTTPException(status_code=400, detail="Search text is too long.")
+    settings = get_settings()
     batches_on = (
-        getattr(get_settings(), "batches_enabled", False)
+        getattr(settings, "batches_enabled", False)
         if profile.tenant_feature_flags is None
         else profile_feature_enabled(profile, "batches")
     )
-
-    # A batch may narrow visibility inside the student's Course -> Level subject
-    # entitlement, but it must never grant a subject from another level/course.
-    def _legacy_sets_config(query):
-        query = query.eq("tenant_id", profile.tenant_id).eq("status", "published")
-        if batches_on:
-            query = query.eq("audience_mode", "legacy_course")
-        return query
-
-    sets = select_all_in(
-        service,
-        "quiz_sets",
-        "id, title, published_at, subject_id, chapter_id",
-        in_column="subject_id",
-        values=subject_ids,
-        configure=_legacy_sets_config,
-        order_column="published_at",
-        order_desc=True,
+    rows = rpc_json_value(
+        get_service_client(),
+        "student_quiz_catalog_page",
+        {
+            "p_tenant": profile.tenant_id,
+            "p_student": profile.user_id,
+            "p_limit": page_size + 1,
+            "p_attempt_limit": settings.student_quiz_attempt_limit,
+            "p_batches_enabled": batches_on,
+            "p_before_at": page_cursor.occurred_at.isoformat() if page_cursor else None,
+            "p_before_id": page_cursor.row_id if page_cursor else None,
+            "p_subject": subject_id,
+            "p_chapter": chapter_id,
+            "p_assignment": assignment,
+            "p_search": normalized_query or None,
+        },
+        list,
     )
-    if batches_on:
-        seen = {quiz_set["id"] for quiz_set in sets}
-        assigned_ids = [
-            quiz_id
-            for quiz_id in assigned_quiz_ids(
-                service, tenant_id=profile.tenant_id, profile_id=profile.user_id
-            )
-            if quiz_id not in seen
-        ]
-        if assigned_ids:
-            sets = sets + select_all_in(
-                service,
-                "quiz_sets",
-                "id, title, published_at, subject_id, chapter_id",
-                in_column="id",
-                values=assigned_ids,
-                configure=lambda query: query.eq("tenant_id", profile.tenant_id)
-                .eq("status", "published")
-                .eq("audience_mode", "assigned_batches")
-                .in_("subject_id", subject_ids),
-                order_column="published_at",
-                order_desc=True,
-            )
-    if not sets:
-        return []
-
-    # Resolve subject + chapter NAMES for every quiz shown (legacy or assigned).
-    present_subject_ids = list({s["subject_id"] for s in sets if s.get("subject_id")})
-    subj_name = {
-        s["id"]: s["name"]
-        for s in select_all_in(
-            service,
-            "subjects",
-            "id, name",
-            in_column="id",
-            values=present_subject_ids,
-            configure=lambda query: query.eq("tenant_id", profile.tenant_id),
-        )
-    } if present_subject_ids else {}
-    chapter_ids = list({s.get("chapter_id") for s in sets if s.get("chapter_id")})
-    chap_name = {}
-    if chapter_ids:
-        chap_name = {
-            c["id"]: c["name"]
-            for c in select_all_in(
-                service,
-                "chapters",
-                "id, name",
-                in_column="id",
-                values=chapter_ids,
-                configure=lambda query: query.eq("tenant_id", profile.tenant_id),
-            )
-        }
-    # Fetch every variant and all approved-question counts in two catalog-sized
-    # queries. This stays constant as the number of quiz sets/variants grows.
-    set_variants: list[tuple[dict, list[dict]]] = []
-    all_variant_ids: list[str] = []
-    set_ids = [quiz_set["id"] for quiz_set in sets]
-    variants = select_all_in(
-        service,
-        "quiz_variants",
-        "id, quiz_set_id, variant_type, total_marks, time_limit_minutes",
-        in_column="quiz_set_id",
-        values=set_ids,
-        configure=lambda query: query.eq("tenant_id", profile.tenant_id),
+    has_more = len(rows) > page_size
+    items = rows[:page_size]
+    next_cursor = (
+        encode_cursor(items[-1]["_cursor_at"], items[-1]["id"])
+        if has_more and items
+        else None
     )
-    question_stats = _approved_question_stats(
-        service, [variant["id"] for variant in variants], profile.tenant_id
+    for item in items:
+        item.pop("_cursor_at", None)
+    return StudentQuizPage(items=items, next_cursor=next_cursor)
+
+
+@router.get("/quizzes", response_model=StudentQuizPage)
+def list_quizzes_route(
+    profile: CurrentProfile = Depends(get_current_profile),
+    cursor: str | None = None,
+    page_size: int = DEFAULT_PAGE_SIZE,
+    subject_id: str | None = None,
+    chapter_id: str | None = None,
+    assignment: Literal["all", "course", "assigned"] = "all",
+) -> StudentQuizPage:
+    """List without free text so private searches never enter a request URL."""
+    return list_quizzes(
+        profile=profile,
+        cursor=cursor,
+        page_size=page_size,
+        subject_id=subject_id,
+        chapter_id=chapter_id,
+        assignment=assignment,
     )
-    variants_by_set: dict[str, list[dict]] = {}
-    for variant in variants:
-        stats = question_stats.get(variant["id"], {})
-        count = stats.get("count", 0)
-        if count:
-            derived_minutes = max(1, -(-stats.get("seconds", 0) // 60))
-            variants_by_set.setdefault(variant["quiz_set_id"], []).append(
-                {
-                    **variant,
-                    "question_count": count,
-                    "time_limit_minutes": variant.get("time_limit_minutes")
-                    or derived_minutes,
-                }
-            )
-            all_variant_ids.append(variant["id"])
 
-    for quiz_set in sets:
-        takeable = variants_by_set.get(quiz_set["id"], [])
-        if takeable:
-            set_variants.append((quiz_set, takeable))
 
-    # This student's own attempts on those variants — so the UI can lead with the
-    # quizzes they HAVEN'T attended yet, and show a best score on the ones they have.
-    attempts_by_variant: dict[str, list[dict]] = {}
-    if all_variant_ids:
-        atts = select_all_in(
-            service,
-            "quiz_attempts",
-            "variant_id, status, total_score",
-            in_column="variant_id",
-            values=all_variant_ids,
-            configure=lambda query: query.eq("tenant_id", profile.tenant_id).eq(
-                "student_id", profile.user_id
-            ),
-        )
-        for a in atts:
-            attempts_by_variant.setdefault(a["variant_id"], []).append(a)
-
-    result = []
-    for s, takeable in set_variants:
-        annotated = []
-        for v in takeable:
-            all_attempts = attempts_by_variant.get(v["id"], [])
-            graded = [
-                a
-                for a in all_attempts
-                if a["status"] == "graded"
-            ]
-            best_pct = None
-            marks = v.get("total_marks")
-            if graded and marks:
-                top = max((a.get("total_score") or 0) for a in graded)
-                best_pct = max(0, min(100, round(top / marks * 100)))
-            annotated.append(
-                {
-                    "id": v["id"],
-                    "variant_type": v["variant_type"],
-                    "total_marks": v.get("total_marks"),
-                    "time_limit_minutes": v.get("time_limit_minutes"),
-                    "question_count": v["question_count"],
-                    "attempted": len(graded) > 0,
-                    "attempt_count": len(all_attempts),
-                    "attempt_limit": attempt_limit,
-                    "attempts_remaining": max(
-                        0, attempt_limit - len(all_attempts)
-                    ),
-                    "best_pct": best_pct,
-                }
-            )
-        result.append(
-            {
-                "id": s["id"],
-                "title": s["title"],
-                "published_at": s.get("published_at"),
-                "subject_id": s.get("subject_id"),
-                "chapter_id": s.get("chapter_id"),
-                "subject_name": subj_name.get(s.get("subject_id")),
-                "chapter_name": chap_name.get(s.get("chapter_id")),
-                "variants": annotated,
-            }
-        )
-    return result
+@router.post("/quizzes/search", response_model=StudentQuizPage)
+def search_quizzes(
+    body: StudentQuizSearchRequest,
+    profile: CurrentProfile = Depends(get_current_profile),
+) -> StudentQuizPage:
+    return list_quizzes(
+        profile=profile,
+        cursor=body.cursor,
+        page_size=body.page_size,
+        subject_id=body.subject_id,
+        chapter_id=body.chapter_id,
+        assignment=body.assignment,
+        q=body.query,
+    )
 
 
 class StartAttemptRequest(BaseModel):
@@ -885,11 +790,13 @@ def submit_attempt(
 def _student_graded_answers(
     service, tenant_id: str, student_id: str
 ) -> tuple[list[dict], int]:
-    """Return every graded answer for one student across both quiz engines.
+    """Return answered questions from graded work across both quiz engines.
 
     Teacher-published quizzes use quiz_attempts/attempt_answers; Smart Quiz,
     Daily, Exam, Challenge and Revision use practice_sessions/practice_answers.
     Student analytics must combine both or the dashboard contradicts History.
+    Grading stores rows for unanswered questions too, so those rows must not
+    count as solved or lower answer-based accuracy and topic mastery.
     """
     quiz_attempts = select_all(
         service,
@@ -915,7 +822,7 @@ def _student_graded_answers(
             select_all_in(
                 service,
                 "attempt_answers",
-                "question_id, is_correct",
+                "question_id, student_answer, is_correct",
                 in_column="attempt_id",
                 values=attempt_ids,
                 configure=lambda query: query.eq("tenant_id", tenant_id),
@@ -927,13 +834,14 @@ def _student_graded_answers(
             select_all_in(
                 service,
                 "practice_answers",
-                "question_id, is_correct",
+                "question_id, student_answer, is_correct",
                 in_column="session_id",
                 values=session_ids,
                 configure=lambda query: query.eq("tenant_id", tenant_id),
             )
         )
-    return answers, len(quiz_attempts) + len(practice_sessions)
+    answered = [a for a in answers if is_answered(a.get("student_answer"))]
+    return answered, len(quiz_attempts) + len(practice_sessions)
 
 
 @router.get("/student/stats")
@@ -1334,115 +1242,41 @@ def mark_topic_revised(
     return {"revised": body.key}
 
 
-@router.get("/student/attempts")
+@router.get("/student/attempts", response_model=AttemptHistoryPage)
 def student_attempts(
     profile: CurrentProfile = Depends(get_current_profile),
-) -> list[dict]:
+    cursor: str | None = None,
+    page_size: int = DEFAULT_PAGE_SIZE,
+    source: Literal["all", "quiz", "practice"] = "all",
+    subject_id: str | None = None,
+    chapter_id: str | None = None,
+) -> AttemptHistoryPage:
     """The student's past (graded) attempts — quiz title, score, date — newest first."""
     _require_student(profile)
-    service = get_service_client()
-    tid, uid = profile.tenant_id, profile.user_id
-
-    attempts = select_all(
-        service,
-        "quiz_attempts",
-        "id, variant_id, total_score, submitted_at",
-        configure=lambda query: query.eq("tenant_id", tid)
-        .eq("student_id", uid)
-        .eq("status", "graded"),
-        order_column="submitted_at",
-        order_desc=True,
-    )
-    variant_ids = list({a["variant_id"] for a in attempts})
-    vrows = []
-    if variant_ids:
-        vrows = select_all_in(
-            service,
-            "quiz_variants",
-            "id, variant_type, total_marks, quiz_set_id",
-            in_column="id",
-            values=variant_ids,
-            configure=lambda query: query.eq("tenant_id", tid),
-        )
-    variants = {v["id"]: v for v in vrows}
-
-    set_ids = list({v["quiz_set_id"] for v in variants.values()})
-    quiz_sets: dict[str, dict] = {}
-    if set_ids:
-        srows = select_all_in(
-            service,
-            "quiz_sets",
-            "id, title, subject_id, chapter_id",
-            in_column="id",
-            values=set_ids,
-            configure=lambda query: query.eq("tenant_id", tid),
-        )
-        quiz_sets = {s["id"]: s for s in srows}
-
-    out = []
-    for a in attempts:
-        v = variants.get(a["variant_id"], {})
-        quiz_set = quiz_sets.get(v.get("quiz_set_id"), {})
-        out.append(
-            {
-                "attempt_id": a["id"],
-                "quiz_title": quiz_set.get("title", "Quiz"),
-                "variant_id": a.get("variant_id"),
-                "variant_type": v.get("variant_type"),
-                "subject_id": quiz_set.get("subject_id"),
-                "chapter_id": quiz_set.get("chapter_id"),
-                "total_score": a.get("total_score"),
-                "max_score": v.get("total_marks"),
-                "submitted_at": a.get("submitted_at"),
-                "source": "quiz",
-            }
-        )
-
-    practice = select_all(
-        service,
-        "practice_sessions",
-        "id, mode, subject_id, chapter_id, total_score, max_score, submitted_at",
-        configure=lambda query: query.eq("tenant_id", tid)
-        .eq("student_id", uid)
-        .eq("status", "graded")
-        .neq("mode", "challenge"),
-        order_column="submitted_at",
-        order_desc=True,
-    )
-    chapter_ids = list(
+    page_size = bounded_page_size(page_size)
+    page_cursor = decode_cursor(cursor)
+    out = rpc_json_value(
+        get_service_client(),
+        "student_attempt_history_page",
         {
-            session["chapter_id"]
-            for session in practice
-            if session.get("chapter_id") and not session.get("subject_id")
-        }
+            "p_tenant": profile.tenant_id,
+            "p_student": profile.user_id,
+            "p_limit": page_size + 1,
+            "p_before_at": page_cursor.occurred_at.isoformat() if page_cursor else None,
+            "p_before_id": page_cursor.row_id if page_cursor else None,
+            "p_source": source,
+            "p_subject": subject_id,
+            "p_chapter": chapter_id,
+        },
+        list,
     )
-    chapter_subjects: dict[str, str] = {}
-    if chapter_ids:
-        chapter_rows = select_all_in(
-            service,
-            "chapters",
-            "id, subject_id",
-            in_column="id",
-            values=chapter_ids,
-            configure=lambda query: query.eq("tenant_id", tid),
-        )
-        chapter_subjects = {
-            chapter["id"]: chapter["subject_id"] for chapter in chapter_rows
-        }
-    for session in practice:
-        mode = str(session.get("mode") or "practice").replace("_", " ").title()
-        out.append(
-            {
-                "attempt_id": session["id"],
-                "quiz_title": f"{mode} practice",
-                "variant_type": session.get("mode"),
-                "subject_id": session.get("subject_id")
-                or chapter_subjects.get(session.get("chapter_id")),
-                "chapter_id": session.get("chapter_id"),
-                "total_score": session.get("total_score"),
-                "max_score": session.get("max_score"),
-                "submitted_at": session.get("submitted_at"),
-                "source": "practice",
-            }
-        )
-    return sorted(out, key=lambda row: row.get("submitted_at") or "", reverse=True)
+    has_more = len(out) > page_size
+    items = out[:page_size]
+    next_cursor = (
+        encode_cursor(items[-1]["submitted_at"], items[-1]["attempt_id"])
+        if has_more and items
+        else None
+    )
+    for item in items:
+        item.pop("_cursor_at", None)
+    return AttemptHistoryPage(items=items, next_cursor=next_cursor)

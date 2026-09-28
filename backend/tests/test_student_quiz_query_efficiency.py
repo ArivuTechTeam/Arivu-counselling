@@ -32,6 +32,10 @@ class RecordingQuery:
     def order(self, *_args, **_kwargs):
         return self
 
+    def limit(self, value: int):
+        self.row_limit = value
+        return self
+
     def execute(self):
         rows = [dict(row) for row in self.service.tables.get(self.table, [])]
         if self.table == "quiz_variant_questions" and "questions!inner" in self.columns:
@@ -63,7 +67,7 @@ class RecordingQuery:
         for column, values in self.in_filters:
             rows = [row for row in rows if row.get(column) in values]
         self.service.calls.append((self.table, self.columns))
-        return SimpleNamespace(data=rows)
+        return SimpleNamespace(data=rows[: getattr(self, "row_limit", len(rows))])
 
 
 class RecordingService:
@@ -122,9 +126,11 @@ class RecordingService:
                     "tenant_id": "tenant-1",
                     "title": f"Quiz {index}",
                     "published_at": "2026-09-10T00:00:00Z",
+                    "created_at": f"2026-09-{10 - index:02d}T00:00:00Z",
                     "subject_id": "subject-1",
                     "chapter_id": None,
                     "status": "published",
+                    "audience_mode": "legacy_course",
                 }
                 for index, set_id in enumerate(set_ids)
             ],
@@ -137,6 +143,27 @@ class RecordingService:
 
     def table(self, name: str) -> RecordingQuery:
         return RecordingQuery(self, name)
+
+    def rpc(self, name: str, params: dict):
+        self.calls.append((name, str(params)))
+        variants_by_set: dict[str, list[dict]] = {}
+        for variant in self.tables["quiz_variants"]:
+            variants_by_set.setdefault(variant["quiz_set_id"], []).append({
+                "id": variant["id"], "variant_type": variant["variant_type"],
+                "total_marks": variant["total_marks"],
+                "time_limit_minutes": variant.get("time_limit_minutes") or 2,
+                "question_count": 2, "attempted": False, "attempt_count": 0,
+                "attempt_limit": params["p_attempt_limit"],
+                "attempts_remaining": params["p_attempt_limit"], "best_pct": None,
+            })
+        payload = [{
+            "id": row["id"], "title": row["title"],
+            "published_at": row["published_at"], "subject_id": row["subject_id"],
+            "chapter_id": row["chapter_id"], "subject_name": "Math",
+            "chapter_name": None, "variants": variants_by_set[row["id"]],
+            "_cursor_at": row["created_at"],
+        } for row in self.tables["quiz_sets"]]
+        return SimpleNamespace(execute=lambda: SimpleNamespace(data=payload))
 
 
 class StudentQuizQueryEfficiencyTests(unittest.TestCase):
@@ -154,33 +181,20 @@ class StudentQuizQueryEfficiencyTests(unittest.TestCase):
                 return_value=SimpleNamespace(student_quiz_attempt_limit=4),
             ),
         ):
-            quizzes = list_quizzes(self.profile)
+            page = list_quizzes(self.profile)
+
+        quizzes = page.items
 
         self.assertEqual(len(quizzes), 4)
-        self.assertEqual(quizzes[0]["variants"][0]["time_limit_minutes"], 2)
-        self.assertEqual(quizzes[0]["variants"][0]["attempt_limit"], 4)
-        self.assertEqual(quizzes[0]["variants"][0]["attempts_remaining"], 4)
+        self.assertEqual(quizzes[0].variants[0].time_limit_minutes, 2)
+        self.assertEqual(quizzes[0].variants[0].attempt_limit, 4)
+        self.assertEqual(quizzes[0].variants[0].attempts_remaining, 4)
         StudentQuizOut.model_validate(quizzes[0])
-        self.assertNotIn("quiz_set_id", quizzes[0]["variants"][0])
-        self.assertEqual(len(self.service.calls), 7)
-        self.assertEqual(
-            sum(1 for table, _ in self.service.calls if table == "quiz_variants"), 1
-        )
-        self.assertEqual(
-            sum(
-                1
-                for table, _ in self.service.calls
-                if table == "quiz_variant_questions"
-            ),
-            1,
-        )
-        self.assertFalse(any(columns == "*" for _, columns in self.service.calls))
-        link_columns = [
-            columns
-            for table, columns in self.service.calls
-            if table == "quiz_variant_questions"
-        ]
-        self.assertEqual(link_columns, ["variant_id, questions!inner(id, type)"])
+        self.assertFalse(hasattr(quizzes[0].variants[0], "quiz_set_id"))
+        self.assertEqual(len(self.service.calls), 1)
+        self.assertEqual(self.service.calls[0][0], "student_quiz_catalog_page")
+        self.assertIn("'p_tenant': 'tenant-1'", self.service.calls[0][1])
+        self.assertIn("'p_student': 'student-1'", self.service.calls[0][1])
 
     def test_attempt_question_load_does_not_select_embedding(self) -> None:
         questions = _ordered_approved_questions(

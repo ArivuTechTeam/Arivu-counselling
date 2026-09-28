@@ -42,6 +42,11 @@ class EmptyService:
     def table(self, _name: str) -> EmptyQuery:
         return EmptyQuery()
 
+    def rpc(self, name: str, _params: dict):
+        if name != "student_quiz_catalog_page":
+            raise AssertionError(name)
+        return SimpleNamespace(execute=lambda: SimpleNamespace(data=[]))
+
 
 class ThreadpoolContentionProbe(unittest.IsolatedAsyncioTestCase):
     async def test_one_generation_does_not_delay_another_accounts_dashboard(self) -> None:

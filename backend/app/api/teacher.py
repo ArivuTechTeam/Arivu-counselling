@@ -13,13 +13,26 @@ from __future__ import annotations
 import asyncio
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.lib.auth import CurrentProfile, get_current_profile
+from app.lib.pagination import DEFAULT_PAGE_SIZE, bounded_page_size, decode_cursor, encode_cursor
 from app.lib.supabase import get_service_client
-from app.lib.supabase_queries import select_all, select_all_in
+from app.lib.supabase_queries import rpc_json_value, select_all, select_all_in
+from app.services.attempt_timing import is_answered
 from app.services.teacher_access import teacher_student_ids, teacher_subject_ids
 
 router = APIRouter(prefix="/api/v1", tags=["teacher"])
+
+
+class PublishedQuizSearchRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    cursor: str | None = None
+    page_size: int = DEFAULT_PAGE_SIZE
+    subject_id: str | None = None
+    query: str = Field(default="", max_length=100)
+
 
 def _initials(name: str | None) -> str:
     parts = (name or "?").split()
@@ -33,244 +46,13 @@ async def class_overview(
     if profile.role != "teacher":
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Teachers only.")
 
-    service = get_service_client()
-    tid, uid = profile.tenant_id, profile.user_id
-    empty = {
-        "class_accuracy": 0,
-        "students": 0,
-        "at_risk": 0,
-        "total_attempts": 0,
-        "accuracy_by_quiz": [],
-        "needs_attention": [],
-        "top_performers": [],
-        "pipeline": {
-            "pending_review": 0,
-            "approved": 0,
-            "rejected": 0,
-            "needs_edit": 0,
-        },
-        "activity_trend": [],
-        "score_distribution": [],
-        "content": {"documents": 0, "quiz_sets": 0, "published": 0, "drafts": 0},
-    }
-
-    # Stage 1: quiz_sets — every later query needs `set_ids` from this, so it
-    # has to run alone first.
-    def fetch_sets():
-        return select_all(
-            service,
-            "quiz_sets",
-            "id, title, status",
-            configure=lambda query: query.eq("tenant_id", tid).eq(
-                "created_by", uid
-            ),
-        )
-
-    def fetch_documents():
-        return select_all(
-            service,
-            "documents",
-            "id",
-            configure=lambda query: query.eq("tenant_id", tid).eq(
-                "uploaded_by", uid
-            ),
-        )
-
-    sets, document_rows = await asyncio.gather(
-        asyncio.to_thread(fetch_sets), asyncio.to_thread(fetch_documents)
+    return await asyncio.to_thread(
+        rpc_json_value,
+        get_service_client(),
+        "teacher_class_overview_metrics",
+        {"p_tenant": profile.tenant_id, "p_teacher": profile.user_id},
+        dict,
     )
-    content = {
-        "documents": len(document_rows),
-        "quiz_sets": len(sets),
-        "published": sum(1 for row in sets if row.get("status") == "published"),
-        "drafts": sum(1 for row in sets if row.get("status") == "draft"),
-    }
-    set_ids = [s["id"] for s in sets]
-    if not set_ids:
-        return {**empty, "content": content}
-    title_by_set = {s["id"]: s["title"] for s in sets}
-
-    # Stage 2: quiz_variants — needs `set_ids` from stage 1.
-    def fetch_variants():
-        return select_all_in(
-            service,
-            "quiz_variants",
-            "id, quiz_set_id, total_marks",
-            in_column="quiz_set_id",
-            values=set_ids,
-            configure=lambda query: query.eq("tenant_id", tid),
-        )
-
-    variants = await asyncio.to_thread(fetch_variants)
-    var_set = {v["id"]: v["quiz_set_id"] for v in variants}
-    var_marks = {v["id"]: v.get("total_marks") for v in variants}
-    variant_ids = [v["id"] for v in variants]
-    if not variant_ids:
-        return {**empty, "content": content}
-
-    # Stage 3: these reads are independent. The shared Supabase client uses a
-    # thread-safe HTTP/1.1 pool, so overlap their network wait safely.
-    def fetch_attempts():
-        return select_all_in(
-            service,
-            "quiz_attempts",
-            "id, student_id, variant_id, total_score, submitted_at",
-            in_column="variant_id",
-            values=variant_ids,
-            configure=lambda query: query.eq("tenant_id", tid)
-            .eq("status", "graded"),
-        )
-
-    def fetch_variant_questions():
-        return select_all_in(
-            service,
-            "quiz_variant_questions",
-            "id, question_id",
-            in_column="variant_id",
-            values=variant_ids,
-            configure=lambda query: query.eq("tenant_id", tid),
-        )
-
-    attempts, vq = await asyncio.gather(
-        asyncio.to_thread(fetch_attempts),
-        asyncio.to_thread(fetch_variant_questions),
-    )
-
-    by_set: dict[str, list[float]] = {}
-    by_student: dict[str, list[float]] = {}
-    total_score = total_maximum = 0.0
-    attempt_pcts: list[float] = []
-    day_counts: dict[str, int] = {}  # submitted date (YYYY-MM-DD) -> attempts
-    for a in attempts:
-        vm = var_marks.get(a["variant_id"])
-        if not vm:
-            continue
-        maximum = float(vm)
-        score = max(0.0, min(maximum, float(a.get("total_score") or 0)))
-        pct = score / maximum * 100
-        total_score += score
-        total_maximum += maximum
-        sid = var_set.get(a["variant_id"])
-        if sid:
-            s = by_set.get(sid, [0.0, 0.0, 0.0])
-            by_set[sid] = [s[0] + score, s[1] + maximum, s[2] + 1]
-        st = by_student.get(a["student_id"], [0.0, 0.0, 0.0])
-        by_student[a["student_id"]] = [st[0] + score, st[1] + maximum, st[2] + 1]
-        attempt_pcts.append(pct)
-        submitted = a.get("submitted_at")
-        if submitted:
-            day = str(submitted)[:10]
-            day_counts[day] = day_counts.get(day, 0) + 1
-
-    accuracy_by_quiz = sorted(
-        [
-            {
-                "set_id": sid,
-                "title": title_by_set.get(sid, "Quiz"),
-                "accuracy": round(v[0] / v[1] * 100),
-                "attempts": int(v[2]),
-            }
-            for sid, v in by_set.items()
-        ],
-        key=lambda x: -x["attempts"],
-    )
-
-    qids = list({r["question_id"] for r in vq})
-
-    # Stage 4: profile and question reads are independent as well.
-    def fetch_profiles():
-        if not by_student:
-            return []
-        return select_all_in(
-            service,
-            "profiles",
-            "id, full_name",
-            in_column="id",
-            values=list(by_student.keys()),
-            configure=lambda query: query.eq("tenant_id", tid)
-            .eq("role", "student"),
-        )
-
-    def fetch_questions():
-        if not qids:
-            return []
-        return select_all_in(
-            service,
-            "questions",
-            "id, review_status",
-            in_column="id",
-            values=qids,
-            configure=lambda query: query.eq("tenant_id", tid),
-        )
-
-    profs, qrows = await asyncio.gather(
-        asyncio.to_thread(fetch_profiles), asyncio.to_thread(fetch_questions)
-    )
-    names = {p["id"]: p.get("full_name") for p in profs}
-
-    students = []
-    for sid, v in by_student.items():
-        acc = round(v[0] / v[1] * 100)
-        name = names.get(sid) or "Student"
-        students.append(
-            {
-                "name": name,
-                "initials": _initials(name),
-                "accuracy": acc,
-                "note": f"{int(v[2])} test{'s' if v[2] != 1 else ''} · {acc}% avg",
-            }
-        )
-    at_risk_students = [s for s in students if s["accuracy"] < 60]
-    needs_attention = sorted(at_risk_students, key=lambda x: x["accuracy"])[:6]
-    # Best-scoring students (highest average accuracy first).
-    top_performers = sorted(students, key=lambda x: -x["accuracy"])[:5]
-
-    # Review pipeline: how many of the teacher's questions sit in each state.
-    pipeline = {
-        "pending_review": 0,
-        "approved": 0,
-        "rejected": 0,
-        "needs_edit": 0,
-    }
-    for q in qrows:
-        st = q.get("review_status")
-        if st in pipeline:
-            pipeline[st] += 1
-
-    class_accuracy = round(total_score / total_maximum * 100) if total_maximum else 0
-
-    # Activity trend: quizzes taken per day over the last 14 days (zero-filled),
-    # so the frontend can draw a clean bar chart without gaps.
-    from datetime import date, timedelta
-
-    today = date.today()
-    activity_trend = [
-        {
-            "date": (today - timedelta(days=offset)).isoformat(),
-            "count": day_counts.get((today - timedelta(days=offset)).isoformat(), 0),
-        }
-        for offset in range(13, -1, -1)
-    ]
-
-    # Score distribution: how many graded attempts fall in each score band.
-    bands = [("0–39", 0, 40), ("40–59", 40, 60), ("60–79", 60, 80), ("80–100", 80, 101)]
-    score_distribution = [
-        {"label": label, "count": sum(1 for p in attempt_pcts if lo <= p < hi)}
-        for label, lo, hi in bands
-    ]
-    return {
-        "class_accuracy": class_accuracy,
-        "students": len(by_student),
-        "at_risk": len(at_risk_students),
-        "total_attempts": len(attempts),
-        "accuracy_by_quiz": accuracy_by_quiz,
-        "needs_attention": needs_attention,
-        "top_performers": top_performers,
-        "pipeline": pipeline,
-        "activity_trend": activity_trend,
-        "score_distribution": score_distribution,
-        "content": content,
-    }
 
 
 @router.get("/teacher/quiz-sets/{quiz_set_id}/performance")
@@ -313,7 +95,7 @@ async def quiz_set_performance(
             .select(
                 "id, total_marks, quiz_variant_questions(question_id, questions(id, question_text)), "
                 "quiz_attempts(id, student_id, total_score, submitted_at, status, "
-                "profiles(full_name), attempt_answers(question_id, is_correct))"
+                "profiles(full_name), attempt_answers(question_id, student_answer, is_correct))"
             )
             .eq("tenant_id", tid).eq("quiz_set_id", quiz_set_id).execute().data or []
         )
@@ -361,6 +143,8 @@ async def quiz_set_performance(
             attempts_by_student.setdefault(student_id, []).append(normal)
             all_percentages.append(accuracy)
             for answer in attempt.get("attempt_answers") or []:
+                if not is_answered(answer.get("student_answer")):
+                    continue
                 question_id = str(answer.get("question_id") or "")
                 if not question_id:
                     continue
@@ -404,102 +188,78 @@ async def quiz_set_performance(
     }
 
 
-@router.get("/teacher/published-quizzes")
 async def published_quiz_monitor(
     profile: CurrentProfile = Depends(get_current_profile),
+    cursor: str | None = None,
+    page_size: int = DEFAULT_PAGE_SIZE,
+    subject_id: str | None = None,
+    q: str = "",
 ) -> dict:
-    """Compact performance metrics for every published quiz owned by a teacher."""
+    """One bounded page of published-quiz metrics owned by the teacher."""
     if profile.role != "teacher":
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Teachers only.")
-    service, tid, uid = get_service_client(), profile.tenant_id, profile.user_id
-    subject_ids = sorted(teacher_subject_ids(service, profile))
-    if not subject_ids:
-        return {"quizzes": []}
-
-    sets = await asyncio.to_thread(
-        select_all_in,
-        service,
-        "quiz_sets",
-        "id, title, subject_id, published_at",
-        in_column="subject_id",
-        values=subject_ids,
-        configure=lambda q: q.eq("tenant_id", tid).eq("created_by", uid).eq("status", "published"),
+    page_size = bounded_page_size(page_size)
+    page_cursor = decode_cursor(cursor)
+    normalized_query = q.strip()
+    if len(normalized_query) > 100:
+        raise HTTPException(status_code=400, detail="Search text is too long.")
+    payload = await asyncio.to_thread(
+        rpc_json_value,
+        get_service_client(),
+        "teacher_published_quiz_metrics_page",
+        {
+            "p_tenant": profile.tenant_id,
+            "p_teacher": profile.user_id,
+            "p_limit": page_size + 1,
+            "p_before_at": page_cursor.occurred_at.isoformat() if page_cursor else None,
+            "p_before_id": page_cursor.row_id if page_cursor else None,
+            "p_subject": subject_id,
+            "p_search": normalized_query or None,
+        },
+        dict,
     )
-    if not sets:
-        return {"quizzes": []}
-    set_ids = [str(row["id"]) for row in sets]
-
-    subjects, variants = await asyncio.gather(
-        asyncio.to_thread(
-            select_all_in, service, "subjects", "id, name, course_id",
-            in_column="id", values=subject_ids,
-            configure=lambda q: q.eq("tenant_id", tid),
-        ),
-        asyncio.to_thread(
-            select_all_in, service, "quiz_variants", "id, quiz_set_id, total_marks",
-            in_column="quiz_set_id", values=set_ids,
-            configure=lambda q: q.eq("tenant_id", tid),
-        ),
+    quizzes = payload.get("quizzes")
+    if not isinstance(quizzes, list):
+        raise RuntimeError("teacher_published_quiz_metrics_page returned an invalid payload")
+    has_more = len(quizzes) > page_size
+    items = quizzes[:page_size]
+    next_cursor = (
+        encode_cursor(items[-1]["_cursor_at"], items[-1]["id"])
+        if has_more and items
+        else None
     )
-    subject_by_id = {str(row["id"]): row for row in subjects}
-    course_ids = sorted({str(row["course_id"]) for row in subjects if row.get("course_id")})
-    enrollments = []
-    if course_ids:
-        enrollments = await asyncio.to_thread(
-            select_all_in, service, "enrollments", "course_id, profile_id",
-            in_column="course_id", values=course_ids,
-            configure=lambda q: q.eq("tenant_id", tid),
-        )
-    students_by_course: dict[str, set[str]] = {}
-    for enrollment in enrollments:
-        students_by_course.setdefault(str(enrollment["course_id"]), set()).add(str(enrollment["profile_id"]))
+    for item in items:
+        item.pop("_cursor_at", None)
+    return {"quizzes": items, "next_cursor": next_cursor}
 
-    variant_to_set = {str(row["id"]): str(row["quiz_set_id"]) for row in variants}
-    marks_by_variant = {str(row["id"]): float(row.get("total_marks") or 0) for row in variants}
-    attempts = []
-    if variant_to_set:
-        attempts = await asyncio.to_thread(
-            select_all_in, service, "quiz_attempts", "variant_id, student_id, total_score, submitted_at",
-            in_column="variant_id", values=sorted(variant_to_set),
-            configure=lambda q: q.eq("tenant_id", tid).eq("status", "graded"),
-        )
-    attempts_by_set: dict[str, list[dict]] = {}
-    for attempt in attempts:
-        set_id = variant_to_set.get(str(attempt.get("variant_id")))
-        if set_id:
-            attempts_by_set.setdefault(set_id, []).append(attempt)
 
-    quizzes = []
-    for quiz in sets:
-        set_id, subject_id = str(quiz["id"]), str(quiz["subject_id"])
-        subject = subject_by_id.get(subject_id) or {}
-        eligible = students_by_course.get(str(subject.get("course_id") or ""), set())
-        scores: list[float] = []
-        completed: set[str] = set()
-        latest: str | None = None
-        for attempt in attempts_by_set.get(set_id, []):
-            student_id = str(attempt.get("student_id") or "")
-            if student_id not in eligible:
-                continue
-            maximum = marks_by_variant.get(str(attempt["variant_id"]), 0)
-            if maximum <= 0:
-                continue
-            score = max(0.0, min(maximum, float(attempt.get("total_score") or 0)))
-            scores.append(round(score / maximum * 100, 1))
-            completed.add(student_id)
-            submitted = attempt.get("submitted_at")
-            if submitted and (latest is None or str(submitted) > latest):
-                latest = str(submitted)
-        quizzes.append({
-            "id": set_id, "title": quiz.get("title") or "Quiz", "subject": subject.get("name") or "Subject",
-            "published_at": quiz.get("published_at"), "eligible_students": len(eligible),
-            "completed_students": len(completed), "not_started_students": max(0, len(eligible) - len(completed)),
-            "total_attempts": len(scores), "average_accuracy": round(sum(scores) / len(scores), 1) if scores else 0,
-            "highest_accuracy": max(scores, default=0), "lowest_accuracy": min(scores, default=0),
-            "last_activity": latest,
-        })
-    quizzes.sort(key=lambda row: row.get("published_at") or "", reverse=True)
-    return {"quizzes": quizzes}
+@router.get("/teacher/published-quizzes")
+async def published_quiz_monitor_route(
+    profile: CurrentProfile = Depends(get_current_profile),
+    cursor: str | None = None,
+    page_size: int = DEFAULT_PAGE_SIZE,
+    subject_id: str | None = None,
+) -> dict:
+    return await published_quiz_monitor(
+        profile=profile,
+        cursor=cursor,
+        page_size=page_size,
+        subject_id=subject_id,
+    )
+
+
+@router.post("/teacher/published-quizzes/search")
+async def search_published_quiz_monitor(
+    body: PublishedQuizSearchRequest,
+    profile: CurrentProfile = Depends(get_current_profile),
+) -> dict:
+    return await published_quiz_monitor(
+        profile=profile,
+        cursor=body.cursor,
+        page_size=body.page_size,
+        subject_id=body.subject_id,
+        q=body.query,
+    )
 
 
 @router.get("/teacher/class-monitor")
@@ -801,11 +561,12 @@ def student_report(
         answers = select_all_in(
             service,
             "attempt_answers",
-            "id, question_id, is_correct",
+            "id, question_id, student_answer, is_correct",
             in_column="attempt_id",
             values=attempt_ids,
             configure=lambda query: query.eq("tenant_id", tid),
         )
+        answers = [a for a in answers if is_answered(a.get("student_answer"))]
         answered = len(answers)
         qids = list({a["question_id"] for a in answers})
         qrows = select_all_in(

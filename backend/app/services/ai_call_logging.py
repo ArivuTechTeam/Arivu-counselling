@@ -5,6 +5,10 @@ from __future__ import annotations
 from contextlib import contextmanager
 from contextvars import ContextVar
 from decimal import Decimal, ROUND_HALF_UP
+from datetime import datetime, timezone
+from functools import wraps
+from inspect import signature
+from uuid import uuid4
 import logging
 import threading
 import time
@@ -33,6 +37,7 @@ def ai_call_context(
     """Attach pipeline ownership to every provider call made in this scope."""
     token = _context.set(
         {
+            "workflow_id": _context.get().get("workflow_id"),
             "call_type": call_type,
             "tenant_id": tenant_id,
             "document_id": document_id,
@@ -43,6 +48,56 @@ def ai_call_context(
         yield
     finally:
         _context.reset(token)
+
+
+def track_quiz_workflow(kind: str):
+    """Attach a durable, metadata-only cost run to synchronous and worker paths.
+
+    Nested generation helpers share a run. Worker retries reuse their job UUID,
+    so retry/fallback costs are not silently omitted from the original run.
+    Telemetry failure must never prevent quiz generation.
+    """
+    def decorate(function):
+        parameters = signature(function)
+
+        @wraps(function)
+        def tracked(*args, **kwargs):
+            if _context.get().get("workflow_id") or not _logging_enabled():
+                return function(*args, **kwargs)
+            values = parameters.bind_partial(*args, **kwargs).arguments
+            job = values.get("job") or {}
+            profile = values.get("profile")
+            tenant = getattr(profile, "tenant_id", None) or values.get("tenant_id") or job.get("tenant_id")
+            document = values.get("document_id") or values.get("source_document_id") or (job.get("request") or {}).get("document_id")
+            workflow_id = job.get("id") or str(uuid4())
+            operation = "extraction" if job.get("kind") == "extraction" else kind
+            try:
+                client = get_service_client()
+                client.table("ai_quiz_workflows").upsert({
+                    "id": workflow_id, "tenant_id": tenant, "document_id": document,
+                    "kind": operation, "status": "running",
+                }).execute()
+            except Exception as exc:
+                logger.warning("Unable to record AI cost workflow: %s", type(exc).__name__)
+                return function(*args, **kwargs)
+            token = _context.set({**_context.get(), "workflow_id": workflow_id})
+            status, quiz_id = "failed", None
+            try:
+                result = function(*args, **kwargs)
+                quiz_id = result.get("quiz_set_id") if isinstance(result, dict) else None
+                status = "completed"
+                return result
+            finally:
+                _context.reset(token)
+                try:
+                    client.table("ai_quiz_workflows").update({
+                        "status": status, "quiz_set_id": quiz_id,
+                        "finished_at": datetime.now(timezone.utc).isoformat(),
+                    }).eq("id", workflow_id).eq("tenant_id", tenant).execute()
+                except Exception as exc:
+                    logger.warning("Unable to finish AI cost workflow: %s", type(exc).__name__)
+        return tracked
+    return decorate
 
 
 @contextmanager
@@ -84,7 +139,7 @@ def calculate_costs(
 ) -> tuple[Decimal | None, Decimal | None]:
     """Return USD/INR estimates, or null costs when the model has no published mapping."""
     pricing = MODEL_PRICING.get(model)
-    if pricing is None:
+    if pricing is None or input_tokens is None or output_tokens is None:
         return None, None
     input_rate, output_rate, cached_rate, thinking_in_output = pricing
     incoming = Decimal(max(0, (input_tokens or 0) - (cached_tokens or 0)))
@@ -150,4 +205,6 @@ def log_ai_call(
         "status": "error" if error_message else "success",
         "error_message": error_message,
     }
+    if context.get("workflow_id"):
+        row["workflow_id"] = context["workflow_id"]
     threading.Thread(target=_write, args=(row,), daemon=True).start()

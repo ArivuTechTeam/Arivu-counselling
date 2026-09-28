@@ -96,7 +96,9 @@ export default function AdminQuizzesPage() {
   const [teacherRows, setTeacherRows] = useState<{
     teacherId: string;
     rows: AdminQuizSet[];
+    nextCursor: string | null;
   } | null>(null);
+  const [loadingTeacherPage, setLoadingTeacherPage] = useState(false);
 
   function load() {
     setActionError(null);
@@ -105,7 +107,6 @@ export default function AdminQuizzesPage() {
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
-    setQuery(params.get("q") ?? "");
     setTeacherId(params.get("teacher") ?? "");
     setCourseId(params.get("course") ?? "");
     setStatus(params.get("status") ?? "");
@@ -118,7 +119,6 @@ export default function AdminQuizzesPage() {
   useEffect(() => {
     if (!filtersReady) return;
     const params = new URLSearchParams();
-    if (query) params.set("q", query);
     if (teacherId) params.set("teacher", teacherId);
     if (courseId) params.set("course", courseId);
     if (status) params.set("status", status);
@@ -129,7 +129,33 @@ export default function AdminQuizzesPage() {
       "",
       `${window.location.pathname}${search ? `?${search}` : ""}`,
     );
-  }, [courseId, filtersReady, query, sort, status, teacherId]);
+  }, [courseId, filtersReady, sort, status, teacherId]);
+  useEffect(() => {
+    if (!filtersReady || !teacherId || teacherId === RETAINED_TEACHER_ID) return;
+    let current = true;
+    const timer = window.setTimeout(() => {
+      setLoadingTeacherPage(true);
+      getAdminQuizSets({
+        teacherId,
+        courseId: courseId || undefined,
+        status: status || undefined,
+        query: query.trim() || undefined,
+      })
+        .then((page) => {
+          if (current) setTeacherRows({ teacherId, rows: page.items, nextCursor: page.next_cursor });
+        })
+        .catch((reason) => {
+          if (current) setActionError(reason.message);
+        })
+        .finally(() => {
+          if (current) setLoadingTeacherPage(false);
+        });
+    }, 250);
+    return () => {
+      current = false;
+      window.clearTimeout(timer);
+    };
+  }, [courseId, filtersReady, query, status, teacherId]);
 
   const selectedTeacher = useMemo(
     () => faculty?.teachers.find((teacher) => teacher.teacher_id === teacherId),
@@ -206,14 +232,36 @@ export default function AdminQuizzesPage() {
     setStatus("");
     setSort("created_desc");
     if (nextTeacherId === RETAINED_TEACHER_ID) {
-      setTeacherRows({ teacherId: nextTeacherId, rows: retainedRows });
+      setTeacherRows({ teacherId: nextTeacherId, rows: retainedRows, nextCursor: null });
       return;
     }
-    getAdminQuizSets(nextTeacherId)
-      .then((quizRows) =>
-        setTeacherRows({ teacherId: nextTeacherId, rows: quizRows }),
-      )
-      .catch((reason) => setActionError(reason.message));
+  }
+
+  async function loadMoreRows() {
+    if (teacherId && teacherId !== RETAINED_TEACHER_ID) {
+      if (!teacherRows?.nextCursor || loadingTeacherPage) return;
+      setLoadingTeacherPage(true);
+      try {
+        const page = await getAdminQuizSets({
+          teacherId,
+          courseId: courseId || undefined,
+          status: status || undefined,
+          query: query.trim() || undefined,
+          cursor: teacherRows.nextCursor,
+        });
+        setTeacherRows({
+          teacherId,
+          rows: [...teacherRows.rows, ...page.items],
+          nextCursor: page.next_cursor,
+        });
+      } catch (reason) {
+        setActionError(reason instanceof Error ? reason.message : "Couldn't load more quizzes.");
+      } finally {
+        setLoadingTeacherPage(false);
+      }
+      return;
+    }
+    await rowsQuery.loadMore();
   }
 
   function backToFaculty() {
@@ -336,7 +384,7 @@ export default function AdminQuizzesPage() {
           </Card>
 
           <div className="flex items-center justify-between gap-3 text-sm text-muted-foreground">
-            <span>{filtered.length} of {sourceRows.length} quizzes</span>
+            <span>{filtered.length} of {sourceRows.length} loaded quizzes</span>
             {(query || courseId || status || sort !== "created_desc") && (
               <button type="button" onClick={clearQuizFilters} className="font-semibold text-primary hover:underline">
                 Clear filters
@@ -423,7 +471,18 @@ export default function AdminQuizzesPage() {
               })}
             </div>
           )}
+          {((teacherId !== RETAINED_TEACHER_ID && teacherRows?.nextCursor) || (!teacherId && rowsQuery.hasMore)) && (
+            <button type="button" onClick={() => void loadMoreRows()} disabled={loadingTeacherPage || rowsQuery.isLoadingMore} className="self-center rounded-lg border border-input px-4 py-2 text-sm font-medium disabled:opacity-60">
+              {loadingTeacherPage || rowsQuery.isLoadingMore ? "Loading…" : "Load more quizzes"}
+            </button>
+          )}
         </>
+      )}
+
+      {!teacherId && rowsQuery.hasMore && (
+        <button type="button" onClick={() => void rowsQuery.loadMore()} disabled={rowsQuery.isLoadingMore} className="self-center rounded-lg border border-input px-4 py-2 text-sm font-medium disabled:opacity-60">
+          {rowsQuery.isLoadingMore ? "Loading…" : "Load more retained-content records"}
+        </button>
       )}
 
       {selectedQuiz && (

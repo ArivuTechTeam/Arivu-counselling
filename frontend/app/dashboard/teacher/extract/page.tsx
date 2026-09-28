@@ -9,7 +9,7 @@ export default function ExtractPage() {
     <div className="mx-auto flex max-w-3xl flex-col gap-5">
       <PageHeader
         title="Import an existing quiz"
-        description="Upload a finished question paper or quiz image. We’ll extract its questions into a draft for you to verify and publish."
+        description="Upload a finished question paper or quiz image. Verify the extracted draft, assign batches, then publish."
         actions={
           <Link
             href="/dashboard/teacher/generate"

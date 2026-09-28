@@ -10,11 +10,13 @@ import {
   PaperTakeQuestion,
   PaperType,
   getPaperFilters,
+  getPaperAttempt,
   listPaperSubjects,
   startPaperAttempt,
   submitPaperAttempt,
 } from "@/lib/api";
 import { formatAnswerValue, typeLabel } from "@/lib/format";
+import { canSubmitPaper, isPaperAnswerComplete } from "@/lib/paper-attempt";
 
 const TYPES: {
   key: PaperType;
@@ -34,6 +36,24 @@ const card = "rounded-xl border bg-card p-4 shadow-sm transition-colors hover:bo
 const field = "h-10 w-full rounded-md border border-input bg-background px-3 text-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20";
 const primaryBtn = "inline-flex h-10 items-center rounded-lg bg-primary px-4 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50";
 const ghostBtn = "inline-flex h-9 items-center rounded-lg border border-input px-3 text-sm hover:bg-accent";
+const ACTIVE_PAPER_KEY = "active-paper-attempt-id";
+
+function rememberAttempt(id: string | null): void {
+  try {
+    if (id) window.sessionStorage.setItem(ACTIVE_PAPER_KEY, id);
+    else window.sessionStorage.removeItem(ACTIVE_PAPER_KEY);
+  } catch {
+    // The attempt still works when browser storage is unavailable.
+  }
+}
+
+function savedAttempt(): string | null {
+  try {
+    return window.sessionStorage.getItem(ACTIVE_PAPER_KEY);
+  } catch {
+    return null;
+  }
+}
 
 export function PyqExplorer() {
   const [type, setType] = useState<PaperType>("pyq");
@@ -45,6 +65,7 @@ export function PyqExplorer() {
   const [qType, setQType] = useState("");
   const [count, setCount] = useState(10);
   const [questions, setQuestions] = useState<PaperTakeQuestion[]>([]);
+  const [attemptId, setAttemptId] = useState<string | null>(null);
   const [answers, setAnswers] = useState<Record<string, unknown>>({});
   const [score, setScore] = useState<PaperScorecard | null>(null);
   const [loading, setLoading] = useState(true);
@@ -63,9 +84,26 @@ export function PyqExplorer() {
     }
   }, []);
   useEffect(() => {
-    setView("subjects");
     void loadSubjects(type);
   }, [type, loadSubjects]);
+
+  useEffect(() => {
+    const savedId = savedAttempt();
+    if (!savedId) return;
+    void getPaperAttempt(savedId).then((attempt) => {
+      setAttemptId(attempt.attempt_id);
+      if (attempt.status === "graded") {
+        setScore(attempt);
+        setView("score");
+      } else {
+        setType(attempt.paper_type);
+        setQuestions(attempt.questions);
+        setView("taking");
+      }
+    }).catch(() => {
+      rememberAttempt(null);
+    });
+  }, []);
 
   async function openSubject(s: PaperSubject) {
     setSubject(s);
@@ -97,6 +135,8 @@ export function PyqExplorer() {
         count,
       };
       const res = await startPaperAttempt(body);
+      setAttemptId(res.attempt_id);
+      rememberAttempt(res.attempt_id);
       setQuestions(res.questions);
       setAnswers({});
       setScore(null);
@@ -109,13 +149,27 @@ export function PyqExplorer() {
   }
 
   async function submit() {
+    if (!attemptId || !canSubmitPaper(questions, answers)) {
+      setError("Answer every question before submitting your paper set.");
+      return;
+    }
     setBusy(true);
     setError(null);
     try {
       const payload = questions.map((q) => ({ question_id: q.id, student_answer: answers[q.id] ?? null }));
-      setScore(await submitPaperAttempt(payload));
+      setScore(await submitPaperAttempt(attemptId, payload));
       setView("score");
     } catch (e) {
+      try {
+        const latest = await getPaperAttempt(attemptId);
+        if (latest.status === "graded") {
+          setScore(latest);
+          setView("score");
+          return;
+        }
+      } catch {
+        // Keep the first, actionable submission error below.
+      }
       setError(e instanceof Error ? e.message : "Couldn't submit.");
     } finally {
       setBusy(false);
@@ -129,7 +183,7 @@ export function PyqExplorer() {
       <div>
         <h1 className="text-2xl font-bold tracking-tight">Mock Test &amp; PYQ</h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          Practise real exam questions — previous-year, mock, and revision papers — with an instant scorecard.
+          Practise real exam questions — previous-year, mock, and revision papers. Answers appear in your report after you complete the set.
         </p>
       </div>
 
@@ -141,9 +195,13 @@ export function PyqExplorer() {
             <button
               key={t.key}
               type="button"
-              onClick={() => setType(t.key)}
+              disabled={view === "taking" || busy}
+              onClick={() => {
+                setType(t.key);
+                setView("subjects");
+              }}
               aria-pressed={active}
-              className={`flex items-start gap-3 rounded-xl border p-3 text-left transition-colors ${
+              className={`flex items-start gap-3 rounded-xl border p-3 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
                 active ? `${t.activeCls} shadow-sm` : "border-input hover:bg-accent"
               }`}
             >
@@ -233,10 +291,10 @@ export function PyqExplorer() {
       {view === "taking" && (
         <div className="flex flex-col gap-4">
           <p className="text-sm text-muted-foreground">
-            {questions.filter((q) => {
-              const v = answers[q.id];
-              return Array.isArray(v) ? v.length > 0 : v !== undefined && v !== "" && v !== null;
-            }).length} of {questions.length} answered
+            {questions.filter((q) => isPaperAnswerComplete(answers[q.id])).length} of {questions.length} answered
+          </p>
+          <p className="text-xs text-muted-foreground">
+            You can reopen this question set in this tab, but answers are not saved until you submit it.
           </p>
           {questions.map((q, i) => (
             <div key={q.id} className="rounded-xl border bg-card p-4 shadow-sm">
@@ -252,10 +310,16 @@ export function PyqExplorer() {
             </div>
           ))}
           <div className="flex gap-3">
-            <button type="button" className={primaryBtn} disabled={busy} onClick={() => void submit()}>
+            <button type="button" className={primaryBtn} disabled={busy || !canSubmitPaper(questions, answers)} onClick={() => void submit()}>
               {busy ? "Submitting…" : "Submit"}
             </button>
-            <button type="button" className={ghostBtn} onClick={() => setView("config")}>Cancel</button>
+            <button type="button" className={ghostBtn} disabled={busy} onClick={() => {
+              if (!window.confirm("Leave this paper set? Your answers will not be saved.")) return;
+              rememberAttempt(null);
+              setAttemptId(null);
+              setAnswers({});
+              setView(subject && filters ? "config" : "subjects");
+            }}>Leave paper</button>
           </div>
         </div>
       )}
@@ -277,7 +341,12 @@ export function PyqExplorer() {
             </div>
           ))}
           <div className="flex gap-3">
-            <button type="button" className={primaryBtn} onClick={() => subject && void openSubject(subject)}>New set</button>
+            <button type="button" className={primaryBtn} onClick={() => {
+              rememberAttempt(null);
+              setAttemptId(null);
+              if (subject) void openSubject(subject);
+              else setView("subjects");
+            }}>New set</button>
             <button type="button" className={ghostBtn} onClick={() => setView("subjects")}>All subjects</button>
           </div>
         </div>

@@ -43,6 +43,7 @@ class _Query:
 class _Service:
     def __init__(self) -> None:
         self.executed: list[_Query] = []
+        self.rpc_calls: list[tuple[str, dict]] = []
         self.rows = {
             "teacher_subjects": [
                 {
@@ -118,6 +119,28 @@ class _Service:
     def table(self, name: str) -> _Query:
         return _Query(self, name)
 
+    def rpc(self, name: str, params: dict):
+        self.rpc_calls.append((name, params))
+        metric = {
+            "id": "s1",
+            "name": "Accounting",
+            "course_name": "CA",
+            "level_name": "Foundation",
+            "chapters": 1,
+            "quizzes_total": 1,
+            "quizzes_published": 1,
+            "quizzes_draft": 0,
+            "questions": 2,
+            "pending_review": 1,
+            "needs_edit": 1,
+            "attempts": 2,
+            "students": 2,
+            "avg_score_pct": 90.0,
+            "score_earned": 27.0,
+            "score_possible": 30.0,
+        }
+        return SimpleNamespace(execute=lambda: SimpleNamespace(data=[metric]))
+
 
 class TeacherSubjectMetricsTests(unittest.TestCase):
     def test_metrics_are_tenant_scoped_teacher_owned_and_graded(self) -> None:
@@ -143,17 +166,16 @@ class TeacherSubjectMetricsTests(unittest.TestCase):
         self.assertEqual(metric["students"], 2)
         self.assertEqual(metric["avg_score_pct"], 90.0)
 
-        for query in service.executed:
-            self.assertIn(
-                ("tenant_id", TENANT_ID),
-                query.equals,
-                f"{query.table} query must be tenant scoped",
-            )
-        for table in ("questions", "quiz_sets"):
-            query = next(q for q in service.executed if q.table == table)
-            self.assertIn(("created_by", TEACHER_ID), query.equals)
-        attempts_query = next(q for q in service.executed if q.table == "quiz_attempts")
-        self.assertIn(("status", "graded"), attempts_query.equals)
+        self.assertEqual(service.executed, [])
+        self.assertEqual(
+            service.rpc_calls,
+            [
+                (
+                    "teacher_subject_metrics",
+                    {"p_tenant": TENANT_ID, "p_teacher": TEACHER_ID},
+                )
+            ],
+        )
 
 
 if __name__ == "__main__":

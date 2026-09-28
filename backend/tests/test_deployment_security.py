@@ -9,7 +9,7 @@ from uuid import uuid4
 from fastapi.testclient import TestClient
 
 from app.lib.config import Settings
-from app.api import admin, institution_admin, student, super_admin
+from app.api import admin, documents, institution_admin, student, super_admin, teacher
 from app.main import app, settings
 
 
@@ -127,6 +127,37 @@ class ResponseSecurityTests(unittest.TestCase):
         for path, route in routes.items():
             with self.subTest(path=path):
                 self.assertIsNotNone(getattr(route, "response_model", None))
+
+    def test_free_text_searches_use_request_bodies_not_urls(self) -> None:
+        routers = (student.router, documents.router, teacher.router, admin.router)
+        routes = {
+            (route.path, method): route
+            for router in routers
+            for route in router.routes
+            for method in getattr(route, "methods", set())
+        }
+        search_pairs = (
+            ("/api/v1/quizzes", "/api/v1/quizzes/search"),
+            ("/api/v1/documents", "/api/v1/documents/search"),
+            ("/api/v1/documents/log", "/api/v1/documents/log/search"),
+            (
+                "/api/v1/teacher/published-quizzes",
+                "/api/v1/teacher/published-quizzes/search",
+            ),
+            ("/api/v1/users", "/api/v1/users/search"),
+            ("/api/v1/admin/quiz-sets", "/api/v1/admin/quiz-sets/search"),
+        )
+
+        for listing_path, search_path in search_pairs:
+            with self.subTest(listing_path=listing_path):
+                listing_route = routes[(listing_path, "GET")]
+                query_parameters = {
+                    parameter.name for parameter in listing_route.dependant.query_params
+                }
+                self.assertNotIn("q", query_parameters)
+
+                search_route = routes[(search_path, "POST")]
+                self.assertIsNotNone(search_route.body_field)
 
     def test_debug_routes_are_disabled_by_default(self) -> None:
         self.assertFalse(settings.debug)

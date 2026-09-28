@@ -106,7 +106,7 @@ class _Query:
         self.table = table
         self.filters: list[tuple[str, object]] = []
         self.in_filters: list[tuple[str, set[object]]] = []
-        self.ordering: tuple[str, bool] | None = None
+        self.ordering: list[tuple[str, bool]] = []
         self.select_str: str | None = None
         self.range_bounds: tuple[int, int] | None = None
 
@@ -124,7 +124,17 @@ class _Query:
         return self
 
     def order(self, column: str, desc: bool = False):
-        self.ordering = (column, desc)
+        self.ordering.append((column, desc))
+        return self
+
+    def limit(self, value: int):
+        self.row_limit = value
+        return self
+
+    def ilike(self, *_args):
+        return self
+
+    def or_(self, *_args):
         return self
 
     def range(self, start: int, end: int):
@@ -137,13 +147,13 @@ class _Query:
             rows = [row for row in rows if row.get(column) == value]
         for column, values in self.in_filters:
             rows = [row for row in rows if row.get(column) in values]
-        if self.ordering:
-            column, desc = self.ordering
+        for column, desc in reversed(self.ordering):
             rows.sort(key=lambda row: row.get(column) or "", reverse=desc)
         total = len(rows)
         if self.range_bounds:
             start, end = self.range_bounds
             rows = rows[start : end + 1]
+        rows = rows[: getattr(self, "row_limit", len(rows))]
         if self.select_str:
             embeds = _parse_embeds(self.select_str)
             if embeds:
@@ -205,9 +215,9 @@ class _Service:
                 {"id": "attempt-open", "tenant_id": "tenant-a", "student_id": "student-a", "variant_id": "variant-a1", "status": "in_progress", "total_score": 10, "submitted_at": None},
             ],
             "attempt_answers": [
-                {"tenant_id": "tenant-a", "attempt_id": "attempt-a1", "question_id": "question-a1", "is_correct": True},
-                {"tenant_id": "tenant-a", "attempt_id": "attempt-a1", "question_id": "question-a2", "is_correct": False},
-                {"tenant_id": "tenant-a", "attempt_id": "attempt-a2", "question_id": "question-a1", "is_correct": False},
+                {"tenant_id": "tenant-a", "attempt_id": "attempt-a1", "question_id": "question-a1", "student_answer": "a", "is_correct": True},
+                {"tenant_id": "tenant-a", "attempt_id": "attempt-a1", "question_id": "question-a2", "student_answer": "b", "is_correct": False},
+                {"tenant_id": "tenant-a", "attempt_id": "attempt-a2", "question_id": "question-a1", "student_answer": "b", "is_correct": False},
             ],
             "enrollments": [
                 {"tenant_id": "tenant-a", "profile_id": "student-a", "course_id": "course-a"},
@@ -230,7 +240,7 @@ class AdminQuizPerformanceTests(unittest.TestCase):
         self.patch.stop()
 
     def test_summary_aggregates_weighted_accuracy_reviews_and_attempts(self) -> None:
-        rows = asyncio.run(admin_quiz_sets(self.profile))
+        rows = asyncio.run(admin_quiz_sets(self.profile)).items
 
         self.assertEqual(len(rows), 1)
         quiz = rows[0]
@@ -253,11 +263,11 @@ class AdminQuizPerformanceTests(unittest.TestCase):
             }
         )
 
-        first = asyncio.run(admin_quiz_sets(self.profile, page=1, page_size=1))
-        second = asyncio.run(admin_quiz_sets(self.profile, page=2, page_size=1))
+        with patch("app.api.admin.encode_cursor", return_value="next-page"):
+            first = asyncio.run(admin_quiz_sets(self.profile, page_size=1))
 
-        self.assertEqual([row.id for row in first], ["set-a"])
-        self.assertEqual([row.id for row in second], ["set-a-older"])
+        self.assertEqual([row.id for row in first.items], ["set-a"])
+        self.assertEqual(first.next_cursor, "next-page")
 
     def test_detail_returns_breakdowns_students_and_weak_questions(self) -> None:
         detail = asyncio.run(admin_quiz_set_detail("set-a", self.profile))
@@ -267,6 +277,16 @@ class AdminQuizPerformanceTests(unittest.TestCase):
         self.assertEqual(detail["student_performance"][0]["student_name"], "Sam")
         self.assertEqual(detail["weak_questions"][0]["question_id"], "question-a2")
         self.assertEqual(detail["weak_questions"][0]["accuracy"], 0.0)
+
+    def test_unanswered_rows_do_not_lower_question_accuracy(self) -> None:
+        self.service.tables["attempt_answers"].append(
+            {"tenant_id": "tenant-a", "attempt_id": "attempt-a2", "question_id": "question-a2", "student_answer": None, "is_correct": False}
+        )
+
+        detail = asyncio.run(admin_quiz_set_detail("set-a", self.profile))
+
+        weak = {row["question_id"]: row for row in detail["weak_questions"]}
+        self.assertEqual(weak["question-a2"]["answered"], 1)
 
     def test_teacher_analytics_aggregates_activity_and_weighted_accuracy(self) -> None:
         result = asyncio.run(admin_teacher_analytics(self.profile))
@@ -291,8 +311,8 @@ class AdminQuizPerformanceTests(unittest.TestCase):
         self.assertEqual(inactive.total_attempts, 0)
 
     def test_quiz_set_teacher_filter_cannot_cross_tenants(self) -> None:
-        own_rows = asyncio.run(admin_quiz_sets(self.profile, teacher_id="teacher-a"))
-        other_rows = asyncio.run(admin_quiz_sets(self.profile, teacher_id="teacher-b"))
+        own_rows = asyncio.run(admin_quiz_sets(self.profile, teacher_id="teacher-a")).items
+        other_rows = asyncio.run(admin_quiz_sets(self.profile, teacher_id="teacher-b")).items
 
         self.assertEqual([row.id for row in own_rows], ["set-a"])
         self.assertEqual(other_rows, [])
@@ -353,7 +373,7 @@ class AdminQuizPerformanceTests(unittest.TestCase):
         stats = institution_stats(self.profile)
         overview = asyncio.run(institution_overview(self.profile))
         analytics = asyncio.run(institution_analytics(self.profile))
-        quizzes = asyncio.run(admin_quiz_sets(self.profile))
+        quizzes = asyncio.run(admin_quiz_sets(self.profile)).items
 
         self.assertEqual(stats["teachers"], len(teachers.items))
         self.assertEqual(stats["teachers"], overview["teachers"])

@@ -201,6 +201,32 @@ class _Service:
     def rpc(self, name: str, params: dict) -> _Rpc:
         if name == "anonymize_account_data":
             return _Rpc([])
+        if name == "teacher_class_overview_metrics":
+            return _Rpc(
+                {
+                    "class_accuracy": 0,
+                    "students": 0,
+                    "at_risk": 0,
+                    "total_attempts": 0,
+                    "accuracy_by_quiz": [],
+                    "needs_attention": [],
+                    "top_performers": [],
+                    "pipeline": {
+                        "pending_review": 0,
+                        "approved": 0,
+                        "rejected": 0,
+                        "needs_edit": 0,
+                    },
+                    "activity_trend": [],
+                    "score_distribution": [],
+                    "content": {
+                        "documents": 1,
+                        "quiz_sets": 1,
+                        "published": 0,
+                        "drafts": 1,
+                    },
+                }
+            )
         if name != "replace_teacher_subjects":
             raise AssertionError(f"Unexpected RPC: {name}")
         return _Rpc(params["p_subject_ids"])
@@ -335,10 +361,7 @@ class InstitutionTeacherManagementTests(unittest.TestCase):
             result["content"],
             {"documents": 1, "quiz_sets": 1, "published": 0, "drafts": 1},
         )
-        self.assertEqual(
-            Counter(self.service.queries),
-            Counter({"quiz_sets": 1, "documents": 1, "quiz_variants": 1}),
-        )
+        self.assertEqual(Counter(self.service.queries), Counter())
 
     def test_course_roster_excludes_teachers_and_other_tenants(self) -> None:
         roster = list_course_students("course-a", self.profile)

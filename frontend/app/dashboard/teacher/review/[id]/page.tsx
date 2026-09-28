@@ -1,8 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { use, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 
 import { Button } from "@/components/ui/button";
 import { ErrorCard } from "@/components/ui/error-card";
@@ -18,6 +18,7 @@ import { useDashboardIdentity } from "@/components/shared/dashboard-identity-con
 import { statusLabel, variantLabel } from "@/lib/format";
 import {
   DocumentFigure,
+  Batch,
   QuizSetDetail,
   ReviewQuestion,
   ScoringPolicy,
@@ -31,6 +32,7 @@ import {
   duplicateQuizSet,
   listScoringPolicies,
   setQuizScoringPolicy,
+  listEligibleBatches,
 } from "@/lib/api";
 
 type ReviewFilter =
@@ -74,8 +76,11 @@ function StatusFilter({
   );
 }
 
-export default function ReviewDetailPage({ params }: { params: { id: string } }) {
+export default function ReviewDetailPage({ params }: { params: Promise<{ id: string }> }) {
+  const { id } = use(params);
   const router = useRouter();
+  const pathname = usePathname();
+  const publishedView = pathname.startsWith("/dashboard/teacher/published-quizzes/");
   const { features } = useDashboardIdentity();
   const { notify } = useToast();
   const [detail, setDetail] = useState<QuizSetDetail | null>(null);
@@ -89,6 +94,10 @@ export default function ReviewDetailPage({ params }: { params: { id: string } })
   const [copying, setCopying] = useState(false);
   const [publishing, setPublishing] = useState(false);
   const [confirmPurge, setConfirmPurge] = useState(false);
+  const [batches, setBatches] = useState<Batch[]>([]);
+  const [selectedBatches, setSelectedBatches] = useState<string[]>([]);
+  const [batchesLoading, setBatchesLoading] = useState(false);
+  const [batchesError, setBatchesError] = useState<string | null>(null);
   const [approving, setApproving] = useState(false);
   const [regenerating, setRegenerating] = useState(false);
   const [confirmRegen, setConfirmRegen] = useState(false);
@@ -105,9 +114,15 @@ export default function ReviewDetailPage({ params }: { params: { id: string } })
   const [celebrate, setCelebrate] = useState(false);
 
   useEffect(() => {
+    setBatches([]);
+    setSelectedBatches([]);
+    setBatchesError(null);
+  }, [id]);
+
+  useEffect(() => {
     try {
       const saved = window.sessionStorage.getItem(
-        `teacher-review-filter:${params.id}`,
+        `teacher-review-filter:${id}`,
       );
       if (
         saved === "all" ||
@@ -121,7 +136,24 @@ export default function ReviewDetailPage({ params }: { params: { id: string } })
     } catch {
       // Filtering remains usable without session storage.
     }
-  }, [params.id]);
+  }, [id]);
+
+  useEffect(() => {
+    if (!features.batches || detail?.status !== "draft") return;
+    let cancelled = false;
+    setBatchesLoading(true);
+    setBatchesError(null);
+    listEligibleBatches(id)
+      .then((rows) => { if (!cancelled) setBatches(rows); })
+      .catch((reason) => { if (!cancelled) setBatchesError(reason instanceof Error ? reason.message : "Could not load eligible batches."); })
+      .finally(() => { if (!cancelled) setBatchesLoading(false); });
+    return () => { cancelled = true; };
+  }, [detail?.status, features.batches, id]);
+
+  useEffect(() => {
+    if (detail?.status === "published" && !publishedView) router.replace(`/dashboard/teacher/published-quizzes/${id}`);
+    if (detail && detail.status !== "published" && publishedView) router.replace(`/dashboard/teacher/review/${id}`);
+  }, [detail, id, publishedView, router]);
 
   useEffect(() => {
     if (!features.scoring_policies) return;
@@ -133,7 +165,7 @@ export default function ReviewDetailPage({ params }: { params: { id: string } })
     setSavingPolicy(true);
     setError(null);
     try {
-      const result = await setQuizScoringPolicy(params.id, policyId || null);
+      const result = await setQuizScoringPolicy(id, policyId || null);
       setDetail({ ...detail, scoring_policy_id: result.scoring_policy_id });
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Couldn't update scoring.");
@@ -149,7 +181,7 @@ export default function ReviewDetailPage({ params }: { params: { id: string } })
 
   function load() {
     setError(null);
-    getQuizSet(params.id)
+    getQuizSet(id)
       .then(setDetail)
       .catch((e) => setError(e.message));
   }
@@ -158,7 +190,7 @@ export default function ReviewDetailPage({ params }: { params: { id: string } })
     let cancelled = false;
     setError(null);
     setDetail(null);
-    getQuizSet(params.id)
+    getQuizSet(id)
       .then((result) => {
         if (!cancelled) setDetail(result);
       })
@@ -168,7 +200,7 @@ export default function ReviewDetailPage({ params }: { params: { id: string } })
     return () => {
       cancelled = true;
     };
-  }, [params.id]);
+  }, [id]);
 
   // Load the source document's figure catalog once, so each card can show its
   // attached figure and offer swap/add. Empty (or absent document) is fine.
@@ -249,12 +281,12 @@ export default function ReviewDetailPage({ params }: { params: { id: string } })
     if (!detail || copying) return;
     setCopying(true);
     setError(null);
-    const storageKey = `quiz-copy-intent:${params.id}`;
+    const storageKey = `quiz-copy-intent:${id}`;
     try { copyKey.current = window.sessionStorage.getItem(storageKey); } catch { /* retry still retains the in-memory key */ }
     copyKey.current ??= crypto.randomUUID();
     try { window.sessionStorage.setItem(storageKey, copyKey.current); } catch { /* storage may be unavailable */ }
     try {
-      const copied = await duplicateQuizSet(params.id, `Copy of ${detail.title}`.slice(0, 200), copyKey.current);
+      const copied = await duplicateQuizSet(id, `Copy of ${detail.title}`.slice(0, 200), copyKey.current);
       try { window.sessionStorage.removeItem(storageKey); } catch { /* copy already saved */ }
       copyKey.current = null;
       router.push(`/dashboard/teacher/review/${copied.quiz_set_id}`);
@@ -283,7 +315,11 @@ export default function ReviewDetailPage({ params }: { params: { id: string } })
     setError(null);
     setPublishing(true);
     try {
-      const s = await publishQuizSet(params.id, detail?.publication_token);
+      if (features.batches && selectedBatches.length === 0) {
+        setError("Select at least one batch before publishing this quiz.");
+        return;
+      }
+      const s = await publishQuizSet(id, detail?.publication_token, features.batches ? selectedBatches : undefined);
       setDetail((d) => d ? {
         ...d, status: s.status,
         release_locked: d.reuse_enabled ? true : d.release_locked,
@@ -294,7 +330,7 @@ export default function ReviewDetailPage({ params }: { params: { id: string } })
       // Rejected questions were permanently removed on the server; refresh so
       // they disappear from the list too.
       const removed = s.purged_rejected ?? 0;
-      if (removed > 0) setDetail(await getQuizSet(params.id));
+      if (removed > 0) setDetail(await getQuizSet(id));
       celebrateBurst();
       notify(
         removed > 0
@@ -302,6 +338,7 @@ export default function ReviewDetailPage({ params }: { params: { id: string } })
           : "🎉 Quiz published — students can now see it",
         "success",
       );
+      router.replace(`/dashboard/teacher/published-quizzes/${id}`);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Publish failed");
     } finally {
@@ -315,13 +352,27 @@ export default function ReviewDetailPage({ params }: { params: { id: string } })
     setError(null);
     setPublishing(true);
     try {
-      const s = await blueprintPublish(params.id, selectedIds);
-      setDetail(await getQuizSet(params.id));
+      if (!detail?.publication_token) {
+        setError("Refresh the quiz before publishing this blueprint.");
+        return;
+      }
+      if (features.batches && selectedBatches.length === 0) {
+        setError("Select at least one batch before publishing this quiz.");
+        return;
+      }
+      const s = await blueprintPublish(
+        id,
+        selectedIds,
+        detail.publication_token,
+        features.batches ? selectedBatches : undefined,
+      );
+      setDetail(await getQuizSet(id));
       celebrateBurst();
       notify(
         `🎉 Published ${s.published_count} question${s.published_count === 1 ? "" : "s"} — the rest stay saved`,
         "success",
       );
+      router.replace(`/dashboard/teacher/published-quizzes/${id}`);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Publish failed");
     } finally {
@@ -334,8 +385,8 @@ export default function ReviewDetailPage({ params }: { params: { id: string } })
     setError(null);
     setRegenerating(true);
     try {
-      const r = await regenerateQuizSet(params.id);
-      setDetail(await getQuizSet(params.id));
+      const r = await regenerateQuizSet(id);
+      setDetail(await getQuizSet(id));
       celebrateBurst();
       notify(
         r.kept > 0
@@ -354,9 +405,9 @@ export default function ReviewDetailPage({ params }: { params: { id: string } })
     setError(null);
     setApproving(true);
     try {
-      const { approved: count, skipped = 0 } = await approveAllQuestions(params.id);
+      const { approved: count, skipped = 0 } = await approveAllQuestions(id);
       if (skipped) setError(`${skipped} question(s) need an answer-format correction or changed during approval. Open them to check.`);
-      setDetail(await getQuizSet(params.id));
+      setDetail(await getQuizSet(id));
       celebrateBurst();
       notify(
         count > 0
@@ -379,7 +430,7 @@ export default function ReviewDetailPage({ params }: { params: { id: string } })
     setArchiving(true);
     setError(null);
     try {
-      await archiveQuizSet(params.id);
+      await archiveQuizSet(id);
       notify("Quiz archived", "success");
       router.push("/dashboard/teacher/review");
     } catch (e) {
@@ -439,7 +490,7 @@ export default function ReviewDetailPage({ params }: { params: { id: string } })
   function chooseFilter(filter: ReviewFilter) {
     setReviewFilter(filter);
     try {
-      window.sessionStorage.setItem(`teacher-review-filter:${params.id}`, filter);
+      window.sessionStorage.setItem(`teacher-review-filter:${id}`, filter);
     } catch {
       // Filtering remains usable without session storage.
     }
@@ -484,10 +535,10 @@ export default function ReviewDetailPage({ params }: { params: { id: string } })
           <div className="flex flex-wrap items-center justify-between gap-3 border-b px-4 py-3 sm:px-5">
             <div className="min-w-0">
               <Link
-                href="/dashboard/teacher/review"
+                href={publishedView ? "/dashboard/teacher/published-quizzes" : "/dashboard/teacher/review"}
                 className="inline-flex items-center gap-1 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
               >
-                ← Review queue
+                ← {publishedView ? "Published quizzes" : "Review queue"}
               </Link>
               <div className="mt-1 flex min-w-0 items-center gap-2">
                 <h1 className="truncate text-xl font-semibold tracking-tight">
@@ -502,7 +553,7 @@ export default function ReviewDetailPage({ params }: { params: { id: string } })
               {copying ? "Copying..." : "Duplicate as draft"}
             </Button>}
             <QuestionPaperButtons
-              quizSetId={params.id}
+              quizSetId={id}
               title={detail.title}
               compact
             />
@@ -572,7 +623,7 @@ export default function ReviewDetailPage({ params }: { params: { id: string } })
             </label>
           )}
           {detail.status === "published" && (
-            <Link href={`/dashboard/teacher/performance/${params.id}`}>
+            <Link href={`/dashboard/teacher/performance/${id}`}>
               <Button size="sm" variant="outline">View performance</Button>
             </Link>
           )}
@@ -621,7 +672,7 @@ export default function ReviewDetailPage({ params }: { params: { id: string } })
           <Button
             size="sm"
             onClick={handlePublish}
-            disabled={publishing || copying || detail.status === "published" || detail.status === "archived" || unresolved > 0}
+            disabled={publishing || copying || detail.status === "published" || detail.status === "archived" || unresolved > 0 || (features.batches && (batchesLoading || !!batchesError || selectedBatches.length === 0))}
             title={
               unresolved > 0
                 ? `Review ${unresolved} remaining question${unresolved === 1 ? "" : "s"} before publishing`
@@ -641,6 +692,26 @@ export default function ReviewDetailPage({ params }: { params: { id: string } })
 
       {error && (
         <p className="text-sm text-destructive">{error}</p>
+      )}
+      {features.batches && detail.status === "draft" && (
+        <section className="rounded-xl border bg-card p-4" aria-label="Assign batches before publishing">
+          <h2 className="font-semibold">Assign to batches</h2>
+          <p className="mt-1 text-sm text-muted-foreground">Choose the batches that can take this quiz. Only these batches will see it after publication.</p>
+          {batchesLoading ? <p className="mt-3 text-sm">Loading eligible batches…</p> : batchesError ? (
+            <p role="alert" className="mt-3 text-sm text-destructive">{batchesError}</p>
+          ) : batches.length === 0 ? (
+            <p className="mt-3 text-sm text-muted-foreground">No eligible batches are available. Ask your institution admin to create or assign an active batch for this course and level.</p>
+          ) : (
+            <div className="mt-3 flex flex-wrap gap-2">
+              {batches.map((batch) => (
+                <label key={batch.id} className="inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-sm">
+                  <input type="checkbox" checked={selectedBatches.includes(batch.id)} onChange={(event) => setSelectedBatches((current) => event.target.checked ? [...current, batch.id] : current.filter((id) => id !== batch.id))} />
+                  {batch.name}
+                </label>
+              ))}
+            </div>
+          )}
+        </section>
       )}
       {/* A concise import receipt only when some candidates were skipped, so the
           review stays focused on the questions. The verbose source-inventory /
@@ -747,7 +818,7 @@ export default function ReviewDetailPage({ params }: { params: { id: string } })
 
       {assigning && (
         <AssignBatchesDialog
-          quizSetId={params.id}
+          quizSetId={id}
           quizTitle={detail.title}
           onClose={() => setAssigning(false)}
         />

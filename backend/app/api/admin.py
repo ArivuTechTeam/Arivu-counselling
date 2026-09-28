@@ -27,11 +27,13 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.lib.auth import CurrentProfile, get_current_profile
+from app.lib.pagination import DEFAULT_PAGE_SIZE, bounded_page_size, decode_cursor, descending_page, encode_cursor
 from app.lib.role_checks import require_institution_admin, require_super_admin
 from app.lib.api_errors import auth_provisioning_error, public_error
 from app.lib.supabase import get_service_client
 from app.lib.storage import delete_bytes, signed_url, upload_bytes
 from app.services.account_deletion import erase_account_data
+from app.services.attempt_timing import is_answered
 from app.services.catalog import active_catalog_subject_ids, provision_catalog_subject
 from app.services.institution_offerings import (
     institution_offerings_by_tenant,
@@ -45,9 +47,36 @@ router = APIRouter(prefix="/api/v1", tags=["admin"])
 AUTH_USERS_PAGE_SIZE = 1000
 POSTGREST_PAGE_SIZE = 1000
 ADMIN_DIRECTORY_PAGE_SIZE = 100
-ADMIN_QUIZ_SET_PAGE_SIZE_MAX = 100
 INSTITUTION_LOGO_MAX_BYTES = 1024 * 1024
 INSTITUTION_LOGO_TYPES = {"image/png": "png", "image/jpeg": "jpg"}
+INSTITUTION_SUBDOMAIN_MAX_LENGTH = 63
+
+
+def _normalize_institution_subdomain(value: str) -> str:
+    subdomain = value.strip().lower()
+    if not subdomain:
+        raise HTTPException(
+            status_code=400,
+            detail="Institution access URL is required.",
+        )
+    if (
+        len(subdomain) > INSTITUTION_SUBDOMAIN_MAX_LENGTH
+        or not all(
+            character in "abcdefghijklmnopqrstuvwxyz0123456789-"
+            for character in subdomain
+        )
+        or not subdomain[0].isalnum()
+        or not subdomain[-1].isalnum()
+        or "--" in subdomain
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Access URL must use lowercase letters, numbers, "
+                "and single internal hyphens only."
+            ),
+        )
+    return subdomain
 
 
 def _signed_logo_url(path: object) -> str | None:
@@ -488,7 +517,6 @@ def _rollback_tenant(service, tenant_id: str) -> None:
 
 
 # ── Institution teacher management ──────────────────────────────────────────
-@router.get("/users", response_model=DirectoryPage)
 def list_users(
     page: int = 1,
     page_size: int = 12,
@@ -586,6 +614,36 @@ def list_users(
         page=page,
         page_size=page_size,
         total=total,
+    )
+
+
+class DirectorySearchRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    page: int = Field(default=1, ge=1)
+    page_size: int = Field(default=12, ge=1, le=ADMIN_DIRECTORY_PAGE_SIZE)
+    query: str = Field(default="", max_length=100)
+
+
+@router.get("/users", response_model=DirectoryPage)
+def list_users_route(
+    page: int = 1,
+    page_size: int = 12,
+    profile: CurrentProfile = Depends(get_current_profile),
+) -> DirectoryPage:
+    return list_users(page=page, page_size=page_size, profile=profile)
+
+
+@router.post("/users/search", response_model=DirectoryPage)
+def search_users(
+    body: DirectorySearchRequest,
+    profile: CurrentProfile = Depends(get_current_profile),
+) -> DirectoryPage:
+    return list_users(
+        page=body.page,
+        page_size=body.page_size,
+        q=body.query,
+        profile=profile,
     )
 
 
@@ -2408,6 +2466,10 @@ class TenantUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     name: str | None = None
+    subdomain: str | None = Field(
+        default=None,
+        max_length=INSTITUTION_SUBDOMAIN_MAX_LENGTH,
+    )
     plan_tier: Literal["free", "starter", "growth", "enterprise"] | None = None
     is_active: bool | None = None
     logo_data: str | None = Field(default=None, max_length=1_500_000)
@@ -2499,7 +2561,7 @@ def onboard_institution(
     )
 
     name = body.name.strip()
-    subdomain = body.subdomain.strip().lower()
+    subdomain = _normalize_institution_subdomain(body.subdomain)
     if not name or not subdomain:
         raise HTTPException(status_code=400, detail="Name and subdomain are required.")
     supplied_admin_fields = [
@@ -2514,15 +2576,6 @@ def onboard_institution(
         )
     if body.admin_password:
         _validate_temporary_password(body.admin_password)
-    if (
-        not all(c.isalnum() or c == "-" for c in subdomain)
-        or not subdomain[0].isalnum()
-        or not subdomain[-1].isalnum()
-    ):
-        raise HTTPException(
-            status_code=400,
-            detail="Subdomain must use letters, numbers, and internal hyphens only.",
-        )
     taken = (
         service.table("tenants").select("id").eq("subdomain", subdomain).execute().data
         or []
@@ -2705,19 +2758,42 @@ def update_institution(
         changes["name"] = changes["name"].strip()
         if not changes["name"]:
             raise HTTPException(status_code=400, detail="Institution name is required.")
+    if "subdomain" in changes:
+        changes["subdomain"] = _normalize_institution_subdomain(
+            changes["subdomain"]
+        )
     if not changes and logo is None:
         raise HTTPException(status_code=400, detail="Choose at least one field to update.")
 
     service = get_service_client()
     existing = (
         service.table("tenants")
-        .select("id, logo_url, logo_filename, primary_color, feature_flags")
+        .select(
+            "id, subdomain, logo_url, logo_filename, primary_color, feature_flags"
+        )
         .eq("id", tenant_id)
         .maybe_single()
         .execute()
     )
     if existing is None or not existing.data:
         raise HTTPException(status_code=404, detail="Institution not found.")
+    if (
+        "subdomain" in changes
+        and changes["subdomain"] != existing.data.get("subdomain")
+    ):
+        duplicate = (
+            service.table("tenants")
+            .select("id")
+            .eq("subdomain", changes["subdomain"])
+            .execute()
+            .data
+            or []
+        )
+        if duplicate:
+            raise HTTPException(
+                status_code=409,
+                detail="That institution access URL is already in use.",
+            )
     previous_logo_path = existing.data.get("logo_url")
     new_logo_path: str | None = None
     if logo is not None:
@@ -3073,13 +3149,21 @@ class AdminQuizSet(BaseModel):
     review_status: ReviewStatusCounts
 
 
-@router.get("/admin/quiz-sets", response_model=list[AdminQuizSet])
+class AdminQuizSetPage(BaseModel):
+    items: list[AdminQuizSet]
+    next_cursor: str | None = None
+
+
 async def admin_quiz_sets(
     profile: CurrentProfile = Depends(get_current_profile),
+    quiz_set_id: str | None = None,
     teacher_id: str | None = None,
-    page: int = 1,
-    page_size: int = 50,
-) -> list[AdminQuizSet]:
+    course_id: str | None = None,
+    status_filter: str | None = None,
+    q: str = "",
+    cursor: str | None = None,
+    page_size: int = DEFAULT_PAGE_SIZE,
+) -> AdminQuizSetPage:
     """
     Every quiz set in the institution, enriched with course/subject/teacher and a
     question/review counts and graded-attempt performance.
@@ -3089,23 +3173,22 @@ async def admin_quiz_sets(
     every join server-side in one request.
     """
     require_institution_admin(profile)
-    if page < 1 or page_size < 1 or page_size > ADMIN_QUIZ_SET_PAGE_SIZE_MAX:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "page must be positive and page_size must be between 1 and "
-                f"{ADMIN_QUIZ_SET_PAGE_SIZE_MAX}."
-            ),
-        )
+    page_size = bounded_page_size(page_size)
+    page_cursor = decode_cursor(cursor)
+    normalized_query = q.strip()
+    if len(normalized_query) > 100:
+        raise HTTPException(status_code=400, detail="Search text is too long.")
+    if status_filter and status_filter not in {"draft", "published", "archived"}:
+        raise HTTPException(status_code=400, detail="Invalid quiz status filter.")
     t = profile.tenant_id
-    start = (page - 1) * page_size
 
     def _fetch(client):
+        subject_join = "subjects!inner" if course_id else "subjects"
         q = (
             client.table("quiz_sets")
             .select(
                 "id, title, status, subject_id, created_by, created_at, published_at, "
-                "subjects(name, course_id, courses(name)), "
+                f"{subject_join}(name, course_id, courses(name)), "
                 "profiles!quiz_sets_created_by_fkey(full_name), "
                 "quiz_variants(id, total_marks, "
                 "quiz_variant_questions(question_id, questions(review_status)), "
@@ -3115,15 +3198,24 @@ async def admin_quiz_sets(
         )
         if teacher_id:
             q = q.eq("created_by", teacher_id)
+        if quiz_set_id:
+            q = q.eq("id", quiz_set_id)
+        if course_id:
+            q = q.eq("subjects.course_id", course_id)
+        if status_filter:
+            q = q.eq("status", status_filter)
+        if normalized_query:
+            q = q.ilike("title", f"%{normalized_query}%")
         return (
-            q.order("created_at", desc=True)
-            .range(start, start + page_size - 1)
+            descending_page(q, "created_at", page_size, page_cursor)
             .execute()
             .data
             or []
         )
 
     sets = await asyncio.to_thread(lambda: _fetch(get_service_client()))
+    has_more = len(sets) > page_size
+    sets = sets[:page_size]
 
     out: list[AdminQuizSet] = []
     for s in sets:
@@ -3185,7 +3277,62 @@ async def admin_quiz_sets(
                 ),
             )
         )
-    return out
+    next_cursor = (
+        encode_cursor(sets[-1]["created_at"], sets[-1]["id"])
+        if has_more and sets
+        else None
+    )
+    return AdminQuizSetPage(items=out, next_cursor=next_cursor)
+
+
+class AdminQuizSetSearchRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    quiz_set_id: str | None = None
+    teacher_id: str | None = None
+    course_id: str | None = None
+    status_filter: str | None = None
+    cursor: str | None = None
+    page_size: int = DEFAULT_PAGE_SIZE
+    query: str = Field(default="", max_length=100)
+
+
+@router.get("/admin/quiz-sets", response_model=AdminQuizSetPage)
+async def admin_quiz_sets_route(
+    profile: CurrentProfile = Depends(get_current_profile),
+    quiz_set_id: str | None = None,
+    teacher_id: str | None = None,
+    course_id: str | None = None,
+    status_filter: str | None = None,
+    cursor: str | None = None,
+    page_size: int = DEFAULT_PAGE_SIZE,
+) -> AdminQuizSetPage:
+    return await admin_quiz_sets(
+        profile=profile,
+        quiz_set_id=quiz_set_id,
+        teacher_id=teacher_id,
+        course_id=course_id,
+        status_filter=status_filter,
+        cursor=cursor,
+        page_size=page_size,
+    )
+
+
+@router.post("/admin/quiz-sets/search", response_model=AdminQuizSetPage)
+async def search_admin_quiz_sets(
+    body: AdminQuizSetSearchRequest,
+    profile: CurrentProfile = Depends(get_current_profile),
+) -> AdminQuizSetPage:
+    return await admin_quiz_sets(
+        profile=profile,
+        quiz_set_id=body.quiz_set_id,
+        teacher_id=body.teacher_id,
+        course_id=body.course_id,
+        status_filter=body.status_filter,
+        q=body.query,
+        cursor=body.cursor,
+        page_size=body.page_size,
+    )
 
 
 class TeacherAnalyticsDetail(BaseModel):
@@ -3394,7 +3541,9 @@ async def admin_quiz_set_detail(
     # This summary lookup doesn't depend on anything below — and is itself
     # already a single embedded query — so let it run concurrently with this
     # endpoint's own query instead of blocking on it up front.
-    summary_task = asyncio.create_task(admin_quiz_sets(profile))
+    summary_task = asyncio.create_task(
+        admin_quiz_sets(profile, quiz_set_id=quiz_set_id, page_size=1)
+    )
 
     def _fetch(client):
         return (
@@ -3404,7 +3553,7 @@ async def admin_quiz_set_detail(
                 "quiz_variant_questions(question_id, "
                 "questions(id, question_text, type, difficulty, review_status)), "
                 "quiz_attempts(id, student_id, total_score, submitted_at, status, "
-                "profiles(full_name), attempt_answers(question_id, is_correct))"
+                "profiles(full_name), attempt_answers(question_id, student_answer, is_correct))"
             )
             .eq("tenant_id", tenant_id)
             .eq("quiz_set_id", quiz_set_id)
@@ -3447,6 +3596,8 @@ async def admin_quiz_set_detail(
                 }
             )
             for answer in attempt.get("attempt_answers") or []:
+                if not is_answered(answer.get("student_answer")):
+                    continue
                 bucket = answer_counts.setdefault(
                     answer["question_id"], {"answered": 0, "correct": 0}
                 )
@@ -3457,10 +3608,8 @@ async def admin_quiz_set_detail(
         key=lambda row: row.get("submitted_at") or "", reverse=True
     )
 
-    summary = next(
-        (row for row in await summary_task if row.id == quiz_set_id),
-        None,
-    )
+    summary_page = await summary_task
+    summary = next((row for row in summary_page.items if row.id == quiz_set_id), None)
     if summary is None:
         raise HTTPException(status_code=404, detail="Quiz set not found.")
 

@@ -34,7 +34,7 @@ flowchart LR
 
 ```mermaid
 flowchart TB
-    subgraph FE["FRONTEND — Next.js 14 (Vercel)"]
+    subgraph FE["FRONTEND — Next.js 15 (Vercel)"]
         direction LR
         UI1["teacher/documents/page.tsx"]
         UI2["teacher/generate/page.tsx<br/>+ blueprint-generator.tsx"]

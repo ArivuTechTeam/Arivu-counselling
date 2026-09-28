@@ -25,7 +25,6 @@ import {
   addBookmark,
   consumePrimedAttemptState,
   finalizeAttemptForExit,
-  finalizeAttemptOnUnload,
   getAttempt,
   getPracticeSession,
   saveAttemptProgress,
@@ -46,6 +45,7 @@ import {
   STUDENT_STATS_KEY,
   STUDENT_WEAK_ANALYSIS_KEY,
 } from "@/lib/student-queries";
+import { examExitDestination, installExamBackGuard } from "@/lib/student-exam";
 
 function isAnswered(v: unknown): boolean {
   if (v === undefined || v === null || v === "") return false;
@@ -94,6 +94,11 @@ export function QuizAttempt({
   const [error, setError] = useState<string | null>(null);
   const [autosaveError, setAutosaveError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [exitTarget, setExitTarget] = useState<string | null>(null);
+  const [exitError, setExitError] = useState<string | null>(null);
+  const [exiting, setExiting] = useState(false);
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const approvedExitRef = useRef(false);
   const loadedAttemptKey = useRef<string | null>(null);
   const answerRevision = useRef(0);
   const savedAnswerRevision = useRef(0);
@@ -145,6 +150,8 @@ export function QuizAttempt({
     setCurrent(0);
     setMarked({});
     setAutosaveError(null);
+    setExitTarget(null);
+    setExitError(null);
     autosaveRetryCount.current = 0;
     autoFiredRef.current = false;
     submissionLockRef.current = false;
@@ -273,24 +280,20 @@ export function QuizAttempt({
 
   useEffect(() => {
     if (!state || state.status !== "in_progress") return;
-    const questions = (state as AttemptInProgress).questions;
-    let leavingIntentionally = false;
-    const warning =
-      "Leaving now ends this attempt. Answered questions will be graded and unanswered questions will score zero. Continue?";
-
-    const finalizeOnUnload = () => {
-      finalizeAttemptOnUnload(
-        attemptId,
-        source,
-        answerPayload(questions, answersRef.current),
-      );
-    };
+    approvedExitRef.current = false;
+    const removeBackGuard = installExamBackGuard(
+      window,
+      attemptId,
+      () => setExitTarget(examExitDestination(source)),
+    );
     const onBeforeUnload = (event: BeforeUnloadEvent) => {
-      if (leavingIntentionally) return;
+      if (approvedExitRef.current) return;
+      // Browsers only allow their own generic wording here. Refreshing keeps
+      // this attempt active; Exit exam / Back are the graded-leave paths.
       event.preventDefault();
       event.returnValue = "";
     };
-    const onDocumentClick = async (event: MouseEvent) => {
+    const onDocumentClick = (event: MouseEvent) => {
       if (
         event.defaultPrevented ||
         event.button !== 0 ||
@@ -307,39 +310,57 @@ export function QuizAttempt({
         return;
       }
       const destination = new URL(anchor.href, window.location.href);
-      if (destination.href === window.location.href) return;
+      const current = new URL(window.location.href);
+      if (
+        destination.origin === current.origin &&
+        destination.pathname === current.pathname &&
+        destination.search === current.search
+      ) return;
       event.preventDefault();
-      if (!window.confirm(warning)) return;
-      leavingIntentionally = true;
-      const payload = answerPayload(questions, answersRef.current);
-      try {
-        await finalizeAttemptForExit(attemptId, source, payload);
-        await invalidateStudentCaches();
-      } catch {
-        finalizeAttemptOnUnload(attemptId, source, payload);
-      } finally {
-        window.location.assign(destination.href);
-      }
-    };
-    const onPopState = () => {
-      if (!window.confirm(warning)) {
-        window.history.forward();
-        return;
-      }
-      leavingIntentionally = true;
-      void invalidateStudentCaches();
-      finalizeOnUnload();
+      setExitTarget(destination.href);
     };
 
     window.addEventListener("beforeunload", onBeforeUnload);
-    window.addEventListener("popstate", onPopState);
     document.addEventListener("click", onDocumentClick, true);
     return () => {
       window.removeEventListener("beforeunload", onBeforeUnload);
-      window.removeEventListener("popstate", onPopState);
+      removeBackGuard();
       document.removeEventListener("click", onDocumentClick, true);
     };
-  }, [attemptId, invalidateStudentCaches, source, state]);
+  }, [attemptId, source, state]);
+
+  async function confirmExit() {
+    if (!exitTarget || !state || state.status !== "in_progress") return;
+    if (exiting || submissionLockRef.current) return;
+    setExiting(true);
+    setExitError(null);
+    const destination = exitTarget;
+    const payload = answerPayload((state as AttemptInProgress).questions, answersRef.current);
+    const leave = async () => {
+      await invalidateStudentCaches().catch(() => undefined);
+      approvedExitRef.current = true;
+      window.location.assign(destination);
+    };
+    try {
+      await finalizeAttemptForExit(attemptId, source, payload);
+      await leave();
+    } catch {
+      // The server may have graded the work even if its response was lost.
+      // Check its authoritative state before offering another submission.
+      try {
+        const fetcher = source === "practice" ? getPracticeSession : getAttempt;
+        const latest = await fetcher(attemptId);
+        if (latest.status === "graded") {
+          await leave();
+          return;
+        }
+      } catch {
+        // Still unconfirmed: keep the student in the exam.
+      }
+      setExitError("We couldn't confirm that your attempt ended. Stay here and try again.");
+      setExiting(false);
+    }
+  }
 
   // Accumulate time-on-screen per question (client-side only) and flag it
   // visited, for the results analysis + the 5-state palette.
@@ -442,6 +463,8 @@ export function QuizAttempt({
         source === "practice" ? submitPracticeSession : submitAttempt;
       const result = await submit(attemptId, payload);
       setState(result);
+      setExitTarget(null);
+      setExitError(null);
       // Grading changes every student summary derived from attempt results.
       // Evict them without issuing requests while the results page is visible;
       // their next mount will reload fresh data once.
@@ -457,6 +480,7 @@ export function QuizAttempt({
           const recovered = await fetcher(attemptId);
           if (recovered.status === "graded") {
             setState(recovered);
+            setExitTarget(null);
             return true;
           }
         } catch {
@@ -486,28 +510,51 @@ export function QuizAttempt({
     <div className={`grid gap-4 lg:items-start ${focusMode ? "" : paletteLayout.pageColumns}`}>
       {/* Question panel — one at a time */}
       <div className="flex min-w-0 flex-1 flex-col gap-4">
-        <div className="flex items-center justify-between gap-3 text-sm">
-          <span className="font-medium text-foreground">
-            Question {current + 1}
-            <span className="text-muted-foreground"> of {questions.length}</span>
-          </span>
-          <div className="flex items-center gap-3">
-            <span className="text-muted-foreground">{answeredCount} answered</span>
-            <button
-              type="button"
-              onClick={() => setFocusMode((f) => !f)}
-              className="rounded-md border border-input px-2.5 py-1 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent"
-              title="Hide the question palette for a distraction-free view"
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border bg-card px-4 py-3 shadow-sm">
+          <div>
+            <p className="text-[11px] font-semibold uppercase tracking-widest text-primary">
+              {source === "quiz" ? "Quiz in progress" : "Practice in progress"}
+            </p>
+            <h1 className="mt-0.5 text-lg font-semibold text-foreground">
+              Question {current + 1}
+              <span className="font-normal text-muted-foreground"> of {questions.length}</span>
+            </h1>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-sm text-muted-foreground">
+              {answeredCount} answered
+            </span>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setFocusMode((enabled) => !enabled)}
+              title="Hide the question palette and rough-work tools for a distraction-free view"
             >
-              {focusMode ? "Show palette" : "Focus mode"}
-            </button>
+              {focusMode ? "Show tools" : "Focus mode"}
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              className="lg:hidden"
+              aria-expanded={paletteOpen}
+              aria-controls="exam-question-palette"
+              onClick={() => setPaletteOpen((open) => !open)}
+            >
+              Questions
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                setExitError(null);
+                setExitTarget(examExitDestination(source));
+              }}
+              disabled={submitting || exiting}
+            >
+              Exit {source === "quiz" ? "quiz" : "practice"}
+            </Button>
           </div>
         </div>
-
-        <p className="rounded-md border border-amber-200 bg-amber-50/70 px-3 py-2 text-xs text-amber-900">
-          Leaving for another page ends the attempt. Answered work is graded; unanswered
-          questions receive zero.
-        </p>
 
         {remainingMs !== null && (
           <div
@@ -600,7 +647,10 @@ export function QuizAttempt({
 
       {/* Question palette + rough work (hidden in focus mode) */}
       {!focusMode && (
-      <aside className="flex w-full flex-col gap-4 lg:sticky lg:top-0">
+      <aside
+        id="exam-question-palette"
+        className={`w-full flex-col gap-4 lg:sticky lg:top-4 ${paletteOpen ? "flex" : "hidden lg:flex"}`}
+      >
         <div className="rounded-lg border bg-card p-3 shadow-sm sm:p-4">
           <div className="mb-2 flex items-center justify-between gap-3">
             <p className="text-[11px] font-semibold uppercase tracking-widest text-muted-foreground">
@@ -610,38 +660,43 @@ export function QuizAttempt({
               {current + 1} / {questions.length}
             </span>
           </div>
-          <div
-            className={`grid grid-cols-8 gap-1.5 sm:grid-cols-10 ${paletteLayout.paletteColumns}`}
-          >
-            {questions.map((qq, i) => {
-              const ans = isAnswered(answers[qq.id]);
-              const mk = marked[qq.id];
-              const cur = i === current;
-              const seen = Boolean(visited[qq.id]) || cur;
-              const base = mk
-                ? ans
-                  ? "bg-violet-500 text-white ring-1 ring-inset ring-emerald-300"
-                  : "bg-violet-500 text-white"
-                : ans
-                  ? "bg-emerald-500 text-white"
-                  : seen
-                    ? "bg-rose-400 text-white"
-                    : "border border-input bg-background text-muted-foreground hover:bg-accent";
-              return (
-                <button
-                  key={qq.id}
-                  type="button"
-                  onClick={() => setCurrent(i)}
-                  aria-label={`Go to question ${i + 1}${ans ? ", answered" : seen ? ", not answered" : ", not visited"}${mk ? ", marked for review" : ""}`}
-                  aria-current={cur ? "step" : undefined}
-                  className={`flex h-8 min-w-0 items-center justify-center rounded-md text-xs font-medium transition ${base} ${
-                    cur ? "ring-2 ring-brand-600 ring-offset-1" : ""
-                  }`}
-                >
-                  {i + 1}
-                </button>
-              );
-            })}
+          <div className="max-h-[min(55vh,32rem)] overflow-y-auto pr-1">
+            <div
+              className={`grid grid-cols-8 gap-1.5 sm:grid-cols-10 ${paletteLayout.paletteColumns}`}
+            >
+              {questions.map((qq, i) => {
+                const ans = isAnswered(answers[qq.id]);
+                const mk = marked[qq.id];
+                const cur = i === current;
+                const seen = Boolean(visited[qq.id]) || cur;
+                const base = mk
+                  ? ans
+                    ? "bg-violet-500 text-white ring-1 ring-inset ring-emerald-300"
+                    : "bg-violet-500 text-white"
+                  : ans
+                    ? "bg-emerald-500 text-white"
+                    : seen
+                      ? "bg-rose-400 text-white"
+                      : "border border-input bg-background text-muted-foreground hover:bg-accent";
+                return (
+                  <button
+                    key={qq.id}
+                    type="button"
+                    onClick={() => {
+                      setCurrent(i);
+                      setPaletteOpen(false);
+                    }}
+                    aria-label={`Go to question ${i + 1}${ans ? ", answered" : seen ? ", not answered" : ", not visited"}${mk ? ", marked for review" : ""}`}
+                    aria-current={cur ? "step" : undefined}
+                    className={`flex h-8 min-w-0 items-center justify-center rounded-md text-xs font-medium transition ${base} ${
+                      cur ? "ring-2 ring-brand-600 ring-offset-1" : ""
+                    }`}
+                  >
+                    {i + 1}
+                  </button>
+                );
+              })}
+            </div>
           </div>
 
           <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1.5 text-[11px] text-muted-foreground">
@@ -666,8 +721,50 @@ export function QuizAttempt({
             </Button>
           </div>
         </div>
-        <ScratchPad storageKey={`scratch:${attemptId}`} />
+        <ScratchPad />
       </aside>
+      )}
+      {exitTarget && (
+        <Dialog
+          onClose={exiting ? undefined : () => setExitTarget(null)}
+          closeOnBackdrop={!exiting}
+          ariaLabelledBy="exam-exit-title"
+          overlayClassName="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4 backdrop-blur-[2px]"
+          contentClassName="w-full max-w-md rounded-xl border bg-card p-5 shadow-2xl sm:p-6"
+        >
+          <h2 id="exam-exit-title" className="text-xl font-semibold text-foreground">
+            End this attempt?
+          </h2>
+          <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
+            Leaving now ends this attempt. Your answered questions will be graded,
+            and unanswered questions will score zero. You cannot resume it later.
+          </p>
+          {exitError && (
+            <p role="alert" className="mt-4 rounded-md border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">
+              {exitError}
+            </p>
+          )}
+          <div className="mt-6 flex flex-wrap justify-end gap-2">
+            <Button
+              variant="outline"
+              onClick={() => {
+                setExitTarget(null);
+                setExitError(null);
+              }}
+              disabled={exiting}
+              data-dialog-initial-focus
+            >
+              Stay in exam
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={() => void confirmExit()}
+              disabled={exiting || submitting}
+            >
+              {exiting ? "Ending attempt…" : "End attempt and leave"}
+            </Button>
+          </div>
+        </Dialog>
       )}
     </div>
   );

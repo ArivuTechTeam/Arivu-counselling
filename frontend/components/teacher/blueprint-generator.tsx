@@ -144,9 +144,12 @@ export function BlueprintGenerator() {
       .then((p) => setExtendedTypesEnabled(!!p.features?.extended_question_types))
       .catch(() => setExtendedTypesEnabled(false));
   }, []);
-  const questionTypes = extendedTypesEnabled
-    ? [...QUESTION_TYPES, ...EXTENDED_QUESTION_TYPES]
-    : QUESTION_TYPES;
+  const questionTypes = useMemo(
+    () => extendedTypesEnabled
+      ? [...QUESTION_TYPES, ...EXTENDED_QUESTION_TYPES]
+      : QUESTION_TYPES,
+    [extendedTypesEnabled],
+  );
 
   const [documents, setDocuments] = useState<DocumentOut[]>([]);
   const [documentId, setDocumentId] = useState("");
@@ -265,7 +268,7 @@ export function BlueprintGenerator() {
 
   useEffect(() => {
     listDocuments()
-      .then((docs) => setDocuments(docs.filter((d) => d.status === "completed")))
+      .then((page) => setDocuments(page.items.filter((d) => d.status === "completed")))
       .catch((e) => setError(e.message));
   }, []);
 
@@ -587,7 +590,7 @@ export function BlueprintGenerator() {
       if ("background_job" in res) {
         setGenerating(false);
         notify(
-          "Generation queued. You can leave this page and open the finished draft from Recent tasks.",
+          "Generation queued. You can leave this page and open the quiz from Recent tasks when it is ready.",
           "success",
         );
         return;

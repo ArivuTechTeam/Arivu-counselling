@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { use, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 
@@ -26,9 +26,9 @@ const MEDAL = ["#e8b923", "#9aa4ad", "#c17d4a"]; // gold / silver / bronze
 export default function ChallengeHubPage({
   params,
 }: {
-  params: { token: string };
+  params: Promise<{ token: string }>;
 }) {
-  const token = params.token;
+  const { token } = use(params);
   const router = useRouter();
   const { data: info, error: loadError, mutate } = useStudentChallenge(token);
   const [actionError, setActionError] = useState<string | null>(null);

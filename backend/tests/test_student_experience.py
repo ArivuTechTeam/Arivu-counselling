@@ -107,6 +107,11 @@ class MemoryService:
     def table(self, name: str) -> MemoryQuery:
         return MemoryQuery([dict(row) for row in self.tables.get(name, [])])
 
+    def rpc(self, name: str, _params: dict):
+        if name != "student_attempt_history_page":
+            raise AssertionError(name)
+        return SimpleNamespace(execute=lambda: SimpleNamespace(data=_history_rows(self.tables)))
+
 
 class MutableQuery:
     def __init__(self, service: "MutableService", table: str) -> None:
@@ -211,6 +216,117 @@ class MutableService:
         self.calls.append(name)
         return MutableQuery(self, name)
 
+    def rpc(self, name: str, params: dict):
+        if name == "create_limited_quiz_attempt":
+            self.calls.append("quiz_attempts")
+            attempt_id = f"quiz_attempts-{self.next_id}"
+            self.next_id += 1
+            self.tables.setdefault("quiz_attempts", []).append(
+                {
+                    "id": attempt_id,
+                    "tenant_id": params["p_tenant_id"],
+                    "variant_id": params["p_variant_id"],
+                    "student_id": params["p_student_id"],
+                    "status": "in_progress",
+                    "started_at": params["p_started_at"],
+                    "question_snapshot": params["p_question_snapshot"],
+                    "scoring_policy_snapshot": params.get(
+                        "p_scoring_policy_snapshot"
+                    ),
+                }
+            )
+            return SimpleNamespace(execute=lambda: SimpleNamespace(data=attempt_id))
+        if name != "select_practice_question_ids_page":
+            raise AssertionError(name)
+        enrollments = [
+            row
+            for row in self.tables.get("enrollments", [])
+            if row.get("tenant_id") == params["p_tenant"]
+            and row.get("profile_id") == params["p_student"]
+        ]
+        levels = {
+            (row.get("course_id"), row.get("course_level_id"))
+            for row in enrollments
+        }
+        subject_ids = {
+            row["id"]
+            for row in self.tables.get("subjects", [])
+            if row.get("tenant_id") == params["p_tenant"]
+            and any(
+                row.get("course_id") == course_id
+                and (level_id is None or row.get("course_level_id") == level_id)
+                for course_id, level_id in levels
+            )
+        }
+        chapters = {
+            row["id"]: row
+            for row in self.tables.get("chapters", [])
+            if row.get("tenant_id") == params["p_tenant"]
+            and row.get("subject_id") in subject_ids
+        }
+        rows = [
+            row
+            for row in self.tables.get("questions", [])
+            if row.get("tenant_id") == params["p_tenant"]
+            and row.get("review_status") == "approved"
+            and row.get("chapter_id") in chapters
+            and (
+                params.get("p_subject") is None
+                or chapters[row["chapter_id"]].get("subject_id")
+                == params["p_subject"]
+            )
+            and (
+                params.get("p_chapter") is None
+                or row.get("chapter_id") == params["p_chapter"]
+            )
+            and (
+                params.get("p_difficulty") is None
+                or row.get("difficulty") == params["p_difficulty"]
+            )
+            and (
+                params.get("p_question_type") is None
+                or row.get("type") == params["p_question_type"]
+            )
+        ][: params["p_limit"]]
+        payload = {
+            "question_ids": [row["id"] for row in rows],
+            "available": len(rows),
+        }
+        return SimpleNamespace(execute=lambda: SimpleNamespace(data=payload))
+
+
+def _history_rows(tables: dict[str, list[dict]]) -> list[dict]:
+    variants = {row["id"]: row for row in tables.get("quiz_variants", [])}
+    sets = {row["id"]: row for row in tables.get("quiz_sets", [])}
+    chapters = {row["id"]: row for row in tables.get("chapters", [])}
+    rows: list[dict] = []
+    for attempt in tables.get("quiz_attempts", []):
+        if attempt.get("student_id") != "u1" or attempt.get("status") != "graded":
+            continue
+        variant = variants.get(attempt.get("variant_id"), {})
+        quiz = sets.get(variant.get("quiz_set_id"), {})
+        rows.append({
+            "attempt_id": attempt["id"], "quiz_title": quiz.get("title", "Quiz"),
+            "variant_id": attempt.get("variant_id"), "variant_type": variant.get("variant_type"),
+            "subject_id": quiz.get("subject_id"), "chapter_id": quiz.get("chapter_id"),
+            "total_score": attempt.get("total_score"), "max_score": variant.get("total_marks"),
+            "submitted_at": attempt.get("submitted_at"), "source": "quiz",
+        })
+    for session in tables.get("practice_sessions", []):
+        if session.get("student_id") != "u1" or session.get("status") != "graded" or session.get("mode") == "challenge":
+            continue
+        chapter = chapters.get(session.get("chapter_id"), {})
+        mode = str(session.get("mode") or "practice").replace("_", " ").title()
+        rows.append({
+            "attempt_id": session["id"], "quiz_title": f"{mode} practice",
+            "variant_id": None, "variant_type": session.get("mode"),
+            "subject_id": session.get("subject_id") or chapter.get("subject_id"),
+            "chapter_id": session.get("chapter_id"), "total_score": session.get("total_score"),
+            "max_score": session.get("max_score"), "submitted_at": session.get("submitted_at"),
+            "source": "practice",
+        })
+    return sorted(rows, key=lambda row: row.get("submitted_at") or "", reverse=True)
+
 
 class GradingTests(unittest.TestCase):
     def test_every_supported_question_type_is_deterministic(self) -> None:
@@ -253,12 +369,14 @@ class StudentAnalyticsTests(unittest.TestCase):
                         "attempt_id": "a1",
                         "tenant_id": "t1",
                         "question_id": "q-weak",
+                        "student_answer": "A",
                         "is_correct": False,
                     },
                     {
                         "attempt_id": "a1",
                         "tenant_id": "t1",
                         "question_id": "q-strong",
+                        "student_answer": "B",
                         "is_correct": True,
                     },
                 ],
@@ -324,10 +442,10 @@ class StudentAnalyticsTests(unittest.TestCase):
         with patch("app.api.student.get_service_client", return_value=service):
             history = student_attempts(profile())
 
-        self.assertEqual(len(history), 1)
-        self.assertEqual(history[0]["source"], "practice")
-        self.assertEqual(history[0]["subject_id"], "subject-1")
-        self.assertEqual(history[0]["chapter_id"], "chapter-1")
+        self.assertEqual(len(history.items), 1)
+        self.assertEqual(history.items[0].source, "practice")
+        self.assertEqual(history.items[0].subject_id, "subject-1")
+        self.assertEqual(history.items[0].chapter_id, "chapter-1")
 
     def test_quiz_and_practice_answers_are_combined_and_scoped(self) -> None:
         service = MemoryService(
@@ -341,18 +459,55 @@ class StudentAnalyticsTests(unittest.TestCase):
                     {"id": "p2", "tenant_id": "other", "student_id": "u1", "status": "graded"},
                 ],
                 "attempt_answers": [
-                    {"attempt_id": "a1", "tenant_id": "t1", "question_id": "q1", "is_correct": True},
-                    {"attempt_id": "a2", "tenant_id": "t1", "question_id": "q2", "is_correct": True},
+                    {"attempt_id": "a1", "tenant_id": "t1", "question_id": "q1", "student_answer": "A", "is_correct": True},
+                    {"attempt_id": "a2", "tenant_id": "t1", "question_id": "q2", "student_answer": "A", "is_correct": True},
                 ],
                 "practice_answers": [
-                    {"session_id": "p1", "tenant_id": "t1", "question_id": "q3", "is_correct": False},
-                    {"session_id": "p2", "tenant_id": "other", "question_id": "q4", "is_correct": True},
+                    {"session_id": "p1", "tenant_id": "t1", "question_id": "q3", "student_answer": "B", "is_correct": False},
+                    {"session_id": "p2", "tenant_id": "other", "question_id": "q4", "student_answer": "A", "is_correct": True},
                 ],
             }
         )
         answers, work_count = _student_graded_answers(service, "t1", "u1")
         self.assertEqual(work_count, 2)
         self.assertEqual({row["question_id"] for row in answers}, {"q1", "q3"})
+
+    def test_partial_attempt_counts_only_answered_questions(self) -> None:
+        service = MemoryService(
+            {
+                "quiz_attempts": [
+                    {"id": "a1", "tenant_id": "t1", "student_id": "u1", "status": "graded"},
+                    {"id": "a2", "tenant_id": "t1", "student_id": "u2", "status": "graded"},
+                ],
+                "practice_sessions": [
+                    {"id": "p1", "tenant_id": "t1", "student_id": "u1", "status": "graded"}
+                ],
+                "attempt_answers": [
+                    {
+                        "attempt_id": "a1",
+                        "tenant_id": "t1",
+                        "question_id": f"q{i}",
+                        "student_answer": "A" if i < 3 else None,
+                        "is_correct": i == 0,
+                    }
+                    for i in range(259)
+                ]
+                + [
+                    {"attempt_id": "a2", "tenant_id": "t1", "question_id": "other", "student_answer": "A", "is_correct": True}
+                ],
+                "practice_answers": [
+                    {"session_id": "p1", "tenant_id": "t1", "question_id": "practice", "student_answer": [], "is_correct": False}
+                ],
+                "questions": [],
+            }
+        )
+        with patch("app.api.student.get_service_client", return_value=service):
+            result = student_stats(profile())
+
+        self.assertEqual(result["questions_solved"], 3)
+        self.assertEqual(result["overall_accuracy"], 33)
+        self.assertEqual(result["quizzes_taken"], 2)
+        self.assertEqual(result["weak_areas"], [])
 
     def test_leaderboard_excludes_other_course_and_ambiguous_practice(self) -> None:
         service = MemoryService(
@@ -390,16 +545,18 @@ class StudentAnalyticsTests(unittest.TestCase):
                     {"id": "p4", "tenant_id": "t1", "student_id": "u1", "status": "graded", "subject_id": None, "chapter_id": None, "total_score": 10, "max_score": 10},
                 ],
                 "attempt_answers": [
-                    {"tenant_id": "t1", "attempt_id": "a1", "is_correct": True},
-                    {"tenant_id": "t1", "attempt_id": "a1", "is_correct": False},
-                    {"tenant_id": "t1", "attempt_id": "a2", "is_correct": True},
-                    {"tenant_id": "t1", "attempt_id": "a3", "is_correct": True},
+                    {"tenant_id": "t1", "attempt_id": "a1", "student_answer": "a", "is_correct": True},
+                    {"tenant_id": "t1", "attempt_id": "a1", "student_answer": "b", "is_correct": False},
+                    {"tenant_id": "t1", "attempt_id": "a1", "student_answer": None, "is_correct": False},
+                    {"tenant_id": "t1", "attempt_id": "a2", "student_answer": "a", "is_correct": True},
+                    {"tenant_id": "t1", "attempt_id": "a3", "student_answer": "a", "is_correct": True},
                 ],
                 "practice_answers": [
-                    {"tenant_id": "t1", "session_id": "p1", "is_correct": False},
-                    {"tenant_id": "t1", "session_id": "p2", "is_correct": True},
-                    {"tenant_id": "t1", "session_id": "p3", "is_correct": True},
-                    {"tenant_id": "t1", "session_id": "p4", "is_correct": True},
+                    {"tenant_id": "t1", "session_id": "p1", "student_answer": "b", "is_correct": False},
+                    {"tenant_id": "t1", "session_id": "p1", "student_answer": [], "is_correct": False},
+                    {"tenant_id": "t1", "session_id": "p2", "student_answer": "a", "is_correct": True},
+                    {"tenant_id": "t1", "session_id": "p3", "student_answer": "a", "is_correct": True},
+                    {"tenant_id": "t1", "session_id": "p4", "student_answer": "a", "is_correct": True},
                 ],
                 "profiles": [
                     {"id": "u1", "tenant_id": "t1", "full_name": "One", "role": "student"},
@@ -488,6 +645,10 @@ class QuizAttemptFlowTests(unittest.TestCase):
             patch("app.api.student.get_service_client", return_value=service),
             patch("app.api.student.log_event"),
             patch(
+                "app.api.student.rpc_json_value",
+                side_effect=lambda *_args, **_kwargs: _history_rows(service.tables),
+            ),
+            patch(
                 "app.api.student.get_settings",
                 return_value=SimpleNamespace(student_quiz_attempt_limit=2),
             ),
@@ -558,10 +719,10 @@ class QuizAttemptFlowTests(unittest.TestCase):
             reviewed = get_attempt(attempt_id, profile())
             self.assertEqual(reviewed["total_score"], 4.0)
             history = student_attempts(profile())
-            self.assertEqual(history[0]["attempt_id"], attempt_id)
-            self.assertEqual(history[0]["variant_id"], "v1")
-            self.assertEqual(history[0]["subject_id"], "s1")
-            self.assertIsNone(history[0]["chapter_id"])
+            self.assertEqual(history.items[0].attempt_id, attempt_id)
+            self.assertEqual(history.items[0].variant_id, "v1")
+            self.assertEqual(history.items[0].subject_id, "s1")
+            self.assertIsNone(history.items[0].chapter_id)
 
             service.tables["questions"][0].update(
                 {
@@ -644,6 +805,10 @@ class PracticeAndRevisionFlowTests(unittest.TestCase):
         with (
             patch("app.api.practice.get_service_client", return_value=service),
             patch("app.api.student.get_service_client", return_value=service),
+            patch(
+                "app.api.student.rpc_json_value",
+                side_effect=lambda *_args, **_kwargs: _history_rows(service.tables),
+            ),
         ):
             listed_subjects = practice_subjects(profile())
             self.assertEqual(
@@ -690,9 +855,9 @@ class PracticeAndRevisionFlowTests(unittest.TestCase):
             self.assertEqual(result["total_score"], 3.0)
             self.assertEqual([row["is_correct"] for row in result["results"]], [True, True])
             history = student_attempts(profile())
-            self.assertEqual(history[0]["attempt_id"], session_id)
-            self.assertIsNone(history[0]["subject_id"])
-            self.assertEqual(history[0]["source"], "practice")
+            self.assertEqual(history.items[0].attempt_id, session_id)
+            self.assertIsNone(history.items[0].subject_id)
+            self.assertEqual(history.items[0].source, "practice")
 
     def test_revised_topic_returns_after_new_weak_work(self) -> None:
         service = MutableService(
@@ -703,7 +868,7 @@ class PracticeAndRevisionFlowTests(unittest.TestCase):
                     {"id": "p1", "tenant_id": "t1", "student_id": "u1", "status": "graded"}
                 ],
                 "practice_answers": [
-                    {"session_id": "p1", "tenant_id": "t1", "question_id": "q1", "is_correct": False}
+                    {"session_id": "p1", "tenant_id": "t1", "question_id": "q1", "student_answer": "B", "is_correct": False}
                 ],
                 "questions": [{"id": "q1", "tenant_id": "t1", "chapter_id": "ch1", "topic_id": "tp1"}],
                 "chapters": [{"id": "ch1", "tenant_id": "t1", "subject_id": "s1", "name": "Numbers"}],
@@ -722,7 +887,7 @@ class PracticeAndRevisionFlowTests(unittest.TestCase):
                 {"id": "p2", "tenant_id": "t1", "student_id": "u1", "status": "graded"}
             )
             service.tables["practice_answers"].append(
-                {"session_id": "p2", "tenant_id": "t1", "question_id": "q1", "is_correct": False}
+                {"session_id": "p2", "tenant_id": "t1", "question_id": "q1", "student_answer": "B", "is_correct": False}
             )
             refreshed = revision_topics(profile())
             self.assertEqual(refreshed[0]["answered"], 2)

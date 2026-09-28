@@ -55,7 +55,9 @@ function quizStatusView(status: string): { label: string; tone: QuizTone } {
 
 export function DocumentLog() {
   const router = useRouter();
-  const { data: items = null, error, mutate } = useTeacherDocumentLog();
+  const [query, setQuery] = useState("");
+  const [statusFilter, setStatusFilter] = useState("");
+  const { data: items = null, error, mutate, hasMore, loadMore, isLoadingMore } = useTeacherDocumentLog({ query: query.trim() || undefined, status: statusFilter || undefined });
   const [opening, setOpening] = useState<string | null>(null);
   const [openError, setOpenError] = useState<string | null>(null);
   const [retrying, setRetrying] = useState<string | null>(null);
@@ -117,10 +119,7 @@ export function DocumentLog() {
     setActionError(null);
     try {
       await archiveDocument(item.id);
-      await mutate(
-        (current) => current?.filter((document) => document.id !== item.id),
-        { revalidate: false },
-      );
+      await mutate();
     } catch (e) {
       setActionError(e instanceof Error ? e.message : "Couldn't archive this document.");
     } finally {
@@ -135,13 +134,24 @@ export function DocumentLog() {
         description="Every file you've uploaded to generate or extract quizzes — newest first."
       />
 
+      <div className="grid gap-3 sm:grid-cols-[1fr_220px]">
+        <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search documents…" aria-label="Search documents" className="h-11 rounded-xl border border-input bg-background px-4 text-sm shadow-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/20" />
+        <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)} aria-label="Filter document status" className="h-11 rounded-xl border border-input bg-background px-3 text-sm shadow-sm">
+          <option value="">All upload statuses</option>
+          <option value="completed">Completed</option>
+          <option value="extracting">Extracting</option>
+          <option value="failed">Failed</option>
+          <option value="uploaded">Uploaded</option>
+        </select>
+      </div>
+
       {(openError || actionError) && (
         <ErrorCard message={openError || actionError || ""} />
       )}
 
       <Card className="animate-rise">
         <CardHeader>
-          <CardTitle>Your documents{items ? ` (${items.length})` : ""}</CardTitle>
+          <CardTitle>Your documents{items ? ` (${items.length} loaded)` : ""}</CardTitle>
           <CardDescription>
             Open a document to view the original file you uploaded.
           </CardDescription>
@@ -239,6 +249,12 @@ export function DocumentLog() {
           )}
         </CardContent>
       </Card>
+
+      {items !== null && hasMore && (
+        <button type="button" onClick={() => void loadMore()} disabled={isLoadingMore} className="self-center rounded-lg border border-input px-4 py-2 text-sm font-medium hover:border-primary/50 disabled:opacity-60">
+          {isLoadingMore ? "Loading…" : "Load more documents"}
+        </button>
+      )}
 
       <p className="text-xs text-muted-foreground">
         Documents open via a secure, time-limited link. PDFs open in a new tab;

@@ -1,6 +1,6 @@
 # Personal data flow and deletion audit
 
-Last reviewed: 2026-09-24
+Last reviewed: 2026-09-25
 
 This document describes application behavior visible in this repository. Hosting
 providers may additionally process IP addresses, user-agent strings, and request
@@ -21,11 +21,11 @@ metadata in infrastructure logs; verify their retention settings separately.
 | Question regeneration/AI tutor | Question text, options, correct answer and existing explanation | FastAPI → Gemini or DeepSeek. | Provider output is validated; tutor output is cached in `ai_explanations`. No student answer, score, name, or email is included. |
 | AI operational telemetry | Provider/model, call type, fallback flag, token counts, estimated cost, latency, status, stable error class/status | FastAPI → `api_call_logs` through a best-effort backend write. | Metadata only. Migration 59 permanently drops the former raw request/response columns; prompts, document text, and provider responses are not stored or exposed by the admin API. |
 | Quiz/practice activity | Answers, autosave state, scores, timestamps, bookmarks, revision topics | Browser → FastAPI → tenant- and user-scoped Supabase tables. Grading is local deterministic code, not AI. | `quiz_attempts`, `attempt_answers`, `practice_sessions`, `practice_answers`, `bookmarks`, and `revised_topics`. |
-| Paper-bank descriptive practice (flag-gated) | Question key points and the student's submitted free-text answer, up to 2,000 characters | Browser → FastAPI → DeepSeek preferred, Gemini fallback, only when `PAPER_BANK_ENABLED` is enabled. The prompt does not add the student's name, email, tenant ID, or access token. | The provider receives the answer to judge key-point coverage. The app does not store this paper-bank attempt or answer in its database; the result is returned to the browser. Paid calls are capped per student per rolling hour. |
+| Paper-bank practice (flag-gated) | Selected questions, submitted answers, and (for descriptive grading) free text up to 2,000 characters | Browser → FastAPI → private `paper_attempts`; descriptive answers also go to DeepSeek preferred, Gemini fallback. The provider prompt does not add the student's name, email, tenant ID, or access token. | The server stores a frozen question/answer-key snapshot and the graded report in `paper_attempts`. Its answer key is never sent while taking; the report is returned only after every selected question is answered and the attempt is graded. Paid grading calls are capped per student per rolling hour. |
 | Dashboard recovery state | Non-sensitive filters/selections and opaque durable job/resource identifiers | Current browser tab only | Stored in `sessionStorage` to survive refresh. Names, emails, filenames, chapter/topic text, question/answer drafts, passwords, uploaded `File` objects, and destructive confirmation state are excluded. Supabase session/PKCE material is the one sensitive exception and is needed for per-tab authentication. Backend/Supabase records remain authoritative. |
 | Challenges/leaderboards | Creator display name, opaque share token, participant identity, scores | Browser → FastAPI → Supabase. A same-course/institution audience receives display names and scores. | `challenges` and linked practice sessions. Account deletion replaces the creator name with `Deleted user` and removes the account pointer. |
 | Operational product events | Actor UUID/role, event type, subject UUID, minimal event metadata, timestamp | FastAPI → Supabase `events`. | Used for internal product-quality analytics. Account deletion removes every event for that actor. Application logs never contain the event payload. |
-| Student feedback and support | Optional 1–5 app rating, selected topic, free-text message and any staff reply; authenticated student/tenant identity is attached by the backend | Student Settings → FastAPI → private `student_contact_requests` table. General/feature/app-bug feedback and app-bug support route to ArivuPro super-admins; course/access/quiz support routes to that tenant's institution admins. | No email or third-party ticket service receives the message. The student sees only their own requests; staff see only their destination and, for institution admins, their tenant. The API returns a short public reference, not internal IDs. Profile deletion cascades to these requests. Free text may contain personal data, so it is never logged. |
+| Feedback and support | Optional 1–5 app rating, selected topic, free-text message and any staff reply; authenticated requester, role, and tenant identity are attached by the backend | Student/faculty/institution-admin Settings → FastAPI → private `student_contact_requests` table. Faculty/admin requests and general/app support route to ArivuPro super-admins; student course/access/quiz support routes to that tenant's institution admins. | No email or third-party ticket service receives the message. Requesters see only their own requests; staff see only their destination and, for institution admins, their tenant. The super-admin inbox labels each request with verified role and institution. The API returns a short public reference, not internal IDs. Profile deletion cascades to these requests. Free text may contain personal data, so it is never logged. |
 | User-initiated WhatsApp share | Challenge URL/question count, or quiz title and score percentage | Browser opens `wa.me` only when the user chooses Share. | WhatsApp receives the pre-filled share text and URL. No email, token, internal account UUID, or answer detail is included. |
 | Theme preference | `light`/`dark` | Browser only | The sole `localStorage` value. It is not personal data and is not sent to an API. |
 
@@ -64,7 +64,18 @@ Firebase, AWS application SDK, or card processor is present in this repository.
   includes only institution-routed requests from their tenant.
 - Super admins receive institution-admin names/emails, platform aggregates, and
   each institution's operational Course → Level → Subject offering tree/counts.
-  Their support inbox includes only platform-routed student feedback and app bugs.
+  Their support inbox includes only platform-routed requests and shows the
+  verified requester role, requester name when available, and institution.
+  The AI API logs page also receives opaque call/tenant/document/job identifiers
+  for paper grouping, filtering and safe metadata drill-down. Uploaded filenames,
+  raw prompts and provider responses are excluded; legacy error text is replaced
+  with a generic provider-failure message. Migration 73 adds metadata-only
+  generation/import run IDs, status and a link to the resulting quiz. The admin
+  summary joins the quiz title for identification without copying it into logs.
+  Run totals aggregate all matching calls across pages. Historical calls without
+  a run ID remain explicit legacy paper totals, never guessed per-quiz costs.
+  The editable INR conversion is a view estimate; call details separately show
+  the originally recorded INR cost. Missing usage/pricing is marked incomplete.
 - Opaque record UUIDs remain in responses only where the client needs them for
   navigation, registration, updates, deletion or drill-down. The public
   institution-branding response includes a tenant UUID solely to scope its
@@ -109,17 +120,18 @@ action is not exposed directly in the avatar menu. It:
 1. revokes all Supabase Auth sessions for the supplied access token;
 2. deletes the account's original private Storage objects, whose bytes may
    themselves contain personal data;
-3. calls the service-role-only `anonymize_account_data` database function,
+3. deletes private paper attempts containing submitted answers and answer-key snapshots;
+4. calls the service-role-only `anonymize_account_data` database function,
    which deletes attempts/answers, practice activity, bookmarks, revision state,
    enrolments, assignments, batch memberships, rate-limit rows, actor event rows,
    copy requests, transient document chunks, generation jobs/checkpoints and
    linked AI telemetry; it clears extraction raw output;
-4. removes names, avatar, filenames and author/reviewer links from retained
+5. removes names, avatar, filenames and author/reviewer links from retained
    institution-owned teaching content;
-5. anonymizes challenge authorship; and
-6. hard-deletes the Supabase Auth identity, cascading the remaining profile.
+6. anonymizes challenge authorship; and
+7. hard-deletes the Supabase Auth identity, cascading the remaining profile.
 
-The profile cascade also deletes that student's feedback/support messages and
+The profile cascade also deletes that requester's feedback/support messages and
 staff replies from `student_contact_requests`.
 
 Supabase notes that an already-issued access JWT can remain cryptographically

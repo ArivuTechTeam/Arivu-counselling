@@ -110,6 +110,43 @@ class _Service:
     def table(self, name: str) -> _Query:
         return _Query(self, name)
 
+    def rpc(self, name: str, _params: dict):
+        if name != "teacher_class_overview_metrics":
+            raise AssertionError(f"Unexpected RPC: {name}")
+        students = [f"student-{i}" for i in range(7)]
+        payload = {
+            "class_accuracy": 20,
+            "students": 7,
+            "at_risk": 7,
+            "total_attempts": 7,
+            "accuracy_by_quiz": [],
+            "needs_attention": [
+                {
+                    "name": student,
+                    "initials": "S",
+                    "accuracy": 20,
+                    "note": "1 test · 20% avg",
+                }
+                for student in students[:6]
+            ],
+            "top_performers": [],
+            "pipeline": {
+                "pending_review": 0,
+                "approved": 0,
+                "rejected": 0,
+                "needs_edit": 0,
+            },
+            "activity_trend": [],
+            "score_distribution": [],
+            "content": {
+                "documents": 0,
+                "quiz_sets": 1,
+                "published": 1,
+                "drafts": 0,
+            },
+        }
+        return SimpleNamespace(execute=lambda: SimpleNamespace(data=payload))
+
 
 def _teacher() -> CurrentProfile:
     return CurrentProfile(user_id=TEACHER, tenant_id=TENANT, role="teacher")
@@ -201,8 +238,9 @@ class FacultyRosterAuthorizationTests(unittest.TestCase):
                     {"id": "a1", "tenant_id": TENANT, "variant_id": "v1", "student_id": "student-in", "status": "graded", "total_score": 1, "submitted_at": "2026-09-17T00:00:00Z"}
                 ],
                 "attempt_answers": [
-                    {"id": "aa1", "tenant_id": TENANT, "attempt_id": "a1", "question_id": "q-weak", "is_correct": False},
-                    {"id": "aa2", "tenant_id": TENANT, "attempt_id": "a1", "question_id": "q-strong", "is_correct": True},
+                    {"id": "aa1", "tenant_id": TENANT, "attempt_id": "a1", "question_id": "q-weak", "student_answer": "a", "is_correct": False},
+                    {"id": "aa2", "tenant_id": TENANT, "attempt_id": "a1", "question_id": "q-strong", "student_answer": "b", "is_correct": True},
+                    {"id": "aa3", "tenant_id": TENANT, "attempt_id": "a1", "question_id": "q-weak", "student_answer": None, "is_correct": False},
                 ],
                 "questions": [
                     {"id": "q-weak", "tenant_id": TENANT, "topic_id": "t-weak"},
@@ -218,6 +256,7 @@ class FacultyRosterAuthorizationTests(unittest.TestCase):
         with patch("app.api.teacher.get_service_client", return_value=service):
             result = student_report("student-in", _teacher())
         self.assertEqual(result["weak_areas"], [{"topic": "Needs practice", "accuracy": 0, "answered": 1}])
+        self.assertEqual(result["overall"]["questions_answered"], 2)
 
 
 class FacultyPublishingTests(unittest.TestCase):
@@ -360,6 +399,17 @@ class BlueprintPublishTests(unittest.TestCase):
             patch("app.api.quiz.log_event"),
             patch("app.api.quiz.log_events"),
             patch("app.api.quiz.snapshot_published_pyq"),
+            patch("app.api.quiz.quiz_reuse.enabled", return_value=True),
+            patch(
+                "app.api.quiz.publish_quiz_set",
+                return_value={
+                    "id": "set1",
+                    "title": "Quiz",
+                    "status": "published",
+                    "created_at": "2026-09-25T00:00:00Z",
+                    "published_at": "2026-09-25T00:01:00Z",
+                },
+            ),
             patch("app.api.questions._match_review_snapshot", side_effect=lambda query, row: query),
             patch("app.api.quiz.get_settings",
                   return_value=SimpleNamespace(extraction_blueprint_enabled=True)),
@@ -368,7 +418,10 @@ class BlueprintPublishTests(unittest.TestCase):
 
     def test_publishes_only_selected_and_leaves_rest_untouched(self) -> None:
         service = _Service(self._rows([("q1", "pending_review"), ("q2", "pending_review"), ("q3", "pending_review")]))
-        result = self._publish(service, {"selected_question_ids": ["q1", "q2"]})
+        result = self._publish(service, {
+            "selected_question_ids": ["q1", "q2"],
+            "publication_token": "token-1",
+        })
         self.assertEqual(result["status"], "published")
         self.assertEqual(result["published_count"], 2)
         by_id = {q["id"]: q for q in service.rows["questions"]}
@@ -377,15 +430,31 @@ class BlueprintPublishTests(unittest.TestCase):
         # The unselected question is UNTOUCHED — still pending, still present.
         self.assertEqual(by_id["q3"]["review_status"], "pending_review")
         self.assertIn("q3", by_id)
-        # Marks denominator reflects only the two published questions (2 marks each).
-        self.assertEqual(service.rows["quiz_variants"][0]["total_marks"], 4)
+        # Marks and release locking are finalized by the ordinary atomic publish
+        # path, rather than being recalculated independently here.
 
     def test_empty_selection_is_rejected(self) -> None:
         service = _Service(self._rows([("q1", "pending_review")]))
         with self.assertRaises(HTTPException) as raised:
-            self._publish(service, {"selected_question_ids": []})
+            self._publish(service, {
+                "selected_question_ids": [],
+                "publication_token": "token-1",
+            })
         self.assertEqual(raised.exception.status_code, 400)
         self.assertEqual(service.rows["quiz_sets"][0]["status"], "draft")
+
+    def test_unselected_approved_question_blocks_subset_publish(self) -> None:
+        service = _Service(self._rows([
+            ("q1", "pending_review"),
+            ("q2", "approved"),
+        ]))
+        with self.assertRaises(HTTPException) as raised:
+            self._publish(service, {
+                "selected_question_ids": ["q1"],
+                "publication_token": "token-1",
+            })
+        self.assertEqual(raised.exception.status_code, 409)
+        self.assertEqual(service.rows["questions"][0]["review_status"], "pending_review")
 
     def test_flag_off_returns_404(self) -> None:
         service = _Service(self._rows([("q1", "pending_review")]))
@@ -396,7 +465,14 @@ class BlueprintPublishTests(unittest.TestCase):
                   return_value=SimpleNamespace(extraction_blueprint_enabled=False)),
             self.assertRaises(HTTPException) as raised,
         ):
-            blueprint_publish("set1", BlueprintPublishRequest(selected_question_ids=["q1"]), _teacher())
+            blueprint_publish(
+                "set1",
+                BlueprintPublishRequest(
+                    selected_question_ids=["q1"],
+                    publication_token="token-1",
+                ),
+                _teacher(),
+            )
         self.assertEqual(raised.exception.status_code, 404)
         self.assertEqual(service.rows["quiz_sets"][0]["status"], "draft")
 

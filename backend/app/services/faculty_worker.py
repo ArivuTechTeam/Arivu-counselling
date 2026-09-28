@@ -12,6 +12,7 @@ from app.lib.config import get_settings
 from app.lib.storage import download_bytes
 from app.lib.supabase import get_service_client
 from app.services.blueprint import generate_blueprint_quiz
+from app.services.ai_call_logging import track_quiz_workflow
 from app.services.faculty_jobs import validate_source
 from app.services.llm import LLMError
 from app.services.quiz_extraction import (
@@ -58,7 +59,9 @@ def prepare_extraction(service, job: dict, profile: CurrentProfile) -> dict:
         ext=document["file_type"],
         tenant_id=profile.tenant_id,
         document_id=request["document_id"],
-        job_id=job["id"],
+        # api_call_logs.job_id references analysis jobs, not faculty jobs.
+        # The outer cost workflow now carries this faculty job's stable ID.
+        job_id=None,
         paper_mode=paper_mode,
     )
     questions, receipt = _validate_import_candidates(raw, paper_mode=paper_mode)
@@ -97,6 +100,7 @@ def _persist_pyq_columns(service, tenant_id: str, result: dict | None) -> None:
             logger.warning("Could not tag paper columns for question %s", q.get("id"))
 
 
+@track_quiz_workflow("generation")
 def process_job(service, job: dict) -> dict:
     profile = CurrentProfile(user_id=job["created_by"], tenant_id=job["tenant_id"], role="teacher")
     request = job["request"]

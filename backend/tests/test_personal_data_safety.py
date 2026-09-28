@@ -49,8 +49,10 @@ class _DeletionService:
 
 
 class _DocumentQuery:
-    def __init__(self, rows: list[dict]) -> None:
+    def __init__(self, rows: list[dict], service: _DeletionService | None = None) -> None:
         self.rows = rows
+        self.service = service
+        self.deleting = False
 
     def select(self, _columns: str) -> "_DocumentQuery":
         return self
@@ -58,7 +60,13 @@ class _DocumentQuery:
     def eq(self, _column: str, _value: str) -> "_DocumentQuery":
         return self
 
+    def delete(self) -> "_DocumentQuery":
+        self.deleting = True
+        return self
+
     def execute(self) -> SimpleNamespace:
+        if self.deleting and self.service:
+            self.service.actions.append(("delete_paper_attempts",))
         return SimpleNamespace(data=self.rows)
 
 
@@ -77,11 +85,11 @@ class AccountDeletionTests(unittest.TestCase):
 
     def test_shared_erasure_removes_storage_before_database_data(self) -> None:
         service = _DeletionService()
-        service.table = lambda _name: _DocumentQuery(
+        service.table = lambda name: _DocumentQuery(
             [
                 {"storage_path": "tenant-a/object-a.pdf"},
                 {"storage_path": "tenant-a/object-a.pdf"},
-            ]
+            ] if name == "documents" else [], service
         )
         with patch(
             "app.services.account_deletion.delete_bytes",
@@ -93,6 +101,7 @@ class AccountDeletionTests(unittest.TestCase):
             service.actions,
             [
                 ("delete_storage",),
+                ("delete_paper_attempts",),
                 (
                     "rpc",
                     "anonymize_account_data",
