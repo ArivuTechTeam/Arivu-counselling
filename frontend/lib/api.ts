@@ -459,10 +459,21 @@ export type DocumentLogItem = {
 /** The teacher's own uploaded documents, newest first (for the Document Log). */
 export type DocumentLogFilters = { cursor?: string; query?: string; status?: string };
 export async function listDocumentLog(filters: DocumentLogFilters = {}): Promise<CursorPage<DocumentLogItem>> {
+  const query = filters.query?.trim();
+  if (query) {
+    return jsonRequest<CursorPage<DocumentLogItem>>(
+      "/api/v1/documents/log/search",
+      "POST",
+      {
+        cursor: filters.cursor,
+        status_filter: filters.status,
+        query,
+      },
+    );
+  }
   const headers = await authHeader();
   const params = new URLSearchParams();
   if (filters.cursor) params.set("cursor", filters.cursor);
-  if (filters.query) params.set("q", filters.query);
   if (filters.status) params.set("status_filter", filters.status);
   const res = await apiFetch(`${API_BASE}/api/v1/documents/log?${params}`, { headers });
   if (!res.ok) {
@@ -876,12 +887,21 @@ export type AccountSettings = {
 export const getAccountSettings = () =>
   jsonRequest<AccountSettings>("/api/v1/auth/settings", "GET");
 
-export type StudentContactKind = "feedback" | "support";
-export type StudentContactCategory = "general" | "feature_idea" | "course_access" | "quiz_issue" | "app_bug";
-export type StudentContact = {
+export type SupportContactKind = "feedback" | "support";
+export type SupportContactCategory =
+  | "general"
+  | "feature_idea"
+  | "general_support"
+  | "course_access"
+  | "quiz_issue"
+  | "app_bug";
+export type SupportContactRole = "student" | "teacher" | "institution_admin";
+export type SupportContact = {
   reference: string;
-  kind: StudentContactKind;
-  category: StudentContactCategory;
+  requester_role: SupportContactRole;
+  requester_name: string | null;
+  kind: SupportContactKind;
+  category: SupportContactCategory;
   routed_to: "platform" | "institution";
   message: string;
   rating: number | null;
@@ -892,26 +912,26 @@ export type StudentContact = {
   institution_name: string | null;
 };
 
-export type StudentContactReceipt = Pick<StudentContact, "reference" | "routed_to" | "status">;
+export type SupportContactReceipt = Pick<SupportContact, "reference" | "routed_to" | "status">;
 
-export const submitStudentContact = (input: {
-  kind: StudentContactKind;
-  category: StudentContactCategory;
+export const submitSupportContact = (input: {
+  kind: SupportContactKind;
+  category: SupportContactCategory;
   message: string;
   rating?: number | null;
-}) => jsonRequest<StudentContactReceipt>("/api/v1/contact", "POST", input);
+}) => jsonRequest<SupportContactReceipt>("/api/v1/contact", "POST", input);
 
-export const getMyStudentContacts = () =>
-  jsonRequest<StudentContact[]>("/api/v1/contact/mine", "GET");
+export const getMySupportContacts = () =>
+  jsonRequest<SupportContact[]>("/api/v1/contact/mine", "GET");
 
 export const getSupportInbox = () =>
-  jsonRequest<StudentContact[]>("/api/v1/contact/inbox", "GET");
+  jsonRequest<SupportContact[]>("/api/v1/contact/inbox", "GET");
 
-export const replyToStudentContact = (
+export const replyToSupportContact = (
   reference: string,
   reply: string,
   status: "answered" | "closed" = "answered",
-) => jsonRequest<StudentContact>(
+) => jsonRequest<SupportContact>(
   `/api/v1/contact/inbox/${encodeURIComponent(reference)}/reply`,
   "POST",
   { reply, status },
@@ -1036,12 +1056,21 @@ export type StudentQuizFilters = {
   query?: string;
 };
 export const listStudentQuizzes = (filters: StudentQuizFilters = {}) => {
+  const query = filters.query?.trim();
+  if (query) {
+    return jsonRequest<CursorPage<StudentQuiz>>("/api/v1/quizzes/search", "POST", {
+      cursor: filters.cursor,
+      subject_id: filters.subjectId,
+      chapter_id: filters.chapterId,
+      assignment: filters.assignment,
+      query,
+    });
+  }
   const params = new URLSearchParams();
   if (filters.cursor) params.set("cursor", filters.cursor);
   if (filters.subjectId) params.set("subject_id", filters.subjectId);
   if (filters.chapterId) params.set("chapter_id", filters.chapterId);
   if (filters.assignment) params.set("assignment", filters.assignment);
-  if (filters.query) params.set("q", filters.query);
   return jsonRequest<CursorPage<StudentQuiz>>(`/api/v1/quizzes?${params}`, "GET");
 };
 
@@ -1816,11 +1845,20 @@ export type PlatformStats = {
   per_institution: { id: string; name: string; teachers: number; students: number }[];
 };
 
-export const listUsers = (page = 1, query = "") =>
-  jsonRequest<DirectoryPage>(
-    `/api/v1/users?page=${page}&page_size=12&q=${encodeURIComponent(query)}`,
+export const listUsers = (page = 1, query = "") => {
+  const normalizedQuery = query.trim();
+  if (normalizedQuery) {
+    return jsonRequest<DirectoryPage>("/api/v1/users/search", "POST", {
+      page,
+      page_size: 12,
+      query: normalizedQuery,
+    });
+  }
+  return jsonRequest<DirectoryPage>(
+    `/api/v1/users?page=${page}&page_size=12`,
     "GET",
   );
+};
 export const createTeacher = (input: TeacherCreateInput) =>
   jsonRequest<{ id: string }>("/api/v1/users", "POST", input);
 export const updateTeacher = (id: string, input: TeacherUpdateInput) =>
@@ -2371,10 +2409,21 @@ export type PublishedQuizMonitor = {
 };
 export type PublishedQuizFilters = { cursor?: string; subjectId?: string; query?: string };
 export const getPublishedQuizMonitor = (filters: PublishedQuizFilters = {}) => {
+  const query = filters.query?.trim();
+  if (query) {
+    return jsonRequest<PublishedQuizMonitor>(
+      "/api/v1/teacher/published-quizzes/search",
+      "POST",
+      {
+        cursor: filters.cursor,
+        subject_id: filters.subjectId,
+        query,
+      },
+    );
+  }
   const params = new URLSearchParams();
   if (filters.cursor) params.set("cursor", filters.cursor);
   if (filters.subjectId) params.set("subject_id", filters.subjectId);
-  if (filters.query) params.set("q", filters.query);
   return jsonRequest<PublishedQuizMonitor>(
     `/api/v1/teacher/published-quizzes?${params}`,
     "GET",
@@ -2423,11 +2472,24 @@ export type AdminQuizSetFilters = {
   cursor?: string;
 };
 export const getAdminQuizSets = (filters: AdminQuizSetFilters = {}) => {
+  const query = filters.query?.trim();
+  if (query) {
+    return jsonRequest<CursorPage<AdminQuizSet>>(
+      "/api/v1/admin/quiz-sets/search",
+      "POST",
+      {
+        teacher_id: filters.teacherId,
+        course_id: filters.courseId,
+        status_filter: filters.status,
+        query,
+        cursor: filters.cursor,
+      },
+    );
+  }
   const params = new URLSearchParams();
   if (filters.teacherId) params.set("teacher_id", filters.teacherId);
   if (filters.courseId) params.set("course_id", filters.courseId);
   if (filters.status) params.set("status_filter", filters.status);
-  if (filters.query) params.set("q", filters.query);
   if (filters.cursor) params.set("cursor", filters.cursor);
   return jsonRequest<CursorPage<AdminQuizSet>>(
     `/api/v1/admin/quiz-sets?${params}`,

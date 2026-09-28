@@ -233,6 +233,10 @@ Two independent channels:
 - Base URL from `NEXT_PUBLIC_API_BASE_URL`.
 - `authHeader()` reads the Supabase session and attaches `Authorization: Bearer <access_token>` — the exact JWT the backend verifies.
 - One typed helper `jsonRequest<T>()` for JSON, one `uploadDocument()` for multipart uploads.
+- User-entered search text is transported in authenticated POST JSON bodies,
+  while non-sensitive filters and pagination may use GET query parameters. This
+  prevents names and search phrases from being retained in URL history and
+  ordinary access logs.
 - Frontend response shapes are typed TypeScript contracts. New and security-sensitive backend endpoints enforce matching Pydantic response models; some legacy endpoints still return dictionaries and should be migrated incrementally when touched. Functions are grouped by feature (documents, generation, teacher review, student attempts, practice/engagement, academics, admin, super-admin, teacher analytics).
 
 **(B) Supabase directly** — `frontend/lib/supabase.ts` (anon key, RLS applies)
@@ -245,6 +249,14 @@ job identifiers and reconnects to durable backend analysis/final-generation jobs
 after refresh. Passwords, tokens, uploaded `File` objects, and destructive
 confirmation state are never stored by this mechanism. See
 `docs/dashboard-state-persistence.md`.
+
+Supabase separately persists the authenticated session in per-tab
+`sessionStorage` so each role can remain isolated in its own browser tab. Since
+browser JavaScript must read that access token for direct Supabase Auth and
+FastAPI bearer requests, the frontend protects script execution with a unique
+per-request CSP nonce and `strict-dynamic`; production `script-src` does not
+allow `unsafe-inline`. HttpOnly session cookies would require a future
+backend-for-frontend redesign rather than a storage-setting-only change.
 
 ### 5.4 Auth & session flow
 1. **Login** → `supabase.auth.signInWithPassword` → one RLS-protected
@@ -518,9 +530,12 @@ and application queries scope every tenant-owned read/write to one institution.
 | 63–64 paper bank | Adds paper metadata and the tenant-scoped PYQ/MTP/RTP `paper_questions` bank. |
 | 65 paper-bank-safety | Makes paper-question snapshot replacement atomic and adds the descriptive-grading quota. |
 | 66 paper-attempts | Adds private, durable paper attempts so answer keys appear only in completed reports. |
+| 67–73 Release A scalability | Adds atomic batch publication, dashboard aggregation, cursor pagination, fair sampling, query-plan indexes, atomic quiz persistence, and AI workflow costs. |
+| 74 role-aware-support | Preserves existing student requests and extends the private ArivuPro support outbox to faculty and institution admins, with verified requester role and institution context for super-admins. |
 
-> **Repository inventory verified 2026-09-25:** migrations 13–65 above are
-> recorded in this table. Migration 59 was reported applied by the operator;
+> **Repository inventory refreshed 2026-09-28:** migrations through 74 are
+> represented above. Migrations through 73 were reported applied by the operator;
+> migration 74 remains code-only until separately applied. Migration 59 was reported applied;
 > a read-only production check confirmed that its AI-log raw-payload columns
 > are absent, but did not prove the complete migration history.
 > `docs/deploy-runbook.md` is the authoritative source for exact filenames,

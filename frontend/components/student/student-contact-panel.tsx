@@ -7,39 +7,55 @@ import { ContactBrand } from "@/components/shared/contact-brand";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import {
-  getMyStudentContacts,
-  submitStudentContact,
-  type StudentContactCategory,
-  type StudentContactKind,
+  getMySupportContacts,
+  submitSupportContact,
+  type SupportContactCategory,
+  type SupportContactKind,
+  type SupportContactRole,
 } from "@/lib/api";
 
-const CATEGORY_LABELS: Record<StudentContactCategory, string> = {
+const CATEGORY_LABELS: Record<SupportContactCategory, string> = {
   general: "General feedback",
   feature_idea: "Feature idea",
+  general_support: "General support",
   course_access: "Course or account access",
-  quiz_issue: "Quiz or result issue",
+  quiz_issue: "Quiz, result, or generation issue",
   app_bug: "App bug",
 };
 
-export function StudentContactPanel({
+export function SupportContactPanel({
+  role,
   institution,
 }: {
+  role: SupportContactRole;
   institution: { name: string; logo_url: string | null } | null;
 }) {
-  const { data: requests, error: listError, mutate } = useSWR("my-student-contacts", getMyStudentContacts);
-  const [kind, setKind] = useState<StudentContactKind | null>(null);
-  const [category, setCategory] = useState<StudentContactCategory>("general");
+  const { data: requests, error: listError, mutate } = useSWR("my-support-contacts", getMySupportContacts);
+  const [kind, setKind] = useState<SupportContactKind | null>(null);
+  const [category, setCategory] = useState<SupportContactCategory>("general");
   const [message, setMessage] = useState("");
   const [rating, setRating] = useState(0);
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [reference, setReference] = useState<string | null>(null);
 
-  const destination = kind === "feedback" || category === "app_bug" ? "platform" : "institution";
+  const destination =
+    role !== "student" ||
+    kind === "feedback" ||
+    category === "general_support" ||
+    category === "app_bug"
+      ? "platform"
+      : "institution";
 
-  function openForm(nextKind: StudentContactKind) {
+  function openForm(nextKind: SupportContactKind) {
     setKind(nextKind);
-    setCategory(nextKind === "feedback" ? "general" : "course_access");
+    setCategory(
+      nextKind === "feedback"
+        ? "general"
+        : role === "student"
+          ? "course_access"
+          : "general_support",
+    );
     setMessage("");
     setRating(0);
     setFormError(null);
@@ -52,7 +68,7 @@ export function StudentContactPanel({
     setSaving(true);
     setFormError(null);
     try {
-      const result = await submitStudentContact({
+      const result = await submitSupportContact({
         kind,
         category,
         message: message.trim(),
@@ -69,10 +85,12 @@ export function StudentContactPanel({
   }
 
   return (
-    <section aria-labelledby="student-help-title" className="space-y-4">
+    <section aria-labelledby="support-help-title" className="space-y-4">
       <div>
-        <h2 id="student-help-title" className="text-lg font-semibold text-foreground">Feedback & support</h2>
-        <p className="mt-1 text-sm text-muted-foreground">Tell us what could improve, or get help with a problem.</p>
+        <h2 id="support-help-title" className="text-lg font-semibold text-foreground">Feedback & support</h2>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Tell ArivuPro what could improve, or get help with a problem.
+        </p>
       </div>
       <div className="grid gap-4 md:grid-cols-2">
         <Card>
@@ -88,10 +106,14 @@ export function StudentContactPanel({
         <Card>
           <CardHeader>
             <CardTitle className="text-lg">Get customer support</CardTitle>
-            <CardDescription>Course and quiz help goes to your institution; app bugs go to ArivuPro.</CardDescription>
+            <CardDescription>
+              {role === "student"
+                ? "Course and quiz help goes to your institution; general and app support goes to ArivuPro."
+                : "Your support request goes directly to the ArivuPro team."}
+            </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
-            <ContactBrand destination="institution" institution={institution} />
+            <ContactBrand destination={role === "student" ? "institution" : "platform"} institution={institution} />
             <Button type="button" variant="outline" onClick={() => openForm("support")}>Contact support</Button>
           </CardContent>
         </Card>
@@ -115,11 +137,14 @@ export function StudentContactPanel({
                 Topic
                 <select
                   value={category}
-                  onChange={(event) => setCategory(event.target.value as StudentContactCategory)}
+                  onChange={(event) => setCategory(event.target.value as SupportContactCategory)}
                   className="mt-2 h-11 w-full rounded-lg border border-input bg-background px-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 >
-                  {(kind === "feedback" ? ["general", "feature_idea", "app_bug"] : ["course_access", "quiz_issue", "app_bug"]).map((option) => (
-                    <option key={option} value={option}>{CATEGORY_LABELS[option as StudentContactCategory]}</option>
+                  {(kind === "feedback"
+                    ? ["general", "feature_idea", "app_bug"]
+                    : ["general_support", "course_access", "quiz_issue", "app_bug"]
+                  ).map((option) => (
+                    <option key={option} value={option}>{CATEGORY_LABELS[option as SupportContactCategory]}</option>
                   ))}
                 </select>
               </label>

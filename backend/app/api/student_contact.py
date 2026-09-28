@@ -1,13 +1,13 @@
-"""Student feedback and role-scoped support inboxes.
+"""Role-aware feedback and tenant-scoped support inboxes.
 
 Routing is derived on the server. Browser input never selects a destination,
-tenant, student identity, or ticket status.
+tenant, requester identity/role, or ticket status.
 """
 
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Literal
+from typing import Literal, cast
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -17,15 +17,30 @@ from app.lib.auth import CurrentProfile, get_current_profile
 from app.lib.api_errors import public_error
 from app.lib.supabase import get_service_client
 
-router = APIRouter(prefix="/api/v1/contact", tags=["student contact"])
+router = APIRouter(prefix="/api/v1/contact", tags=["support contact"])
 
 Kind = Literal["feedback", "support"]
-Category = Literal["general", "feature_idea", "course_access", "quiz_issue", "app_bug"]
+Category = Literal[
+    "general",
+    "feature_idea",
+    "general_support",
+    "course_access",
+    "quiz_issue",
+    "app_bug",
+]
 Route = Literal["platform", "institution"]
 Status = Literal["open", "answered", "closed"]
+RequesterRole = Literal["student", "teacher", "institution_admin"]
 
-_STUDENT_FIELDS = "reference,kind,category,routed_to,message,rating,status,reply,created_at,updated_at"
-_STAFF_FIELDS = _STUDENT_FIELDS + ",tenant:tenants!student_contact_requests_tenant_id_fkey(name)"
+_REQUESTER_FIELDS = (
+    "reference,requester_role,kind,category,routed_to,message,rating,status,"
+    "reply,created_at,updated_at"
+)
+_STAFF_FIELDS = (
+    _REQUESTER_FIELDS
+    + ",tenant:tenants!student_contact_requests_tenant_id_fkey(name)"
+    + ",requester:profiles!student_contact_requests_requester_tenant_fkey(full_name)"
+)
 
 
 class ContactCreate(BaseModel):
@@ -62,6 +77,7 @@ class ContactReply(BaseModel):
 
 class ContactOut(BaseModel):
     reference: str
+    requester_role: RequesterRole
     kind: Kind
     category: Category
     routed_to: Route
@@ -72,6 +88,7 @@ class ContactOut(BaseModel):
     created_at: datetime
     updated_at: datetime
     institution_name: str | None = None
+    requester_name: str | None = None
 
 
 class ContactReceipt(BaseModel):
@@ -80,16 +97,23 @@ class ContactReceipt(BaseModel):
     status: Status
 
 
-def _route(kind: Kind, category: Category, rating: int | None) -> Route:
+def _route(
+    role: RequesterRole,
+    kind: Kind,
+    category: Category,
+    rating: int | None,
+) -> Route:
     if kind == "feedback":
         if category not in {"general", "feature_idea", "app_bug"}:
             raise HTTPException(422, "Choose a feedback category.")
         return "platform"
-    if category not in {"course_access", "quiz_issue", "app_bug"}:
+    if category not in {"general_support", "course_access", "quiz_issue", "app_bug"}:
         raise HTTPException(422, "Choose a support issue category.")
     if rating is not None:
         raise HTTPException(422, "Ratings are only available for app feedback.")
-    return "platform" if category == "app_bug" else "institution"
+    if role == "student" and category in {"course_access", "quiz_issue"}:
+        return "institution"
+    return "platform"
 
 
 def _staff_scope(profile: CurrentProfile) -> tuple[str, str | None]:
@@ -102,9 +126,17 @@ def _staff_scope(profile: CurrentProfile) -> tuple[str, str | None]:
 
 def _contact_out(row: dict) -> ContactOut:
     tenant = row.get("tenant")
+    requester = row.get("requester")
     return ContactOut(
-        **{field: row.get(field) for field in ContactOut.model_fields if field != "institution_name"},
+        **{
+            field: row.get(field)
+            for field in ContactOut.model_fields
+            if field not in {"institution_name", "requester_name"}
+        },
         institution_name=tenant.get("name") if isinstance(tenant, dict) else None,
+        requester_name=(
+            requester.get("full_name") if isinstance(requester, dict) else None
+        ),
     )
 
 
@@ -113,15 +145,19 @@ def submit_contact(
     payload: ContactCreate,
     profile: CurrentProfile = Depends(get_current_profile),
 ) -> ContactReceipt:
-    if profile.role != "student":
-        raise HTTPException(403, "Only students can submit this form.")
-    destination = _route(payload.kind, payload.category, payload.rating)
+    if profile.role not in {"student", "teacher", "institution_admin"}:
+        raise HTTPException(403, "This account cannot submit support requests.")
+    requester_role = cast(RequesterRole, profile.role)
+    destination = _route(
+        requester_role, payload.kind, payload.category, payload.rating
+    )
     try:
         result = get_service_client().rpc(
-            "submit_student_contact",
+            "submit_contact_request",
             {
                 "p_tenant_id": profile.tenant_id,
-                "p_student_id": profile.user_id,
+                "p_requester_id": profile.user_id,
+                "p_requester_role": requester_role,
                 "p_reference": uuid4().hex[:12].upper(),
                 "p_kind": payload.kind,
                 "p_category": payload.category,
@@ -134,7 +170,7 @@ def submit_contact(
         raise public_error(
             503,
             "Request could not be saved. Please try again.",
-            operation="submit student contact request",
+            operation="submit support contact request",
             exception=exc,
         ) from exc
     row = result.data
@@ -152,13 +188,13 @@ def submit_contact(
 
 @router.get("/mine", response_model=list[ContactOut])
 def my_contacts(profile: CurrentProfile = Depends(get_current_profile)) -> list[ContactOut]:
-    if profile.role != "student":
-        raise HTTPException(403, "Only students can view their requests.")
+    if profile.role not in {"student", "teacher", "institution_admin"}:
+        raise HTTPException(403, "This account does not have a support outbox.")
     rows = (
         get_service_client().table("student_contact_requests")
-        .select(_STUDENT_FIELDS)
+        .select(_REQUESTER_FIELDS)
         .eq("tenant_id", profile.tenant_id)
-        .eq("student_id", profile.user_id)
+        .eq("requester_id", profile.user_id)
         .order("created_at", desc=True)
         .limit(50)
         .execute()

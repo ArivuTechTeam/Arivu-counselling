@@ -58,6 +58,9 @@ jobs:
       - name: Verify Release A AI cost workflows
         run: node scripts/test-ai-quiz-cost-workflows-db.mjs
 
+      - name: Verify role-aware support routing
+        run: node scripts/test-role-aware-support-db.mjs
+
       - name: Verify Release A integrity report
         run: node scripts/test-a7-integrity-report-db.mjs
 

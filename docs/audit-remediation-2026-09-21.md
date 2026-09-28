@@ -27,12 +27,14 @@ future reviews do not repeatedly report the same observations as new defects.
 
 ## Accepted or separately scoped
 
-- Production CSP retains `script-src 'unsafe-inline'` because Next.js currently
+- Historical note: production CSP retained `script-src 'unsafe-inline'` at the
+  time of this audit because Next.js
   emits framework bootstrap scripts that require it in this static deployment.
   Removing it safely requires a nonce-based dynamic rendering/middleware project
   and production browser verification. `object-src 'none'`,
   `frame-ancestors 'none'`, restrictive connection/image origins, and the absence
-  of production `unsafe-eval` remain in force.
+  of production `unsafe-eval` remain in force. The nonce-based implementation
+  was subsequently added; deployment verification remains required.
 - Legacy dictionary-returning routes are migrated to Pydantic when touched. A
   bulk conversion of dozens of unrelated endpoints is deliberately excluded
   from this bug-fix branch because it changes response filtering and can break

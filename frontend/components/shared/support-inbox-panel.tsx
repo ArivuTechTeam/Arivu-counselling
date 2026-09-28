@@ -6,7 +6,13 @@ import useSWR from "swr";
 import { ContactBrand } from "@/components/shared/contact-brand";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { getSupportInbox, replyToStudentContact } from "@/lib/api";
+import { getSupportInbox, replyToSupportContact } from "@/lib/api";
+
+const ROLE_LABELS = {
+  student: "Student",
+  teacher: "Faculty",
+  institution_admin: "Institution administrator",
+} as const;
 
 export function SupportInboxPanel({
   role,
@@ -18,6 +24,7 @@ export function SupportInboxPanel({
   const { data: items, error, mutate } = useSWR("support-inbox", getSupportInbox);
   const [activeReference, setActiveReference] = useState<string | null>(null);
   const [reply, setReply] = useState("");
+  const [replyStatus, setReplyStatus] = useState<"answered" | "closed">("answered");
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const destination = role === "super_admin" ? "platform" : "institution";
@@ -28,7 +35,7 @@ export function SupportInboxPanel({
     setSaving(true);
     setSaveError(null);
     try {
-      await replyToStudentContact(activeReference, reply.trim());
+      await replyToSupportContact(activeReference, reply.trim(), replyStatus);
       setActiveReference(null);
       setReply("");
       await mutate();
@@ -42,10 +49,12 @@ export function SupportInboxPanel({
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="text-xl">Student support inbox</CardTitle>
+        <CardTitle className="text-xl">
+          {role === "super_admin" ? "ArivuPro support inbox" : "Student support inbox"}
+        </CardTitle>
         <CardDescription>
           {role === "super_admin"
-            ? "App feedback and bugs sent to ArivuPro."
+            ? "Requests sent to ArivuPro, labelled by sender role and institution."
             : "Course, account-access, and quiz requests from your students."}
         </CardDescription>
       </CardHeader>
@@ -56,7 +65,9 @@ export function SupportInboxPanel({
         ) : !items ? (
           <p className="text-sm text-muted-foreground">Loading requests…</p>
         ) : items.length === 0 ? (
-          <p className="text-sm text-muted-foreground">No student requests yet.</p>
+          <p className="text-sm text-muted-foreground">
+            {role === "super_admin" ? "No ArivuPro requests yet." : "No student requests yet."}
+          </p>
         ) : items.map((item) => (
           <article key={item.reference} className="rounded-xl border bg-muted/15 p-4">
             <div className="flex flex-wrap items-start justify-between gap-2">
@@ -69,6 +80,19 @@ export function SupportInboxPanel({
                   {item.institution_name ? ` · ${item.institution_name}` : ""}
                   {item.rating ? ` · ${item.rating}/5` : ""}
                   {` · ${new Date(item.created_at).toLocaleDateString()}`}
+                </p>
+                <p className="mt-2 flex flex-wrap gap-2 text-xs font-medium text-foreground">
+                  <span className="rounded-full border bg-background px-2 py-1">
+                    Role: {ROLE_LABELS[item.requester_role]}
+                  </span>
+                  <span className="rounded-full border bg-background px-2 py-1">
+                    Institution: {item.institution_name ?? "Unknown institution"}
+                  </span>
+                  {item.requester_name && (
+                    <span className="rounded-full border bg-background px-2 py-1">
+                      From: {item.requester_name}
+                    </span>
+                  )}
                 </p>
               </div>
               <span className="rounded-full bg-primary/10 px-2 py-1 text-xs font-medium capitalize text-primary">{item.status}</span>
@@ -83,7 +107,7 @@ export function SupportInboxPanel({
             {activeReference === item.reference ? (
               <form onSubmit={(event) => void sendReply(event)} className="mt-4 space-y-2">
                 <label className="block text-sm font-medium text-foreground">
-                  Reply to student
+                  Reply to requester
                   <textarea
                     value={reply}
                     onChange={(event) => setReply(event.target.value)}
@@ -94,6 +118,17 @@ export function SupportInboxPanel({
                   />
                 </label>
                 {saveError && <p role="alert" className="text-sm text-destructive">{saveError}</p>}
+                <label className="block text-sm font-medium text-foreground">
+                  After replying
+                  <select
+                    value={replyStatus}
+                    onChange={(event) => setReplyStatus(event.target.value as "answered" | "closed")}
+                    className="mt-2 h-10 w-full rounded-lg border border-input bg-background px-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  >
+                    <option value="answered">Mark answered</option>
+                    <option value="closed">Mark closed</option>
+                  </select>
+                </label>
                 <div className="flex gap-2">
                   <Button type="submit" disabled={saving || !reply.trim()}>{saving ? "Sending…" : "Send reply"}</Button>
                   <Button type="button" variant="outline" disabled={saving} onClick={() => setActiveReference(null)}>Cancel</Button>
@@ -103,6 +138,7 @@ export function SupportInboxPanel({
               <Button type="button" variant="outline" size="sm" className="mt-4" onClick={() => {
                 setActiveReference(item.reference);
                 setReply(item.reply ?? "");
+                setReplyStatus(item.status === "closed" ? "closed" : "answered");
                 setSaveError(null);
               }}>
                 {item.reply ? "Edit reply" : "Reply"}

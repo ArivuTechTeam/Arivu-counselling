@@ -48,4 +48,10 @@ test("responses include the production security-header baseline", async ({ reque
   expect(headers["referrer-policy"]).toBe("strict-origin-when-cross-origin");
   expect(headers["content-security-policy"]).toContain("object-src 'none'");
   expect(headers["content-security-policy"]).toContain("frame-ancestors 'none'");
+  const scriptDirective = headers["content-security-policy"]
+    .split(";")
+    .find((directive) => directive.trim().startsWith("script-src"));
+  expect(scriptDirective).toContain("'nonce-");
+  expect(scriptDirective).toContain("'strict-dynamic'");
+  expect(scriptDirective).not.toContain("'unsafe-inline'");
 });

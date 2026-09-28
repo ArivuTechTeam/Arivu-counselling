@@ -35,10 +35,21 @@ worker (`quiz-generator-worker`). They share one Supabase project.
   teacher, institution-admin, and super-admin browser journeys still require
   disposable isolated-staging accounts; do not put production credentials in
   GitHub Actions.
-- `X-Powered-By` is disabled. The current CSP retains `unsafe-inline` for
-  framework bootstrap/style compatibility. Moving to per-request nonces is a
-  separate architecture decision because it forces dynamic rendering and
-  removes normal static/CDN caching; test latency and cost before adopting it.
+- `X-Powered-By` is disabled. JavaScript uses a unique per-request CSP nonce
+  with `strict-dynamic`; `script-src` must never include `unsafe-inline` in
+  production. Inline style attributes remain allowed because tenant colours
+  and charts currently depend on them, but that permission cannot execute
+  JavaScript. Nonces force dynamic page rendering, so check Vercel latency and
+  invocation usage after deployment.
+- Browser auth remains per-tab in `sessionStorage`, which is required by the
+  current browser-to-Supabase/browser-to-FastAPI architecture. The nonce-based
+  script policy materially reduces the XSS path that could read those tokens.
+  Moving tokens to HttpOnly cookies would require a separate backend-for-
+  frontend auth redesign; do not claim that storage is HttpOnly today.
+- Free-text dashboard searches are sent in authenticated POST JSON bodies, not
+  query strings. This keeps names and search phrases out of browser history,
+  proxy access logs, referrer URLs, and screenshots. IDs, cursors, statuses,
+  and other non-free-text filters may remain in GET query strings.
 - GitHub repository rules could not be independently enabled on the current
   private-repository plan. Until required checks are available, treat a green
   `Repository checks` run as a manual merge gate.
@@ -182,6 +193,7 @@ migration-70-fair-practice-selection.sql
 migration-71-query-plan-indexes.sql
 migration-72-atomic-quiz-persistence.sql
 migration-73-ai-quiz-cost-workflows.sql
+migration-74-role-aware-support.sql
 ```
 
 (Filenames above verified 2026-09-26 against `migrations/`, through migration
@@ -260,9 +272,21 @@ accounts or the production API. Save the read/write JSON reports, both SQL
 reports, worker recovery evidence, and infrastructure metrics before capacity
 sign-off.
 
+Apply `migration-74-role-aware-support.sql` after migration 73 and before
+deploying the role-aware contact API. It preserves existing student requests,
+records their role as `student`, renames the owner column to `requester_id`, and
+adds the service-role-only `submit_contact_request` function. Its compatibility
+wrapper keeps old student submissions working during rollout, but the renamed
+owner column means request-history reads require the new API. Deploy the API
+immediately after the migration and before the frontend. Run
+`node scripts/test-role-aware-support-db.mjs`
+before deployment, then smoke-test one student, faculty, and institution-admin
+submission plus the super-admin reply/close flow. No worker deployment is
+required.
+
 Apply `migration-62-atomic-student-contact.sql` after migration 60 and
-before deploying the contact API that calls `submit_student_contact`; otherwise
-student submissions will return a temporary service error. Apply
+before deploying the original contact API that calls `submit_student_contact`;
+otherwise student submissions will return a temporary service error. Apply
 `migration-61-extended-question-types.sql` after migrations 59 and 60
 before enabling `EXTENDED_QUESTION_TYPES_ENABLED`. It adds three objective
 question-type enum values. `migration-60-student-contact.sql` creates the private

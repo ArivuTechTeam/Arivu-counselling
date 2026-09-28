@@ -9,6 +9,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from fastapi import HTTPException
+from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
 from app.api.student_contact import (
@@ -20,6 +21,7 @@ from app.api.student_contact import (
     support_inbox,
 )
 from app.lib.auth import CurrentProfile
+from app.main import app
 
 
 class _Query:
@@ -85,7 +87,7 @@ class _Service:
         return _Query(self.rows)
 
     def rpc(self, name: str, params: dict):
-        if name != "submit_student_contact":
+        if name != "submit_contact_request":
             raise AssertionError(name)
         self.rpc_params.append(params)
         service = self
@@ -97,7 +99,7 @@ class _Service:
                     recent = [
                         row for row in service.rows
                         if row["tenant_id"] == params["p_tenant_id"]
-                        and row["student_id"] == params["p_student_id"]
+                        and row["requester_id"] == params["p_requester_id"]
                         and datetime.fromisoformat(row["created_at"]) > now - timedelta(seconds=60)
                     ]
                     if recent:
@@ -105,7 +107,8 @@ class _Service:
                     row = {
                         "reference": params["p_reference"],
                         "tenant_id": params["p_tenant_id"],
-                        "student_id": params["p_student_id"],
+                        "requester_id": params["p_requester_id"],
+                        "requester_role": params["p_requester_role"],
                         "kind": params["p_kind"],
                         "category": params["p_category"],
                         "routed_to": params["p_routed_to"],
@@ -132,6 +135,25 @@ def _profile(user: str, tenant: str, role: str) -> CurrentProfile:
 
 
 class StudentContactTests(unittest.TestCase):
+    def test_contact_routes_require_authentication(self) -> None:
+        client = TestClient(app, raise_server_exceptions=False)
+        responses = (
+            client.get("/api/v1/contact/mine"),
+            client.get("/api/v1/contact/inbox"),
+            client.post(
+                "/api/v1/contact",
+                json={
+                    "kind": "support",
+                    "category": "general_support",
+                    "message": "Please help with this account",
+                },
+            ),
+        )
+        for response in responses:
+            with self.subTest(path=response.request.url.path):
+                self.assertEqual(response.status_code, 401)
+                self.assertEqual(response.json()["detail"], "Not authenticated")
+
     def test_feedback_and_app_bug_route_to_platform(self) -> None:
         service = _Service()
         with patch("app.api.student_contact.get_service_client", return_value=service):
@@ -140,9 +162,10 @@ class StudentContactTests(unittest.TestCase):
                 _profile("student-a", "tenant-a", "student"),
             )
         self.assertEqual(result.routed_to, "platform")
-        self.assertEqual(service.rpc_params[0]["p_student_id"], "student-a")
+        self.assertEqual(service.rpc_params[0]["p_requester_id"], "student-a")
+        self.assertEqual(service.rpc_params[0]["p_requester_role"], "student")
         self.assertEqual(service.rpc_params[0]["p_tenant_id"], "tenant-a")
-        self.assertNotIn("student_id", result.model_dump())
+        self.assertNotIn("requester_id", result.model_dump())
 
     def test_academic_support_routes_to_institution(self) -> None:
         service = _Service()
@@ -161,6 +184,48 @@ class StudentContactTests(unittest.TestCase):
                 _profile("student-a", "tenant-a", "student"),
             )
         self.assertEqual(result.routed_to, "platform")
+
+    def test_teacher_and_institution_admin_requests_route_to_platform(self) -> None:
+        for role in ("teacher", "institution_admin"):
+            service = _Service()
+            with self.subTest(role=role), patch(
+                "app.api.student_contact.get_service_client", return_value=service
+            ):
+                result = submit_contact(
+                    ContactCreate(
+                        kind="support",
+                        category="quiz_issue",
+                        message="Quiz generation needs investigation",
+                    ),
+                    _profile(f"{role}-a", "tenant-a", role),
+                )
+            self.assertEqual(result.routed_to, "platform")
+            self.assertEqual(service.rpc_params[0]["p_requester_role"], role)
+
+    def test_student_can_contact_arivupro_for_general_support(self) -> None:
+        service = _Service()
+        with patch("app.api.student_contact.get_service_client", return_value=service):
+            result = submit_contact(
+                ContactCreate(
+                    kind="support",
+                    category="general_support",
+                    message="I need help from the ArivuPro team",
+                ),
+                _profile("student-a", "tenant-a", "student"),
+            )
+        self.assertEqual(result.routed_to, "platform")
+
+    def test_super_admin_cannot_create_tenant_support_request(self) -> None:
+        with self.assertRaises(HTTPException) as caught:
+            submit_contact(
+                ContactCreate(
+                    kind="support",
+                    category="general_support",
+                    message="This should not create a support request",
+                ),
+                _profile("admin-p", "platform", "super_admin"),
+            )
+        self.assertEqual(caught.exception.status_code, 403)
 
     def test_rapid_repeat_is_limited_without_storing_duplicate(self) -> None:
         service = _Service()
@@ -205,11 +270,12 @@ class StudentContactTests(unittest.TestCase):
         self.assertEqual(caught.exception.status_code, 503)
         self.assertNotIn("provider response", caught.exception.detail)
 
-    def test_browser_cannot_set_routing_or_student_identity(self) -> None:
+    def test_browser_cannot_set_routing_or_requester_identity(self) -> None:
         with self.assertRaises(ValidationError):
             ContactCreate.model_validate({
                 "kind": "support", "category": "quiz_issue", "message": "A missing quiz result",
-                "routed_to": "platform", "student_id": "student-b",
+                "routed_to": "platform", "requester_id": "student-b",
+                "requester_role": "institution_admin",
             })
         with self.assertRaises(HTTPException):
             submit_contact(
@@ -217,29 +283,41 @@ class StudentContactTests(unittest.TestCase):
                 _profile("student-a", "tenant-a", "student"),
             )
 
-    def test_student_only_sees_own_requests(self) -> None:
+    def test_requester_only_sees_own_requests(self) -> None:
         now = datetime.now(timezone.utc).isoformat()
         rows = [
-            {"reference": "AAAAAAAAAAAA", "student_id": "student-a", "tenant_id": "tenant-a", "kind": "support", "category": "quiz_issue", "routed_to": "institution", "message": "My quiz result is missing", "rating": None, "status": "open", "reply": None, "created_at": now, "updated_at": now},
-            {"reference": "BBBBBBBBBBBB", "student_id": "student-b", "tenant_id": "tenant-a", "kind": "support", "category": "quiz_issue", "routed_to": "institution", "message": "Another student's quiz", "rating": None, "status": "open", "reply": None, "created_at": now, "updated_at": now},
+            {"reference": "AAAAAAAAAAAA", "requester_id": "teacher-a", "requester_role": "teacher", "tenant_id": "tenant-a", "kind": "support", "category": "quiz_issue", "routed_to": "platform", "message": "My quiz generation is missing", "rating": None, "status": "open", "reply": None, "created_at": now, "updated_at": now},
+            {"reference": "BBBBBBBBBBBB", "requester_id": "teacher-b", "requester_role": "teacher", "tenant_id": "tenant-a", "kind": "support", "category": "quiz_issue", "routed_to": "platform", "message": "Another teacher's quiz", "rating": None, "status": "open", "reply": None, "created_at": now, "updated_at": now},
         ]
         with patch("app.api.student_contact.get_service_client", return_value=_Service(rows)):
-            result = my_contacts(_profile("student-a", "tenant-a", "student"))
+            result = my_contacts(_profile("teacher-a", "tenant-a", "teacher"))
         self.assertEqual([item.reference for item in result], ["AAAAAAAAAAAA"])
 
     def test_staff_inboxes_and_replies_are_destination_and_tenant_scoped(self) -> None:
         now = datetime.now(timezone.utc).isoformat()
-        common = {"kind": "support", "category": "quiz_issue", "message": "Quiz result is missing", "rating": None, "status": "open", "reply": None, "created_at": now, "updated_at": now}
+        common = {"requester_role": "student", "kind": "support", "category": "quiz_issue", "message": "Quiz result is missing", "rating": None, "status": "open", "reply": None, "created_at": now, "updated_at": now}
         rows = [
             {**common, "reference": "AAAAAAAAAAAA", "tenant_id": "tenant-a", "routed_to": "institution"},
             {**common, "reference": "BBBBBBBBBBBB", "tenant_id": "tenant-b", "routed_to": "institution"},
-            {**common, "reference": "CCCCCCCCCCCC", "tenant_id": "tenant-a", "routed_to": "platform"},
+            {
+                **common,
+                "reference": "CCCCCCCCCCCC",
+                "tenant_id": "tenant-a",
+                "requester_role": "teacher",
+                "routed_to": "platform",
+                "tenant": {"name": "Institute A"},
+                "requester": {"full_name": "Faculty A"},
+            },
         ]
         service = _Service(rows)
         with patch("app.api.student_contact.get_service_client", return_value=service):
             institution = _profile("admin-a", "tenant-a", "institution_admin")
             self.assertEqual([item.reference for item in support_inbox(institution)], ["AAAAAAAAAAAA"])
-            self.assertEqual([item.reference for item in support_inbox(_profile("admin-p", "platform", "super_admin"))], ["CCCCCCCCCCCC"])
+            platform_items = support_inbox(_profile("admin-p", "platform", "super_admin"))
+            self.assertEqual([item.reference for item in platform_items], ["CCCCCCCCCCCC"])
+            self.assertEqual(platform_items[0].requester_role, "teacher")
+            self.assertEqual(platform_items[0].institution_name, "Institute A")
+            self.assertEqual(platform_items[0].requester_name, "Faculty A")
             with self.assertRaises(HTTPException):
                 reply_to_contact("BBBBBBBBBBBB", ContactReply(reply="Please retry."), institution)
             reply_to_contact("AAAAAAAAAAAA", ContactReply(reply="Please retry."), institution)
@@ -248,9 +326,10 @@ class StudentContactTests(unittest.TestCase):
         self.assertIsNone(rows[2]["reply"])
 
     def test_non_admin_cannot_use_staff_inbox(self) -> None:
-        with self.assertRaises(HTTPException) as caught:
-            support_inbox(_profile("student-a", "tenant-a", "student"))
-        self.assertEqual(caught.exception.status_code, 403)
+        for role in ("student", "teacher"):
+            with self.subTest(role=role), self.assertRaises(HTTPException) as caught:
+                support_inbox(_profile(f"{role}-a", "tenant-a", role))
+            self.assertEqual(caught.exception.status_code, 403)
 
     def test_migration_keeps_contact_table_private_and_cascades_erasure(self) -> None:
         migration = (
@@ -274,6 +353,20 @@ class StudentContactTests(unittest.TestCase):
         self.assertIn("security invoker", migration)
         self.assertIn("from public, anon, authenticated", migration)
         self.assertIn("to service_role", migration)
+
+    def test_role_aware_support_migration_preserves_history_and_privacy(self) -> None:
+        migration = (
+            Path(__file__).resolve().parents[2]
+            / "migrations"
+            / "migration-74-role-aware-support.sql"
+        ).read_text(encoding="utf-8").lower()
+        self.assertIn("rename column student_id to requester_id", migration)
+        self.assertIn("set requester_role = 'student'", migration)
+        self.assertIn("profile.role::text = p_requester_role", migration)
+        self.assertIn("for update", migration)
+        self.assertIn("from public, anon, authenticated", migration)
+        self.assertIn("to service_role", migration)
+        self.assertIn("submit_student_contact", migration)
 
 
 if __name__ == "__main__":

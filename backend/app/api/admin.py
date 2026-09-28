@@ -517,7 +517,6 @@ def _rollback_tenant(service, tenant_id: str) -> None:
 
 
 # ── Institution teacher management ──────────────────────────────────────────
-@router.get("/users", response_model=DirectoryPage)
 def list_users(
     page: int = 1,
     page_size: int = 12,
@@ -615,6 +614,36 @@ def list_users(
         page=page,
         page_size=page_size,
         total=total,
+    )
+
+
+class DirectorySearchRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    page: int = Field(default=1, ge=1)
+    page_size: int = Field(default=12, ge=1, le=ADMIN_DIRECTORY_PAGE_SIZE)
+    query: str = Field(default="", max_length=100)
+
+
+@router.get("/users", response_model=DirectoryPage)
+def list_users_route(
+    page: int = 1,
+    page_size: int = 12,
+    profile: CurrentProfile = Depends(get_current_profile),
+) -> DirectoryPage:
+    return list_users(page=page, page_size=page_size, profile=profile)
+
+
+@router.post("/users/search", response_model=DirectoryPage)
+def search_users(
+    body: DirectorySearchRequest,
+    profile: CurrentProfile = Depends(get_current_profile),
+) -> DirectoryPage:
+    return list_users(
+        page=body.page,
+        page_size=body.page_size,
+        q=body.query,
+        profile=profile,
     )
 
 
@@ -3125,7 +3154,6 @@ class AdminQuizSetPage(BaseModel):
     next_cursor: str | None = None
 
 
-@router.get("/admin/quiz-sets", response_model=AdminQuizSetPage)
 async def admin_quiz_sets(
     profile: CurrentProfile = Depends(get_current_profile),
     quiz_set_id: str | None = None,
@@ -3255,6 +3283,56 @@ async def admin_quiz_sets(
         else None
     )
     return AdminQuizSetPage(items=out, next_cursor=next_cursor)
+
+
+class AdminQuizSetSearchRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    quiz_set_id: str | None = None
+    teacher_id: str | None = None
+    course_id: str | None = None
+    status_filter: str | None = None
+    cursor: str | None = None
+    page_size: int = DEFAULT_PAGE_SIZE
+    query: str = Field(default="", max_length=100)
+
+
+@router.get("/admin/quiz-sets", response_model=AdminQuizSetPage)
+async def admin_quiz_sets_route(
+    profile: CurrentProfile = Depends(get_current_profile),
+    quiz_set_id: str | None = None,
+    teacher_id: str | None = None,
+    course_id: str | None = None,
+    status_filter: str | None = None,
+    cursor: str | None = None,
+    page_size: int = DEFAULT_PAGE_SIZE,
+) -> AdminQuizSetPage:
+    return await admin_quiz_sets(
+        profile=profile,
+        quiz_set_id=quiz_set_id,
+        teacher_id=teacher_id,
+        course_id=course_id,
+        status_filter=status_filter,
+        cursor=cursor,
+        page_size=page_size,
+    )
+
+
+@router.post("/admin/quiz-sets/search", response_model=AdminQuizSetPage)
+async def search_admin_quiz_sets(
+    body: AdminQuizSetSearchRequest,
+    profile: CurrentProfile = Depends(get_current_profile),
+) -> AdminQuizSetPage:
+    return await admin_quiz_sets(
+        profile=profile,
+        quiz_set_id=body.quiz_set_id,
+        teacher_id=body.teacher_id,
+        course_id=body.course_id,
+        status_filter=body.status_filter,
+        q=body.query,
+        cursor=body.cursor,
+        page_size=body.page_size,
+    )
 
 
 class TeacherAnalyticsDetail(BaseModel):

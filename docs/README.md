@@ -38,6 +38,9 @@ Verified on 26 September 2026:
   code or its job contract; its last observed deployment remains `8dfc43bc`.
 - The operator reported migrations through 73 applied. PR #65 required no new
   database migration, and none was applied as part of this deployment.
+- The repository now includes migration 74 for role-aware support. It has not
+  been reported applied and must be run before deploying the matching API and
+  frontend.
 
 This snapshot proves deployment and basic public availability, not the open
 authenticated-role, worker-recovery, backup/restore, or 200/500-user capacity

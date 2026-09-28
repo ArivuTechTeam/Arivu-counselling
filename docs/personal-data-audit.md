@@ -25,7 +25,7 @@ metadata in infrastructure logs; verify their retention settings separately.
 | Dashboard recovery state | Non-sensitive filters/selections and opaque durable job/resource identifiers | Current browser tab only | Stored in `sessionStorage` to survive refresh. Names, emails, filenames, chapter/topic text, question/answer drafts, passwords, uploaded `File` objects, and destructive confirmation state are excluded. Supabase session/PKCE material is the one sensitive exception and is needed for per-tab authentication. Backend/Supabase records remain authoritative. |
 | Challenges/leaderboards | Creator display name, opaque share token, participant identity, scores | Browser → FastAPI → Supabase. A same-course/institution audience receives display names and scores. | `challenges` and linked practice sessions. Account deletion replaces the creator name with `Deleted user` and removes the account pointer. |
 | Operational product events | Actor UUID/role, event type, subject UUID, minimal event metadata, timestamp | FastAPI → Supabase `events`. | Used for internal product-quality analytics. Account deletion removes every event for that actor. Application logs never contain the event payload. |
-| Student feedback and support | Optional 1–5 app rating, selected topic, free-text message and any staff reply; authenticated student/tenant identity is attached by the backend | Student Settings → FastAPI → private `student_contact_requests` table. General/feature/app-bug feedback and app-bug support route to ArivuPro super-admins; course/access/quiz support routes to that tenant's institution admins. | No email or third-party ticket service receives the message. The student sees only their own requests; staff see only their destination and, for institution admins, their tenant. The API returns a short public reference, not internal IDs. Profile deletion cascades to these requests. Free text may contain personal data, so it is never logged. |
+| Feedback and support | Optional 1–5 app rating, selected topic, free-text message and any staff reply; authenticated requester, role, and tenant identity are attached by the backend | Student/faculty/institution-admin Settings → FastAPI → private `student_contact_requests` table. Faculty/admin requests and general/app support route to ArivuPro super-admins; student course/access/quiz support routes to that tenant's institution admins. | No email or third-party ticket service receives the message. Requesters see only their own requests; staff see only their destination and, for institution admins, their tenant. The super-admin inbox labels each request with verified role and institution. The API returns a short public reference, not internal IDs. Profile deletion cascades to these requests. Free text may contain personal data, so it is never logged. |
 | User-initiated WhatsApp share | Challenge URL/question count, or quiz title and score percentage | Browser opens `wa.me` only when the user chooses Share. | WhatsApp receives the pre-filled share text and URL. No email, token, internal account UUID, or answer detail is included. |
 | Theme preference | `light`/`dark` | Browser only | The sole `localStorage` value. It is not personal data and is not sent to an API. |
 
@@ -64,7 +64,8 @@ Firebase, AWS application SDK, or card processor is present in this repository.
   includes only institution-routed requests from their tenant.
 - Super admins receive institution-admin names/emails, platform aggregates, and
   each institution's operational Course → Level → Subject offering tree/counts.
-  Their support inbox includes only platform-routed student feedback and app bugs.
+  Their support inbox includes only platform-routed requests and shows the
+  verified requester role, requester name when available, and institution.
   The AI API logs page also receives opaque call/tenant/document/job identifiers
   for paper grouping, filtering and safe metadata drill-down. Uploaded filenames,
   raw prompts and provider responses are excluded; legacy error text is replaced
@@ -130,7 +131,7 @@ action is not exposed directly in the avatar menu. It:
 6. anonymizes challenge authorship; and
 7. hard-deletes the Supabase Auth identity, cascading the remaining profile.
 
-The profile cascade also deletes that student's feedback/support messages and
+The profile cascade also deletes that requester's feedback/support messages and
 staff replies from `student_contact_requests`.
 
 Supabase notes that an already-issued access JWT can remain cryptographically

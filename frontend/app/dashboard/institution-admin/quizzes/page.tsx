@@ -107,7 +107,6 @@ export default function AdminQuizzesPage() {
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
-    setQuery(params.get("q") ?? "");
     setTeacherId(params.get("teacher") ?? "");
     setCourseId(params.get("course") ?? "");
     setStatus(params.get("status") ?? "");
@@ -120,7 +119,6 @@ export default function AdminQuizzesPage() {
   useEffect(() => {
     if (!filtersReady) return;
     const params = new URLSearchParams();
-    if (query) params.set("q", query);
     if (teacherId) params.set("teacher", teacherId);
     if (courseId) params.set("course", courseId);
     if (status) params.set("status", status);
@@ -131,7 +129,7 @@ export default function AdminQuizzesPage() {
       "",
       `${window.location.pathname}${search ? `?${search}` : ""}`,
     );
-  }, [courseId, filtersReady, query, sort, status, teacherId]);
+  }, [courseId, filtersReady, sort, status, teacherId]);
   useEffect(() => {
     if (!filtersReady || !teacherId || teacherId === RETAINED_TEACHER_ID) return;
     let current = true;

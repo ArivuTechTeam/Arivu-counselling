@@ -10,6 +10,7 @@ from app.api.admin import router as handler_router
 
 _PATHS = {
     "/api/v1/users",
+    "/api/v1/users/search",
     "/api/v1/users/{user_id}",
     "/api/v1/users/{user_id}/temporary-password",
     "/api/v1/teachers/{teacher_id}/courses",
@@ -20,6 +21,7 @@ _PATHS = {
     "/api/v1/admin/analytics",
     "/api/v1/admin/teachers/analytics",
     "/api/v1/admin/quiz-sets",
+    "/api/v1/admin/quiz-sets/search",
     "/api/v1/admin/quiz-sets/{quiz_set_id}",
 }
 

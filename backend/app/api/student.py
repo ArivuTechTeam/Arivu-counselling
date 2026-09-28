@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.lib.auth import CurrentProfile, get_current_profile
 from app.lib.api_errors import public_error
@@ -74,6 +74,15 @@ class StudentQuizOut(StudentResponse):
 class StudentQuizPage(StudentResponse):
     items: list[StudentQuizOut]
     next_cursor: str | None = None
+
+
+class StudentQuizSearchRequest(StudentResponse):
+    cursor: str | None = None
+    page_size: int = DEFAULT_PAGE_SIZE
+    subject_id: str | None = None
+    chapter_id: str | None = None
+    assignment: Literal["all", "course", "assigned"] = "all"
+    query: str = Field(default="", max_length=100)
 
 
 class AttemptHistoryOut(StudentResponse):
@@ -233,7 +242,6 @@ def _quiz_title_for_variant(
     return "Quiz"
 
 
-@router.get("/quizzes", response_model=StudentQuizPage)
 def list_quizzes(
     profile: CurrentProfile = Depends(get_current_profile),
     cursor: str | None = None,
@@ -283,6 +291,42 @@ def list_quizzes(
     for item in items:
         item.pop("_cursor_at", None)
     return StudentQuizPage(items=items, next_cursor=next_cursor)
+
+
+@router.get("/quizzes", response_model=StudentQuizPage)
+def list_quizzes_route(
+    profile: CurrentProfile = Depends(get_current_profile),
+    cursor: str | None = None,
+    page_size: int = DEFAULT_PAGE_SIZE,
+    subject_id: str | None = None,
+    chapter_id: str | None = None,
+    assignment: Literal["all", "course", "assigned"] = "all",
+) -> StudentQuizPage:
+    """List without free text so private searches never enter a request URL."""
+    return list_quizzes(
+        profile=profile,
+        cursor=cursor,
+        page_size=page_size,
+        subject_id=subject_id,
+        chapter_id=chapter_id,
+        assignment=assignment,
+    )
+
+
+@router.post("/quizzes/search", response_model=StudentQuizPage)
+def search_quizzes(
+    body: StudentQuizSearchRequest,
+    profile: CurrentProfile = Depends(get_current_profile),
+) -> StudentQuizPage:
+    return list_quizzes(
+        profile=profile,
+        cursor=body.cursor,
+        page_size=body.page_size,
+        subject_id=body.subject_id,
+        chapter_id=body.chapter_id,
+        assignment=body.assignment,
+        q=body.query,
+    )
 
 
 class StartAttemptRequest(BaseModel):

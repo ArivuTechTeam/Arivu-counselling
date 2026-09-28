@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.lib.auth import CurrentProfile, get_current_profile
 from app.lib.pagination import DEFAULT_PAGE_SIZE, bounded_page_size, decode_cursor, encode_cursor
@@ -22,6 +23,16 @@ from app.services.attempt_timing import is_answered
 from app.services.teacher_access import teacher_student_ids, teacher_subject_ids
 
 router = APIRouter(prefix="/api/v1", tags=["teacher"])
+
+
+class PublishedQuizSearchRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    cursor: str | None = None
+    page_size: int = DEFAULT_PAGE_SIZE
+    subject_id: str | None = None
+    query: str = Field(default="", max_length=100)
+
 
 def _initials(name: str | None) -> str:
     parts = (name or "?").split()
@@ -177,7 +188,6 @@ async def quiz_set_performance(
     }
 
 
-@router.get("/teacher/published-quizzes")
 async def published_quiz_monitor(
     profile: CurrentProfile = Depends(get_current_profile),
     cursor: str | None = None,
@@ -221,6 +231,35 @@ async def published_quiz_monitor(
     for item in items:
         item.pop("_cursor_at", None)
     return {"quizzes": items, "next_cursor": next_cursor}
+
+
+@router.get("/teacher/published-quizzes")
+async def published_quiz_monitor_route(
+    profile: CurrentProfile = Depends(get_current_profile),
+    cursor: str | None = None,
+    page_size: int = DEFAULT_PAGE_SIZE,
+    subject_id: str | None = None,
+) -> dict:
+    return await published_quiz_monitor(
+        profile=profile,
+        cursor=cursor,
+        page_size=page_size,
+        subject_id=subject_id,
+    )
+
+
+@router.post("/teacher/published-quizzes/search")
+async def search_published_quiz_monitor(
+    body: PublishedQuizSearchRequest,
+    profile: CurrentProfile = Depends(get_current_profile),
+) -> dict:
+    return await published_quiz_monitor(
+        profile=profile,
+        cursor=body.cursor,
+        page_size=body.page_size,
+        subject_id=body.subject_id,
+        q=body.query,
+    )
 
 
 @router.get("/teacher/class-monitor")

@@ -19,7 +19,7 @@ from io import BytesIO
 from zipfile import BadZipFile, ZipFile
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 from starlette.concurrency import run_in_threadpool
 
 from app.lib.auth import CurrentProfile, get_current_profile
@@ -68,6 +68,18 @@ class DocumentOut(BaseModel):
 class DocumentPage(BaseModel):
     items: list[DocumentOut]
     next_cursor: str | None = None
+
+
+class DocumentSearchRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    cursor: str | None = None
+    page_size: int = DEFAULT_PAGE_SIZE
+    query: str = Field(default="", max_length=100)
+
+
+class DocumentLogSearchRequest(DocumentSearchRequest):
+    status_filter: str | None = None
 
 
 class UploadResult(BaseModel):
@@ -373,7 +385,6 @@ def check_duplicate(
     return DuplicateCheckResult(duplicate=False)
 
 
-@router.get("", response_model=DocumentPage)
 def list_documents(
     profile: CurrentProfile = Depends(get_current_profile),
     cursor: str | None = None,
@@ -414,7 +425,28 @@ def list_documents(
     ], next_cursor=next_cursor)
 
 
-@router.get("/log", response_model=DocumentLogPage)
+@router.get("", response_model=DocumentPage)
+def list_documents_route(
+    profile: CurrentProfile = Depends(get_current_profile),
+    cursor: str | None = None,
+    page_size: int = DEFAULT_PAGE_SIZE,
+) -> DocumentPage:
+    return list_documents(profile=profile, cursor=cursor, page_size=page_size)
+
+
+@router.post("/search", response_model=DocumentPage)
+def search_documents(
+    body: DocumentSearchRequest,
+    profile: CurrentProfile = Depends(get_current_profile),
+) -> DocumentPage:
+    return list_documents(
+        profile=profile,
+        cursor=body.cursor,
+        page_size=body.page_size,
+        q=body.query,
+    )
+
+
 def document_log(
     profile: CurrentProfile = Depends(get_current_profile),
     cursor: str | None = None,
@@ -552,6 +584,35 @@ def document_log(
             )
         )
     return DocumentLogPage(items=items, next_cursor=next_cursor)
+
+
+@router.get("/log", response_model=DocumentLogPage)
+def document_log_route(
+    profile: CurrentProfile = Depends(get_current_profile),
+    cursor: str | None = None,
+    page_size: int = DEFAULT_PAGE_SIZE,
+    status_filter: str | None = None,
+) -> DocumentLogPage:
+    return document_log(
+        profile=profile,
+        cursor=cursor,
+        page_size=page_size,
+        status_filter=status_filter,
+    )
+
+
+@router.post("/log/search", response_model=DocumentLogPage)
+def search_document_log(
+    body: DocumentLogSearchRequest,
+    profile: CurrentProfile = Depends(get_current_profile),
+) -> DocumentLogPage:
+    return document_log(
+        profile=profile,
+        cursor=body.cursor,
+        page_size=body.page_size,
+        status_filter=body.status_filter,
+        q=body.query,
+    )
 
 
 @router.post("/{document_id}/archive", response_model=ArchivedDocumentOut)
