@@ -15,6 +15,7 @@ MESSAGES = {
     "quiz_copy_size": "Duplicate a quiz containing between 1 and 500 questions.",
     "quiz_invalid_batches": "Select active batches from this quiz's course and level.",
     "quiz_batch_access": "You can publish only to batches you manage.",
+    "quiz_invalid_selection": "Select distinct questions that belong to this quiz.",
 }
 
 

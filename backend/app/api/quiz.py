@@ -795,20 +795,25 @@ def publish_quiz_set(
                         validate_question_answer_shape(question["type"], question.get("options"), question.get("correct_answer"))
                     except ValueError as exc:
                         raise HTTPException(409, "Correct the answer configuration before publishing.") from exc
+        purge_enabled = get_settings().rejected_purge_enabled
         if body.batch_ids is not None:
+            rpc_name = (
+                "publish_quiz_to_batches_with_rejected_purge_atomic"
+                if purge_enabled
+                else "publish_quiz_to_batches_atomic"
+            )
             row = quiz_reuse.rpc(
-                service, "publish_quiz_to_batches_atomic", profile, quiz_set_id,
+                service, rpc_name, profile, quiz_set_id,
                 p_token=body.publication_token, p_batch_ids=[str(batch_id) for batch_id in body.batch_ids],
                 p_require_managed=profile.tenant_feature_flags is not None,
             )
         else:
-            row = quiz_reuse.rpc(service, "publish_quiz_atomic", profile, quiz_set_id, p_token=body.publication_token)
+            rpc_name = "publish_quiz_with_rejected_purge_atomic" if purge_enabled else "publish_quiz_atomic"
+            row = quiz_reuse.rpc(service, rpc_name, profile, quiz_set_id, p_token=body.publication_token)
         snapshot_published_pyq(service, profile.tenant_id, quiz_set_id, profile.user_id)
         published = {key: row.get(key) for key in ("id", "title", "status", "created_at", "published_at")}
-        if get_settings().rejected_purge_enabled:
-            published["purged_rejected"] = purge_rejected_for_quiz_set(
-                service, profile.tenant_id, profile.user_id, quiz_set_id
-            )["purged"]
+        if purge_enabled:
+            published["purged_rejected"] = int(row.get("purged_rejected") or 0)
         return published
     variants = select_all(
         service,
@@ -1020,10 +1025,10 @@ def blueprint_publish(
     down to the ones they want live, optionally capped per paper type. This
     endpoint approves exactly those selected questions and publishes the set.
 
-    Everything NOT selected is left completely untouched in the database — never
-    rejected, never deleted — so it stays available to publish later. This is
-    deliberately separate from the reject/purge feature. Requires at least one
-    selected question. Gated behind EXTRACTION_BLUEPRINT_ENABLED.
+    Everything not selected stays stored for lineage but the released quiz is
+    immutable. Duplicate it to a draft before editing or publishing a different
+    subset. Requires at least one selected question and is gated behind
+    EXTRACTION_BLUEPRINT_ENABLED.
     """
     require_teacher(profile, action="access quiz sets")
     if not getattr(get_settings(), "extraction_blueprint_enabled", False):
@@ -1036,12 +1041,14 @@ def blueprint_publish(
     service = get_service_client()
     _teacher_quiz_set(service, quiz_set_id, profile)
 
-    selected = {str(qid) for qid in body.selected_question_ids}
+    selected = [str(qid) for qid in body.selected_question_ids]
     if not selected:
         raise HTTPException(
             status_code=400,
             detail="Select at least one question to publish.",
         )
+    if len(set(selected)) != len(selected):
+        raise HTTPException(status_code=400, detail="Select each question only once.")
 
     variants = (
         service.table("quiz_variants")
@@ -1062,13 +1069,12 @@ def blueprint_publish(
         configure=lambda query: query.eq("tenant_id", profile.tenant_id),
     )
     ids_in_set = {str(link["question_id"]) for link in links}
-    if selected - ids_in_set:
+    if set(selected) - ids_in_set:
         raise HTTPException(
             status_code=400,
             detail="One or more selected questions do not belong to this quiz.",
         )
 
-    from app.api.questions import _match_review_snapshot
     from app.services.question_validation import validate_question_answer_shape
 
     all_rows = select_all_in(
@@ -1082,10 +1088,9 @@ def blueprint_publish(
             detail="One or more quiz questions are unavailable. Refresh and try again.",
         )
 
-    already_approved_outside_selection = [
-        row for row in all_rows
-        if row.get("review_status") == "approved" and str(row["id"]) not in selected
-    ]
+    already_approved_outside_selection = [row for row in all_rows
+                                          if row.get("review_status") == "approved"
+                                          and str(row["id"]) not in selected]
     if already_approved_outside_selection:
         raise HTTPException(
             status_code=409,
@@ -1096,67 +1101,43 @@ def blueprint_publish(
         )
 
     rows = [row for row in all_rows if str(row["id"]) in selected]
-    # Approve every SELECTED question that can be approved; leave the rest of the
-    # document alone. Already-approved stay approved; explicitly-rejected ones are
-    # not silently revived; invalid answer shapes are skipped and reported.
-    approved_ids: set[str] = set()
-    newly_approved: list[str] = []
-    skipped = 0
     for row in rows:
-        status = row.get("review_status")
-        if status == "approved":
-            approved_ids.add(str(row["id"]))
-            continue
-        if status == "rejected":
-            skipped += 1
-            continue
-        quiz_reuse.assert_editable(row)
+        if row.get("review_status") == "rejected":
+            raise HTTPException(
+                status_code=409,
+                detail="A selected question is rejected. Remove it or move it back to review.",
+            )
         try:
             validate_question_answer_shape(row.get("type"), row.get("options"), row.get("correct_answer"))
-        except ValueError:
-            skipped += 1
-            continue
-        query = (service.table("questions").update({
-            "review_status": "approved", "reviewed_by": profile.user_id,
-            "reviewed_at": datetime.now(timezone.utc).isoformat(),
-        }).eq("id", row["id"]).eq("created_by", profile.user_id).eq("tenant_id", profile.tenant_id))
-        updated = _match_review_snapshot(query, row).execute()
-        if updated.data:
-            approved_ids.add(str(row["id"]))
-            newly_approved.append(str(row["id"]))
-        else:
-            skipped += 1
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=409,
+                detail="A selected question has an invalid answer. Correct it before publishing.",
+            ) from exc
 
-    if not approved_ids:
-        raise HTTPException(
-            status_code=400,
-            detail="None of the selected questions could be published. Check their answers.",
-        )
+    if body.batch_ids is not None:
+        _require_batches_enabled(profile, legacy_master_check=True)
+        if not body.batch_ids or len(set(body.batch_ids)) != len(body.batch_ids):
+            raise HTTPException(400, "Select one or more distinct batches before publishing.")
 
-    # Reuse the same atomic publication path as ordinary publishing. This keeps
-    # release locking, marks, publication tokens, and optional batch assignment
-    # consistent with the rest of the application. Because every approved
-    # question outside the selection was rejected above, students can receive
-    # only this blueprint's approved subset.
-    published = publish_quiz_set(
-        quiz_set_id,
+    # Approval, marks, release locking, publication and optional assignments
+    # commit together. A stale token or validation failure changes nothing.
+    row = quiz_reuse.rpc(
+        service,
+        "publish_quiz_blueprint_atomic",
         profile,
-        PublishQuizRequest(
-            publication_token=body.publication_token,
-            batch_ids=body.batch_ids,
-        ),
+        quiz_set_id,
+        p_token=body.publication_token,
+        p_selected_ids=selected,
+        p_batch_ids=([str(batch_id) for batch_id in body.batch_ids]
+                     if body.batch_ids is not None else None),
+        p_require_managed=profile.tenant_feature_flags is not None,
     )
-    log_events([
-        make_event(tenant_id=profile.tenant_id, event_type=QUESTION_APPROVED,
-                   actor_id=profile.user_id, actor_role=profile.role,
-                   subject_type="question", subject_id=qid,
-                   metadata={"method": "blueprint"})
-        for qid in newly_approved
-    ])
+    snapshot_published_pyq(service, profile.tenant_id, quiz_set_id, profile.user_id)
     return {
-        **published,
-        "published_count": len(approved_ids),
-        "skipped": skipped,
+        **{key: row.get(key) for key in ("id", "title", "status", "created_at", "published_at")},
+        "published_count": int(row.get("published_count") or len(selected)),
+        "skipped": 0,
     }
 
 
@@ -1165,45 +1146,12 @@ def regenerate_all_questions(
     quiz_set_id: str,
     profile: CurrentProfile = Depends(get_current_profile),
 ) -> dict:
-    """Regenerate every question in a DRAFT quiz with a fresh AI version (same
-    shape). Published quizzes are locked; duplicate them to a draft first. Gated
-    behind EXTRACTION-independent flag REGENERATE_SET_ENABLED and rate-limited as
-    one generation action."""
+    """Retired synchronous route; regeneration now uses a durable faculty job."""
     require_teacher(profile, action="regenerate quizzes")
-    settings = get_settings()
-    if not getattr(settings, "regenerate_set_enabled", False):
-        raise HTTPException(status_code=404, detail="Not found.")
-    service = get_service_client()
-    _teacher_quiz_set(service, quiz_set_id, profile)
-    status_row = (
-        service.table("quiz_sets").select("status")
-        .eq("id", quiz_set_id).eq("tenant_id", profile.tenant_id)
-        .maybe_single().execute()
+    raise HTTPException(
+        status_code=410,
+        detail="This regeneration route was replaced by background processing. Refresh the page.",
     )
-    if not status_row or not status_row.data:
-        raise HTTPException(status_code=404, detail="Quiz set not found.")
-    if status_row.data.get("status") != "draft":
-        raise HTTPException(
-            status_code=409,
-            detail="Only draft quizzes can be regenerated. Duplicate this quiz to a draft first.",
-        )
-    enforce_ai_rate_limit(
-        profile=profile,
-        endpoint=QUIZ_GENERATION,
-        hourly_limit=settings.rate_limit_quiz_generation_per_hour,
-        action_label="regenerate the quiz",
-    )
-    from app.services.review import regenerate_quiz_set
-
-    try:
-        return regenerate_quiz_set(
-            quiz_set_id,
-            profile.tenant_id,
-            max_questions=settings.regenerate_set_max_questions,
-            concurrency=settings.regenerate_set_concurrency,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.post("/{quiz_set_id}/approve-all")

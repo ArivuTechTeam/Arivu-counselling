@@ -58,7 +58,7 @@ export function FacultyTasks() {
         {jobs.map((job) => (
           <li key={job.id} className="flex flex-wrap items-center justify-between gap-2 border-t pt-2 text-sm">
             <div>
-              <p>{job.kind === "extraction" ? "Import" : "Quiz generation"} · {new Date(job.created_at).toLocaleString()}</p>
+              <p>{job.kind === "extraction" ? "Import" : job.kind === "regenerate_set" ? "Quiz regeneration" : "Quiz generation"} · {new Date(job.created_at).toLocaleString()}</p>
               <p className="capitalize text-muted-foreground">{job.phase === "retrying" ? "Retry queued" : job.phase === "saving" ? "Saving draft" : job.status}</p>
               {job.error_message && <p className="text-muted-foreground">{job.error_message}</p>}
             </div>

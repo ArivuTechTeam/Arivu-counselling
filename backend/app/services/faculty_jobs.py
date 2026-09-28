@@ -21,7 +21,12 @@ def public_job(row: dict) -> dict:
     result = {key: row.get(key) for key in PUBLIC_COLUMNS.split(",")}
     if result["result"]:
         # Status polling should not transfer entire question banks every few seconds.
-        result["result"] = {"quiz_set_id": result["result"].get("quiz_set_id")}
+        raw_result = result["result"]
+        result["result"] = {
+            key: raw_result.get(key)
+            for key in ("quiz_set_id", "regenerated", "kept", "total")
+            if raw_result.get(key) is not None
+        }
     elif row.get("quiz_set_id"):
         result["result"] = {"quiz_set_id": row["quiz_set_id"]}
     result["source_document_id"] = (row.get("request") or {}).get("document_id")
@@ -66,7 +71,12 @@ def enqueue(profile: CurrentProfile, key: str, kind: str, request: dict) -> dict
     service = get_service_client()
     validate_source(service, profile, request)
     settings = get_settings()
-    limit = settings.rate_limit_quiz_extraction_per_hour if kind == "extraction" else settings.rate_limit_blueprint_per_hour
+    if kind == "extraction":
+        limit = settings.rate_limit_quiz_extraction_per_hour
+    elif kind == "regenerate_set":
+        limit = settings.rate_limit_quiz_generation_per_hour
+    else:
+        limit = settings.rate_limit_blueprint_per_hour
     identity = dict(request)
     if kind == "extraction" and identity.get("content_hash"):
         # Concurrent upload retries may create distinct temporary document rows.

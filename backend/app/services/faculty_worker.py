@@ -114,6 +114,33 @@ def process_job(service, job: dict) -> dict:
         raise ValueError("Teacher or institution is no longer active")
     validate_source(service, profile, request)
 
+    if job["kind"] == "regenerate_set":
+        quiz = (
+            service.table("quiz_sets")
+            .select("id,status,released_at")
+            .eq("id", request["quiz_set_id"])
+            .eq("tenant_id", profile.tenant_id)
+            .eq("created_by", profile.user_id)
+            .maybe_single()
+            .execute()
+            .data
+        )
+        if not quiz or quiz.get("status") != "draft" or quiz.get("released_at") is not None:
+            raise ValueError("Quiz is no longer an editable draft")
+        from app.services.review import regenerate_quiz_set
+
+        settings = get_settings()
+        result = regenerate_quiz_set(
+            request["quiz_set_id"],
+            profile.tenant_id,
+            max_questions=settings.regenerate_set_max_questions,
+            concurrency=settings.regenerate_set_concurrency,
+        )
+        result["quiz_set_id"] = request["quiz_set_id"]
+        if not update_job(service, job, "complete", p_payload=result):
+            raise LeaseLost("Worker no longer owns this job")
+        return result
+
     def commit(payload: dict) -> dict:
         if not update_job(service, job, "checkpoint", p_payload=payload):
             raise LeaseLost("Worker no longer owns this job")

@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import unittest
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from fastapi import HTTPException
 
@@ -340,15 +340,15 @@ class FacultyPublishingTests(unittest.TestCase):
                 "app.api.quiz.get_settings",
                 return_value=SimpleNamespace(rejected_purge_enabled=True),
             ),
+            patch(
+                "app.api.quiz.purge_rejected_for_quiz_set",
+                return_value={"purged": 1, "kept": 0},
+            ) as purge,
         ):
             result = publish_quiz_set("set1", _teacher())
         self.assertEqual(result["status"], "published")
         self.assertEqual(result["purged_rejected"], 1)
-        question_ids = {row["id"] for row in service.rows["questions"]}
-        self.assertNotIn("q2", question_ids, "rejected question must be deleted on publish")
-        self.assertIn("q1", question_ids, "approved question must remain")
-        links = {row["question_id"] for row in service.rows["quiz_variant_questions"]}
-        self.assertNotIn("q2", links, "the deleted question's variant link must be removed")
+        purge.assert_called_once_with(service, TENANT, TEACHER, "set1")
 
     def test_publish_keeps_rejected_when_flag_off(self) -> None:
         # Default flag (off): rejecting stays a soft-flag, byte-identical to
@@ -394,23 +394,22 @@ class BlueprintPublishTests(unittest.TestCase):
 
     def _publish(self, service, body):
         from app.api.quiz import BlueprintPublishRequest, blueprint_publish
+        self.publish_rpc = Mock(return_value={
+            "id": "set1",
+            "title": "Quiz",
+            "status": "published",
+            "created_at": "2026-09-25T00:00:00Z",
+            "published_at": "2026-09-25T00:01:00Z",
+            "published_count": len(body["selected_question_ids"]),
+            "skipped": 0,
+        })
         with (
             patch("app.api.quiz.get_service_client", return_value=service),
             patch("app.api.quiz.log_event"),
             patch("app.api.quiz.log_events"),
             patch("app.api.quiz.snapshot_published_pyq"),
             patch("app.api.quiz.quiz_reuse.enabled", return_value=True),
-            patch(
-                "app.api.quiz.publish_quiz_set",
-                return_value={
-                    "id": "set1",
-                    "title": "Quiz",
-                    "status": "published",
-                    "created_at": "2026-09-25T00:00:00Z",
-                    "published_at": "2026-09-25T00:01:00Z",
-                },
-            ),
-            patch("app.api.questions._match_review_snapshot", side_effect=lambda query, row: query),
+            patch("app.api.quiz.quiz_reuse.rpc", self.publish_rpc),
             patch("app.api.quiz.get_settings",
                   return_value=SimpleNamespace(extraction_blueprint_enabled=True)),
         ):
@@ -425,13 +424,13 @@ class BlueprintPublishTests(unittest.TestCase):
         self.assertEqual(result["status"], "published")
         self.assertEqual(result["published_count"], 2)
         by_id = {q["id"]: q for q in service.rows["questions"]}
-        self.assertEqual(by_id["q1"]["review_status"], "approved")
-        self.assertEqual(by_id["q2"]["review_status"], "approved")
-        # The unselected question is UNTOUCHED — still pending, still present.
+        # The API performs no partial writes before the one atomic RPC.
+        self.assertEqual(by_id["q1"]["review_status"], "pending_review")
+        self.assertEqual(by_id["q2"]["review_status"], "pending_review")
         self.assertEqual(by_id["q3"]["review_status"], "pending_review")
         self.assertIn("q3", by_id)
-        # Marks and release locking are finalized by the ordinary atomic publish
-        # path, rather than being recalculated independently here.
+        self.assertEqual(self.publish_rpc.call_args.args[1], "publish_quiz_blueprint_atomic")
+        self.assertEqual(self.publish_rpc.call_args.kwargs["p_selected_ids"], ["q1", "q2"])
 
     def test_empty_selection_is_rejected(self) -> None:
         service = _Service(self._rows([("q1", "pending_review")]))

@@ -961,8 +961,8 @@ export const publishQuizSet = (id: string, publicationToken?: string, batchIds?:
     `/api/v1/quiz-sets/${id}/${batchIds ? "publish-to-batches" : "publish"}`, "POST",
     publicationToken ? { publication_token: publicationToken, ...(batchIds ? { batch_ids: batchIds } : {}) } : undefined);
 
-/** Publish ONLY the selected subset of an extracted quiz (the blueprint). The
- *  unselected questions are left untouched in the database. */
+/** Publish only the selected subset of an extracted quiz. Unselected questions
+ *  remain stored in the immutable release and can be reused from a duplicate. */
 export const blueprintPublish = (
   id: string,
   selectedQuestionIds: string[],
@@ -976,11 +976,6 @@ export const blueprintPublish = (
       publication_token: publicationToken,
       ...(batchIds ? { batch_ids: batchIds } : {}),
     });
-
-/** Regenerate every question in a draft quiz with a fresh AI version (same shape). */
-export const regenerateQuizSet = (id: string) =>
-  jsonRequest<{ regenerated: number; kept: number; total: number }>(
-    `/api/v1/quiz-sets/${id}/regenerate-all`, "POST");
 
 export const duplicateQuizSet = (id: string, title: string, requestKey: string) =>
   jsonRequest<{ quiz_set_id: string; replayed: boolean }>(`/api/v1/quiz-sets/${id}/duplicate`, "POST",
@@ -2727,12 +2722,18 @@ export const generateFromJob = async (
 
 export type FacultyJob = {
   id: string;
-  kind: "blueprint" | "analysis_quiz" | "extraction";
+  kind: "blueprint" | "analysis_quiz" | "extraction" | "regenerate_set";
   status: "queued" | "running" | "completed" | "failed" | "cancelled";
   phase: string;
   attempts: number;
   error_message: string | null;
-  result: { quiz_set_id: string; quiz_status?: string | null } | null;
+  result: {
+    quiz_set_id: string;
+    quiz_status?: string | null;
+    regenerated?: number;
+    kept?: number;
+    total?: number;
+  } | null;
   created_at: string;
 };
 
@@ -2741,8 +2742,27 @@ export type QueuedFacultyResponse = { background_job: FacultyJob };
 export const listFacultyJobs = () =>
   jsonRequest<{ enabled: boolean; jobs: FacultyJob[] }>("/api/v1/faculty-jobs", "GET");
 
+export const getFacultyJob = (id: string) =>
+  jsonRequest<FacultyJob>(`/api/v1/faculty-jobs/${id}`, "GET");
+
 export const cancelFacultyJob = (id: string) =>
   jsonRequest<FacultyJob>(`/api/v1/faculty-jobs/${id}/cancel`, "POST");
+
+/** Queue whole-quiz regeneration with an idempotency key. The worker continues
+ * even if the browser closes or the network connection is interrupted. */
+export async function regenerateQuizSet(id: string): Promise<FacultyJob> {
+  const body = { quiz_set_id: id, request_key: crypto.randomUUID() };
+  try {
+    const job = await jsonRequest<FacultyJob>("/api/v1/faculty-jobs/regenerate", "POST", body);
+    window.dispatchEvent(new Event("faculty-job-queued"));
+    return job;
+  } catch (error) {
+    if (!(error instanceof ApiRequestError) || !["network_error", "request_timeout"].includes(error.code)) throw error;
+    const job = await jsonRequest<FacultyJob>("/api/v1/faculty-jobs/regenerate", "POST", body);
+    window.dispatchEvent(new Event("faculty-job-queued"));
+    return job;
+  }
+}
 
 async function submitFacultyGeneration(req: BlueprintGenerateRequest, analysisJobId?: string): Promise<QueuedFacultyResponse> {
   const body = { ...req, request_key: crypto.randomUUID(), analysis_job_id: analysisJobId };
