@@ -26,6 +26,7 @@ import {
   approveAllQuestions,
   blueprintPublish,
   regenerateQuizSet,
+  getFacultyJob,
   getQuizSet,
   listDocumentFigures,
   publishQuizSet,
@@ -369,7 +370,7 @@ export default function ReviewDetailPage({ params }: { params: Promise<{ id: str
       setDetail(await getQuizSet(id));
       celebrateBurst();
       notify(
-        `🎉 Published ${s.published_count} question${s.published_count === 1 ? "" : "s"} — the rest stay saved`,
+        `🎉 Published ${s.published_count} question${s.published_count === 1 ? "" : "s"} — duplicate this quiz to reuse the saved questions`,
         "success",
       );
       router.replace(`/dashboard/teacher/published-quizzes/${id}`);
@@ -385,7 +386,20 @@ export default function ReviewDetailPage({ params }: { params: Promise<{ id: str
     setError(null);
     setRegenerating(true);
     try {
-      const r = await regenerateQuizSet(id);
+      let job = await regenerateQuizSet(id);
+      notify("Regeneration was queued. It will continue even if you leave this page.", "success");
+      while (job.status === "queued" || job.status === "running") {
+        await new Promise((resolve) => window.setTimeout(resolve, 2_000));
+        job = await getFacultyJob(job.id);
+      }
+      if (job.status !== "completed" || !job.result) {
+        throw new Error(job.error_message || "Regeneration did not complete. Check Recent tasks and try again.");
+      }
+      const r = {
+        regenerated: job.result.regenerated ?? 0,
+        kept: job.result.kept ?? 0,
+        total: job.result.total ?? 0,
+      };
       setDetail(await getQuizSet(id));
       celebrateBurst();
       notify(

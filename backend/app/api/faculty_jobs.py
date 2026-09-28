@@ -27,6 +27,11 @@ class GenerateJobRequest(BlueprintGenerateRequest):
     analysis_job_id: UUID | None = None
 
 
+class RegenerateJobRequest(BaseModel):
+    request_key: UUID
+    quiz_set_id: UUID
+
+
 @router.get("")
 def list_jobs(profile: CurrentProfile = Depends(get_current_profile)) -> dict:
     require_teacher(profile)
@@ -79,6 +84,50 @@ def create_job(req: GenerateJobRequest, profile: CurrentProfile = Depends(get_cu
             raise HTTPException(400, "This analysis belongs to a different document.")
         kind = "analysis_quiz"
     return enqueue(profile, str(req.request_key), kind, request)
+
+
+@router.post("/regenerate", status_code=202)
+def create_regeneration_job(
+    req: RegenerateJobRequest,
+    profile: CurrentProfile = Depends(get_current_profile),
+) -> dict:
+    """Queue whole-quiz regeneration without keeping an HTTP request open."""
+    require_teacher(profile)
+    settings = get_settings()
+    if not getattr(settings, "regenerate_set_enabled", False):
+        raise HTTPException(404, "Not found.")
+    if profile.tenant_feature_flags is None:
+        if not settings.faculty_jobs_enabled:
+            raise HTTPException(503, "Background processing is not enabled yet.")
+    else:
+        require_profile_feature(profile, "faculty_jobs", label="Background processing")
+    service = get_service_client()
+    response = (
+        service.table("quiz_sets")
+        .select("id,status,subject_id,document_id,released_at")
+        .eq("id", str(req.quiz_set_id))
+        .eq("tenant_id", profile.tenant_id)
+        .eq("created_by", profile.user_id)
+        .maybe_single()
+        .execute()
+    )
+    quiz = response.data if response else None
+    if not quiz:
+        raise HTTPException(404, "Quiz set not found.")
+    if quiz.get("status") != "draft" or quiz.get("released_at") is not None:
+        raise HTTPException(409, "Only an unreleased draft can be regenerated. Duplicate the quiz first.")
+    if not quiz.get("subject_id") or not quiz.get("document_id"):
+        raise HTTPException(400, "This quiz is not linked to its source document and cannot be regenerated.")
+    return enqueue(
+        profile,
+        str(req.request_key),
+        "regenerate_set",
+        {
+            "quiz_set_id": str(req.quiz_set_id),
+            "subject_id": str(quiz["subject_id"]),
+            "document_id": str(quiz["document_id"]),
+        },
+    )
 
 
 @router.get("/{job_id}")

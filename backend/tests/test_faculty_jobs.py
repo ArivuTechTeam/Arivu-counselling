@@ -1,12 +1,17 @@
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
-from app.api.faculty_jobs import router, list_jobs
+from app.api.faculty_jobs import (
+    RegenerateJobRequest,
+    create_regeneration_job,
+    list_jobs,
+    router,
+)
 from app.lib.auth import CurrentProfile, get_current_profile
 from app.services.blueprint import BPQuestion, BPQuiz, generate_and_persist_from_material
 from app.services.faculty_jobs import enqueue, load_owned, public_job
@@ -17,7 +22,11 @@ from tests.test_faculty_pilot_safety import Service
 
 PROFILE = CurrentProfile(user_id=str(uuid4()), tenant_id=str(uuid4()), role="teacher")
 SETTINGS = SimpleNamespace(faculty_jobs_enabled=True, rate_limit_blueprint_per_hour=10,
-                           rate_limit_quiz_extraction_per_hour=10)
+                           rate_limit_quiz_extraction_per_hour=10,
+                           rate_limit_quiz_generation_per_hour=10,
+                           regenerate_set_enabled=True,
+                           regenerate_set_max_questions=40,
+                           regenerate_set_concurrency=5)
 
 
 def job(**changes):
@@ -38,6 +47,17 @@ def test_public_status_does_not_expose_worker_token_request_or_source_content():
     visible = public_job(job(checkpoint={"source": "private"}, result={"quiz_set_id": "quiz", "questions": ["private"]}))
     assert "lease_token" not in visible and "request" not in visible and "checkpoint" not in visible
     assert visible["result"] == {"quiz_set_id": "quiz"}
+
+
+def test_public_regeneration_status_exposes_counts_but_not_private_result() -> None:
+    visible = public_job(job(
+        kind="regenerate_set",
+        result={"quiz_set_id": "quiz", "regenerated": 8, "kept": 2, "total": 10,
+                "provider_response": "private"},
+    ))
+    assert visible["result"] == {
+        "quiz_set_id": "quiz", "regenerated": 8, "kept": 2, "total": 10,
+    }
 
 
 def test_recent_tasks_include_owned_quiz_publication_status():
@@ -103,6 +123,26 @@ def test_disabled_queue_does_not_query_missing_table_and_rejects_students():
         assert client.get("/api/v1/faculty-jobs").status_code == 403
 
 
+def test_regeneration_endpoint_queues_owned_unreleased_draft() -> None:
+    quiz_id, subject_id, document_id = str(uuid4()), str(uuid4()), str(uuid4())
+    service = Mock()
+    service.table.return_value.select.return_value.eq.return_value.eq.return_value.eq.return_value.maybe_single.return_value.execute.return_value = SimpleNamespace(
+        data={"id": quiz_id, "status": "draft", "released_at": None,
+              "subject_id": subject_id, "document_id": document_id}
+    )
+    with patch("app.api.faculty_jobs.get_settings", return_value=SETTINGS), \
+         patch("app.api.faculty_jobs.get_service_client", return_value=service), \
+         patch("app.api.faculty_jobs.enqueue", return_value={"id": "job"}) as queued:
+        result = create_regeneration_job(
+            RegenerateJobRequest(request_key=uuid4(), quiz_set_id=UUID(quiz_id)), PROFILE
+        )
+    assert result == {"id": "job"}
+    assert queued.call_args.args[2] == "regenerate_set"
+    assert queued.call_args.args[3] == {
+        "quiz_set_id": quiz_id, "subject_id": subject_id, "document_id": document_id,
+    }
+
+
 def test_crash_after_checkpoint_resumes_without_another_model_call():
     service = authorized_service()
     row = job(checkpoint={"questions": ["already prepared"]})
@@ -110,6 +150,26 @@ def test_crash_after_checkpoint_resumes_without_another_model_call():
         process_job(service, row)
     prepare.assert_not_called()
     assert service.rpc.call_args.args[0] == "finish_faculty_job"
+
+
+def test_worker_regenerates_in_background_and_completes_with_safe_counts() -> None:
+    service = authorized_service()
+    row = job(kind="regenerate_set", request={
+        "quiz_set_id": "quiz", "document_id": "document", "subject_id": "subject",
+    })
+    service.tables["quiz_sets"] = [{
+        "id": "quiz", "tenant_id": PROFILE.tenant_id, "created_by": PROFILE.user_id,
+        "status": "draft", "released_at": None,
+    }]
+    with patch("app.services.faculty_worker.validate_source"), \
+         patch("app.services.faculty_worker.get_settings", return_value=SETTINGS), \
+         patch("app.services.review.regenerate_quiz_set",
+               return_value={"regenerated": 8, "kept": 2, "total": 10}) as regenerate:
+        result = process_job(service, row)
+    assert result == {"quiz_set_id": "quiz", "regenerated": 8, "kept": 2, "total": 10}
+    regenerate.assert_called_once_with("quiz", PROFILE.tenant_id, max_questions=40, concurrency=5)
+    assert service.rpc.call_args.args[0] == "update_faculty_job"
+    assert service.rpc.call_args.args[1]["p_action"] == "complete"
 
 
 def test_cancelled_worker_cannot_commit_prepared_output():

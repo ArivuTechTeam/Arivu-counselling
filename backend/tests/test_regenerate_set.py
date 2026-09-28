@@ -198,45 +198,12 @@ class RegenerateSetServiceTests(unittest.TestCase):
 
 
 class RegenerateSetEndpointTests(unittest.TestCase):
-    def _settings(self, enabled=True):
-        return SimpleNamespace(
-            regenerate_set_enabled=enabled,
-            regenerate_set_max_questions=40,
-            regenerate_set_concurrency=5,
-            rate_limit_quiz_generation_per_hour=10,
-        )
-
-    def _call(self, service, enabled=True):
+    def test_synchronous_route_is_retired_without_calling_ai(self) -> None:
         from app.api.quiz import regenerate_all_questions
-        with (
-            patch("app.api.quiz.get_service_client", return_value=service),
-            patch("app.api.quiz.get_settings", return_value=self._settings(enabled)),
-            patch("app.api.quiz.enforce_ai_rate_limit"),
-            patch("app.services.review.regenerate_quiz_set",
-                  return_value={"regenerated": 3, "kept": 0, "total": 3}) as bulk,
-        ):
-            result = regenerate_all_questions("set1", _profile())
-        return result, bulk
-
-    def test_draft_regenerates(self) -> None:
-        service = _Service(_blueprint_world(3))
-        result, bulk = self._call(service)
-        self.assertEqual(result["regenerated"], 3)
-        bulk.assert_called_once()
-
-    def test_flag_off_is_404(self) -> None:
-        service = _Service(_blueprint_world(3))
-        with self.assertRaises(HTTPException) as raised:
-            self._call(service, enabled=False)
-        self.assertEqual(raised.exception.status_code, 404)
-
-    def test_published_is_rejected(self) -> None:
-        world = _blueprint_world(3)
-        world["quiz_sets"][0]["status"] = "published"
-        service = _Service(world)
-        with self.assertRaises(HTTPException) as raised:
-            self._call(service)
-        self.assertEqual(raised.exception.status_code, 409)
+        with patch("app.services.review.regenerate_quiz_set") as bulk, self.assertRaises(HTTPException) as raised:
+            regenerate_all_questions("set1", _profile())
+        self.assertEqual(raised.exception.status_code, 410)
+        bulk.assert_not_called()
 
 
 if __name__ == "__main__":

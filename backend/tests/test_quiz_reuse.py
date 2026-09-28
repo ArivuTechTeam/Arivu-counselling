@@ -76,6 +76,25 @@ def test_batch_publication_uses_atomic_rpc_for_eligible_managed_batch():
     assert atomic.call_args.kwargs["p_require_managed"] is True
 
 
+def test_rejected_purge_is_part_of_the_atomic_publication_rpc() -> None:
+    with patch("app.services.quiz_reuse.enabled", return_value=True), \
+         patch("app.api.quiz.get_service_client"), \
+         patch("app.api.quiz._teacher_quiz_set"), \
+         patch("app.api.quiz.get_quiz_set_detail", return_value={"variants": []}), \
+         patch("app.api.quiz.get_settings", return_value=Mock(rejected_purge_enabled=True)), \
+         patch("app.services.quiz_reuse.rpc", return_value={
+             "id": "quiz", "status": "published", "purged_rejected": 2,
+         }) as atomic, \
+         patch("app.api.quiz.purge_rejected_for_quiz_set") as post_publish_purge, \
+         patch("app.api.quiz.snapshot_published_pyq"):
+        result = publish_quiz_set(
+            "quiz", PROFILE, PublishQuizRequest(publication_token="token")
+        )
+    assert result["purged_rejected"] == 2
+    assert atomic.call_args.args[1] == "publish_quiz_with_rejected_purge_atomic"
+    post_publish_purge.assert_not_called()
+
+
 def test_batch_publication_route_requires_a_batch_before_database_access():
     with patch("app.api.quiz.get_service_client") as client:
         with pytest.raises(HTTPException) as error:

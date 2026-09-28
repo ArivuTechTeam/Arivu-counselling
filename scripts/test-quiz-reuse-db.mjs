@@ -4,11 +4,19 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import { PGlite } from "../.tmp/pg-test/node_modules/@electric-sql/pglite/dist/index.js";
 
-process.on("uncaughtException", () => { console.error("Database migration test failed."); process.exit(1); });
+process.on("uncaughtException", (error) => {
+  console.error("Database migration test failed.", error);
+  process.exit(1);
+});
 
 const db = new PGlite();
 const schema = fs.readFileSync("migrations/schema.sql", "utf8");
 await db.exec("create role anon; create role authenticated; create role service_role bypassrls; create schema auth; create table auth.users(id uuid primary key);");
+await db.exec(`create function auth.uid() returns uuid language sql stable as $$ select null::uuid $$;
+  create function public.current_tenant_id() returns uuid language sql stable as $$ select null::uuid $$;
+  create function public.is_super_admin() returns boolean language sql stable as $$ select false $$;
+  create function public.current_role_name() returns text language sql stable as $$ select null::text $$;
+  create function public.is_staff() returns boolean language sql stable as $$ select false $$;`);
 for (const type of schema.matchAll(/^create type .*?;$/gm)) await db.exec(type[0]);
 await db.exec("alter type question_source add value 'extracted';");
 for (const name of ["tenants", "profiles", "catalog_courses", "catalog_course_levels", "catalog_course_subjects", "courses", "course_levels", "subjects", "teacher_subjects", "chapters", "topics", "documents", "ai_extraction_jobs", "questions", "quiz_sets", "quiz_variants", "quiz_variant_questions", "quiz_generation_jobs", "quiz_attempts"]) {
@@ -59,11 +67,66 @@ const historicalAttempt=await scalar('select to_jsonb(a) from quiz_attempts a wh
 const migration=fs.readFileSync('migrations/migration-51-safe-quiz-reuse.sql','utf8');
 await db.exec(migration);
 await db.exec(migration);
+// Install the later batch shape and the new atomic review migration on the same
+// isolated database. Minimal answer tables are enough to exercise history guards.
+await db.exec(`create table public.attempt_answers(id uuid primary key default gen_random_uuid(),question_id uuid not null references public.questions(id));
+  create table public.practice_answers(id uuid primary key default gen_random_uuid(),question_id uuid not null references public.questions(id));`);
+await db.exec(fs.readFileSync('migrations/migration-52-batches-assignments.sql','utf8'));
+await db.exec(fs.readFileSync('migrations/migration-67-atomic-batch-publication.sql','utf8'));
+const atomicReviewMigration=fs.readFileSync('migrations/migration-75-atomic-review-and-regeneration.sql','utf8');
+await db.exec(atomicReviewMigration);
+await db.exec(atomicReviewMigration);
 assert.equal(await scalar('select release_locked from questions where id=$1',[question]),false,
   'migration rollout must not retroactively lock existing quizzes while the feature flag is off');
 const state=id=>scalar('select quiz_publication_state($1,$2,$3)',[id,tenant,actor]);
 const copy=(id,key=uuid(),title='Copy')=>scalar('select copy_quiz_draft($1,$2,$3,$4,$5)',[id,tenant,actor,key,title]);
 const publish=(id,token)=>scalar('select publish_quiz_atomic($1,$2,$3,$4)',[id,tenant,actor,token]);
+const regenerationJob=uuid();
+await db.query("insert into faculty_jobs(id,tenant_id,created_by,request_key,request_hash,kind,request) values($1,$2,$3,$4,'hash','regenerate_set','{}')",[regenerationJob,tenant,actor,uuid()]);
+assert.equal(await scalar('select kind from faculty_jobs where id=$1',[regenerationJob]),'regenerate_set');
+await db.query('delete from faculty_jobs where id=$1',[regenerationJob]);
+
+// Purge + publish is one transaction and replays with the browser's original token.
+const purgeSet=uuid(), purgeVariant=uuid(), approved=uuid(), rejected=uuid(), answeredRejected=uuid();
+await db.query("insert into quiz_sets(id,tenant_id,subject_id,chapter_id,document_id,title,status,created_by) values($1,$2,$3,$4,$5,'Purge','draft',$6)",[purgeSet,tenant,subject,chapter,doc,actor]);
+await db.query("insert into quiz_variants(id,tenant_id,quiz_set_id,variant_type,total_marks) values($1,$2,$3,'mixed',0)",[purgeVariant,tenant,purgeSet]);
+await db.query(`insert into questions(id,tenant_id,chapter_id,type,question_text,correct_answer,review_status,created_by,marks) values
+ ($1,$3,$4,'true_false','Approved','true','approved',$5,2),
+ ($2,$3,$4,'true_false','Rejected','false','rejected',$5,5),
+ ($6,$3,$4,'true_false','Answered rejected','false','rejected',$5,1)`,[approved,rejected,tenant,chapter,actor,answeredRejected]);
+await db.query("insert into quiz_variant_questions(tenant_id,variant_id,question_id,order_index) values($1,$2,$3,0),($1,$2,$4,1),($1,$2,$5,2)",[tenant,purgeVariant,approved,rejected,answeredRejected]);
+await db.query('insert into attempt_answers(question_id) values($1)',[answeredRejected]);
+const purgeToken=(await state(purgeSet)).publication_token;
+const purged=await scalar('select publish_quiz_with_rejected_purge_atomic($1,$2,$3,$4)',[purgeSet,tenant,actor,purgeToken]);
+assert.equal(purged.purged_rejected,1);
+assert.equal(await scalar('select count(*)::int from questions where id=$1',[rejected]),0);
+assert.equal(await scalar('select count(*)::int from questions where id=$1',[answeredRejected]),1);
+assert.equal(await scalar('select release_locked from questions where id=$1',[answeredRejected]),true);
+assert.equal(await scalar('select status from quiz_sets where id=$1',[purgeSet]),'published');
+assert.equal((await scalar('select publish_quiz_with_rejected_purge_atomic($1,$2,$3,$4)',[purgeSet,tenant,actor,purgeToken])).purged_rejected,0);
+
+// Blueprint approval and release are indivisible; unselected content remains
+// stored but is locked with the immutable release.
+const blueprintSet=uuid(), blueprintVariant=uuid(), chosenQuestion=uuid(), savedQuestion=uuid();
+await db.query("insert into quiz_sets(id,tenant_id,subject_id,chapter_id,document_id,title,status,created_by) values($1,$2,$3,$4,$5,'Blueprint','draft',$6)",[blueprintSet,tenant,subject,chapter,doc,actor]);
+await db.query("insert into quiz_variants(id,tenant_id,quiz_set_id,variant_type,total_marks) values($1,$2,$3,'mixed',0)",[blueprintVariant,tenant,blueprintSet]);
+await db.query(`insert into questions(id,tenant_id,chapter_id,type,question_text,correct_answer,review_status,created_by,marks) values
+ ($1,$3,$4,'true_false','Chosen','true','pending_review',$5,3),
+ ($2,$3,$4,'true_false','Saved','false','pending_review',$5,7)`,[chosenQuestion,savedQuestion,tenant,chapter,actor]);
+await db.query("insert into quiz_variant_questions(tenant_id,variant_id,question_id,order_index) values($1,$2,$3,0),($1,$2,$4,1)",[tenant,blueprintVariant,chosenQuestion,savedQuestion]);
+const blueprintToken=(await state(blueprintSet)).publication_token;
+await db.query("update questions set explanation='revision' where id=$1",[chosenQuestion]);
+await assert.rejects(scalar('select publish_quiz_blueprint_atomic($1,$2,$3,$4,$5,$6,$7)',[blueprintSet,tenant,actor,blueprintToken,[chosenQuestion],null,false]));
+assert.equal(await scalar('select review_status::text from questions where id=$1',[chosenQuestion]),'pending_review');
+assert.equal(await scalar('select status from quiz_sets where id=$1',[blueprintSet]),'draft');
+const currentBlueprintToken=(await state(blueprintSet)).publication_token;
+const blueprintPublished=await scalar('select publish_quiz_blueprint_atomic($1,$2,$3,$4,$5,$6,$7)',[blueprintSet,tenant,actor,currentBlueprintToken,[chosenQuestion],null,false]);
+assert.equal(blueprintPublished.published_count,1);
+assert.equal(await scalar('select review_status::text from questions where id=$1',[chosenQuestion]),'approved');
+assert.equal(await scalar('select review_status::text from questions where id=$1',[savedQuestion]),'pending_review');
+assert.equal(await scalar('select release_locked from questions where id=$1',[savedQuestion]),true);
+assert.equal(await scalar('select total_marks from quiz_variants where id=$1',[blueprintVariant]),'3');
+await assert.rejects(db.query("update questions set question_text='Changed' where id=$1",[savedQuestion]));
 const key=uuid(), copied=await copy(source,key);
 assert.equal((await copy(source,key)).quiz_set_id,copied.quiz_set_id);
 await assert.rejects(copy(source,key,'Different title'));
@@ -88,7 +151,7 @@ await db.query("update questions set review_status='approved' where id=$1",[copi
 const publishToken=(await state(copyId)).publication_token;
 await publish(copyId,publishToken);
 await publish(copyId,publishToken);
-assert.equal(await scalar("select count(*)::int from events where event_type='quiz.published'"),1,'lost response replay does not publish twice');
+assert.equal(await scalar("select count(*)::int from events where event_type='quiz.published' and subject_id=$1",[copyId]),1,'lost response replay does not publish twice');
 assert.equal(await scalar('select total_marks from quiz_variants where quiz_set_id=$1',[copyId]),'2');
 for (const sql of ["update questions set question_text='Changed' where id=$1", "update questions set release_locked=false where id=$1", "update questions set figure_id=null where id=$1", "delete from questions where id=$1"]) {
   await assert.rejects(db.query(sql,[copiedRow.id]));
