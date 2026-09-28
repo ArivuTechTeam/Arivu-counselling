@@ -194,6 +194,10 @@ def validate_question_answer_shape(
     correct_answer: Any,
 ) -> None:
     """Reject answer shapes that the deterministic grader cannot score safely."""
+    if question_type == "descriptive":
+        # Descriptive answers are graded by the AI against the stored model
+        # answer, not by a deterministic shape — there is nothing to validate.
+        return
     if correct_answer is None:
         raise ValueError("missing correct_answer")
 

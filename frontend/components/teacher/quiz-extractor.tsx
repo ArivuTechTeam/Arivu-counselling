@@ -91,6 +91,7 @@ export function QuizExtractor() {
   const { features } = useDashboardIdentity();
   const paperBank = !!features?.paper_bank;
   const [busy, setBusy] = useState(false);
+  const [elapsed, setElapsed] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const displayError = error ?? coursesQuery.error?.message ?? null;
   const [dupMessage, setDupMessage] = useState<string | null>(null);
@@ -153,6 +154,16 @@ export function QuizExtractor() {
   const chapterReady =
     chapterSel === NEW_CHAPTER ? newChapterName.trim().length > 0 : chapterSel !== "";
   const canExtract = Boolean(file && subjectId && chapterReady && !busy);
+
+  // A live elapsed timer while extracting, so the wait feels tracked, not stuck.
+  useEffect(() => {
+    if (!busy) {
+      setElapsed(0);
+      return;
+    }
+    const t = window.setInterval(() => setElapsed((s) => s + 1), 1000);
+    return () => window.clearInterval(t);
+  }, [busy]);
 
   async function handleExtract(force = false) {
     if (!file || !subjectId || !chapterReady) return;
@@ -354,10 +365,20 @@ export function QuizExtractor() {
         )}
 
         {busy ? (
-          <div className="flex items-center gap-2 rounded-lg border border-primary/20 bg-primary/5 px-3 py-2.5 text-sm text-primary">
-            <Spinner />
-            Reading your document with AI… this can take several minutes. Please
-            don&apos;t close this tab.
+          <div className="flex flex-col gap-1 rounded-lg border border-primary/20 bg-primary/5 px-3 py-2.5 text-sm text-primary">
+            <div className="flex items-center gap-2">
+              <Spinner />
+              <span>
+                Reading your document with AI…{" "}
+                <span className="tabular-nums opacity-80">
+                  ({Math.floor(elapsed / 60)}:{String(elapsed % 60).padStart(2, "0")})
+                </span>
+              </span>
+            </div>
+            <p className="pl-6 text-xs text-primary/80">
+              This usually takes 1–5 minutes for a typical paper. Keep this tab open — you
+              can switch to other tabs meanwhile.
+            </p>
           </div>
         ) : dupMessage ? (
           <div className="flex flex-col gap-2.5 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2.5 text-sm text-amber-800">

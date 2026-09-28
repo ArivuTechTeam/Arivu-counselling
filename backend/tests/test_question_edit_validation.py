@@ -7,7 +7,14 @@ from unittest.mock import patch
 import pytest
 from fastapi import HTTPException
 
-from app.api.questions import QuestionApproval, QuestionEdit, approve_question, edit_question
+from app.api.questions import (
+    QuestionApproval,
+    QuestionEdit,
+    approve_question,
+    edit_question,
+    reject_question,
+    unreject_question,
+)
 from app.lib.auth import CurrentProfile
 
 
@@ -194,6 +201,24 @@ def test_unchanged_save_preserves_warning_but_teacher_can_approve() -> None:
         result = approve_question("question-1", PROFILE)
     assert result["review_status"] == "approved"
     assert result["verification_status"] == "unsupported"
+
+
+def test_unreject_moves_rejected_question_back_to_pending() -> None:
+    service = _Service()
+    service.rows[0]["review_status"] = "rejected"
+    with patch("app.api.questions.get_service_client", return_value=service), patch("app.api.questions.log_event"):
+        result = unreject_question("question-1", PROFILE)
+    assert result["review_status"] == "pending_review"
+    assert service.rows[0]["review_status"] == "pending_review"
+
+
+def test_reject_then_unreject_round_trips() -> None:
+    service = _Service()
+    with patch("app.api.questions.get_service_client", return_value=service), patch("app.api.questions.log_event"):
+        reject_question("question-1", PROFILE)
+        assert service.rows[0]["review_status"] == "rejected"
+        unreject_question("question-1", PROFILE)
+    assert service.rows[0]["review_status"] == "pending_review"
 
 
 @pytest.mark.parametrize("verification", [None, "unsupported", "ambiguous", "needs_teacher_review"])

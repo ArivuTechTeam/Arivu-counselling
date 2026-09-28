@@ -383,6 +383,15 @@ def read_my_profile(
     features["extended_question_types"] = getattr(
         get_settings(), "extended_question_types_enabled", False
     )
+    features["rejected_purge"] = getattr(
+        get_settings(), "rejected_purge_enabled", False
+    )
+    features["extraction_blueprint"] = getattr(
+        get_settings(), "extraction_blueprint_enabled", False
+    )
+    features["regenerate_set"] = getattr(
+        get_settings(), "regenerate_set_enabled", False
+    )
     return CurrentProfileOut(
         role=profile.role,
         must_change_password=profile.must_change_password,

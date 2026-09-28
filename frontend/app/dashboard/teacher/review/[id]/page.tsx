@@ -1,6 +1,6 @@
 "use client";
 
-import { use, useEffect, useRef, useState } from "react";
+import { use, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 
@@ -12,6 +12,8 @@ import { useToast } from "@/components/ui/toast";
 import { QuestionPaperButtons } from "@/components/shared/pdf-buttons";
 import { QuestionReviewCard } from "@/components/teacher/question-review-card";
 import { QuestionReviewNavigator } from "@/components/teacher/question-review-navigator";
+import { BlueprintPanel } from "@/components/teacher/blueprint-panel";
+import { AssignBatchesDialog } from "@/components/teacher/assign-batches-dialog";
 import { useDashboardIdentity } from "@/components/shared/dashboard-identity-context";
 import { statusLabel, variantLabel } from "@/lib/format";
 import {
@@ -22,6 +24,8 @@ import {
   ScoringPolicy,
   archiveQuizSet,
   approveAllQuestions,
+  blueprintPublish,
+  regenerateQuizSet,
   getQuizSet,
   listDocumentFigures,
   publishQuizSet,
@@ -83,13 +87,24 @@ export default function ReviewDetailPage({ params }: { params: Promise<{ id: str
   const [documentFigures, setDocumentFigures] = useState<DocumentFigure[]>([]);
   const [error, setError] = useState<string | null>(null);
   const copyKey = useRef<string | null>(null);
+  // Keyboard filter shortcuts: a stable window listener calls the latest handler
+  // via this ref (the handler needs `chooseFilter`, which is defined after the
+  // early returns, so we can't reference it directly in the effect).
+  const keyHandlerRef = useRef<(e: KeyboardEvent) => void>(() => {});
   const [copying, setCopying] = useState(false);
   const [publishing, setPublishing] = useState(false);
+  const [confirmPurge, setConfirmPurge] = useState(false);
   const [batches, setBatches] = useState<Batch[]>([]);
   const [selectedBatches, setSelectedBatches] = useState<string[]>([]);
   const [batchesLoading, setBatchesLoading] = useState(false);
   const [batchesError, setBatchesError] = useState<string | null>(null);
   const [approving, setApproving] = useState(false);
+  const [regenerating, setRegenerating] = useState(false);
+  const [confirmRegen, setConfirmRegen] = useState(false);
+  const [assigning, setAssigning] = useState(false);
+  // Blueprint: the current random pick + whether the list is filtered to it.
+  const [blueprintSelection, setBlueprintSelection] = useState<string[]>([]);
+  const [showSelectedOnly, setShowSelectedOnly] = useState(false);
   const [archiving, setArchiving] = useState(false);
   const [activeQuestionId, setActiveQuestionId] = useState<string | null>(null);
   const [reviewFilter, setReviewFilter] = useState<ReviewFilter>("all");
@@ -208,6 +223,36 @@ export default function ReviewDetailPage({ params }: { params: Promise<{ id: str
     };
   }, [detail?.document_id]);
 
+  // One stable keydown listener that delegates to the latest handler.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => keyHandlerRef.current(e);
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  // Stable list for the blueprint panel (id + type), recomputed only when the
+  // quiz detail changes — so reporting the selection back can't loop.
+  const blueprintQuestions = useMemo(
+    () =>
+      (detail?.variants ?? [])
+        .flatMap((v) => v.questions)
+        .map((q) => ({ id: q.id, paper_type: q.paper_type ?? null })),
+    [detail],
+  );
+
+  const handleBlueprintSelection = useCallback((ids: string[]) => {
+    setBlueprintSelection(ids);
+  }, []);
+
+  function openSelectedView() {
+    setShowSelectedOnly(true);
+    window.requestAnimationFrame(() => {
+      document
+        .getElementById("review-question-list")
+        ?.scrollTo({ top: 0, behavior: "smooth" });
+    });
+  }
+
   function updateQuestion(updated: ReviewQuestion) {
     if (detail?.reuse_enabled) { load(); return; }
     setDetail((d) =>
@@ -250,7 +295,23 @@ export default function ReviewDetailPage({ params }: { params: Promise<{ id: str
     } finally { setCopying(false); }
   }
 
-  async function handlePublish() {
+  // Publish gate: when purge mode is on and the teacher has marked questions
+  // rejected, confirm first — publishing permanently deletes them. Otherwise
+  // publish straight away, exactly as before.
+  function handlePublish() {
+    const purgeMode = features?.rejected_purge ?? false;
+    const rejectedNow = (detail?.variants.flatMap((v) => v.questions) ?? []).filter(
+      (q) => q.review_status === "rejected",
+    ).length;
+    if (purgeMode && rejectedNow > 0) {
+      setConfirmPurge(true);
+      return;
+    }
+    void doPublish();
+  }
+
+  async function doPublish() {
+    setConfirmPurge(false);
     setError(null);
     setPublishing(true);
     try {
@@ -266,13 +327,77 @@ export default function ReviewDetailPage({ params }: { params: Promise<{ id: str
           ...v, questions: v.questions.map((q) => ({ ...q, release_locked: true })),
         })) : d.variants,
       } : d);
+      // Rejected questions were permanently removed on the server; refresh so
+      // they disappear from the list too.
+      const removed = s.purged_rejected ?? 0;
+      if (removed > 0) setDetail(await getQuizSet(id));
       celebrateBurst();
-      notify("🎉 Quiz published — students can now see it", "success");
+      notify(
+        removed > 0
+          ? `🎉 Quiz published — ${removed} rejected question${removed === 1 ? "" : "s"} removed`
+          : "🎉 Quiz published — students can now see it",
+        "success",
+      );
       router.replace(`/dashboard/teacher/published-quizzes/${id}`);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Publish failed");
     } finally {
       setPublishing(false);
+    }
+  }
+
+  // Blueprint publish: publish ONLY the selected subset; the rest stay saved.
+  async function handleBlueprintPublish(selectedIds: string[]) {
+    if (selectedIds.length === 0) return;
+    setError(null);
+    setPublishing(true);
+    try {
+      if (!detail?.publication_token) {
+        setError("Refresh the quiz before publishing this blueprint.");
+        return;
+      }
+      if (features.batches && selectedBatches.length === 0) {
+        setError("Select at least one batch before publishing this quiz.");
+        return;
+      }
+      const s = await blueprintPublish(
+        id,
+        selectedIds,
+        detail.publication_token,
+        features.batches ? selectedBatches : undefined,
+      );
+      setDetail(await getQuizSet(id));
+      celebrateBurst();
+      notify(
+        `🎉 Published ${s.published_count} question${s.published_count === 1 ? "" : "s"} — the rest stay saved`,
+        "success",
+      );
+      router.replace(`/dashboard/teacher/published-quizzes/${id}`);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Publish failed");
+    } finally {
+      setPublishing(false);
+    }
+  }
+
+  async function handleRegenerateAll() {
+    setConfirmRegen(false);
+    setError(null);
+    setRegenerating(true);
+    try {
+      const r = await regenerateQuizSet(id);
+      setDetail(await getQuizSet(id));
+      celebrateBurst();
+      notify(
+        r.kept > 0
+          ? `Regenerated ${r.regenerated} of ${r.total} questions (${r.kept} kept their previous version)`
+          : `🎉 Regenerated all ${r.regenerated} questions — review them below`,
+        "success",
+      );
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Regeneration failed");
+    } finally {
+      setRegenerating(false);
     }
   }
 
@@ -342,11 +467,13 @@ export default function ReviewDetailPage({ params }: { params: Promise<{ id: str
   const questionNumbers = Object.fromEntries(
     all.map((question, index) => [question.id, index + 1]),
   );
+  const selectedSet = new Set(blueprintSelection);
   const visibleVariants = detail.variants
     .map((variant) => ({
       ...variant,
-      questions:
-        reviewFilter === "all"
+      questions: showSelectedOnly
+        ? variant.questions.filter((question) => selectedSet.has(question.id))
+        : reviewFilter === "all"
           ? variant.questions
           : variant.questions.filter(
               (question) => question.review_status === reviewFilter,
@@ -377,6 +504,27 @@ export default function ReviewDetailPage({ params }: { params: Promise<{ id: str
         ?.scrollTo({ top: 0, behavior: "smooth" });
     });
   }
+
+  // Filter shortcuts: A/P/R/E to filter by status, 0 for all. Ignored while
+  // typing in a field so it never fights with editing a question.
+  keyHandlerRef.current = (e: KeyboardEvent) => {
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    const el = e.target as HTMLElement | null;
+    const tag = el?.tagName;
+    if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || el?.isContentEditable) return;
+    const map: Record<string, ReviewFilter> = {
+      a: "approved",
+      p: "pending_review",
+      r: "rejected",
+      e: "needs_edit",
+      "0": "all",
+    };
+    const next = map[e.key.toLowerCase()];
+    if (next) {
+      e.preventDefault();
+      chooseFilter(next);
+    }
+  };
 
   return (
     <div className="mx-auto flex h-full max-w-7xl flex-col gap-4">
@@ -449,9 +597,15 @@ export default function ReviewDetailPage({ params }: { params: Promise<{ id: str
                 active={reviewFilter === "rejected"}
                 onClick={() => chooseFilter("rejected")}
               />
+              <span
+                className="ml-1 hidden shrink-0 select-none items-center self-center rounded-md border border-dashed border-input px-2 text-[10px] font-medium text-muted-foreground lg:inline-flex"
+                title="Keyboard: A approved · P pending · R rejected · E needs edit · 0 all"
+              >
+                ⌨ A / P / R / E / 0
+              </span>
             </div>
 
-            <div className="flex shrink-0 items-center gap-2">
+            <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
           {features.scoring_policies && detail.status === "draft" && (
             <label className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
               Scoring
@@ -473,6 +627,16 @@ export default function ReviewDetailPage({ params }: { params: Promise<{ id: str
               <Button size="sm" variant="outline">View performance</Button>
             </Link>
           )}
+          {features.batches && (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => setAssigning(true)}
+              disabled={archiving || publishing || approving}
+            >
+              Assign to batches
+            </Button>
+          )}
           <Button
             size="sm"
             variant="outline"
@@ -485,12 +649,22 @@ export default function ReviewDetailPage({ params }: { params: Promise<{ id: str
                 ? "Unpublish & archive"
                 : "Archive"}
           </Button>
+          {features.regenerate_set && detail.status === "draft" && all.length > 0 && (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => setConfirmRegen(true)}
+              disabled={regenerating || approving || publishing || detail.release_locked}
+            >
+              {regenerating ? "Regenerating…" : "Regenerate quiz"}
+            </Button>
+          )}
           {approvablePending > 0 && (
             <Button
               size="sm"
               variant="outline"
               onClick={handleApproveAll}
-              disabled={approving || publishing || detail.release_locked}
+              disabled={approving || publishing || regenerating || detail.release_locked}
             >
               {approving ? "Approving…" : `Approve all (${approvablePending})`}
             </Button>
@@ -563,6 +737,29 @@ export default function ReviewDetailPage({ params }: { params: Promise<{ id: str
         </p>
       )}
 
+      {features.extraction_blueprint && detail.status === "draft" && all.length > 0 && (
+        <BlueprintPanel
+          questions={blueprintQuestions}
+          publishing={publishing}
+          previewing={showSelectedOnly}
+          onPublish={handleBlueprintPublish}
+          onSelectionChange={handleBlueprintSelection}
+          onPreview={openSelectedView}
+        />
+      )}
+
+      {showSelectedOnly && (
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-primary/30 bg-primary/10 px-3 py-2 text-sm">
+          <span className="font-medium text-primary">
+            Showing the {selectedSet.size} question{selectedSet.size === 1 ? "" : "s"} you&apos;re about
+            to publish. Read or edit them, shuffle for a different set, then publish.
+          </span>
+          <Button size="sm" variant="outline" onClick={() => setShowSelectedOnly(false)}>
+            Show all questions
+          </Button>
+        </div>
+      )}
+
       <div className="grid min-h-0 flex-1 items-start gap-4 lg:grid-cols-[210px_minmax(0,1fr)]">
         <QuestionReviewNavigator
           variants={visibleVariants}
@@ -618,6 +815,82 @@ export default function ReviewDetailPage({ params }: { params: Promise<{ id: str
           )}
         </div>
       </div>
+
+      {assigning && (
+        <AssignBatchesDialog
+          quizSetId={id}
+          quizTitle={detail.title}
+          onClose={() => setAssigning(false)}
+        />
+      )}
+
+      {confirmRegen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="regen-confirm-title"
+          onClick={() => !regenerating && setConfirmRegen(false)}
+        >
+          <div
+            className="w-full max-w-md rounded-2xl border bg-card p-6 shadow-xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2 id="regen-confirm-title" className="text-lg font-semibold tracking-tight">
+              Regenerate all {all.length} question{all.length === 1 ? "" : "s"}?
+            </h2>
+            <p className="mt-2 text-sm text-muted-foreground">
+              Every question is replaced with a <strong>fresh AI version</strong> of the same type,
+              and your review resets to pending. This <strong>can&apos;t be undone</strong>. It may
+              take a little while.
+            </p>
+            <div className="mt-5 flex justify-end gap-2">
+              <Button variant="outline" onClick={() => setConfirmRegen(false)} disabled={regenerating}>
+                Cancel
+              </Button>
+              <Button onClick={() => void handleRegenerateAll()} disabled={regenerating}>
+                {regenerating ? "Regenerating…" : "Yes, regenerate all"}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {confirmPurge && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="purge-confirm-title"
+          onClick={() => !publishing && setConfirmPurge(false)}
+        >
+          <div
+            className="w-full max-w-md rounded-2xl border bg-card p-6 shadow-xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2 id="purge-confirm-title" className="text-lg font-semibold tracking-tight">
+              Delete {rejected} rejected question{rejected === 1 ? "" : "s"}?
+            </h2>
+            <p className="mt-2 text-sm text-muted-foreground">
+              You have rejected <strong>{rejected}</strong> question{rejected === 1 ? "" : "s"}.
+              If you publish now, {rejected === 1 ? "it" : "they"} will be{" "}
+              <strong>deleted permanently</strong>. Approved questions will be published as usual.
+            </p>
+            <div className="mt-5 flex justify-end gap-2">
+              <Button
+                variant="outline"
+                onClick={() => setConfirmPurge(false)}
+                disabled={publishing}
+              >
+                No, go back
+              </Button>
+              <Button onClick={() => void doPublish()} disabled={publishing}>
+                {publishing ? "Publishing…" : "Yes, publish & delete"}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

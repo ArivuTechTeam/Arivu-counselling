@@ -25,6 +25,7 @@ class _Query:
         self.memberships: list[tuple[str, set[object]]] = []
         self.single = False
         self.update_payload: dict | None = None
+        self.deleting = False
         self.order_column: str | None = None
         self.order_desc = False
         self.bounds: tuple[int, int] | None = None
@@ -49,12 +50,23 @@ class _Query:
         self.bounds = (start, end)
         return self
 
+    def limit(self, _count: int):
+        return self
+
+    def is_(self, column: str, _value: str):
+        self.equals.append((column, None))
+        return self
+
     def maybe_single(self):
         self.single = True
         return self
 
     def update(self, payload: dict):
         self.update_payload = payload
+        return self
+
+    def delete(self):
+        self.deleting = True
         return self
 
     def execute(self):
@@ -66,6 +78,12 @@ class _Query:
             if all(row.get(column) == value for column, value in self.equals)
             and all(row.get(column) in values for column, values in self.memberships)
         ]
+        if self.deleting:
+            removed = {id(row) for row in rows}
+            self.service.rows[self.table] = [
+                row for row in source if id(row) not in removed
+            ]
+            return SimpleNamespace(data=[dict(row) for row in rows])
         if self.update_payload is not None:
             for row in rows:
                 row.update(self.update_payload)
@@ -311,6 +329,152 @@ class FacultyPublishingTests(unittest.TestCase):
             result = publish_quiz_set("set1", _teacher())
         self.assertEqual(result["status"], "published")
         self.assertEqual(service.rows["quiz_variants"][0]["total_marks"], 2)
+
+    def test_publish_purges_rejected_when_flag_on(self) -> None:
+        service = _Service(self._rows([("q1", "approved", 2), ("q2", "rejected", 5)]))
+        with (
+            patch("app.api.quiz.get_service_client", return_value=service),
+            patch("app.api.quiz.log_event"),
+            patch("app.api.quiz.quiz_reuse.enabled", return_value=False),
+            patch(
+                "app.api.quiz.get_settings",
+                return_value=SimpleNamespace(rejected_purge_enabled=True),
+            ),
+        ):
+            result = publish_quiz_set("set1", _teacher())
+        self.assertEqual(result["status"], "published")
+        self.assertEqual(result["purged_rejected"], 1)
+        question_ids = {row["id"] for row in service.rows["questions"]}
+        self.assertNotIn("q2", question_ids, "rejected question must be deleted on publish")
+        self.assertIn("q1", question_ids, "approved question must remain")
+        links = {row["question_id"] for row in service.rows["quiz_variant_questions"]}
+        self.assertNotIn("q2", links, "the deleted question's variant link must be removed")
+
+    def test_publish_keeps_rejected_when_flag_off(self) -> None:
+        # Default flag (off): rejecting stays a soft-flag, byte-identical to
+        # before — no deletion and no purged_rejected key in the response.
+        service = _Service(self._rows([("q1", "approved", 2), ("q2", "rejected", 5)]))
+        with (
+            patch("app.api.quiz.get_service_client", return_value=service),
+            patch("app.api.quiz.log_event"),
+            patch("app.api.quiz.quiz_reuse.enabled", return_value=False),
+            # Pin the flag OFF so the assertion is independent of the ambient .env.
+            patch("app.api.quiz.get_settings",
+                  return_value=SimpleNamespace(rejected_purge_enabled=False)),
+        ):
+            result = publish_quiz_set("set1", _teacher())
+        self.assertEqual(result["status"], "published")
+        self.assertNotIn("purged_rejected", result)
+        question_ids = {row["id"] for row in service.rows["questions"]}
+        self.assertIn("q2", question_ids, "rejected question must be preserved when flag is off")
+
+
+class BlueprintPublishTests(unittest.TestCase):
+    def _rows(self, statuses: list[tuple[str, str]]) -> dict[str, list[dict]]:
+        return {
+            "quiz_sets": [{
+                "id": "set1", "tenant_id": TENANT, "created_by": TEACHER,
+                "title": "Quiz", "status": "draft",
+                "created_at": "2026-09-25T00:00:00Z", "published_at": None,
+            }],
+            "quiz_variants": [
+                {"id": "v1", "tenant_id": TENANT, "quiz_set_id": "set1", "total_marks": 0}
+            ],
+            "quiz_variant_questions": [
+                {"id": f"link-{qid}", "tenant_id": TENANT, "variant_id": "v1", "question_id": qid}
+                for qid, _status in statuses
+            ],
+            "questions": [{
+                "id": qid, "tenant_id": TENANT, "created_by": TEACHER,
+                "type": "mcq_single", "question_text": f"Q {qid}",
+                "options": [{"id": "a", "text": "A"}, {"id": "b", "text": "B"}],
+                "correct_answer": "a", "marks": 2, "review_status": status,
+            } for qid, status in statuses]
+        }
+
+    def _publish(self, service, body):
+        from app.api.quiz import BlueprintPublishRequest, blueprint_publish
+        with (
+            patch("app.api.quiz.get_service_client", return_value=service),
+            patch("app.api.quiz.log_event"),
+            patch("app.api.quiz.log_events"),
+            patch("app.api.quiz.snapshot_published_pyq"),
+            patch("app.api.quiz.quiz_reuse.enabled", return_value=True),
+            patch(
+                "app.api.quiz.publish_quiz_set",
+                return_value={
+                    "id": "set1",
+                    "title": "Quiz",
+                    "status": "published",
+                    "created_at": "2026-09-25T00:00:00Z",
+                    "published_at": "2026-09-25T00:01:00Z",
+                },
+            ),
+            patch("app.api.questions._match_review_snapshot", side_effect=lambda query, row: query),
+            patch("app.api.quiz.get_settings",
+                  return_value=SimpleNamespace(extraction_blueprint_enabled=True)),
+        ):
+            return blueprint_publish("set1", BlueprintPublishRequest(**body), _teacher())
+
+    def test_publishes_only_selected_and_leaves_rest_untouched(self) -> None:
+        service = _Service(self._rows([("q1", "pending_review"), ("q2", "pending_review"), ("q3", "pending_review")]))
+        result = self._publish(service, {
+            "selected_question_ids": ["q1", "q2"],
+            "publication_token": "token-1",
+        })
+        self.assertEqual(result["status"], "published")
+        self.assertEqual(result["published_count"], 2)
+        by_id = {q["id"]: q for q in service.rows["questions"]}
+        self.assertEqual(by_id["q1"]["review_status"], "approved")
+        self.assertEqual(by_id["q2"]["review_status"], "approved")
+        # The unselected question is UNTOUCHED — still pending, still present.
+        self.assertEqual(by_id["q3"]["review_status"], "pending_review")
+        self.assertIn("q3", by_id)
+        # Marks and release locking are finalized by the ordinary atomic publish
+        # path, rather than being recalculated independently here.
+
+    def test_empty_selection_is_rejected(self) -> None:
+        service = _Service(self._rows([("q1", "pending_review")]))
+        with self.assertRaises(HTTPException) as raised:
+            self._publish(service, {
+                "selected_question_ids": [],
+                "publication_token": "token-1",
+            })
+        self.assertEqual(raised.exception.status_code, 400)
+        self.assertEqual(service.rows["quiz_sets"][0]["status"], "draft")
+
+    def test_unselected_approved_question_blocks_subset_publish(self) -> None:
+        service = _Service(self._rows([
+            ("q1", "pending_review"),
+            ("q2", "approved"),
+        ]))
+        with self.assertRaises(HTTPException) as raised:
+            self._publish(service, {
+                "selected_question_ids": ["q1"],
+                "publication_token": "token-1",
+            })
+        self.assertEqual(raised.exception.status_code, 409)
+        self.assertEqual(service.rows["questions"][0]["review_status"], "pending_review")
+
+    def test_flag_off_returns_404(self) -> None:
+        service = _Service(self._rows([("q1", "pending_review")]))
+        from app.api.quiz import BlueprintPublishRequest, blueprint_publish
+        with (
+            patch("app.api.quiz.get_service_client", return_value=service),
+            patch("app.api.quiz.get_settings",
+                  return_value=SimpleNamespace(extraction_blueprint_enabled=False)),
+            self.assertRaises(HTTPException) as raised,
+        ):
+            blueprint_publish(
+                "set1",
+                BlueprintPublishRequest(
+                    selected_question_ids=["q1"],
+                    publication_token="token-1",
+                ),
+                _teacher(),
+            )
+        self.assertEqual(raised.exception.status_code, 404)
+        self.assertEqual(service.rows["quiz_sets"][0]["status"], "draft")
 
 
 class FacultyDashboardMetricTests(unittest.TestCase):

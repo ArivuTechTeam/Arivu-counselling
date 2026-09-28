@@ -51,14 +51,14 @@ export default function PublishedQuizzesPage() {
                 </div>
               </div>
               <div className="mt-5 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
-                <Metric label="Eligible" value={quiz.eligible_students} />
-                <Metric label="Completed" value={quiz.completed_students} tone="text-emerald-600" />
-                <Metric label="Not started" value={quiz.not_started_students} />
-                <Metric label="Attempts" value={quiz.total_attempts} />
-                <Metric label="Average" value={`${quiz.average_accuracy}%`} tone="text-primary" />
-                <Metric label="Last activity" value={dateLabel(quiz.last_activity)} />
+                <Metric label="Eligible" value={quiz.eligible_students} hint="Students who can take this quiz" />
+                <Metric label="Completed" value={quiz.completed_students} tone="text-emerald-600" hint="Students with at least one graded attempt" />
+                <Metric label="Not started" value={quiz.not_started_students} hint="Eligible students who haven't attempted it yet" />
+                <Metric label="Attempts" value={quiz.total_attempts} hint="Total attempts across all students" />
+                <Metric label="Avg. accuracy" value={`${quiz.average_accuracy}%`} tone="text-primary" hint="Average % of questions answered correctly across graded attempts" />
+                <Metric label="Last activity" value={dateLabel(quiz.last_activity)} hint="Most recent attempt on this quiz" />
               </div>
-              <p className="mt-4 text-xs text-muted-foreground">Highest {quiz.highest_accuracy}% · Lowest {quiz.lowest_accuracy}%</p>
+              <p className="mt-4 text-xs text-muted-foreground">Highest {quiz.highest_accuracy}% · Lowest {quiz.lowest_accuracy}% accuracy</p>
             </article>
           ))}
           {hasMore && (
@@ -72,6 +72,6 @@ export default function PublishedQuizzesPage() {
   );
 }
 
-function Metric({ label, value, tone = "" }: { label: string; value: string | number; tone?: string }) {
-  return <div className="rounded-xl bg-muted/50 p-3"><p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">{label}</p><p className={`mt-1 text-lg font-semibold ${tone}`}>{value}</p></div>;
+function Metric({ label, value, tone = "", hint }: { label: string; value: string | number; tone?: string; hint?: string }) {
+  return <div title={hint} className="rounded-xl bg-muted/50 p-3"><p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">{label}</p><p className={`mt-1 text-lg font-semibold ${tone}`}>{value}</p></div>;
 }
