@@ -1,15 +1,15 @@
 # ArivuPro Quiz Platform (quiz-generator-v1) — Technical Project Document
 
-> **Purpose of this document.** A single technical reference for the ArivuPro Quiz Platform. AI/document routing, durable jobs, retry behavior, cost controls, dashboard refresh persistence, institution branding, and the Course → Level → Subject model were refreshed against `main` on 22 September 2026. Railway topology, migration inventory, and question-type notes were updated on 24 September 2026. See `docs/current-ai-document-workflow.md` and `docs/dashboard-state-persistence.md` for focused current references. Dated evidence, changelogs, and original plans remain historical. Repository state alone does not prove Railway environment values, provider health, deployed code, or applied Supabase migrations; verify those separately.
+> **Purpose of this document.** A single technical reference for the ArivuPro Quiz Platform. AI/document routing, durable jobs, retry behavior, cost controls, dashboard refresh persistence, institution branding, Course → Level → Subject, review/publication controls, and student quiz-taking behavior were refreshed against `main` on 28 September 2026. See `docs/current-ai-document-workflow.md` and `docs/dashboard-state-persistence.md` for focused current references. Dated evidence, changelogs, and original plans remain historical. Repository state alone does not prove Railway environment values, provider health, deployed code, or applied Supabase migrations; verify those separately.
 
 | | |
 |---|---|
 | **Product** | ArivuPro Quiz Platform — multi-tenant AI quiz generator for coaching institutions |
 | **Repository** | `ArivuTechTeam/quiz-generator` |
-| **Document version** | 1.5 |
-| **Document date** | 7 September 2026; targeted current-state updates 24 September 2026 |
-| **Basis** | `main` through `d9f45dd` for the targeted updates; older unrelated sections retain their dated verification notes |
-| **Status of product** | Live production pilot; Railway service inventory and API health verified 2026-09-24, not an end-to-end product acceptance test |
+| **Document version** | 1.6 |
+| **Document date** | 7 September 2026; targeted current-state updates 28 September 2026 |
+| **Basis** | `main` at `f5aa0f1` for the targeted updates; older unrelated sections retain their dated verification notes |
+| **Status of product** | Live production pilot; matching Vercel deployment, Railway API deployment, and API health verified 2026-09-28, not an end-to-end product acceptance test |
 | **Audience** | Engineering, technical leadership, prospective contributors, stakeholders |
 
 ---
@@ -281,10 +281,14 @@ backend-for-frontend redesign rather than a storage-setting-only change.
 ### 5.6 Key reusable components
 | Component | Role |
 |---|---|
-| `quiz-attempt.tsx` | Universal take-and-results engine for **all** attempt types (quiz, practice, challenge, daily, exam): questions, timer, submit, graded results, per-question AI tutor, PDF/share-card export. |
+| `quiz-attempt.tsx` | Universal take-and-results engine for **all** attempt types (quiz, practice, challenge, daily, exam): questions, timer, submit, graded results, five-state question navigation, focus mode, per-question AI tutor, and share-card export. |
 | `student-dashboard.tsx` | Student home: stats, streak, accuracy-over-time chart, quick actions. |
 | `blueprint-generator.tsx` | Teacher generation wizard: upload → durable topic analysis → select grouped topics + exact per-type counts → durable grounded generation; refresh-safe job reconnection and retry. |
+| `blueprint-panel.tsx` / `allocation-meter.tsx` | Teacher extraction-review blueprint controls and a live selected/remaining allocation meter before atomic subset publication. |
 | `question-review-card.tsx` | One reviewable question: inline edit, approve/reject, AI regenerate. |
+| `quiz-analysis-report.tsx` | Student post-submit analysis with summary, topic/type breakdowns, and question-level review. |
+| `scratch-pad.tsx` | In-attempt calculator, notes, and drawing canvas held only in component memory. |
+| `mini-sparkline.tsx` | Compact trend visualization used in student result analysis. |
 | `course-manager.tsx` | Admin CRUD for courses & subjects. |
 | `admin-manager.tsx` | Super-admin management of institution admins. |
 | `teacher-stats.tsx` / `class-analytics.tsx` | Teacher KPIs and class performance. |
@@ -329,9 +333,9 @@ Guards: **public** / **student** / **staff** (teacher+admin+super) / **admin** (
 
 **Topics** (`/api/v1`, `topics.py`) — teacher-only topic extraction from an uploaded document, feeding the blueprint wizard (§8.1).
 
-**Quiz sets** (`/api/v1/quiz-sets`) — `POST /generate`, `POST /generate-blueprint`, `GET ""`, `GET /{id}`, `POST /{id}/publish`, `POST /{id}/archive`, and `POST /{id}/approve-all` are teacher-only by design. Document analysis additionally exposes `POST /analyze`, `GET /generation-jobs/{id}`, and `POST /generation-jobs/{id}/retry`; final generation is a durable idempotent job. The normal typed-document analysis is one cost-bounded call (or an optional zero-AI local PDF outline), with persisted map/reduce retained as a compatibility fallback. See `docs/chunked-generation-architecture.md`.
+**Quiz sets** (`/api/v1/quiz-sets`) — `POST /generate`, `POST /generate-blueprint`, `GET ""`, `GET /{id}`, `POST /{id}/publish`, `POST /{id}/blueprint-publish`, `POST /{id}/regenerate-all`, `POST /{id}/archive`, and `POST /{id}/approve-all` are teacher-only by design. Publication may optionally target a batch. Blueprint publication atomically publishes only the selected approved questions and refuses an inconsistent selection; whole-set regeneration is bounded and draft-only. Both new operations are feature-gated. Document analysis additionally exposes `POST /analyze`, `GET /generation-jobs/{id}`, and `POST /generation-jobs/{id}/retry`; final generation is a durable idempotent job. The normal typed-document analysis is one cost-bounded call (or an optional zero-AI local PDF outline), with persisted map/reduce retained as a compatibility fallback. See `docs/chunked-generation-architecture.md`.
 
-**Questions** (`/api/v1/questions`) — `PATCH /{id}`, `POST /{id}/approve`, `POST /{id}/reject`, and `POST /{id}/regenerate` are teacher-only by design; `POST /{id}/explain` is available to a teacher for their own question or to a student after that question has been graded.
+**Questions** (`/api/v1/questions`) — `PATCH /{id}`, `POST /{id}/approve`, `POST /{id}/reject`, `POST /{id}/unreject`, and `POST /{id}/regenerate` are teacher-only by design; `POST /{id}/explain` is available to a teacher for their own question or to a student after that question has been graded.
 
 **Academics** (`/api/v1`) — `GET /public/courses` (**public**, feeds tenant-scoped Course + Level signup); authenticated Course → Level → Subject reads and manual writes; super-admin-only global catalogue reads/provisioning; `GET/PUT /teachers/{teacher_id}/subjects` (institution admin); chapters CRUD restricted to explicitly assigned teachers.
 
@@ -371,7 +375,7 @@ Guards: **public** / **student** / **staff** (teacher+admin+super) / **admin** (
 - **`blueprint.py`** — weighted "blueprint" generation. Two modes: the original weighted mode converts High/Med/Low topic priorities into a 3:2:1 question mix, emphasising priority topics (~70% of questions); a newer **per-topic mode** (added after 7 September — see `docs/llm-prompts.md` §2) instead takes exact per-topic, per-question-type counts from the teacher and bypasses the weight math entirely. Both modes tag each question with its topic.
 - **`grading.py`** — `grade_answer()` deterministic scoring per question type (see §8.2).
 - **`selector.py`** — `select_question_ids()` — the shared question picker for all practice modes; always scopes to tenant + enrolled subjects + approved questions.
-- **`review.py`** — assembles quiz-set detail; regenerates a single question in place (now also re-sends the original source material so the regenerated question stays grounded — see `docs/llm-prompts.md` §3).
+- **`review.py`** — assembles quiz-set detail; regenerates a single question in place or a bounded draft set. Source material is recovered once for whole-set regeneration and supplied to each provider call so regenerated questions remain grounded (see `docs/llm-prompts.md` §3).
 - **`topics.py`** — extracts a de-duplicated list of teachable topics from a document.
 - **`tutor.py`** — AI Tutor: one cached explanation per question, reused across all students.
 - **`events.py`** — append-only event ledger writer; **never throws** (instrumentation must not break requests).
@@ -395,7 +399,7 @@ Guards: **public** / **student** / **staff** (teacher+admin+super) / **admin** (
 
 ## 7. Database Schema
 
-PostgreSQL on Supabase. The repository contains `migrations/schema.sql` plus migrations 01, 02, and 04–65 (inventory verified 2026-09-25). There is no migration 03; migration 04 removed the abandoned seed-library feature. The incremental files remain required for an existing database. Apply migrations once, in numeric order, using `docs/deploy-runbook.md`; repository presence does not prove production application state. The operator reported migration 65 applied, but the target database was not checked directly in this documentation pass.
+PostgreSQL on Supabase. The repository contains `migrations/schema.sql` plus migrations 01, 02, and 04–74 (inventory verified 2026-09-28). There is no migration 03; migration 04 removed the abandoned seed-library feature. The incremental files remain required for an existing database. Apply migrations once, in numeric order, using `docs/deploy-runbook.md`; repository presence does not prove production application state. The operator reported migrations through 74 applied, but the target database was not checked directly in this documentation pass.
 
 ### 7.1 Enums
 `user_role` (super_admin, institution_admin, teacher, student) · `question_type` (mcq_single, mcq_multi, numerical, true_false, fill_blank, descriptive; migration 61 adds assertion_reason, mrm, matching) · `question_source` (ai_generated, manual) · `review_status` (pending_review, approved, rejected, needs_edit) · `document_status` · `job_status` · `variant_type` (theory, practical, mixed) · `quiz_status` (draft, published, archived) · `attempt_status` (in_progress, submitted, graded, abandoned). The three extended objective types are produced only when their backend flag is enabled. Descriptive grading is available only in the separately flagged paper-bank flow, not standard quiz/practice grading.
@@ -534,8 +538,9 @@ and application queries scope every tenant-owned read/write to one institution.
 | 74 role-aware-support | Preserves existing student requests and extends the private ArivuPro support outbox to faculty and institution admins, with verified requester role and institution context for super-admins. |
 
 > **Repository inventory refreshed 2026-09-28:** migrations through 74 are
-> represented above. Migrations through 73 were reported applied by the operator;
-> migration 74 remains code-only until separately applied. Migration 59 was reported applied;
+> represented above. The operator reported migrations through 74 applied;
+> this documentation pass did not independently query the Supabase migration
+> history. Migration 59 was reported applied;
 > a read-only production check confirmed that its AI-log raw-payload columns
 > are absent, but did not prove the complete migration history.
 > `docs/deploy-runbook.md` is the authoritative source for exact filenames,
@@ -640,11 +645,20 @@ GitHub (ArivuTechTeam/quiz-generator)
 SUPABASE (dashboard-configured): Postgres + Auth + Storage — settings apply instantly
 ```
 
-### 10.2 Deploy workflow (two tracks)
+### 10.2 Deploy workflow
 - **Frontend change:** push to GitHub → **merge PR to `main`** → **Vercel auto-deploys**. (`next build` runs ESLint and fails on lint errors — always run `pnpm build` locally before merging, not just `tsc`.)
 - **Backend API change:** from a clean, synchronized `main`, run **`./scripts/deploy.sh`**. It scopes Railway to `backend/` with `--path-as-root`; a bare `railway up` from the repository root is invalid for this service. Keep Railway's custom Start Command blank so the Dockerfile `CMD` expands `$PORT` correctly.
 - **Worker or shared-job change:** deploy `quiz-generator-worker` independently from the same verified revision. The API deploy script does not update it; verify worker health and a queued job, not just API `/health`. The old retention cron was removed 2026-09-24.
 - **Supabase change:** dashboard settings (auth URLs, SMTP, RLS) apply immediately; schema changes are applied by running migration SQL in order.
+
+**Observed 2026-09-28:** PR #66 merged to `main` at `f5aa0f1`; the matching
+GitHub checks and Vercel deployment passed. Railway API deployment
+`ee42e89c-11e9-4685-a8d7-96e2be358ab7` reported `SUCCESS` with a running
+instance, and `/health` returned HTTP 200. The unchanged worker's last observed
+successful deployment remains `8dfc43bc`. The operator reported migration 74
+applied; this documentation pass did not independently inspect Supabase's
+migration history. These observations prove deployment and liveness, not the
+new authenticated feature workflows or full capacity.
 
 ### 10.3 Environment variables
 **Frontend (browser-exposed, `NEXT_PUBLIC_*`):**
@@ -657,6 +671,13 @@ SUPABASE (dashboard-configured): Postgres + Auth + Storage — settings apply in
 - `DEEPSEEK_API_KEY` (+ optional `DEEPSEEK_MODEL`, `DEEPSEEK_BASE_URL`, `DEEPSEEK_THINKING_ENABLED`, `DEEPSEEK_STRUCTURED_MAX_OUTPUT_TOKENS`, `DEEPSEEK_REQUEST_TIMEOUT_SECONDS`, `DEEPSEEK_MAX_OUTPUT_TOKENS`)
 - `GEMINI_API_KEY` (+ optional `GEMINI_MODEL`, `GEMINI_FALLBACK_MODEL`, `GEMINI_BLUEPRINT_MODEL`, `GEMINI_BASE_URL`)
 - Stage routing: `AI_FALLBACK_PROVIDER`, `TOPIC_ANALYSIS_PROVIDER`, `QUIZ_GENERATION_PROVIDER`, `TYPED_QUIZ_EXTRACTION_PROVIDER`, `QUESTION_VERIFICATION_PROVIDER`, `QUESTION_REGENERATION_PROVIDER`, and `VISION_EXTRACTION_PROVIDER` (must remain `gemini`)
+- Teacher review/publication switches: `REJECTED_PURGE_ENABLED`,
+  `EXTRACTION_BLUEPRINT_ENABLED`, and `REGENERATE_SET_ENABLED` are API-only and
+  default to `false`; whole-set limits default to
+  `REGENERATE_SET_MAX_QUESTIONS=40` and `REGENERATE_SET_CONCURRENCY=5`.
+  Production Railway directly reported the three switches `true` on 28
+  September 2026; blueprint publication also requires
+  `QUIZ_REUSE_ENABLED=true`, which was directly observed.
 - Large-document generation and extraction tuning (safe code defaults; see `backend/.env.example` for the full, commented list): `GENERATION_MAX_TEXT_CHARS`, `CHUNKING_TRIGGER_CHARS`, `GENERATION_CHUNK_CHARS`, `GENERATION_CHUNK_OVERLAP_CHARS`, `GENERATION_CHUNK_MIN_CHARS`, `GENERATION_CHUNK_CONCURRENCY`, `GENERATION_MAP_MAX_OUTPUT_TOKENS`, `GENERATION_LARGE_REQUEST_TIMEOUT_SECONDS`, `GENERATION_PROFILE_MAX_CHARS`, `GENERATION_CHUNK_STUCK_SECONDS`, `GEMINI_VISION_TIMEOUT_SECONDS`, `GEMINI_EXTRACTION_MAX_OUTPUT_TOKENS`, `EXTRACTION_TEXT_CHUNK_CHARS`, `EXTRACTION_CHUNK_CONCURRENCY`.
 - The eight `RATE_LIMIT_*_PER_HOUR` endpoint rate limits (seven AI actions,
   including paper-bank descriptive grading, plus friend-challenge joins), `STUDENT_QUIZ_ATTEMPT_LIMIT`,

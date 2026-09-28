@@ -1,6 +1,6 @@
 # Dashboard refresh persistence
 
-**Verified against code:** 24 September 2026
+**Verified against code:** 28 September 2026
 
 Non-sensitive UI preferences and drafts use per-tab `sessionStorage`, primarily
 through `frontend/lib/use-session-storage-state.ts`. A refresh in the same tab
@@ -23,6 +23,9 @@ Currently covered:
   management drafts.
 - Student: challenge setup, leaderboard course, revision tab, smart-quiz setup,
   and subject/tab selection.
+- Student quiz-taking scratch notes, drawing strokes, and calculator input are
+  intentionally component-memory only: they disappear on refresh and are never
+  written to browser storage or sent to an API.
 - Teacher Generate Quiz: uploaded document selection, subject/chapter, analysis
   job and checkpoint UI, extracted topics, topic counts, and final generation
   job reconnection.

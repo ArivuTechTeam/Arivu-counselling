@@ -24,27 +24,28 @@ code remains the final source of truth.
 
 ## Current production snapshot
 
-Verified on 26 September 2026:
+Verified on 28 September 2026:
 
-- PR #65 was merged to `main` at `6dd08cd`. The resulting GitHub `Repository
-  checks` run passed, including database migration harnesses, backend tests,
-  frontend audit/lint/unit/build checks, and the public Playwright smoke suite.
-- Vercel reported a successful production deployment for `6dd08cd`. The public
-  institution login route returned HTTP 200 with the expected CSP, HSTS,
-  clickjacking, MIME-sniffing, and framework-header protections.
-- Railway API deployment `a4daadf2-d2f2-4dba-99d3-4ef7cde68c7c` reported
-  `SUCCESS`, and `/health` returned HTTP 200. The worker was not redeployed in
-  that operation because the merged remediation did not change worker runtime
-  code or its job contract; its last observed deployment remains `8dfc43bc`.
-- The operator reported migrations through 73 applied. PR #65 required no new
-  database migration, and none was applied as part of this deployment.
-- The repository now includes migration 74 for role-aware support. It has not
-  been reported applied and must be run before deploying the matching API and
-  frontend.
+- PR #66 was merged to `main` at `f5aa0f1`. GitHub `Repository checks` passed,
+  including the backend, frontend, database-guarantee, and public smoke-test
+  jobs. Vercel also reported a successful production deployment for that
+  revision.
+- Railway API deployment `ee42e89c-11e9-4685-a8d7-96e2be358ab7` reported
+  `SUCCESS` with a running instance after the feature-switch redeploy, and the
+  public `/health` endpoint returned HTTP 200. The worker was not changed by PR
+  #66 and its last observed successful deployment remains `8dfc43bc`.
+- The operator reported migration 74 applied, so the reported production
+  migration level is now through 74. This documentation pass did not query the
+  Supabase migration history directly.
+- Railway directly reported `QUIZ_REUSE_ENABLED=true`,
+  `REJECTED_PURGE_ENABLED=true`, `EXTRACTION_BLUEPRINT_ENABLED=true`, and
+  `REGENERATE_SET_ENABLED=true` on the production API service. The last three
+  remain `false` by default in code and are API-only switches.
 
-This snapshot proves deployment and basic public availability, not the open
-authenticated-role, worker-recovery, backup/restore, or 200/500-user capacity
-checks. Use the deploy runbook and Release A checklist for those gates.
+This snapshot proves deployment and basic public availability, not the new
+authenticated teacher/student workflows, worker recovery, backup/restore, or
+200/500-user capacity checks. Use the deploy runbook and Release A checklist
+for those gates.
 
 ## Historical material
 

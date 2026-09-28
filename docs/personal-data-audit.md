@@ -1,6 +1,6 @@
 # Personal data flow and deletion audit
 
-Last reviewed: 2026-09-25
+Last reviewed: 2026-09-28
 
 This document describes application behavior visible in this repository. Hosting
 providers may additionally process IP addresses, user-agent strings, and request
@@ -21,6 +21,7 @@ metadata in infrastructure logs; verify their retention settings separately.
 | Question regeneration/AI tutor | Question text, options, correct answer and existing explanation | FastAPI → Gemini or DeepSeek. | Provider output is validated; tutor output is cached in `ai_explanations`. No student answer, score, name, or email is included. |
 | AI operational telemetry | Provider/model, call type, fallback flag, token counts, estimated cost, latency, status, stable error class/status | FastAPI → `api_call_logs` through a best-effort backend write. | Metadata only. Migration 59 permanently drops the former raw request/response columns; prompts, document text, and provider responses are not stored or exposed by the admin API. |
 | Quiz/practice activity | Answers, autosave state, scores, timestamps, bookmarks, revision topics | Browser → FastAPI → tenant- and user-scoped Supabase tables. Grading is local deterministic code, not AI. | `quiz_attempts`, `attempt_answers`, `practice_sessions`, `practice_answers`, `bookmarks`, and `revised_topics`. |
+| In-quiz rough work | Calculator input, typed notes, and drawing strokes | Current React component memory only | Never sent to an API or written to browser storage; discarded on refresh or when leaving the attempt. |
 | Paper-bank practice (flag-gated) | Selected questions, submitted answers, and (for descriptive grading) free text up to 2,000 characters | Browser → FastAPI → private `paper_attempts`; descriptive answers also go to DeepSeek preferred, Gemini fallback. The provider prompt does not add the student's name, email, tenant ID, or access token. | The server stores a frozen question/answer-key snapshot and the graded report in `paper_attempts`. Its answer key is never sent while taking; the report is returned only after every selected question is answered and the attempt is graded. Paid grading calls are capped per student per rolling hour. |
 | Dashboard recovery state | Non-sensitive filters/selections and opaque durable job/resource identifiers | Current browser tab only | Stored in `sessionStorage` to survive refresh. Names, emails, filenames, chapter/topic text, question/answer drafts, passwords, uploaded `File` objects, and destructive confirmation state are excluded. Supabase session/PKCE material is the one sensitive exception and is needed for per-tab authentication. Backend/Supabase records remain authoritative. |
 | Challenges/leaderboards | Creator display name, opaque share token, participant identity, scores | Browser → FastAPI → Supabase. A same-course/institution audience receives display names and scores. | `challenges` and linked practice sessions. Account deletion replaces the creator name with `Deleted user` and removes the account pointer. |

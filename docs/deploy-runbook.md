@@ -102,10 +102,9 @@ them in the Supabase dashboard for the exact project used by production.
 Merge your work to `main` first (see `docs/merge-workflow.md`).
 
 - **Frontend (Vercel):** builds automatically from GitHub after a PR merges to
-  `main`. PR #65 produced merge commit `6dd08cd`; GitHub's Vercel production
-  status reported success on 2026-09-26. The production institution login
-  route returned HTTP 200 with the expected security headers. That check did
-  not exercise an authenticated role journey.
+  `main`. PR #66 produced merge commit `f5aa0f1`; GitHub's Vercel production
+  status reported success on 2026-09-28. That deployment check did not exercise
+  an authenticated role journey.
 - **Backend (Railway): does NOT auto-deploy from GitHub.** Confirmed
   2026-09-04 via `railway status --json` → the service's `"source"` field is
   `null`. Merging to `main` alone does nothing to the backend — after
@@ -196,15 +195,14 @@ migration-73-ai-quiz-cost-workflows.sql
 migration-74-role-aware-support.sql
 ```
 
-(Filenames above verified 2026-09-26 against `migrations/`, through migration
-73. Migrations 63–65 support the existing paper bank; migration 66 adds durable,
-private paper attempts. The operator reported migration 66 applied on 2026-09-25,
-but that has not been checked directly in the target Supabase project. Migration
-67 adds atomic publish-and-batch-assignment and **must be applied before deploying
-the batch-publication API**; it has not been reported applied. The change is
-API/frontend only; the existing paper-import worker is unchanged. Before rollout, run a
-staging paper-import/publish/student-grade drill. Repository tests cannot verify
-live SQL or provider behavior.
+Filenames above were verified 2026-09-28 against `migrations/`, through migration
+74. The operator reported migrations through 74 applied, but this documentation
+pass did not independently inspect the target Supabase migration history or all
+function privileges. Migrations 63–65 support the paper bank, migration 66 adds
+durable private paper attempts, and migration 67 adds atomic
+publish-and-batch-assignment. The paper-import worker is unchanged. Before a
+new-environment rollout, run a staging paper-import/publish/student-grade drill;
+repository tests cannot verify live SQL or provider behavior.
 The batch-publication frontend calls a new `/publish-to-batches` API route so it
 fails closed against an older Railway API while Vercel updates after merge;
 deploy the API promptly after migration 67 and the main-branch merge.
@@ -449,16 +447,20 @@ afterward. Do not mistake an API `/health` response for worker readiness; use
 the super-admin `/api/v1/platform/worker-health` check and a small queued-job
 smoke test. The obsolete retention cron is not a companion service.
 
-**Observed 2026-09-26:** API deployment
-`a4daadf2-d2f2-4dba-99d3-4ef7cde68c7c`, uploaded from a clean `main` worktree
-at `6dd08cd`, reported `SUCCESS`; the production `/health` endpoint returned
-HTTP 200. The worker was deliberately not redeployed because PR #65 changed no
-worker runtime code or shared job contract, so its last observed successful
-deployment remains `8dfc43bc`. No migration was required or applied for PR
-#65. Earlier Release A verification passed production schema preflight and a
-live queued 10-question generation through that worker, recording its workflow
-and provider-call costs. API health does not prove worker readiness, restart
-recovery, paper-bank grading, 200/500-user capacity, or backup restoration.
+**Observed 2026-09-28:** PR #66 was merged to `main` at `f5aa0f1`; GitHub
+repository checks and the matching Vercel production deployment passed. The
+current Railway API deployment `ee42e89c-11e9-4685-a8d7-96e2be358ab7`, created
+by the later feature-switch redeploy, reported `SUCCESS` with a running instance;
+the production `/health` endpoint returned HTTP 200. The worker was deliberately
+not redeployed because PR #66 changed neither worker runtime code nor its shared
+job contract, so its last observed successful deployment remains `8dfc43bc`.
+The operator reported migration 74 applied; that report was not independently
+checked against Supabase migration history. PR #66 added no migration. Earlier
+Release A verification passed production schema preflight and a live queued
+10-question generation through the worker, recording workflow and provider-call
+costs. API health does not prove worker readiness, the new authenticated feature
+workflows, restart recovery, paper-bank grading, 200/500-user capacity, or backup
+restoration.
 
 ### Advanced feature master switches
 
@@ -475,6 +477,9 @@ there is no per-institution feature setup.
 | `PAPER_BANK_ENABLED` | Code default `false`; observed `true` on both production Railway services 2026-09-25. Before deploying the new paper-attempt API, apply migration 66; verify paper start, incomplete-submit rejection, completed report, and retry behavior. The end-to-end checks remain outstanding. |
 | `RATE_LIMIT_PAPER_GRADING_PER_HOUR` | `10` paid descriptive grading attempts per student per rolling hour (requires migration 65) |
 | `QUIZ_REUSE_ENABLED` | `true` |
+| `REJECTED_PURGE_ENABLED` | Code default `false`; directly observed `true` on the production API 2026-09-28. Permanently deletes rejected questions during publish, so first verify it with disposable draft content. |
+| `EXTRACTION_BLUEPRINT_ENABLED` | Code default `false`; directly observed `true` on the production API 2026-09-28. Requires `QUIZ_REUSE_ENABLED=true`; blueprint publication is atomic and can assign the release to a batch when batch features are enabled. |
+| `REGENERATE_SET_ENABLED` | Code default `false`; directly observed `true` on the production API 2026-09-28. Enables bounded, draft-only whole-quiz regeneration. Code defaults are 40 questions maximum and 5 concurrent provider calls. |
 | `BATCHES_ENABLED` | `true` |
 | `SCORING_POLICIES_ENABLED` | `true` |
 | `COMMERCE_PACK_ENABLED` | `true` |
@@ -514,6 +519,10 @@ explicitly in Railway so the production policy is visible and easy to edit:
 | `QUESTION_VERIFICATION_PROVIDER` | grounding-verification preferred provider (default `deepseek`) |
 | `QUESTION_REGENERATION_PROVIDER` | review regeneration preferred provider (default `deepseek`) |
 | `VISION_EXTRACTION_PROVIDER` | must remain `gemini` until another multimodal adapter exists |
+| `REJECTED_PURGE_ENABLED` | API-only publish-time rejected-question purge; code default `false` |
+| `EXTRACTION_BLUEPRINT_ENABLED` | API-only extraction-review blueprint and atomic subset publication; code default `false` and requires quiz reuse |
+| `REGENERATE_SET_ENABLED` | API-only whole-draft regeneration; code default `false` |
+| `REGENERATE_SET_MAX_QUESTIONS` / `REGENERATE_SET_CONCURRENCY` | whole-set safety limits (code defaults `40` / `5`) |
 | `RATE_LIMIT_QUIZ_GENERATION_PER_HOUR` | per-user standard quiz generations per rolling hour (default `10`) |
 | `RATE_LIMIT_BLUEPRINT_PER_HOUR` | per-user blueprint generations per rolling hour (default `10`) |
 | `RATE_LIMIT_TOPIC_EXTRACTION_PER_HOUR` | per-user document-analysis AI calls per rolling hour (default `30`; normal typed-document analysis is one provider call, while explicit compatibility fallback can use multiple calls) |
@@ -565,12 +574,10 @@ Notes/gotchas below.
 The institution-admin teacher editor keeps Save/Cancel visible while its
 subject list scrolls (`frontend/app/dashboard/institution-admin/users/page.tsx`,
 merged in PR #59). The security/test remediation in PR #65 upgraded the
-frontend to Next.js `15.5.26`, added the public Playwright smoke suite, and was
-merged as `6dd08cd`. Vercel reported the production deployment successful on
-2026-09-26. The institution login route returned HTTP 200 with CSP, HSTS,
-`X-Content-Type-Options: nosniff`, and clickjacking protection, without an
-`X-Powered-By` header. Authenticated role journeys were not rerun after this
-deployment and remain a manual post-deploy check.
+frontend to Next.js `15.5.26` and added the public Playwright smoke suite. PR
+#66 then merged the current feature set as `f5aa0f1`; Vercel reported the
+production deployment successful on 2026-09-28. Authenticated role journeys
+were not rerun after this deployment and remain a manual post-deploy check.
 
 **Environment variables** (from `frontend/.env.local.example`):
 
