@@ -15,6 +15,12 @@ import {
   WeakAnalysis,
   getChallenge,
   getDaily,
+  getHandwrittenAnalytics,
+  getHandwrittenMistakes,
+  getHandwrittenRevisionItems,
+  getHandwrittenWeakAreas,
+  HandwrittenMistakeSeverity,
+  listStudentEvaluationPapers,
   getExamConfig,
   getLeaderboard,
   getRevisionTopics,
@@ -135,4 +141,50 @@ export function useStudentChallenge(token: string) {
 
 export function useMyChallenges() {
   return useSWR<MyChallenge[]>(STUDENT_MY_CHALLENGES_KEY, listMyChallenges);
+}
+
+// --- Handwritten learning. Keys include every filter so each view caches on its own. ---
+export const STUDENT_HW_PAPERS_KEY = "student:handwritten-papers";
+export const STUDENT_HW_MISTAKES_KEY = "student:handwritten-mistakes";
+export const STUDENT_HW_REVISION_KEY = "student:handwritten-revision";
+export const STUDENT_HW_ANALYTICS_KEY = "student:handwritten-analytics";
+export const STUDENT_HW_WEAK_AREAS_KEY = "student:handwritten-weak-areas";
+
+/** Papers the student can access; the learning pages derive their subject filter from these. */
+export function useStudentHandwrittenPapers() {
+  return useSWR(STUDENT_HW_PAPERS_KEY, listStudentEvaluationPapers);
+}
+
+export function useStudentHandwrittenMistakes(filters: {
+  subjectId?: string;
+  severity?: HandwrittenMistakeSeverity;
+}) {
+  return useSWR(
+    [STUDENT_HW_MISTAKES_KEY, filters.subjectId ?? "", filters.severity ?? ""],
+    () => getHandwrittenMistakes(filters),
+  );
+}
+
+export function useStudentHandwrittenRevisionItems(filters: {
+  subjectId?: string;
+  resolved?: boolean;
+}) {
+  return useSWR(
+    [STUDENT_HW_REVISION_KEY, filters.subjectId ?? "", String(filters.resolved ?? "")],
+    () => getHandwrittenRevisionItems(filters),
+  );
+}
+
+/** Pass null to skip the request (e.g. while the subject list is still loading). */
+export function useStudentHandwrittenAnalytics(subjectId: string | null) {
+  return useSWR(
+    subjectId ? [STUDENT_HW_ANALYTICS_KEY, subjectId] : null,
+    () => getHandwrittenAnalytics(subjectId as string),
+  );
+}
+
+export function useStudentHandwrittenWeakAreas(subjectId?: string) {
+  return useSWR([STUDENT_HW_WEAK_AREAS_KEY, subjectId ?? ""], () =>
+    getHandwrittenWeakAreas(subjectId),
+  );
 }

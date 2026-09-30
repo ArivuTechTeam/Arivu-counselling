@@ -11,6 +11,7 @@ type DashboardIdentity = {
   institution: DashboardProfile["institution"];
   canChangePassword: boolean;
   features: DashboardProfile["features"];
+  handwrittenEvaluationEnabled: boolean;
 };
 
 const NO_FEATURES: DashboardProfile["features"] = {
@@ -28,6 +29,7 @@ const DashboardIdentityContext = createContext<DashboardIdentity>({
   institution: null,
   canChangePassword: false,
   features: NO_FEATURES,
+  handwrittenEvaluationEnabled: false,
 });
 
 export function DashboardIdentityProvider({
@@ -36,11 +38,19 @@ export function DashboardIdentityProvider({
   institution,
   canChangePassword,
   features,
+  handwrittenEvaluationEnabled,
   children,
 }: DashboardIdentity & { children: React.ReactNode }) {
   return (
     <DashboardIdentityContext.Provider
-      value={{ role, email, institution, canChangePassword, features }}
+      value={{
+        role,
+        email,
+        institution,
+        canChangePassword,
+        features,
+        handwrittenEvaluationEnabled,
+      }}
     >
       {children}
     </DashboardIdentityContext.Provider>

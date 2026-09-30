@@ -48,6 +48,8 @@ export default function DashboardLayout({
     commerce_pack: false,
     figure_attach: false,
   });
+  const [handwrittenEvaluationEnabled, setHandwrittenEvaluationEnabled] =
+    useState(false);
   const [bootstrapError, setBootstrapError] = useState<string | null>(null);
   const [bootstrapAttempt, setBootstrapAttempt] = useState(0);
   const [sessionAvailable, setSessionAvailable] = useState(false);
@@ -119,6 +121,7 @@ export default function DashboardLayout({
       setMustChangePassword(passwordChangeRequired);
       setInstitution(data.institution);
       setFeatures(data.features);
+      setHandwrittenEvaluationEnabled(data.handwritten_evaluation_enabled);
       setReady(true);
     });
     return () => {
@@ -215,6 +218,7 @@ export default function DashboardLayout({
           institution={institution}
           canChangePassword={canChangePassword}
           features={features}
+          handwrittenEvaluationEnabled={handwrittenEvaluationEnabled}
         >
           {isStudentExamPath(pathname) && !mustChangePassword ? (
             <ExamShell institution={institution}>{content}</ExamShell>

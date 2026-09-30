@@ -704,6 +704,7 @@ export type DashboardProfile = {
     primary_color: string;
   } | null;
   features: InstitutionFeatureFlags;
+  handwritten_evaluation_enabled: boolean;
 };
 
 export type InstitutionFeatureFlags = {
@@ -734,6 +735,416 @@ export type InstitutionFeatureFlags = {
 
 export const getDashboardProfile = () =>
   jsonRequest<DashboardProfile>("/api/v1/me/profile", "GET");
+
+// --- Native handwritten evaluation (Phase A: upload + queue only) ---
+export const EVALUATION_UPLOAD_MAX_BYTES = 30 * 1024 * 1024;
+
+export type EvaluationPaper = {
+  id: string;
+  tenant_id?: string;
+  course_level_id: string;
+  subject_id: string;
+  title: string;
+  total_marks: number;
+  mcq_marks?: number | null;
+  rubric_status?: "not_started";
+  is_active?: boolean;
+  generated_paper_id?: string | null;
+  created_by?: string;
+  created_at?: string;
+  question_paper_url?: string | null;
+  suggested_answer_url?: string | null;
+  subject_name?: string | null;
+  course_name?: string | null;
+  level_name?: string | null;
+  paper_type?: "mock_test";
+};
+
+export type EvaluationSubmission = {
+  id: string;
+  paper_id: string | null;
+  upload_intent_id: string | null;
+  status: string;
+  submitted_at: string;
+  job_id?: string | null;
+  job_status?: string | null;
+  report_available: boolean;
+  paper_title?: string | null;
+  subject_name?: string | null;
+  marks_obtained?: number | null;
+  marks_possible?: number | null;
+  percentage?: number | null;
+  evaluation_date?: string | null;
+  error_message?: string | null;
+  retrigger_count: number;
+  regraded_from?: string | null;
+};
+
+export type EvaluationCriterionResult = {
+  criterion_id: string;
+  criterion?: string;
+  marks_awarded: number;
+  marks_available: number;
+  category?: string;
+  student_evidence?: string;
+  comment?: string;
+  correct_treatment?: string;
+};
+
+export type EvaluationQuestionReport = {
+  question_ref: string;
+  question_text: string;
+  marks_obtained: number;
+  marks_possible: number;
+  not_attempted: boolean;
+  not_evaluated: boolean;
+  not_counted: boolean;
+  mapping_status: "matched" | "recovered" | "unsafe" | "blank";
+  feedback: string;
+  student_guidance: {
+    what_you_did_well?: string;
+    improve_next?: string[];
+  };
+  student_answer_excerpt: string;
+  handwriting_legibility: string;
+  grading_confidence: number;
+  criteria_breakdown: EvaluationCriterionResult[];
+};
+
+export type HandwrittenEvaluationReport = {
+  submission_id: string;
+  status: string;
+  submission_date: string;
+  evaluation_date: string;
+  paper: {
+    id: string | null;
+    title: string;
+    subject?: string | null;
+    total_marks: number;
+  };
+  student: {
+    name?: string | null;
+    email?: string | null;
+  };
+  total_score: number;
+  total_marks: number;
+  percentage: number;
+  overall_feedback: string;
+  strengths: string[];
+  areas_to_improve: string[];
+  requires_review: boolean;
+  answer_script_url?: string | null;
+  questions: EvaluationQuestionReport[];
+};
+
+export async function createEvaluationPaper(input: {
+  course_level_id: string;
+  subject_id: string;
+  title: string;
+  total_marks: number;
+  mcq_marks?: number | null;
+  question_paper: File;
+  suggested_answer?: File | null;
+}): Promise<EvaluationPaper> {
+  const headers = await authHeader();
+  const form = new FormData();
+  form.append("course_level_id", input.course_level_id);
+  form.append("subject_id", input.subject_id);
+  form.append("title", input.title);
+  form.append("total_marks", String(input.total_marks));
+  if (input.mcq_marks != null) form.append("mcq_marks", String(input.mcq_marks));
+  form.append("question_paper", input.question_paper);
+  if (input.suggested_answer) form.append("suggested_answer", input.suggested_answer);
+  const response = await apiFetch(
+    `${API_BASE}/api/v1/evaluation-papers`,
+    { method: "POST", headers, body: form },
+    DOCUMENT_UPLOAD_TIMEOUT_MS,
+  );
+  if (!response.ok) return apiError(response, "We couldn't create the evaluation paper.");
+  return response.json();
+}
+
+export async function listEvaluationPapers(): Promise<EvaluationPaper[]> {
+  const response = await jsonRequest<{ papers: EvaluationPaper[] }>(
+    "/api/v1/evaluation-papers",
+    "GET",
+  );
+  return response.papers;
+}
+
+export async function listStudentEvaluationPapers(): Promise<EvaluationPaper[]> {
+  const response = await jsonRequest<{ papers: EvaluationPaper[] }>(
+    "/api/v1/handwritten-evaluations/papers",
+    "GET",
+  );
+  return response.papers;
+}
+
+export async function submitHandwrittenAnswer(
+  paperId: string,
+  file: File,
+): Promise<EvaluationSubmission> {
+  if (file.size === 0 || file.size > EVALUATION_UPLOAD_MAX_BYTES) {
+    throw new Error("Choose a non-empty PDF, PNG or JPEG no larger than 30 MB.");
+  }
+  const intent = await jsonRequest<{
+    id: string;
+    upload_url: string;
+    upload_token: string;
+    storage_path: string;
+  }>("/api/v1/handwritten-evaluations/upload-intents", "POST", {
+    paper_id: paperId,
+    filename: file.name,
+    content_type: file.type,
+    size_bytes: file.size,
+  });
+  const { error: uploadError } = await createClient()
+    .storage
+    .from("evaluation-submissions")
+    .uploadToSignedUrl(intent.storage_path, intent.upload_token, file, {
+      contentType: file.type,
+    });
+  if (uploadError) throw new Error("The answer script could not be uploaded. Please try again.");
+  await jsonRequest(
+    `/api/v1/handwritten-evaluations/upload-intents/${intent.id}/finalize`,
+    "POST",
+  );
+  return jsonRequest<EvaluationSubmission>(
+    "/api/v1/handwritten-evaluations/submissions",
+    "POST",
+    { upload_intent_id: intent.id },
+  );
+}
+
+export const getEvaluationSubmission = (id: string) =>
+  jsonRequest<EvaluationSubmission>(
+    `/api/v1/handwritten-evaluations/submissions/${id}`,
+    "GET",
+  );
+
+export async function listStudentEvaluationSubmissions(): Promise<EvaluationSubmission[]> {
+  const response = await jsonRequest<{ submissions: EvaluationSubmission[] }>(
+    "/api/v1/handwritten-evaluations/submissions",
+    "GET",
+  );
+  return response.submissions;
+}
+
+export const getHandwrittenEvaluationReport = (submissionId: string) =>
+  jsonRequest<HandwrittenEvaluationReport>(
+    `/api/v1/handwritten-evaluations/submissions/${submissionId}/report`,
+    "GET",
+  );
+
+export const retriggerHandwrittenEvaluation = (submissionId: string) =>
+  jsonRequest<EvaluationSubmission>(
+    `/api/v1/handwritten-evaluations/submissions/${submissionId}/retrigger`,
+    "POST",
+  );
+
+export async function attachHandwrittenAdditionalPages(
+  submission: EvaluationSubmission,
+  file: File,
+): Promise<EvaluationSubmission> {
+  if (!submission.paper_id) throw new Error("This paper has been deleted.");
+  if (file.size === 0 || file.size > EVALUATION_UPLOAD_MAX_BYTES) {
+    throw new Error("Choose a non-empty PDF, PNG or JPEG no larger than 30 MB.");
+  }
+  const intent = await jsonRequest<{
+    id: string;
+    upload_url: string;
+    upload_token: string;
+    storage_path: string;
+  }>(
+    `/api/v1/handwritten-evaluations/submissions/${submission.id}/additional-pages/upload-intents`,
+    "POST",
+    {
+      paper_id: submission.paper_id,
+      filename: file.name,
+      content_type: file.type,
+      size_bytes: file.size,
+    },
+  );
+  const { error: uploadError } = await createClient()
+    .storage.from("evaluation-submissions")
+    .uploadToSignedUrl(intent.storage_path, intent.upload_token, file, {
+      contentType: file.type,
+    });
+  if (uploadError) throw new Error("The additional pages could not be uploaded.");
+  await jsonRequest(
+    `/api/v1/handwritten-evaluations/upload-intents/${intent.id}/finalize`,
+    "POST",
+  );
+  return jsonRequest<EvaluationSubmission>(
+    `/api/v1/handwritten-evaluations/submissions/${submission.id}/additional-pages`,
+    "POST",
+    { upload_intent_id: intent.id },
+  );
+}
+
+export type HandwrittenSubmissionQuota = {
+  paper_id: string;
+  completed_attempts: number;
+  attempt_limit: number;
+  remaining_attempts: number;
+  active: boolean;
+};
+
+export const getHandwrittenSubmissionQuota = (paperId: string) =>
+  jsonRequest<HandwrittenSubmissionQuota>(
+    `/api/v1/handwritten-evaluations/papers/${paperId}/quota`,
+    "GET",
+  );
+
+// --- Handwritten learning (mistakes, revision, progress) ---
+// Read-only views from /api/v1/handwritten-learning. Students never pass
+// `student_id`: the backend always scopes to the signed-in student, and a
+// different id is rejected with 403.
+export type HandwrittenMistakeSeverity = "minor" | "moderate" | "major";
+
+export type HandwrittenMistake = {
+  id: string;
+  evaluation_id: string;
+  question_result_id: string | null;
+  category: string;
+  severity: HandwrittenMistakeSeverity;
+  description: string;
+  marks_lost: number;
+  suggestion: string;
+  chapter_name: string;
+  criterion_key: string;
+  signature: string;
+  is_recurring: boolean;
+  created_at: string;
+  // Where the mistake came from. Null when the backend can't resolve the
+  // submission or paper.
+  subject_id: string | null;
+  submission_id: string | null;
+  paper_title: string | null;
+};
+
+export type HandwrittenRevisionPriority = "high" | "medium" | "low";
+
+export type HandwrittenRevisionItem = {
+  id: string;
+  subject_id: string;
+  chapter: string;
+  title: string;
+  description: string;
+  priority: HandwrittenRevisionPriority;
+  is_resolved: boolean;
+  occurrence_count: number;
+  marks_at_risk: number;
+  source_count: number;
+  resolution_source: "" | "reviewed" | "improved";
+  resolved_at: string | null;
+  last_seen_at: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type HandwrittenLevel =
+  | "beginner"
+  | "improving"
+  | "proficient"
+  | "advanced"
+  | "exam_ready";
+
+export type HandwrittenScorePoint = {
+  evaluation_id: string;
+  percentage: number;
+  date: string;
+};
+
+export type HandwrittenAnalytics = {
+  id: string;
+  subject_id: string;
+  total_attempts: number;
+  avg_percentage: number;
+  best_percentage: number;
+  latest_percentage: number;
+  score_history: HandwrittenScorePoint[];
+  current_level: HandwrittenLevel;
+  improvement_rate: number;
+  updated_at: string;
+};
+
+export type HandwrittenWeakChapter = {
+  subject_id: string;
+  chapter: string;
+  title: string;
+  marks_at_risk: number;
+  source_count: number;
+  priority: HandwrittenRevisionPriority;
+  last_seen_at: string;
+};
+
+export type HandwrittenMistakePattern = {
+  category: string;
+  count: number;
+  total_marks_lost: number;
+};
+
+export type HandwrittenWeakAreas = {
+  weak_chapters: HandwrittenWeakChapter[];
+  mistake_patterns: HandwrittenMistakePattern[];
+};
+
+function learningQuery(params: Record<string, string | boolean | undefined>): string {
+  const search = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (value !== undefined) search.set(key, String(value));
+  }
+  const text = search.toString();
+  return text ? `?${text}` : "";
+}
+
+export async function getHandwrittenMistakes(
+  filters: { subjectId?: string; severity?: HandwrittenMistakeSeverity } = {},
+): Promise<HandwrittenMistake[]> {
+  const response = await jsonRequest<{ mistakes: HandwrittenMistake[] }>(
+    `/api/v1/handwritten-learning/mistakes${learningQuery({
+      subject_id: filters.subjectId,
+      severity: filters.severity,
+    })}`,
+    "GET",
+  );
+  return response.mistakes;
+}
+
+export async function getHandwrittenRevisionItems(
+  filters: { subjectId?: string; resolved?: boolean } = {},
+): Promise<HandwrittenRevisionItem[]> {
+  const response = await jsonRequest<{ revision_items: HandwrittenRevisionItem[] }>(
+    `/api/v1/handwritten-learning/revision-items${learningQuery({
+      subject_id: filters.subjectId,
+      resolved: filters.resolved,
+    })}`,
+    "GET",
+  );
+  return response.revision_items;
+}
+
+/** Returns null when the student has no analytics for this subject yet (404). */
+export async function getHandwrittenAnalytics(
+  subjectId: string,
+): Promise<HandwrittenAnalytics | null> {
+  try {
+    return await jsonRequest<HandwrittenAnalytics>(
+      `/api/v1/handwritten-learning/analytics${learningQuery({ subject_id: subjectId })}`,
+      "GET",
+    );
+  } catch (reason) {
+    if (reason instanceof ApiRequestError && reason.status === 404) return null;
+    throw reason;
+  }
+}
+
+export const getHandwrittenWeakAreas = (subjectId?: string) =>
+  jsonRequest<HandwrittenWeakAreas>(
+    `/api/v1/handwritten-learning/weak-areas${learningQuery({ subject_id: subjectId })}`,
+    "GET",
+  );
 
 // --- Mock Test & PYQ student surface (KB-D): PYQ / MTP / RTP ---
 export type PaperType = "pyq" | "mtp" | "rtp";

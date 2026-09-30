@@ -10,6 +10,7 @@ import { DevAccountSwitcher } from "@/components/shared/dev-account-switcher";
 import { useEscapeKey } from "@/components/ui/dialog";
 import { ThemeToggle } from "@/components/shared/theme-provider";
 import {
+  AlertTriangle,
   BarChart3,
   BookOpen,
   Building2,
@@ -23,6 +24,7 @@ import {
   Search,
   Settings,
   Sparkles,
+  TrendingUp,
   Trophy,
   UserCheck,
   Users,
@@ -52,6 +54,7 @@ type NavItem = {
   section?: string;
   icon: IconComponent;
   feature?: keyof DashboardProfile["features"];
+  evaluation?: boolean;
 };
 
 const PRIMARY_ACTION: Record<
@@ -123,6 +126,13 @@ const NAV: Record<string, NavItem[]> = {
       section: "Content",
       icon: BookOpen,
       feature: "paper_bank",
+    },
+    {
+      label: "Handwritten evaluation",
+      href: "/dashboard/teacher/handwritten-evaluation",
+      section: "Content",
+      icon: FileText,
+      evaluation: true,
     },
     {
       label: "Class monitor",
@@ -292,6 +302,41 @@ const NAV: Record<string, NavItem[]> = {
       feature: "paper_bank",
     },
     {
+      label: "Exam Papers",
+      href: "/dashboard/student/handwritten-evaluation",
+      section: "Handwritten Evaluation",
+      icon: FileText,
+      evaluation: true,
+    },
+    {
+      label: "My Submissions",
+      href: "/dashboard/student/handwritten-evaluation/submissions",
+      section: "Handwritten Evaluation",
+      icon: BarChart3,
+      evaluation: true,
+    },
+    {
+      label: "Mistake Library",
+      href: "/dashboard/student/handwritten-evaluation/mistakes",
+      section: "Handwritten Evaluation",
+      icon: AlertTriangle,
+      evaluation: true,
+    },
+    {
+      label: "Handwritten Revision",
+      href: "/dashboard/student/handwritten-evaluation/revision",
+      section: "Handwritten Evaluation",
+      icon: RefreshCw,
+      evaluation: true,
+    },
+    {
+      label: "My Progress",
+      href: "/dashboard/student/handwritten-evaluation/progress",
+      section: "Handwritten Evaluation",
+      icon: TrendingUp,
+      evaluation: true,
+    },
+    {
       label: "Leaderboard",
       href: "/dashboard/student/leaderboard",
       section: "Progress",
@@ -318,8 +363,22 @@ const NAV: Record<string, NavItem[]> = {
   ],
 };
 
+/** The sidebar entries this role may see, given the tenant's feature flags. */
+export function visibleNavItems(
+  role: string | null,
+  features: DashboardProfile["features"],
+  handwrittenEvaluationEnabled: boolean,
+): NavItem[] {
+  if (!role) return [];
+  return (NAV[role] ?? []).filter(
+    (item) =>
+      (!item.feature || features[item.feature]) &&
+      (!item.evaluation || handwrittenEvaluationEnabled),
+  );
+}
+
 // Groups consecutive items that share a `section` under one header.
-function groupBySection(items: NavItem[]) {
+export function groupBySection(items: NavItem[]) {
   const groups: { section: string; items: NavItem[] }[] = [];
   for (const item of items) {
     const section = item.section ?? "Workspace";
@@ -440,8 +499,9 @@ export function DashboardShell({
   mustChangePassword?: boolean;
   children: React.ReactNode;
 }) {
-  const { features } = useDashboardIdentity();
+  const { features, handwrittenEvaluationEnabled } = useDashboardIdentity();
   const pathname = usePathname();
+  const isHandwrittenReport = /^\/dashboard\/student\/handwritten-evaluation\/submissions\/[^/]+$/.test(pathname);
   const router = useRouter();
   const [menuOpen, setMenuOpen] = useState(false);
   const [navOpen, setNavOpen] = useState(false);
@@ -528,9 +588,7 @@ export function DashboardShell({
     };
   }, [navOpen]);
 
-  const items = role
-    ? (NAV[role] ?? []).filter((item) => !item.feature || features[item.feature])
-    : [];
+  const items = visibleNavItems(role, features, handwrittenEvaluationEnabled);
   const dashboardRole = role && role in PRIMARY_ACTION
     ? (role as DashboardRole)
     : null;
@@ -547,7 +605,9 @@ export function DashboardShell({
   const active = items
     .filter((i) => i.href && (navPathname === i.href || navPathname.startsWith(i.href + "/")))
     .sort((a, b) => (b.href?.length ?? 0) - (a.href?.length ?? 0))[0];
-  const title = pathname.startsWith("/dashboard/student/attempt/")
+  const title = isHandwrittenReport
+    ? "Evaluation Report"
+    : pathname.startsWith("/dashboard/student/attempt/")
     ? "Quiz attempt"
     : pathname.startsWith("/dashboard/student/practice/")
       ? "Quiz session"
@@ -835,7 +895,13 @@ export function DashboardShell({
             </div>
           </div>
         </header>
-        <main id="dashboard-main" tabIndex={-1} className="flex-1 overflow-auto p-4 outline-none sm:p-6">{children}</main>
+        <main
+          id="dashboard-main"
+          tabIndex={-1}
+          className={`flex-1 overflow-auto outline-none ${isHandwrittenReport ? "" : "p-4 sm:p-6"}`}
+        >
+          {children}
+        </main>
       </div>
 
       <ChangePasswordModal
