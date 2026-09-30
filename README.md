@@ -34,9 +34,10 @@ map. Deployment and security guidance live in
 collection, disclosure, processor, and deletion map is in
 [`docs/personal-data-audit.md`](docs/personal-data-audit.md). Migration 59 was
 reported applied on 2026-09-24; the production AI-log raw-payload columns were
-also verified absent that day. Railway production now has two services: the
+also verified absent that day. Railway production now has three services: the
 public `quiz-generator-api` service and the private `quiz-generator-faculty-worker` for durable
-faculty jobs. The obsolete `quiz-generator-retention` cron was deleted on
+faculty jobs, plus the private `quiz-generator-evaluation-worker` for
+handwritten evaluation. The obsolete `quiz-generator-retention` cron was deleted on
 2026-09-24 after its code and target columns were removed. API and worker
 deployments are independent; see the deploy runbook before updating either.
 

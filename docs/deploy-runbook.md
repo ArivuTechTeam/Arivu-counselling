@@ -14,10 +14,10 @@ worker (`quiz-generator-faculty-worker`). They share one Supabase project.
 > alternative if you're setting this up fresh, but isn't what's deployed today.
 > The frontend goes on Vercel.
 
-> **Production service inventory (last verified 2026-09-26):** only
-> `quiz-generator` and `quiz-generator-worker` remained (since renamed `quiz-generator-api`
-> and `quiz-generator-faculty-worker`; see the rename note below). The old daily
-> `quiz-generator-retention` service was deleted after migration 59 removed the
+> **Production service inventory (last verified 2026-09-30):** three services in project
+> `quiz-generator`: `quiz-generator-api`, `quiz-generator-faculty-worker`, and
+> `quiz-generator-evaluation-worker` (see the rename note below for their earlier names).
+> The old daily `quiz-generator-retention` service was deleted after migration 59 removed the
 > raw AI-log columns it cleaned. Do not recreate that cron for this schema.
 >
 > **Railway service names (renamed 2026-09-30, verified via the Railway CLI):** the
