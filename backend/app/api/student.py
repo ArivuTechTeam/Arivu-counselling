@@ -158,10 +158,18 @@ QUESTION_ATTEMPT_COLUMNS = (
 )
 
 
+# The ordinary quiz-taking flow can only score objective questions. A descriptive
+# question (extracted in paper mode) would get the wrong answer box and always
+# score 0, so it is left out of what students take and out of every denominator.
+# Descriptive questions are still graded where they belong: the paper-bank flow.
+def _without_descriptive(questions: list[dict]) -> list[dict]:
+    return [q for q in questions if q.get("type") != "descriptive"]
+
+
 def _ordered_approved_questions(
     service, variant_id: str, tenant_id: str
 ) -> list[dict]:
-    """The variant's APPROVED questions, in the teacher's chosen order."""
+    """The variant's APPROVED, student-answerable questions, in the teacher's order."""
     links = (
         service.table("quiz_variant_questions")
         .select("question_id, order_index, marks_override")
@@ -193,14 +201,15 @@ def _ordered_approved_questions(
         if link.get("marks_override") is not None:
             effective_question["marks"] = link["marks_override"]
         ordered.append(effective_question)
-    return ordered
+    return _without_descriptive(ordered)
 
 
 def _attempt_questions(service, attempt: dict, tenant_id: str) -> list[dict]:
     """Return the immutable paper saved at start, with a legacy fallback."""
     snapshot = attempt.get("question_snapshot")
     if isinstance(snapshot, list) and snapshot:
-        return snapshot
+        # Attempts frozen before this rule still hold descriptive questions.
+        return _without_descriptive(snapshot)
     return _ordered_approved_questions(service, attempt["variant_id"], tenant_id)
 
 

@@ -354,11 +354,13 @@ export function QuizExtractor() {
             />
             <span>
               <span className="font-medium text-foreground">
-                This document contains previous-year (PYQ), mock test (MTP), or revision (RTP) questions
+                Also add to the paper bank (previous-year, mock test and revision papers)
               </span>
               <span className="mt-0.5 block text-xs text-muted-foreground">
-                When ticked, the AI classifies each question (year &amp; exam) and adds them to the student
-                Mock Test &amp; PYQ bank on publish. Leave unticked for a normal quiz.
+                Tick this if the document is an exam paper. The AI classifies each question (exam &amp; year),
+                and they feed student Mock Test &amp; PYQ practice and Generate exam paper.
+                Questions appear there only after you approve them and publish the quiz.
+                Descriptive questions are extracted only in this mode. Leave unticked for a normal quiz.
               </span>
             </span>
           </label>

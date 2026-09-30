@@ -16,7 +16,14 @@ from app.api.extraction import (
 from app.lib.auth import CurrentProfile
 from app.lib.role_checks import require_teacher
 from app.services.extraction import ExtractedText, PageSpan
-from app.services.quiz_extraction import _extract_document_content, _merge_questions, _validate_import_candidates, extract_quiz
+from app.services.extraction_prompts import EXTRACTION_SYSTEM, extraction_system
+from app.services.quiz_extraction import (
+    MARKS_DEFAULTED_WARNING,
+    _extract_document_content,
+    _merge_questions,
+    _validate_import_candidates,
+    extract_quiz,
+)
 
 
 def profile(role: str = "teacher") -> CurrentProfile:
@@ -289,6 +296,74 @@ class ExtractionEndpointTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(caught.exception.status_code, 400)
         store.assert_not_called()
+
+
+class ExtractionMarksTests(unittest.TestCase):
+    """Marks the source never showed must not look like a real 1-mark question."""
+
+    @staticmethod
+    def _candidate(**overrides):
+        base = {
+            "type": "mcq_single",
+            "question_text": "Which is correct?",
+            "options": [{"id": "a", "text": "One"}, {"id": "b", "text": "Two"}],
+            "correct_answer": "a",
+        }
+        return {**base, **overrides}
+
+    def _validate(self, candidate, *, paper_mode):
+        questions, _summary = _validate_import_candidates(
+            {"questions": [candidate]}, paper_mode=paper_mode
+        )
+        self.assertEqual(len(questions), 1)
+        return questions[0]
+
+    def test_prompt_asks_for_null_instead_of_a_guess(self) -> None:
+        self.assertNotIn("else 1", EXTRACTION_SYSTEM)
+        self.assertIn("null", EXTRACTION_SYSTEM.split('"marks"')[1].split('"confidence"')[0])
+        self.assertIn("Never guess", EXTRACTION_SYSTEM)
+        self.assertIn("section-level rule", EXTRACTION_SYSTEM)
+        # Paper mode appends to the same base, so it inherits the rule.
+        self.assertTrue(extraction_system(True).startswith(EXTRACTION_SYSTEM))
+
+    def test_unshown_marks_default_to_one_with_warning_in_paper_mode(self) -> None:
+        for marks in ({"marks": None}, {}):  # explicit null, and field omitted
+            with self.subTest(marks=marks):
+                question = self._validate(self._candidate(**marks), paper_mode=True)
+                self.assertEqual(question.marks, 1.0)
+                self.assertEqual(question.verification_warnings.count(MARKS_DEFAULTED_WARNING), 1)
+
+    def test_unshown_marks_add_no_warning_in_normal_mode(self) -> None:
+        question = self._validate(self._candidate(marks=None), paper_mode=False)
+        self.assertEqual(question.marks, 1.0)  # column is NOT NULL
+        self.assertNotIn(MARKS_DEFAULTED_WARNING, question.verification_warnings)
+        self.assertEqual(len(question.verification_warnings), 1)  # only the usual one
+
+    def test_a_real_one_mark_question_is_not_flagged(self) -> None:
+        for paper_mode in (True, False):
+            with self.subTest(paper_mode=paper_mode):
+                question = self._validate(self._candidate(marks=1), paper_mode=paper_mode)
+                self.assertEqual(question.marks, 1.0)
+                self.assertNotIn(MARKS_DEFAULTED_WARNING, question.verification_warnings)
+
+    def test_printed_marks_are_kept(self) -> None:
+        question = self._validate(self._candidate(marks=2.5), paper_mode=True)
+        self.assertEqual(question.marks, 2.5)
+        self.assertNotIn(MARKS_DEFAULTED_WARNING, question.verification_warnings)
+
+    def test_marks_are_always_a_number_in_the_persisted_payload(self) -> None:
+        question = self._validate(self._candidate(marks=None), paper_mode=True)
+        self.assertEqual(question.model_dump()["marks"], 1.0)
+
+    def test_other_candidates_are_unaffected_by_one_missing_marks(self) -> None:
+        questions, summary = _validate_import_candidates(
+            {"questions": [self._candidate(marks=None), self._candidate(marks=4)]},
+            paper_mode=True,
+        )
+        self.assertEqual([q.marks for q in questions], [1.0, 4.0])
+        self.assertEqual(summary["skipped"], 0)
+        self.assertIn(MARKS_DEFAULTED_WARNING, questions[0].verification_warnings)
+        self.assertNotIn(MARKS_DEFAULTED_WARNING, questions[1].verification_warnings)
 
 
 class ExtractionMigrationTests(unittest.TestCase):

@@ -842,7 +842,7 @@ def publish_quiz_set(
         select_all_in(
             service,
             "questions",
-            "id, review_status, marks",
+            "id, type, review_status, marks",
             in_column="id",
             values=question_ids,
             configure=lambda query: query
@@ -883,9 +883,13 @@ def publish_quiz_set(
         if question.get("review_status") != "approved":
             continue
         variant_id = str(link["variant_id"])
-        approved_marks_by_variant[variant_id] += float(
-            link.get("marks_override") or question.get("marks") or 1
-        )
+        # Students can't take descriptive questions in a quiz (they are graded in
+        # the paper-bank flow), so their marks stay out of the quiz total. They
+        # still count as approved content, so a paper-only set can be published.
+        if question.get("type") != "descriptive":
+            approved_marks_by_variant[variant_id] += float(
+                link.get("marks_override") or question.get("marks") or 1
+            )
         approved_count_by_variant[variant_id] += 1
 
     if any(count == 0 for count in approved_count_by_variant.values()):

@@ -330,6 +330,33 @@ class FacultyPublishingTests(unittest.TestCase):
         self.assertEqual(result["status"], "published")
         self.assertEqual(service.rows["quiz_variants"][0]["total_marks"], 2)
 
+    def _publish_total(self, statuses, descriptive_ids) -> float:
+        rows = self._rows(statuses)
+        for question in rows["questions"]:
+            question["type"] = "descriptive" if question["id"] in descriptive_ids else "mcq_single"
+        service = _Service(rows)
+        with (
+            patch("app.api.quiz.get_service_client", return_value=service),
+            patch("app.api.quiz.log_event"),
+            patch("app.api.quiz.quiz_reuse.enabled", return_value=False),
+        ):
+            result = publish_quiz_set("set1", _teacher())
+        self.assertEqual(result["status"], "published")
+        return service.rows["quiz_variants"][0]["total_marks"]
+
+    def test_publish_total_leaves_out_descriptive_marks(self) -> None:
+        # Students cannot take descriptive questions in a quiz, so 10 marks of
+        # them must not sit in the denominator.
+        total = self._publish_total(
+            [("q1", "approved", 2), ("q2", "approved", 1), ("q3", "approved", 10)], {"q3"}
+        )
+        self.assertEqual(total, 3)
+
+    def test_paper_only_set_still_publishes_so_the_paper_bank_is_fed(self) -> None:
+        # The bank syncs at publish; an all-descriptive paper must not be blocked.
+        total = self._publish_total([("q1", "approved", 5), ("q2", "approved", 5)], {"q1", "q2"})
+        self.assertEqual(total, 0)
+
     def test_publish_purges_rejected_when_flag_on(self) -> None:
         service = _Service(self._rows([("q1", "approved", 2), ("q2", "rejected", 5)]))
         with (

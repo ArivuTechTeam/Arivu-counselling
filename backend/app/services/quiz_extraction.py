@@ -63,6 +63,12 @@ _TEXT_EXT = {"docx"}  # always extracted to text first
 # hundreds of characters; a scanned page yields ~0 from pdfplumber.
 
 
+DEFAULT_MARKS = 1.0
+MARKS_DEFAULTED_WARNING = (
+    "Marks not shown in the source; defaulted to 1 — confirm before approval."
+)
+
+
 class ExtractedQuestion(GeneratedQuestion):
     """A generated-question shape plus extraction-only metadata."""
 
@@ -71,6 +77,9 @@ class ExtractedQuestion(GeneratedQuestion):
     type: Literal[  # type: ignore[assignment]
         "mcq_single", "mcq_multi", "true_false", "numerical", "fill_blank", "descriptive"
     ]
+    # None means the source showed no marks (as opposed to a real 1-mark question).
+    # The column is NOT NULL, so _validate_import_candidates stores 1 and records it.
+    marks: float | None = None  # type: ignore[assignment]
     confidence: float | None = Field(default=None, ge=0, le=1)
     is_pyq: bool = False            # base contract (normal extraction / off path)
     year: str | None = None
@@ -104,6 +113,12 @@ def _validate_import_candidates(
             question.verification_status = "needs_teacher_review"
             if not question.verification_warnings:
                 question.verification_warnings = ["Imported answer is unconfirmed; compare with the original paper before approval."]
+            if question.marks is None:
+                question.marks = DEFAULT_MARKS
+                # Only paper-bank questions feed exact-mark paper generation. On a
+                # normal quiz most papers print no marks, so a warning would be noise.
+                if paper_mode:
+                    question.verification_warnings.append(MARKS_DEFAULTED_WARNING)
             if question.type == "descriptive":
                 if not paper_mode:
                     raise ValueError("Descriptive questions require paper analysis mode.")

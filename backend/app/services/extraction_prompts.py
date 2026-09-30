@@ -20,7 +20,9 @@ Every <question> has these common fields:
   "type":          one of "mcq_single" | "mcq_multi" | "true_false" | "numerical" | "fill_blank"
   "question_text": the question EXACTLY as written (verbatim)
   "explanation":   a short reason for the answer if the document gives one, else null
-  "marks":         number (use the marks shown, else 1)
+  "marks":         number or null — the marks PRINTED for this specific question, or the
+                   section-level rule that covers it (e.g. "each question carries 2 marks").
+                   If no marks are shown anywhere for it, return null. Never guess a number.
   "confidence":    number from 0 to 1 — how sure you are the correct_answer is right
                    (use a LOW value when the answer was not clearly indicated)
   "is_pyq":        true if the item is tagged as a previous-year question, else false
