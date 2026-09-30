@@ -36,6 +36,10 @@ mistake-category patterns are aggregated live from `handwritten_mistakes` for
 the student's latest evaluated submission per paper. This is intentional and
 prevents stale duplicate analytics state.
 
+`score_history` is Quiz Generator's own stable contract. Every array item is
+exactly `{evaluation_id, percentage, date}`; it is not intended to be consumed
+as an ExamApp `StudentAnalytics` payload.
+
 Apply `migration-82-handwritten-learning.sql` before deploying this worker and
 API version. The three new tables and their reconciliation functions are
 service-role-only; API authorization uses the server-side profile tenant and

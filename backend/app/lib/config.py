@@ -110,6 +110,23 @@ class Settings:
         self.evaluation_worker_poll_seconds = _positive_int(
             "EVALUATION_WORKER_POLL_SECONDS", 3
         )
+        self.evaluation_job_soft_timeout_seconds = _positive_int(
+            "EVALUATION_JOB_SOFT_TIMEOUT_SECONDS", 780
+        )
+        self.evaluation_job_hard_timeout_seconds = _positive_int(
+            "EVALUATION_JOB_HARD_TIMEOUT_SECONDS", 840
+        )
+        if self.evaluation_job_hard_timeout_seconds <= self.evaluation_job_soft_timeout_seconds:
+            raise RuntimeError(
+                "EVALUATION_JOB_HARD_TIMEOUT_SECONDS must be greater than "
+                "EVALUATION_JOB_SOFT_TIMEOUT_SECONDS."
+            )
+        self.evaluation_reaper_interval_seconds = _positive_int(
+            "EVALUATION_REAPER_INTERVAL_SECONDS", 60
+        )
+        self.handwritten_evaluation_attempts_per_paper = _positive_int(
+            "HANDWRITTEN_EVALUATION_ATTEMPTS_PER_PAPER", 2
+        )
         self.gemini_stage1_max_output_tokens = _positive_int(
             "GEMINI_STAGE1_MAX_OUTPUT_TOKENS", 32000
         )

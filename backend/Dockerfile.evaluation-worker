@@ -1,0 +1,10 @@
+FROM python:3.12-slim
+
+WORKDIR /app
+COPY requirements.txt requirements.lock ./
+RUN pip install --no-cache-dir --require-hashes -r requirements.lock
+COPY . .
+
+# Dedicated handwritten-evaluation worker. It exposes no public port and must
+# run as an always-on service with restart-on-failure enabled.
+CMD ["python", "-m", "app.services.evaluation_worker"]

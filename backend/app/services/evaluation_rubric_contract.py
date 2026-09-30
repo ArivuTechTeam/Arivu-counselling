@@ -140,6 +140,15 @@ RULES:
 - Preserve each printed question_ref and full question_text verbatim. Never invent or renumber questions.
 - Printed marks are authoritative. marks_source, parent_question_ref, and parent_total_marks are mandatory and must never be null or omitted.
 - For unmarked children under a printed parent total, preserve printed sibling marks, subtract them, and split the remainder equally only if the result lies on the 0.5 grid. If equal splitting is impossible, an unequal proposed allocation is allowed only when every mark is positive, lies on the 0.5 grid, and sums exactly to the verified parent remainder. Otherwise use marks_source=\"unknown\"; never guess.
+- If the paper prints NO question-level or parent-level marks, every extracted
+  question is standalone and compulsory, and the configured effective grading
+  total is positive, treat the configured paper total as their common governing
+  total. Divide it EQUALLY across the standalone questions only when the result
+  is an exact multiple of 0.5. Use marks_source="derived_from_parent",
+  parent_question_ref="PAPER_TOTAL", and parent_total_marks equal to the
+  configured effective grading total for every question. NEVER copy the full
+  configured paper total onto each question. If the equal split is not possible
+  on the 0.5 grid, use marks=0 and marks_source="unknown" for admin review.
 - Each evaluation criterion must be specific and independently checkable, worth at least 0.5 on the half-mark grid, and all criteria must sum exactly to the question marks. Criterion count may not exceed question_marks x 2.
 - A pure MCQ uses question_type=\"mcq_single\", at least two unique labelled options, one correct_option matching a label, and exactly one full-mark criterion. Descriptive questions use an empty options array and empty correct_option.
 - Preserve printed top-level refs in paper_structure. A printed pick N may change only for one non-overlapping optional group with equal top-level marks where exactly one whole-number pick reconciles the configured total. Otherwise retain the printed pick and set requires_admin_review=true with a reason.

@@ -2,8 +2,11 @@
 from __future__ import annotations
 
 import logging
+import os
 import signal
 import threading
+import time
+from collections.abc import Callable
 from uuid import uuid4
 
 from app.lib.auth import CurrentProfile
@@ -140,7 +143,7 @@ def _authorized_rubric(service, job: dict) -> bool:
 def _rubric_context(service, job: dict) -> dict:
     paper = (
         service.table("evaluation_papers")
-        .select("id,tenant_id,course_level_id,subject_id,total_marks,created_by,is_active,question_paper_storage_path,suggested_answer_storage_path,question_paper_text,suggested_answer_text")
+        .select("id,tenant_id,course_level_id,subject_id,total_marks,mcq_marks,created_by,is_active,question_paper_storage_path,suggested_answer_storage_path,question_paper_text,suggested_answer_text")
         .eq("id", job["evaluation_paper_id"])
         .eq("tenant_id", job["tenant_id"])
         .eq("created_by", job["owner_teacher_id"])
@@ -154,7 +157,7 @@ def _rubric_context(service, job: dict) -> dict:
 def _stage1_context(service, job: dict) -> tuple[dict, dict]:
     submission = (
         service.table("handwritten_submissions")
-        .select("id,tenant_id,student_id,evaluation_paper_id,answer_script_path,stage1_extraction,stage1_extraction_source,page_mapping,status")
+        .select("id,tenant_id,student_id,evaluation_paper_id,answer_script_path,additional_pages_path,stage1_extraction,stage1_extraction_source,page_mapping,status")
         .eq("id", job["submission_id"])
         .eq("tenant_id", job["tenant_id"])
         .eq("student_id", job["owner_student_id"])
@@ -164,7 +167,7 @@ def _stage1_context(service, job: dict) -> tuple[dict, dict]:
         raise Stage1PermanentError("Submission is no longer available.")
     paper = (
         service.table("evaluation_papers")
-        .select("id,tenant_id,generated_paper_id,subject_id,course_level_id,total_marks,is_active,structured_qa,question_structure,rubric_source,rubric_status")
+        .select("id,tenant_id,generated_paper_id,subject_id,course_level_id,total_marks,mcq_marks,is_active,structured_qa,question_structure,rubric_source,rubric_status")
         .eq("id", submission["evaluation_paper_id"])
         .eq("tenant_id", job["tenant_id"])
         .eq("is_active", True)
@@ -184,7 +187,15 @@ def _stage1_context(service, job: dict) -> tuple[dict, dict]:
     return submission, paper
 
 
-def run_one(service=None, *, worker_id: str | None = None, heartbeat_seconds: float = 20) -> bool:
+def run_one(
+    service=None,
+    *,
+    worker_id: str | None = None,
+    heartbeat_seconds: float = 20,
+    soft_timeout_seconds: float | None = None,
+    hard_timeout_seconds: float | None = None,
+    hard_exit: Callable[[int], object] = os._exit,
+) -> bool:
     """Claim one job and lease-safely persist its output."""
     service = service or get_service_client()
     worker_id = worker_id or str(uuid4())
@@ -193,6 +204,19 @@ def run_one(service=None, *, worker_id: str | None = None, heartbeat_seconds: fl
         return False
     job = claimed[0] if isinstance(claimed, list) else claimed
     done = threading.Event()
+    settings = get_settings()
+    soft_timeout = float(
+        soft_timeout_seconds
+        if soft_timeout_seconds is not None
+        else settings.evaluation_job_soft_timeout_seconds
+    )
+    hard_timeout = float(
+        hard_timeout_seconds
+        if hard_timeout_seconds is not None
+        else settings.evaluation_job_hard_timeout_seconds
+    )
+    if hard_timeout <= soft_timeout:
+        raise ValueError("Evaluation hard timeout must be greater than soft timeout.")
 
     def heartbeat() -> None:
         while not done.wait(heartbeat_seconds):
@@ -204,7 +228,29 @@ def run_one(service=None, *, worker_id: str | None = None, heartbeat_seconds: fl
             except Exception as exc:
                 logger.warning("Evaluation heartbeat failed (%s)", type(exc).__name__)
 
+    def watchdog() -> None:
+        if done.wait(soft_timeout):
+            return
+        try:
+            watchdog_service = get_service_client()
+            response = watchdog_service.rpc(
+                "timeout_evaluation_job",
+                {
+                    "p_id": job["id"],
+                    "p_worker": worker_id,
+                    "p_reason": "Evaluation processing exceeded its safe duration.",
+                },
+            ).execute().data
+            logger.error("Evaluation job soft timeout fenced job=%s result=%s", job["id"], response)
+        except Exception as exc:
+            logger.error("Could not fence timed-out evaluation job (%s)", type(exc).__name__)
+        if done.wait(hard_timeout - soft_timeout):
+            return
+        logger.critical("Evaluation job hard timeout; terminating worker job=%s", job["id"])
+        hard_exit(70)
+
     thread: threading.Thread | None = None
+    watchdog_thread: threading.Thread | None = None
     try:
         rubric_job = job.get("kind") == "build_rubric"
         authorized = _authorized_rubric(service, job) if rubric_job else _authorized_submission(service, job)
@@ -223,6 +269,10 @@ def run_one(service=None, *, worker_id: str | None = None, heartbeat_seconds: fl
             return True
         thread = threading.Thread(target=heartbeat, daemon=True, name="evaluation-job-heartbeat")
         thread.start()
+        watchdog_thread = threading.Thread(
+            target=watchdog, daemon=True, name="evaluation-job-watchdog"
+        )
+        watchdog_thread.start()
         if rubric_job:
             paper = _rubric_context(service, job)
 
@@ -279,8 +329,21 @@ def run_one(service=None, *, worker_id: str | None = None, heartbeat_seconds: fl
                         "p_requires_review": True,
                     })
                     return True
+            if paper.get("rubric_status") == "failed":
+                _rpc_bool(service, "block_submission_for_failed_rubric", {
+                    "p_id": job["id"], "p_worker": worker_id,
+                })
+                return True
             if paper.get("rubric_status") != "ready":
-                raise Stage2PermanentError("The fixed evaluation rubric is not ready.")
+                _rpc_bool(service, "finish_evaluation_stage1_job", {
+                    "p_id": job["id"], "p_worker": worker_id,
+                    "p_extraction": stage1,
+                    "p_source": submission.get("stage1_extraction_source")
+                    or submission.get("answer_script_path"),
+                    "p_mapping": submission.get("page_mapping") or {},
+                    "p_requires_review": False,
+                })
+                return True
             if not _rpc_bool(service, "begin_evaluation_stage2", {
                 "p_id": job["id"], "p_worker": worker_id,
             }):
@@ -299,7 +362,7 @@ def run_one(service=None, *, worker_id: str | None = None, heartbeat_seconds: fl
                 "p_questions": scored.questions, "p_artifacts": scored.artifacts,
                 "p_review": scored.requires_review,
             })
-            if finished and not scored.requires_review:
+            if finished:
                 _run_learning_follow_on(
                     service, evaluation_id=evaluation_id,
                     submission=submission, paper=paper,
@@ -332,6 +395,8 @@ def run_one(service=None, *, worker_id: str | None = None, heartbeat_seconds: fl
         done.set()
         if thread is not None:
             thread.join(timeout=1)
+        if watchdog_thread is not None:
+            watchdog_thread.join(timeout=1)
     return True
 
 
@@ -352,8 +417,18 @@ def main() -> None:
         settings.evaluation_worker_poll_seconds,
     )
     connection_logged = False
+    next_reaper_at = 0.0
     while not stop.is_set():
         try:
+            now = time.monotonic()
+            if now >= next_reaper_at:
+                reaped = get_service_client().rpc(
+                    "reap_stuck_evaluation_jobs",
+                    {"p_soft_timeout_seconds": settings.evaluation_job_soft_timeout_seconds},
+                ).execute().data
+                if reaped:
+                    logger.warning("Reaped %s stuck evaluation job(s)", reaped)
+                next_reaper_at = now + settings.evaluation_reaper_interval_seconds
             worked = run_one(worker_id=worker_id)
             if not connection_logged:
                 logger.info("Evaluation worker connected; polling evaluation jobs")

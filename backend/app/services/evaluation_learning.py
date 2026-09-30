@@ -270,13 +270,16 @@ def update_student_analytics(service, *, tenant_id: str, student_id: str,
 
 
 def current_evaluation_ids(service, *, tenant_id: str, student_id: str,
-                           subject_id: str | None = None) -> list[str]:
+                           subject_id: str | None = None,
+                           subject_ids: set[str] | None = None) -> list[str]:
     papers = select_all(
         service, "evaluation_papers", "id,subject_id",
         configure=lambda query: query.eq("tenant_id", tenant_id),
     )
     if subject_id:
         papers = [row for row in papers if str(row.get("subject_id")) == subject_id]
+    elif subject_ids is not None:
+        papers = [row for row in papers if str(row.get("subject_id")) in subject_ids]
     paper_ids = {str(row["id"]) for row in papers}
     submissions = select_all(
         service, "handwritten_submissions", "id,evaluation_paper_id,created_at",
@@ -303,11 +306,13 @@ def current_evaluation_ids(service, *, tenant_id: str, student_id: str,
 
 
 def current_mistakes(service, *, tenant_id: str, student_id: str,
-                     subject_id: str | None = None, severity: str | None = None) -> list[dict]:
+                     subject_id: str | None = None, severity: str | None = None,
+                     subject_ids: set[str] | None = None) -> list[dict]:
     evaluation_ids = current_evaluation_ids(
         service, tenant_id=tenant_id, student_id=student_id, subject_id=subject_id,
+        subject_ids=subject_ids,
     )
-    return select_all_in(
+    mistakes = select_all_in(
         service, "handwritten_mistakes",
         "id,evaluation_id,question_result_id,category,severity,description,marks_lost,"
         "suggestion,chapter_name,criterion_key,signature,is_recurring,created_at",
@@ -316,3 +321,53 @@ def current_mistakes(service, *, tenant_id: str, student_id: str,
         if not severity else query.eq("tenant_id", tenant_id).eq("severity", severity),
         order_column="created_at", order_desc=True,
     )
+    if not mistakes:
+        return []
+
+    evaluations = select_all_in(
+        service,
+        "handwritten_evaluations",
+        "id,submission_id",
+        in_column="id",
+        values=[str(row["evaluation_id"]) for row in mistakes],
+        configure=lambda query: query.eq("tenant_id", tenant_id),
+    )
+    evaluation_sources = {str(row["id"]): row for row in evaluations}
+    submissions = select_all_in(
+        service,
+        "handwritten_submissions",
+        "id,evaluation_paper_id",
+        in_column="id",
+        values=[str(row["submission_id"]) for row in evaluations],
+        configure=lambda query: query.eq("tenant_id", tenant_id).eq(
+            "student_id", student_id
+        ),
+    )
+    submission_sources = {str(row["id"]): row for row in submissions}
+    papers = select_all_in(
+        service,
+        "evaluation_papers",
+        "id,subject_id,title",
+        in_column="id",
+        values=[str(row["evaluation_paper_id"]) for row in submissions],
+        configure=lambda query: query.eq("tenant_id", tenant_id),
+    )
+    paper_sources = {str(row["id"]): row for row in papers}
+
+    enriched: list[dict] = []
+    for mistake in mistakes:
+        evaluation = evaluation_sources.get(str(mistake["evaluation_id"]))
+        submission_id = str(evaluation["submission_id"]) if evaluation else None
+        submission = submission_sources.get(submission_id or "")
+        paper = (
+            paper_sources.get(str(submission["evaluation_paper_id"]))
+            if submission
+            else None
+        )
+        enriched.append({
+            **mistake,
+            "subject_id": paper.get("subject_id") if paper else None,
+            "submission_id": submission_id,
+            "paper_title": paper.get("title") if paper else None,
+        })
+    return enriched

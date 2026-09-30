@@ -9,7 +9,11 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from app.lib.auth import CurrentProfile, get_current_profile
 from app.lib.supabase import get_service_client
 from app.lib.supabase_queries import select_all
-from app.services.evaluation_access import require_evaluation_enabled
+from app.services.evaluation_access import (
+    assigned_evaluation_subject_ids,
+    require_evaluation_enabled,
+    teacher_can_inspect_student_learning,
+)
 from app.services.evaluation_learning import current_mistakes
 
 router = APIRouter(prefix="/api/v1/handwritten-learning", tags=["handwritten-learning"])
@@ -30,10 +34,31 @@ def _target_student(service, profile: CurrentProfile, requested: UUID | None) ->
     return str(requested)
 
 
-def _scope(profile: CurrentProfile, student_id: UUID | None) -> tuple[object, str]:
+def _scope(
+    profile: CurrentProfile,
+    student_id: UUID | None,
+    subject_id: UUID | None = None,
+) -> tuple[object, str, set[str] | None]:
     service = get_service_client()
     require_evaluation_enabled(service, profile)
-    return service, _target_student(service, profile, student_id)
+    student = _target_student(service, profile, student_id)
+    if profile.role == "student":
+        return service, student, None
+
+    assigned = assigned_evaluation_subject_ids(service, profile)
+    requested_subject = str(subject_id) if subject_id else None
+    if requested_subject is not None:
+        if requested_subject not in assigned:
+            raise HTTPException(status_code=404, detail="Learning data not found")
+        assigned = {requested_subject}
+    if not teacher_can_inspect_student_learning(
+        service,
+        profile,
+        student_id=student,
+        subject_ids=assigned,
+    ):
+        raise HTTPException(status_code=404, detail="Student not found")
+    return service, student, assigned
 
 
 @router.get("/mistakes")
@@ -43,10 +68,11 @@ def mistake_library(
     severity: str | None = Query(default=None, pattern="^(minor|moderate|major)$"),
     profile: CurrentProfile = Depends(get_current_profile),
 ) -> dict:
-    service, student = _scope(profile, student_id)
+    service, student, subject_scope = _scope(profile, student_id, subject_id)
     rows = current_mistakes(
         service, tenant_id=profile.tenant_id, student_id=student,
         subject_id=str(subject_id) if subject_id else None, severity=severity,
+        subject_ids=subject_scope,
     )
     return {"mistakes": rows}
 
@@ -58,12 +84,14 @@ def revision_items(
     resolved: bool | None = None,
     profile: CurrentProfile = Depends(get_current_profile),
 ) -> dict:
-    service, student = _scope(profile, student_id)
+    service, student, subject_scope = _scope(profile, student_id, subject_id)
 
     def configure(query):
         query = query.eq("tenant_id", profile.tenant_id).eq("student_id", student)
         if subject_id:
             query = query.eq("subject_id", str(subject_id))
+        elif subject_scope is not None:
+            query = query.in_("subject_id", sorted(subject_scope))
         if resolved is not None:
             query = query.eq("is_resolved", resolved)
         return query
@@ -84,7 +112,7 @@ def analytics_summary(
     student_id: UUID | None = None,
     profile: CurrentProfile = Depends(get_current_profile),
 ) -> dict:
-    service, student = _scope(profile, student_id)
+    service, student, _subject_scope = _scope(profile, student_id, subject_id)
     row = (service.table("handwritten_student_analytics")
            .select("id,subject_id,total_attempts,avg_percentage,best_percentage,"
                    "latest_percentage,score_history,current_level,improvement_rate,updated_at")
@@ -102,10 +130,11 @@ def weak_areas(
     profile: CurrentProfile = Depends(get_current_profile),
 ) -> dict:
     """Compute Option-A weak areas live; no stale analytics JSON is stored."""
-    service, student = _scope(profile, student_id)
+    service, student, subject_scope = _scope(profile, student_id, subject_id)
     mistakes = current_mistakes(
         service, tenant_id=profile.tenant_id, student_id=student,
         subject_id=str(subject_id) if subject_id else None,
+        subject_ids=subject_scope,
     )
     categories: dict[str, dict] = defaultdict(lambda: {"count": 0, "total_marks_lost": 0.0})
     for row in mistakes:
@@ -118,7 +147,11 @@ def weak_areas(
     def configure(query):
         query = (query.eq("tenant_id", profile.tenant_id).eq("student_id", student)
                  .eq("is_resolved", False))
-        return query.eq("subject_id", str(subject_id)) if subject_id else query
+        if subject_id:
+            return query.eq("subject_id", str(subject_id))
+        if subject_scope is not None:
+            return query.in_("subject_id", sorted(subject_scope))
+        return query
 
     revision = select_all(
         service, "handwritten_revision_items",

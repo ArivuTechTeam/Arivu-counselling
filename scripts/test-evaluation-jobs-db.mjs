@@ -55,6 +55,9 @@ await db.exec(learningMigration);
 const telemetryMigration = fs.readFileSync("migrations/migration-83-evaluation-ai-telemetry.sql", "utf8");
 await db.exec(telemetryMigration);
 await db.exec(telemetryMigration);
+const hardeningMigration = fs.readFileSync("migrations/migration-84-handwritten-evaluation-hardening.sql", "utf8");
+await db.exec(hardeningMigration);
+await db.exec(hardeningMigration);
 
 const tenantA = uuid(), tenantB = uuid(), teacherA = uuid(), studentA = uuid(), otherA = uuid();
 const courseA = uuid(), levelA = uuid(), subjectA = uuid(), generated = uuid(), paper = uuid(), intent = uuid();
@@ -95,7 +98,8 @@ await db.query(`insert into evaluation_upload_intents(id,tenant_id,student_id,ev
   values($1,$2,$3,$4,'answer.pdf','answer.pdf','application/pdf',5,'verified',now())`, [intent, tenantA, studentA, paper]);
 
 const createSubmission = () => scalar(
-  "select create_handwritten_submission_job($1,$2,$3)", [tenantA, studentA, intent]
+  "select create_limited_handwritten_submission_job($1,$2,$3,$4)",
+  [tenantA, studentA, intent, 2]
 );
 const first = await createSubmission();
 const replay = await createSubmission();
@@ -123,6 +127,13 @@ assert.equal(claimed.id, first.job.id);
 assert.equal(await scalar("select claim_evaluation_job($1)", [workerTwo]), null, "a live lease cannot be double-claimed");
 assert.equal(await scalar("select start_evaluation_job($1,$2)", [claimed.id, workerTwo]), false, "another worker cannot start the lease");
 await db.query("update evaluation_jobs set lease_expires_at=now()-interval '1 second' where id=$1", [claimed.id]);
+assert.equal(await scalar("select claim_evaluation_job($1)", [workerTwo]), null,
+  "an interrupted first attempt observes the 30-second backoff");
+const retryDelay = Number(await scalar(
+  "select extract(epoch from available_at-clock_timestamp()) from evaluation_jobs where id=$1", [claimed.id]
+));
+assert.ok(retryDelay > 28 && retryDelay <= 30, "first retry is delayed by 30 seconds");
+await db.query("update evaluation_jobs set available_at=now()-interval '1 second' where id=$1", [claimed.id]);
 const reclaimed = await scalar("select claim_evaluation_job($1)", [workerTwo]);
 assert.equal(reclaimed.id, claimed.id);
 assert.equal(reclaimed.attempts, 2);
@@ -199,8 +210,8 @@ await db.query(`insert into evaluation_papers(id,tenant_id,course_level_id,subje
   values($1,$2,$3,$4,'Mock 2','paper-2.pdf',100,$5,$6)`, [paperTwo, tenantA, levelA, subjectA, generated, teacherA]);
 await db.query(`insert into evaluation_upload_intents(id,tenant_id,student_id,evaluation_paper_id,storage_path,original_filename,content_type,expected_size,status,verified_at)
   values($1,$2,$3,$4,'answer-2.pdf','answer-2.pdf','application/pdf',5,'verified',now())`, [intentTwo, tenantA, studentA, paperTwo]);
-await db.query(`insert into handwritten_submissions(id,tenant_id,student_id,evaluation_paper_id,upload_intent_id,answer_script_path,status)
-  values($1,$2,$3,$4,$5,'answer-2.pdf','evaluated')`, [submissionTwo, tenantA, studentA, paperTwo, intentTwo]);
+await db.query(`insert into handwritten_submissions(id,tenant_id,student_id,evaluation_paper_id,upload_intent_id,answer_script_path,status,paper_title_snapshot,subject_name_snapshot)
+  values($1,$2,$3,$4,$5,'answer-2.pdf','evaluated','Mock 2','Accounts')`, [submissionTwo, tenantA, studentA, paperTwo, intentTwo]);
 await db.query(`insert into handwritten_evaluations(id,tenant_id,submission_id,total_marks_obtained,total_marks_possible,percentage)
   values($1,$2,$3,60,100,60)`, [evaluationTwo, tenantA, submissionTwo]);
 const questionResultTwo = uuid();
@@ -229,6 +240,121 @@ assert.equal(await scalar(`select count(*)::int from information_schema.columns
   where table_name='handwritten_student_analytics'
    and column_name in('weak_chapters','top_mistake_categories','presentation_scores','streak_count')`), 0,
   "Option A analytics intentionally omits ExamApp's unused fields");
+
+// Successful evaluations, not technical failures, consume the lifetime quota.
+const regrade = await scalar(
+  "select retrigger_handwritten_submission($1,$2,$3,2)",
+  [tenantA, studentA, first.submission.id],
+);
+assert.notEqual(regrade.submission.id, first.submission.id);
+assert.equal(regrade.submission.regraded_from, first.submission.id);
+assert.equal(regrade.completed_attempts, 1);
+assert.equal(regrade.submission.stage1_extraction_source, "answer.pdf",
+  "same-script regrades safely reuse the verified Stage 1 transcript");
+const reservedIntent = uuid();
+await db.query(`insert into evaluation_upload_intents(
+ id,tenant_id,student_id,evaluation_paper_id,storage_path,original_filename,
+ content_type,expected_size,status,verified_at
+ ) values($1,$2,$3,$4,'reserved-answer.pdf','reserved-answer.pdf',
+ 'application/pdf',5,'verified',now())`, [reservedIntent, tenantA, studentA, paper]);
+await assert.rejects(
+  db.query("select create_limited_handwritten_submission_job($1,$2,$3,$4)",
+    [tenantA, studentA, reservedIntent, 2]),
+  undefined,
+  "an active regrade reserves the final slot and prevents a concurrent overrun",
+);
+await db.query("update evaluation_jobs set status='done' where id=$1", [regrade.job.id]);
+await db.query("update handwritten_submissions set status='evaluated' where id=$1", [regrade.submission.id]);
+await db.query(`insert into handwritten_evaluations(tenant_id,submission_id,total_marks_obtained,total_marks_possible,percentage)
+ values($1,$2,70,100,70)`, [tenantA, regrade.submission.id]);
+await assert.rejects(
+  db.query("select retrigger_handwritten_submission($1,$2,$3,2)", [tenantA, studentA, regrade.submission.id]),
+  undefined,
+  "two committed evaluations exhaust the lifetime cap",
+);
+const exhaustedIntent = uuid();
+await db.query(`insert into evaluation_upload_intents(
+ id,tenant_id,student_id,evaluation_paper_id,storage_path,original_filename,
+ content_type,expected_size,status,verified_at
+ ) values($1,$2,$3,$4,'exhausted-answer.pdf','exhausted-answer.pdf',
+ 'application/pdf',5,'verified',now())`, [exhaustedIntent, tenantA, studentA, paper]);
+await assert.rejects(
+  db.query("select create_limited_handwritten_submission_job($1,$2,$3,$4)",
+    [tenantA, studentA, exhaustedIntent, 2]),
+  undefined,
+  "fresh uploads cannot bypass the two-completed-evaluation lifetime cap",
+);
+
+// Failed rubrics stop explicitly, recover automatically, and stale live work is
+// fenced even when its heartbeat lease is still fresh.
+const paperThree = uuid(), intentThree = uuid();
+await db.query(`insert into evaluation_papers(id,tenant_id,course_level_id,subject_id,title,question_paper_storage_path,total_marks,created_by)
+ values($1,$2,$3,$4,'Recovery paper','paper-3.pdf',100,$5)`,
+ [paperThree, tenantA, levelA, subjectA, teacherA]);
+await db.query(`insert into evaluation_upload_intents(id,tenant_id,student_id,evaluation_paper_id,storage_path,original_filename,content_type,expected_size,status,verified_at)
+ values($1,$2,$3,$4,'answer-3.pdf','answer-3.pdf','application/pdf',5,'verified',now())`,
+ [intentThree, tenantA, studentA, paperThree]);
+const recoverySubmission = await scalar(
+  "select create_limited_handwritten_submission_job($1,$2,$3,$4)",
+  [tenantA, studentA, intentThree, 2]
+);
+const recoveryWorker = uuid();
+await db.query(`update evaluation_papers set rubric_status='failed' where id=$1`, [paperThree]);
+await db.query(`update handwritten_submissions set status='stage1_complete',stage1_extraction=$2::jsonb,
+ stage1_extraction_source='answer-3.pdf' where id=$1`,
+ [recoverySubmission.submission.id, JSON.stringify(extraction)]);
+await db.query(`update evaluation_jobs set status='processing',claimed_by=$2,attempts=1,
+ lease_expires_at=now()+interval '2 minutes',processing_started_at=now() where id=$1`,
+ [recoverySubmission.job.id, recoveryWorker]);
+assert.equal(await scalar("select block_submission_for_failed_rubric($1,$2)",
+ [recoverySubmission.job.id, recoveryWorker]), true);
+assert.equal(await scalar("select status from handwritten_submissions where id=$1",
+ [recoverySubmission.submission.id]), "blocked_rubric_failed");
+await db.query("update evaluation_papers set rubric_status='ready' where id=$1", [paperThree]);
+assert.equal(await scalar("select status from handwritten_submissions where id=$1",
+ [recoverySubmission.submission.id]), "stage1_complete");
+assert.equal(await scalar("select status from evaluation_jobs where id=$1",
+ [recoverySubmission.job.id]), "queued");
+
+await db.query(`update evaluation_jobs set status='processing',claimed_by=$2,attempts=1,
+ lease_expires_at=now()+interval '2 minutes',processing_started_at=now()-interval '781 seconds'
+ where id=$1`, [recoverySubmission.job.id, recoveryWorker]);
+await db.query("update handwritten_submissions set status='processing_stage2' where id=$1",
+ [recoverySubmission.submission.id]);
+assert.equal(await scalar("select reap_stuck_evaluation_jobs(780)"), 1);
+assert.equal(await scalar("select status from evaluation_jobs where id=$1",
+ [recoverySubmission.job.id]), "queued");
+assert.equal(await scalar("select status from handwritten_submissions where id=$1",
+ [recoverySubmission.submission.id]), "stage1_complete");
+
+const extraIntent = uuid();
+await db.query(`insert into evaluation_upload_intents(
+ id,tenant_id,student_id,evaluation_paper_id,submission_id,purpose,storage_path,
+ original_filename,content_type,expected_size,status,verified_at
+ ) values($1,$2,$3,$4,$5,'additional_pages','answer-3-extra.pdf','extra.pdf',
+ 'application/pdf',5,'verified',now())`,
+ [extraIntent, tenantA, studentA, paperThree, recoverySubmission.submission.id]);
+const attached = await scalar("select attach_handwritten_additional_pages($1,$2,$3,$4)",
+ [tenantA, studentA, recoverySubmission.submission.id, extraIntent]);
+assert.equal(attached.submission.additional_pages_path, "answer-3-extra.pdf");
+assert.deepEqual(attached.submission.stage1_extraction, {});
+assert.equal(attached.submission.retrigger_count, 1);
+
+assert.equal(await scalar("select mark_handwritten_submission_failed($1,$2,$3)",
+ [tenantA, recoverySubmission.submission.id, "Operator recovery test"]), true);
+const technicalRetry = await scalar("select retrigger_handwritten_submission($1,$2,$3,2)",
+ [tenantA, studentA, recoverySubmission.submission.id]);
+assert.equal(technicalRetry.submission.id, recoverySubmission.submission.id,
+  "a technical failure retries the same row and consumes no successful attempt");
+assert.equal(technicalRetry.completed_attempts, 0);
+
+// Historical scores and snapshots survive source-paper deletion.
+await db.query("delete from evaluation_papers where id=$1", [paperTwo]);
+assert.equal(await scalar("select count(*)::int from handwritten_submissions where id=$1", [submissionTwo]), 1);
+assert.equal(await scalar("select evaluation_paper_id from handwritten_submissions where id=$1", [submissionTwo]), null);
+assert.equal(await scalar("select paper_title_snapshot from handwritten_submissions where id=$1", [submissionTwo]), "Mock 2");
+assert.equal(await scalar("select subject_name_snapshot from handwritten_submissions where id=$1", [submissionTwo]), "Accounts");
+assert.equal(await scalar("select count(*)::int from handwritten_evaluations where id=$1", [evaluationTwo]), 1);
 
 const holderOne = uuid(), holderTwo = uuid();
 assert.equal(await scalar("select acquire_ai_provider_slot('deepseek',$1,1,900)", [holderOne]), true);

@@ -11,6 +11,7 @@ from app.services.evaluation_stage1 import (
     run_stage1,
     split_tables_by_row_ref,
 )
+from app.services.evaluation_stage1_contract import STAGE1_EXTRACTION_PROMPT
 from app.services.evaluation_worker import _stage1_context
 from tests.test_faculty_pilot_safety import Service
 
@@ -78,6 +79,19 @@ def test_reference_normalization_exact_examples_and_boundaries():
     assert plausible_unbound_ref("Debtors A/c") == ""
 
 
+def test_stage1_prompt_contains_examapp_edge_case_instructions():
+    for phrase in (
+        "SELECTED-RESPONSE TRANSCRIPTION IS NOT GRADING",
+        "CARET-INSERTED CORRECTIONS",
+        "STUDENTS ANSWER OUT OF ORDER",
+        "SHORTHAND PARENT BOUNDARIES ARE STILL BOUNDARIES",
+        "QUESTION-BOUNDARY SWEEP (MANDATORY)",
+        "JOURNAL ENTRIES ARE ALWAYS TABLES",
+        "PAGE-BY-PAGE COMPLETENESS SWEEP (MANDATORY)",
+    ):
+        assert phrase in STAGE1_EXTRACTION_PROMPT
+
+
 def test_clean_extraction_and_gemini_stage1_config():
     response = extraction(manifest=[manifest()], answers=[answer()])
     call = Mock(return_value=response)
@@ -91,6 +105,24 @@ def test_clean_extraction_and_gemini_stage1_config():
     assert call.call_args.kwargs["temperature"] == 0.0
     assert call.call_args.kwargs["max_output_tokens"] == 32000
     assert call.call_args.kwargs["thinking_budget"] == 4000
+
+
+def test_stage1_reads_primary_and_verified_additional_pages_as_two_documents():
+    response = extraction(manifest=[
+        {**manifest(1, "blank"), "document_index": 1},
+        {**manifest(1, "blank"), "document_index": 2},
+    ])
+    call = Mock(return_value=response)
+    current = submission(additional_pages_path="tenant/student/additional.pdf")
+    with patch("app.services.evaluation_stage1.download_bytes",
+               side_effect=[pdf_bytes(), pdf_bytes()]), \
+         patch("app.services.evaluation_stage1.get_settings", return_value=settings()):
+        outcome = run_stage1(Mock(), current, {}, job_id="job-a", gemini_call=call)
+    files = call.call_args.args[2]
+    assert len(files) == 2
+    assert outcome.source == (
+        '["tenant/student/answer.pdf","tenant/student/additional.pdf"]'
+    )
 
 
 def test_impossible_provenance_is_rejected_then_retried_cleanly():

@@ -158,6 +158,36 @@ def test_pick_is_corrected_only_when_one_whole_number_solution_is_provable():
     assert all(group["pick"] == group["printed_pick"] for group in reviewed["optional_groups"])
 
 
+def test_narrow_paper_total_copy_is_recovered_and_criteria_rescaled():
+    text = "Q1 Explain alpha.\nQ2 Explain beta."
+    rows = []
+    for ref, question_text in (("Q1", "Q1 Explain alpha."), ("Q2", "Q2 Explain beta.")):
+        row = question(ref, question_text, 4)
+        row.update(
+            marks_source="derived_from_parent",
+            parent_question_ref=ref,
+            parent_total_marks=4,
+            evaluation_criteria=[
+                {"criterion": "Explains the governing principle", "marks": 2,
+                 "category": "conceptual"},
+                {"criterion": "Applies the governing principle", "marks": 2,
+                 "category": "application"},
+            ],
+        )
+        rows.append(row)
+    result = validate_rubric(candidate(rows, {
+        "compulsory": ["Q1", "Q2"], "optional_groups": [],
+        "printed_required_marks": 0, "configured_total_marks": 4,
+        "structure_adjusted": False, "requires_admin_review": False,
+        "adjustment_reason": "",
+    }), text, 4)
+    assert result.errors == []
+    assert [row["marks"] for row in result.questions] == [2, 2]
+    assert {row["parent_question_ref"] for row in result.questions} == {"PAPER_TOTAL"}
+    assert all(sum(item["marks"] for item in row["evaluation_criteria"]) == 2
+               for row in result.questions)
+
+
 def paper(answer_path="answer.pdf"):
     return {
         "id": "paper-a", "tenant_id": "tenant-a", "subject_id": "subject-a",

@@ -72,6 +72,67 @@ def _normalized_text(value: object) -> str:
     return " ".join(str(value or "").split()).casefold()
 
 
+def _normalize_misapplied_paper_total(
+    questions: object, raw_structure: object, total_marks: float
+) -> set[str]:
+    """Repair only the proven all-compulsory copied-paper-total shape."""
+    if (
+        not isinstance(questions, list)
+        or len(questions) < 2
+        or not isinstance(raw_structure, dict)
+        or total_marks <= 0
+        or raw_structure.get("optional_groups")
+    ):
+        return set()
+    compulsory = {_ref_key(ref) for ref in raw_structure.get("compulsory", [])}
+    compulsory.discard("")
+    question_keys = {
+        _ref_key(row.get("question_ref")) for row in questions if isinstance(row, dict)
+    }
+    question_keys.discard("")
+    if not question_keys or question_keys != compulsory:
+        return set()
+    for row in questions:
+        if not isinstance(row, dict):
+            return set()
+        question_key = _ref_key(row.get("question_ref"))
+        if (
+            row.get("marks_source") != "derived_from_parent"
+            or not question_key
+            or _ref_key(row.get("parent_question_ref")) != question_key
+            or abs(_number(row.get("parent_total_marks")) - total_marks) > 1e-6
+        ):
+            return set()
+    share = total_marks / len(questions)
+    if not _half(share):
+        return set()
+    for row in questions:
+        row["parent_question_ref"] = "PAPER_TOTAL"
+        row["parent_total_marks"] = total_marks
+    return question_keys
+
+
+def _rescale_recovered_criteria(criteria: list[dict], marks: float) -> None:
+    """Rescale copied-total criteria onto the authoritative half-mark grid."""
+    units = int(round(marks * 2))
+    if not criteria or len(criteria) > units:
+        return
+    weights = [max(_number(row.get("marks")), 0.0) for row in criteria]
+    if sum(weights) <= 0:
+        return
+    assigned = [1] * len(criteria)
+    remaining = units - len(criteria)
+    raw = [remaining * weight / sum(weights) for weight in weights]
+    floors = [int(value) for value in raw]
+    assigned = [base + extra for base, extra in zip(assigned, floors)]
+    for index in sorted(
+        range(len(criteria)), key=lambda item: raw[item] - floors[item], reverse=True
+    )[: remaining - sum(floors)]:
+        assigned[index] += 1
+    for row, value in zip(criteria, assigned):
+        row["marks"] = value / 2
+
+
 def _reconcile_parent_marks(questions: list[dict]) -> list[str]:
     groups: dict[str, list[dict]] = {}
     for question in questions:
@@ -209,6 +270,10 @@ def validate_rubric(candidate: object, question_paper_text: str, total_marks: fl
     if not isinstance(candidate, dict) or not isinstance(candidate.get("questions"), list):
         return RubricValidation([], _validate_structure({}, [], total_marks),
                                 ["response must contain a questions array"])
+    candidate = deepcopy(candidate)
+    recovered_paper_total = _normalize_misapplied_paper_total(
+        candidate["questions"], candidate.get("paper_structure"), total_marks
+    )
     errors: list[str] = []
     questions: list[dict] = []
     required = set(STRUCTURED_QA_SCHEMA["properties"]["questions"]["items"]["required"])
@@ -243,6 +308,8 @@ def validate_rubric(candidate: object, question_paper_text: str, total_marks: fl
         if not isinstance(criteria, list) or not criteria:
             errors.append(f"{ref or index}: evaluation_criteria is empty")
             criteria = []
+        if _ref_key(ref) in recovered_paper_total and isinstance(criteria, list):
+            _rescale_recovered_criteria(criteria, total_marks / len(candidate["questions"]))
         cleaned_criteria: list[dict] = []
         for cidx, criterion in enumerate(criteria):
             if not isinstance(criterion, dict):
@@ -260,7 +327,12 @@ def validate_rubric(candidate: object, question_paper_text: str, total_marks: fl
             if category not in CRITERION_CATEGORIES:
                 errors.append(f"{ref or index}: criterion {cidx + 1} category is invalid")
             cleaned_criteria.append({"criterion": wording, "marks": cmarks, "category": category})
-        if abs(sum(item["marks"] for item in cleaned_criteria) - marks) > 1e-6:
+        criteria_target = (
+            total_marks / len(candidate["questions"])
+            if _ref_key(ref) in recovered_paper_total
+            else marks
+        )
+        if abs(sum(item["marks"] for item in cleaned_criteria) - criteria_target) > 1e-6:
             errors.append(f"{ref or index}: criteria do not sum exactly to question marks")
         if marks > 0 and len(cleaned_criteria) > round(marks * 2):
             errors.append(f"{ref or index}: criterion count exceeds marks x 2")
@@ -376,7 +448,10 @@ def build_rubric(
     if on_extracted is not None:
         on_extracted(question_text, answer_text)
     subject, course, level, commerce = _context(service, paper)
-    total_marks = _number(paper.get("total_marks"))
+    total_marks = max(
+        0.0,
+        _number(paper.get("total_marks")) - _number(paper.get("mcq_marks")),
+    )
     system, user, source = build_rubric_prompt(
         question_text=question_text, answer_text=answer_text, total_marks=total_marks,
         subject=subject, course=course, level=level, commerce_context=commerce,

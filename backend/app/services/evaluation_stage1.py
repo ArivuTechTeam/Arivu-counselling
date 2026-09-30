@@ -625,7 +625,9 @@ def question_guide_from_paper(paper: dict) -> list[dict]:
     return guide
 
 
-def _document_details(path: str, raw: bytes) -> tuple[str, list[dict], set[int]]:
+def _document_details(
+    path: str, raw: bytes, *, document_index: int = 1
+) -> tuple[str, list[dict], set[int]]:
     mime = mimetypes.guess_type(path)[0] or "application/octet-stream"
     if mime == "application/pdf" or raw.startswith(b"%PDF"):
         try:
@@ -635,20 +637,25 @@ def _document_details(path: str, raw: bytes) -> tuple[str, list[dict], set[int]]
             raise Stage1PermanentError("The stored answer PDF cannot be opened.") from exc
         if count < 1:
             raise Stage1PermanentError("The stored answer PDF has no pages.")
-        return "application/pdf", [{"document_index": 1, "page_count": count}], set()
+        return "application/pdf", [{"document_index": document_index, "page_count": count}], set()
     if mime in {"image/png", "image/jpeg", "image/webp"}:
-        return mime, [], {1}
+        return mime, [], {document_index}
     raise Stage1PermanentError("The stored answer script has an unsupported file type.")
 
 
-def _render_repair_pages(raw: bytes, pages: set[tuple[int, int]]) -> list[tuple[str, bytes]]:
-    if any(document != 1 for document, _ in pages):
-        raise Stage1PermanentError("Focused repair referenced an unavailable document.")
+def _render_repair_pages(
+    documents: dict[int, bytes], pages: set[tuple[int, int]]
+) -> list[tuple[str, bytes]]:
     rendered: list[tuple[str, bytes]] = []
     try:
-        with fitz.open(stream=raw, filetype="pdf") as document:
-            matrix = fitz.Matrix(300 / 72, 300 / 72)
-            for _, page_number in sorted(pages):
+        for document_index, page_number in sorted(pages):
+            raw = documents.get(document_index)
+            if raw is None:
+                raise Stage1PermanentError("Focused repair referenced an unavailable document.")
+            with fitz.open(stream=raw, filetype="pdf") as document:
+                if page_number < 1 or page_number > document.page_count:
+                    raise Stage1PermanentError("Focused repair referenced an unavailable page.")
+                matrix = fitz.Matrix(300 / 72, 300 / 72)
                 pixmap = document.load_page(page_number - 1).get_pixmap(matrix=matrix, alpha=False)
                 rendered.append(("image/png", pixmap.tobytes("png")))
     except Exception as exc:
@@ -686,19 +693,39 @@ def run_stage1(
     gemini_call: Callable[..., dict] = gemini_json_multimodal,
 ) -> Stage1Outcome:
     """Run or safely reuse the pure-transcription Stage 1 result."""
-    source = str(submission.get("answer_script_path") or "")
-    if not source:
+    paths = [
+        str(value)
+        for value in (
+            submission.get("answer_script_path"),
+            submission.get("additional_pages_path"),
+        )
+        if value
+    ]
+    if not paths:
         raise Stage1PermanentError("Submission has no stored answer script.")
+    source = paths[0] if len(paths) == 1 else json.dumps(paths, separators=(",", ":"))
     cached = submission.get("stage1_extraction")
     if (not explicit_re_evaluation and submission.get("stage1_extraction_source") == source
             and isinstance(cached, dict) and all(key in cached for key in REQUIRED_KEYS)):
         return Stage1Outcome(cached, source, submission.get("page_mapping") or build_page_mapping(cached),
                              stage1_requires_review(cached))
+    files: list[tuple[str, bytes]] = []
+    inventory: list[dict] = []
+    image_documents: set[int] = set()
+    pdf_documents: dict[int, bytes] = {}
     try:
-        raw = download_bytes(source, bucket=EVALUATION_SUBMISSIONS_BUCKET)
+        for document_index, path in enumerate(paths, start=1):
+            raw = download_bytes(path, bucket=EVALUATION_SUBMISSIONS_BUCKET)
+            mime, document_inventory, document_images = _document_details(
+                path, raw, document_index=document_index
+            )
+            files.append((mime, raw))
+            inventory.extend(document_inventory)
+            image_documents.update(document_images)
+            if mime == "application/pdf":
+                pdf_documents[document_index] = raw
     except Exception as exc:
         raise Stage1RetryableError("Could not download the stored answer script.") from exc
-    mime, inventory, image_documents = _document_details(source, raw)
     guide = question_guide_from_paper(paper)
     valid_refs = [row["question_ref"] for row in guide]
 
@@ -725,13 +752,20 @@ def run_stage1(
     paid_gaps = [gap for gap in gaps if gap.get("reason") in PAID_GAP_REASONS]
     repair_attempted = False
     repair_reference: dict | None = None
-    if paid_gaps and len(paid_gaps) <= MAX_REPAIR_PAGES and mime == "application/pdf":
+    if paid_gaps and len(paid_gaps) <= MAX_REPAIR_PAGES and all(
+        int(gap["document_index"]) in pdf_documents for gap in paid_gaps
+    ):
         repair_attempted = True
         repaired_keys = {(int(gap["document_index"]), int(gap["page_number"])) for gap in paid_gaps}
-        repair_inventory = [{"document_index": 1,
-                             "page_numbers": [page for document, page in sorted(repaired_keys) if document == 1]}]
+        repair_inventory = [
+            {
+                "document_index": document,
+                "page_numbers": [page for doc, page in sorted(repaired_keys) if doc == document],
+            }
+            for document in sorted({document for document, _ in repaired_keys})
+        ]
         try:
-            repair_files = _render_repair_pages(raw, repaired_keys)
+            repair_files = _render_repair_pages(pdf_documents, repaired_keys)
             repair_reference = postprocess_stage1(
                 _call_stage1(gemini_call, repair_files, guide, repair_inventory,
                              tenant_id=str(submission["tenant_id"]), job_id=job_id),
@@ -764,4 +798,3 @@ def run_stage1(
         )
     requires_review = stage1_requires_review(primary)
     return Stage1Outcome(primary, source, build_page_mapping(primary), requires_review)
-    files = [(mime, raw)]

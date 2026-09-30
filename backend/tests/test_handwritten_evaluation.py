@@ -1,5 +1,6 @@
 import asyncio
 import io
+import time
 from copy import deepcopy
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
@@ -10,7 +11,13 @@ import pytest
 from fastapi import HTTPException, UploadFile
 from starlette.datastructures import Headers
 
-from app.api.evaluation_papers import create_evaluation_paper, list_evaluation_papers
+from app.api.evaluation_papers import (
+    create_evaluation_paper,
+    delete_evaluation_paper,
+    get_evaluation_paper,
+    list_evaluation_papers,
+    update_evaluation_paper,
+)
 from app.api.handwritten_submissions import (
     CreateSubmissionRequest,
     UploadIntentRequest,
@@ -18,7 +25,11 @@ from app.api.handwritten_submissions import (
     create_submission,
     finalize_upload_intent,
     get_evaluation_report,
+    get_stage2_artifacts,
+    get_submission,
     list_submissions,
+    mark_submission_failed,
+    MarkFailedRequest,
 )
 from app.lib.auth import CurrentProfile
 from app.services.evaluation_stage1 import Stage1Outcome
@@ -104,7 +115,14 @@ def tables(intent_status="pending"):
 
 
 def test_teacher_paper_listing_is_tenant_scoped_and_flag_uses_dedicated_column():
-    service = Service(tables())
+    source = tables()
+    assigned_subject = source["evaluation_papers"][0]["subject_id"]
+    source["teacher_subjects"] = [{
+        "tenant_id": TENANT,
+        "teacher_id": TEACHER,
+        "subject_id": assigned_subject,
+    }]
+    service = Service(source)
     with patch("app.api.evaluation_papers.get_service_client", return_value=service):
         response = asyncio.run(list_evaluation_papers(profile("teacher")))
     assert [str(paper.id) for paper in response.papers] == [PAPER]
@@ -116,6 +134,103 @@ def test_teacher_paper_listing_is_tenant_scoped_and_flag_uses_dedicated_column()
     with patch("app.api.evaluation_papers.get_service_client", return_value=service), pytest.raises(HTTPException) as error:
         asyncio.run(list_evaluation_papers(profile("teacher")))
     assert error.value.status_code == 403
+
+
+def test_teacher_paper_reads_are_limited_to_assigned_subjects():
+    now = datetime.now(UTC).isoformat()
+    subject_a, subject_b = str(uuid4()), str(uuid4())
+    paper_a, paper_b = str(uuid4()), str(uuid4())
+    base = {
+        "tenant_id": TENANT,
+        "course_level_id": str(uuid4()),
+        "question_paper_storage_path": "tenant/paper.pdf",
+        "suggested_answer_storage_path": "tenant/answers.pdf",
+        "total_marks": 100,
+        "rubric_status": "ready",
+        "is_active": True,
+        "generated_paper_id": None,
+        "created_by": TEACHER,
+        "created_at": now,
+    }
+    service = Service({
+        "tenants": [{"id": TENANT, "handwritten_evaluation_enabled": True}],
+        "teacher_subjects": [{
+            "tenant_id": TENANT,
+            "teacher_id": TEACHER,
+            "subject_id": subject_a,
+        }],
+        "evaluation_papers": [
+            {**base, "id": paper_a, "subject_id": subject_a, "title": "Subject A"},
+            {**base, "id": paper_b, "subject_id": subject_b, "title": "Subject B"},
+        ],
+    })
+    with patch("app.api.evaluation_papers.get_service_client", return_value=service):
+        listed = asyncio.run(list_evaluation_papers(profile("teacher")))
+        assert [str(row.id) for row in listed.papers] == [paper_a]
+        with pytest.raises(HTTPException) as denied:
+            asyncio.run(get_evaluation_paper(UUID(paper_b), profile("teacher")))
+    assert denied.value.status_code == 404
+
+
+def test_institution_admin_lists_every_paper_in_own_tenant():
+    source = tables()
+    source["evaluation_papers"].append({
+        **source["evaluation_papers"][0],
+        "id": str(uuid4()), "subject_id": str(uuid4()), "title": "Second subject",
+        "question_paper_storage_path": "a/second.pdf",
+    })
+    service = Service(source)
+    admin = profile("institution_admin")
+    with patch("app.api.evaluation_papers.get_service_client", return_value=service):
+        response = asyncio.run(list_evaluation_papers(admin))
+    assert {paper.title for paper in response.papers} == {"Accounts mock", "Second subject"}
+
+
+def test_paper_update_delete_are_teacher_subject_scoped_and_admin_tenant_wide():
+    class DeleteQuery(Query):
+        deleting = False
+
+        def delete(self):
+            self.deleting = True
+            return self
+
+        def execute(self):
+            if not self.deleting:
+                return super().execute()
+            rows = self.service.tables.setdefault(self.table, [])
+            matches = [row for row in rows if all(check(row) for check in self.filters)]
+            self.service.tables[self.table] = [row for row in rows if row not in matches]
+            return SimpleNamespace(data=deepcopy(matches))
+
+    class DeleteService(Service):
+        def table(self, name):
+            return DeleteQuery(self, name)
+
+    source = tables()
+    source["teacher_subjects"] = []
+    service = DeleteService(source)
+    teacher = profile("teacher")
+    with patch("app.api.evaluation_papers.get_service_client", return_value=service):
+        with pytest.raises(HTTPException) as update_denied:
+            asyncio.run(update_evaluation_paper(UUID(PAPER), title="Denied", profile=teacher))
+        with pytest.raises(HTTPException) as delete_denied:
+            asyncio.run(delete_evaluation_paper(UUID(PAPER), teacher))
+    assert update_denied.value.status_code == 404
+    assert delete_denied.value.status_code == 404
+
+    admin = profile("institution_admin")
+    with patch("app.api.evaluation_papers.get_service_client", return_value=service), \
+         patch("app.api.evaluation_papers.signed_url", return_value="https://signed.example/paper"), \
+         patch("app.api.evaluation_papers.delete_bytes") as delete_storage:
+        updated = asyncio.run(
+            update_evaluation_paper(UUID(PAPER), title="Admin updated", profile=admin)
+        )
+        assert updated.title == "Admin updated"
+        asyncio.run(delete_evaluation_paper(UUID(PAPER), admin))
+    assert not any(row["id"] == PAPER for row in service.tables["evaluation_papers"])
+    delete_storage.assert_called_once_with(
+        ["a/paper.pdf"], bucket="evaluation-papers"
+    )
 
 
 def test_finalize_rejects_size_mismatch_deletes_object_and_marks_failed():
@@ -156,7 +271,10 @@ def test_submission_creation_replays_the_same_submission_and_job():
         data={"handwritten_evaluation_enabled": True}
     )
     service.rpc.return_value.execute.return_value = SimpleNamespace(data=payload)
-    settings = SimpleNamespace(evaluation_jobs_enabled=True)
+    settings = SimpleNamespace(
+        evaluation_jobs_enabled=True,
+        handwritten_evaluation_attempts_per_paper=2,
+    )
     body = CreateSubmissionRequest(upload_intent_id=UUID(INTENT))
     with patch("app.api.handwritten_submissions.get_service_client", return_value=service), \
          patch("app.api.handwritten_submissions.get_settings", return_value=settings):
@@ -165,7 +283,11 @@ def test_submission_creation_replays_the_same_submission_and_job():
     assert first.id == replay.id == UUID(SUBMISSION)
     assert first.job_id == replay.job_id == UUID(JOB)
     assert service.rpc.call_count == 2
-    assert all(call.args[0] == "create_handwritten_submission_job" for call in service.rpc.call_args_list)
+    assert all(
+        call.args[0] == "create_limited_handwritten_submission_job"
+        for call in service.rpc.call_args_list
+    )
+    assert all(call.args[1]["p_limit"] == 2 for call in service.rpc.call_args_list)
 
 
 def test_student_can_reload_submission_and_full_persisted_report_but_other_tenant_cannot():
@@ -211,7 +333,23 @@ def test_student_can_reload_submission_and_full_persisted_report_but_other_tenan
                 "marks_available": 10, "correct_treatment": "Rule plus application",
             }], "created_at": now,
         }],
+        "profiles": [{
+            "id": STUDENT,
+            "tenant_id": TENANT,
+            "role": "student",
+            "full_name": "Arjun Student",
+        }],
+        "teacher_subjects": [{
+            "tenant_id": TENANT,
+            "teacher_id": TEACHER,
+            "subject_id": "subject-1",
+        }],
     })
+    service.auth = SimpleNamespace(admin=SimpleNamespace(
+        get_user_by_id=lambda user_id: SimpleNamespace(
+            user=SimpleNamespace(id=user_id, email="arjun@example.com")
+        )
+    ))
     with patch("app.api.handwritten_submissions.get_service_client", return_value=service), \
          patch("app.api.handwritten_submissions.signed_url", return_value="https://signed.example/answer"):
         submissions = asyncio.run(list_submissions(profile()))
@@ -229,10 +367,63 @@ def test_student_can_reload_submission_and_full_persisted_report_but_other_tenan
     assert report.answer_script_url == "https://signed.example/answer"
     assert report.questions[0].criteria_breakdown[0]["correct_treatment"] == "Rule plus application"
 
+    teacher = CurrentProfile(
+        user_id=TEACHER,
+        tenant_id=TENANT,
+        role="teacher",
+        full_name="Teacher Requester",
+        email="teacher@example.com",
+    )
+    with patch("app.api.handwritten_submissions.get_service_client", return_value=service), \
+         patch("app.api.handwritten_submissions.signed_url", return_value="https://signed.example/answer"):
+        teacher_report = asyncio.run(get_evaluation_report(UUID(SUBMISSION), teacher))
+    assert teacher_report.student.name == "Arjun Student"
+    assert teacher_report.student.email == "arjun@example.com"
+    assert teacher_report.student.name != teacher.full_name
+    assert teacher_report.student.email != teacher.email
+
     with patch("app.api.handwritten_submissions.get_service_client", return_value=service), \
          pytest.raises(HTTPException) as denied:
         asyncio.run(get_evaluation_report(UUID(SUBMISSION), profile(tenant=OTHER_TENANT)))
     assert denied.value.status_code == 404
+
+
+def test_teacher_cannot_retrieve_unassigned_subject_submission_or_report():
+    subject_a, subject_b = str(uuid4()), str(uuid4())
+    paper_b, submission_b = str(uuid4()), str(uuid4())
+    now = datetime.now(UTC).isoformat()
+    service = Service({
+        "tenants": [{"id": TENANT, "handwritten_evaluation_enabled": True}],
+        "teacher_subjects": [{
+            "tenant_id": TENANT,
+            "teacher_id": TEACHER,
+            "subject_id": subject_a,
+        }],
+        "evaluation_papers": [{
+            "id": paper_b,
+            "tenant_id": TENANT,
+            "subject_id": subject_b,
+        }],
+        "handwritten_submissions": [{
+            "id": submission_b,
+            "tenant_id": TENANT,
+            "student_id": STUDENT,
+            "evaluation_paper_id": paper_b,
+            "upload_intent_id": str(uuid4()),
+            "answer_script_path": "tenant/student/answer.pdf",
+            "status": "evaluated",
+            "error_message": None,
+            "created_at": now,
+        }],
+    })
+    teacher = profile("teacher")
+    with patch("app.api.handwritten_submissions.get_service_client", return_value=service):
+        with pytest.raises(HTTPException) as submission_denied:
+            asyncio.run(get_submission(UUID(submission_b), teacher))
+        with pytest.raises(HTTPException) as report_denied:
+            asyncio.run(get_evaluation_report(UUID(submission_b), teacher))
+    assert submission_denied.value.status_code == 404
+    assert report_denied.value.status_code == 404
 
 
 def test_worker_persists_stage1_only_after_authorization_recheck():
@@ -285,6 +476,88 @@ def test_stub_worker_fails_closed_on_owner_or_tenant_mismatch():
     assert service.rpc.call_args_list[-1].args[1]["p_retryable"] is False
 
 
+def test_worker_watchdog_fences_a_hung_job_then_reaches_hard_exit():
+    job = {
+        "id": JOB, "tenant_id": TENANT, "submission_id": SUBMISSION,
+        "owner_student_id": STUDENT, "attempts": 1,
+    }
+    service = Mock()
+    service.rpc.side_effect = [
+        Mock(execute=Mock(return_value=SimpleNamespace(data=job))),
+        Mock(execute=Mock(return_value=SimpleNamespace(data=True))),
+        Mock(execute=Mock(return_value=SimpleNamespace(data=True))),
+    ]
+    watchdog_service = Mock()
+    watchdog_service.rpc.return_value.execute.return_value = SimpleNamespace(
+        data={"changed": True, "retrying": True}
+    )
+    exits: list[int] = []
+    outcome = Stage1Outcome({"text_answers": []}, "answer.pdf", {}, False)
+
+    def slow_stage1(*_args, **_kwargs):
+        time.sleep(0.04)
+        return outcome
+
+    with patch("app.services.evaluation_worker._authorized_submission", return_value=True), \
+         patch("app.services.evaluation_worker._stage1_context", return_value=(
+             {"id": SUBMISSION}, {"id": PAPER, "rubric_status": "not_started"}
+         )), \
+         patch("app.services.evaluation_worker.run_stage1", side_effect=slow_stage1), \
+         patch("app.services.evaluation_worker.get_service_client", return_value=watchdog_service):
+        assert run_one(
+            service, worker_id="worker", heartbeat_seconds=1,
+            soft_timeout_seconds=0.005, hard_timeout_seconds=0.015,
+            hard_exit=exits.append,
+        ) is True
+    watchdog_service.rpc.assert_called_once_with(
+        "timeout_evaluation_job",
+        {
+            "p_id": JOB, "p_worker": "worker",
+            "p_reason": "Evaluation processing exceeded its safe duration.",
+        },
+    )
+    assert exits == [70]
+
+
+def test_stage2_artifact_audit_and_manual_failure_are_admin_only():
+    evaluation_id = str(uuid4())
+    artifact_id = str(uuid4())
+    now = datetime.now(UTC).isoformat()
+    service = Service({
+        "tenants": [{"id": TENANT, "handwritten_evaluation_enabled": True}],
+        "handwritten_evaluations": [{"id": evaluation_id, "tenant_id": TENANT}],
+        "handwritten_stage2_artifacts": [{
+            "id": artifact_id, "tenant_id": TENANT, "evaluation_id": evaluation_id,
+            "sequence": 1, "route": "whole_paper", "model": "deepseek",
+            "prompt_revision": "v2", "raw_content": "{}", "content_bytes": 2,
+            "content_sha256": "a" * 64, "content_omitted": False, "created_at": now,
+        }],
+    })
+    teacher = profile("teacher")
+    with pytest.raises(HTTPException) as denied:
+        asyncio.run(get_stage2_artifacts(UUID(evaluation_id), teacher))
+    assert denied.value.status_code == 403
+
+    admin = profile("institution_admin")
+    with patch("app.api.handwritten_submissions.get_service_client", return_value=service):
+        result = asyncio.run(get_stage2_artifacts(UUID(evaluation_id), admin))
+    assert str(result.artifacts[0].id) == artifact_id
+    assert result.artifacts[0].raw_content == "{}"
+
+    rpc = Mock()
+    rpc.execute.return_value = SimpleNamespace(data=True)
+    service.rpc = Mock(return_value=rpc)
+    with patch("app.api.handwritten_submissions.get_service_client", return_value=service):
+        changed = asyncio.run(mark_submission_failed(
+            UUID(SUBMISSION), MarkFailedRequest(reason="Operator recovery"), admin,
+        ))
+    assert changed == {"changed": True}
+    service.rpc.assert_called_once_with("mark_handwritten_submission_failed", {
+        "p_tenant": TENANT, "p_submission": SUBMISSION,
+        "p_reason": "Operator recovery",
+    })
+
+
 class _PhaseAQuery(Query):
     def execute(self):
         if self.inserting and self.table == "evaluation_papers":
@@ -314,7 +587,7 @@ class _PhaseAService(Service):
 
         class _Call:
             def execute(self):
-                if name == "create_handwritten_submission_job":
+                if name == "create_limited_handwritten_submission_job":
                     intent = next(row for row in service.tables["evaluation_upload_intents"] if row["id"] == params["p_intent"])
                     existing = next((row for row in service.tables.setdefault("handwritten_submissions", []) if row["upload_intent_id"] == intent["id"]), None)
                     if existing is None:
@@ -397,7 +670,13 @@ def test_full_flow_runs_stage1_and_persists_extraction():
          patch("app.api.handwritten_submissions.download_bytes", return_value=answer):
         assert asyncio.run(finalize_upload_intent(intent.id, profile())).status == "verified"
     with patch("app.api.handwritten_submissions.get_service_client", return_value=service), \
-         patch("app.api.handwritten_submissions.get_settings", return_value=SimpleNamespace(evaluation_jobs_enabled=True)):
+         patch(
+             "app.api.handwritten_submissions.get_settings",
+             return_value=SimpleNamespace(
+                 evaluation_jobs_enabled=True,
+                 handwritten_evaluation_attempts_per_paper=2,
+             ),
+         ):
         submission = asyncio.run(create_submission(CreateSubmissionRequest(upload_intent_id=intent.id), profile()))
     stage1_payload = {"text_answers": [], "tables": [], "numerical_workings": [],
                       "page_manifest": [], "legibility_report": {"overall_legibility": "clear"}}

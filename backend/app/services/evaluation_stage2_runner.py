@@ -74,10 +74,12 @@ def _placeholder(question: dict, feedback: str) -> dict:
     }
 
 
-def _summary(results: list[dict]) -> dict:
+def _summary(results: list[dict], total_possible: float | None = None) -> dict:
     counted = [row for row in results if not row.get("not_counted")]
     obtained = round(sum(float(row["marks_obtained"]) for row in counted), 2)
-    possible = round(sum(float(row["marks_possible"]) for row in counted), 2)
+    computed_possible = round(sum(float(row["marks_possible"]) for row in counted), 2)
+    possible = computed_possible if total_possible is None else round(max(total_possible, 0.0), 2)
+    obtained = min(obtained, possible) if total_possible is not None else obtained
     evaluated = [row for row in counted if not row.get("not_evaluated")]
     strengths = [row["question_ref"] for row in evaluated if row["marks_possible"] and row["marks_obtained"] / row["marks_possible"] >= .75][:5]
     improve = [row["question_ref"] for row in counted if row.get("not_evaluated") or (row["marks_possible"] and row["marks_obtained"] / row["marks_possible"] < .5)][:5]
@@ -232,11 +234,18 @@ def run_stage2(
         row["not_evaluated"] or row["handwriting_legibility"] == "difficult"
         for row in ordered
     )
-    summary = _summary(ordered)
+    descriptive_total = max(
+        0.0,
+        float(paper.get("total_marks") or 0) - float(paper.get("mcq_marks") or 0),
+    )
+    summary = _summary(
+        ordered,
+        descriptive_total if paper.get("mcq_marks") is not None else None,
+    )
     return CompiledStage2(questions=ordered, artifacts=artifacts,
                           total_obtained=summary["total_marks_obtained"],
                           total_possible=summary["total_marks_possible"], requires_review=requires_review)
 
 
 def stage2_summary(outcome: CompiledStage2) -> dict:
-    return _summary(outcome.questions)
+    return _summary(outcome.questions, outcome.total_possible)

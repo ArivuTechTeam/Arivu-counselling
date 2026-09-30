@@ -9,7 +9,7 @@ from app.services.evaluation_stage2 import (
     build_evidence_groups, compile_question, compile_response, direct_score_mark, fixed_payload,
     deterministic_mcq, map_evidence_to_rubric, validate_fixed_rubric,
 )
-from app.services.evaluation_stage2_runner import run_stage2
+from app.services.evaluation_stage2_runner import _summary, run_stage2
 from app.services.evaluation_stage2_transport import deepseek_stage2
 from app.services.evaluation_worker import run_one
 
@@ -21,6 +21,15 @@ def criterion(cid="c1", marks=1):
 def question(ref="Q1", marks=1, **extra):
     return {"question_ref": ref, "question_text": ref, "suggested_answer": "Answer",
             "marks": marks, "evaluation_criteria": [criterion(marks=marks)], **extra}
+
+
+def test_separate_mcq_marks_use_descriptive_denominator():
+    rows = [{"question_ref": "Q1", "marks_obtained": 72, "marks_possible": 100,
+             "not_counted": False, "not_evaluated": False}]
+    summary = _summary(rows, 80)
+    assert summary["total_marks_obtained"] == 72
+    assert summary["total_marks_possible"] == 80
+    assert summary["percentage"] == 90
 
 
 def test_fixed_rubric_rejects_every_pre_send_invariant():
@@ -340,7 +349,10 @@ def test_cached_stage1_review_signal_completes_stage2_and_flags_report():
     )
     finish = service.rpc.call_args_list[-1].args[1]
     assert finish["p_review"] is True
-    learning.assert_not_called()
+    learning.assert_called_once_with(
+        service, evaluation_id=finish["p_evaluation"],
+        submission=submission, paper=paper,
+    )
 
 
 def test_stage1_page_uncertainty_remains_scoreable_but_forces_review():

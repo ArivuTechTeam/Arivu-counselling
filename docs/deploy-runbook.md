@@ -201,9 +201,11 @@ migration-79-handwritten-stage1.sql
 migration-80-handwritten-rubric.sql
 migration-81-handwritten-stage2.sql
 migration-82-handwritten-learning.sql
+migration-83-evaluation-ai-telemetry.sql
+migration-84-handwritten-evaluation-hardening.sql
 ```
 
-Filenames above include the current repository migrations through migration 82.
+Filenames above include the current repository migrations through migration 84.
 The operator reported migrations through 74 applied, but this documentation
 pass did not independently inspect the target Supabase migration history or all
 function privileges. Migrations 63–65 support the paper bank, migration 66 adds
@@ -681,6 +683,24 @@ hostname changes, then restart or redeploy the backend.
     evaluated submission contributes to revision risk. Verify the weak-area API
     computes chapters and category patterns live; the analytics table
     intentionally omits ExamApp's four unused summary fields.
+14. Apply migrations 83 and 84 before deploying the hardened evaluation worker.
+    Configure `EVALUATION_JOB_SOFT_TIMEOUT_SECONDS=780`,
+    `EVALUATION_JOB_HARD_TIMEOUT_SECONDS=840`,
+    `EVALUATION_REAPER_INTERVAL_SECONDS=60`, and
+    `HANDWRITTEN_EVALUATION_ATTEMPTS_PER_PAPER=2`. Failed system processing does
+    not consume a student attempt; only a committed `handwritten_evaluations`
+    row does. Build the always-running worker with
+    `backend/Dockerfile.evaluation-worker`; it exposes no public port and should
+    restart on process failure. `scripts/deploy-evaluation-worker.sh` targets the
+    Railway service `quiz-generator-evaluation-worker`.
+
+    As verified with Railway CLI on 30 September 2026, the linked production
+    project had only `quiz-generator` and `quiz-generator-worker`; no dedicated
+    evaluation-worker service existed. Create that service once in Railway,
+    point it at `Dockerfile.evaluation-worker`, copy the API's required Supabase
+    and AI environment variables, set `EVALUATION_JOBS_ENABLED=true`, and do not
+    attach a public domain. This repository change does not create or deploy the
+    live service.
 
 If a page 500s, check the backend logs and that all env vars are set + migrations run.
 

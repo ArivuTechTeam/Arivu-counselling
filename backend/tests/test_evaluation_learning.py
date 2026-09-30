@@ -1,18 +1,25 @@
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from fastapi import HTTPException
 
-from app.api.handwritten_learning import _target_student, weak_areas
+from app.api.handwritten_learning import (
+    _target_student,
+    analytics_summary,
+    mistake_library,
+    revision_items,
+    weak_areas,
+)
 from app.lib.auth import CurrentProfile
 from app.services.evaluation_learning import (
     LearningContext, _signature, analytics_values, build_mistake_specs,
     current_evaluation_ids, resolve_chapter_name,
 )
 from app.services.evaluation_worker import _run_learning_follow_on
+from tests.test_faculty_pilot_safety import Service
 
 
 def context(questions, *, rubric=None, chapters=None):
@@ -171,6 +178,111 @@ def test_student_scope_rejects_other_student_and_teacher_checks_target_tenant():
     with pytest.raises(HTTPException) as error:
         _target_student(service, profile("teacher", user="teacher"), target)
     assert error.value.status_code == 404
+
+
+def test_teacher_cannot_inspect_learning_for_an_unassigned_subject_student():
+    tenant, teacher, student = str(uuid4()), str(uuid4()), str(uuid4())
+    subject_a, subject_b = str(uuid4()), str(uuid4())
+    paper_b, submission_b = str(uuid4()), str(uuid4())
+    service = Service({
+        "tenants": [{"id": tenant, "handwritten_evaluation_enabled": True}],
+        "profiles": [{
+            "id": student,
+            "tenant_id": tenant,
+            "role": "student",
+        }],
+        "teacher_subjects": [{
+            "tenant_id": tenant,
+            "teacher_id": teacher,
+            "subject_id": subject_a,
+        }],
+        "evaluation_papers": [{
+            "id": paper_b,
+            "tenant_id": tenant,
+            "subject_id": subject_b,
+        }],
+        "handwritten_submissions": [{
+            "id": submission_b,
+            "tenant_id": tenant,
+            "student_id": student,
+            "evaluation_paper_id": paper_b,
+        }],
+    })
+    teacher_profile = profile("teacher", tenant=tenant, user=teacher)
+    student_id, subject_id = UUID(student), UUID(subject_b)
+    calls = (
+        lambda: mistake_library(student_id=student_id, subject_id=None, profile=teacher_profile),
+        lambda: mistake_library(student_id=student_id, subject_id=subject_id, profile=teacher_profile),
+        lambda: revision_items(student_id=student_id, subject_id=subject_id, profile=teacher_profile),
+        lambda: analytics_summary(subject_id=subject_id, student_id=student_id, profile=teacher_profile),
+        lambda: weak_areas(student_id=student_id, subject_id=subject_id, profile=teacher_profile),
+    )
+    with patch("app.api.handwritten_learning.get_service_client", return_value=service):
+        for call in calls:
+            with pytest.raises(HTTPException) as denied:
+                call()
+            assert denied.value.status_code == 404
+
+
+def test_mistake_library_includes_source_subject_submission_and_paper():
+    tenant, student = str(uuid4()), str(uuid4())
+    subject, paper, submission, evaluation, mistake = (
+        str(uuid4()) for _ in range(5)
+    )
+    service = Service({
+        "tenants": [{"id": tenant, "handwritten_evaluation_enabled": True}],
+        "evaluation_papers": [{
+            "id": paper,
+            "tenant_id": tenant,
+            "subject_id": subject,
+            "title": "Business Law Paper 2",
+        }],
+        "handwritten_submissions": [{
+            "id": submission,
+            "tenant_id": tenant,
+            "student_id": student,
+            "evaluation_paper_id": paper,
+            "status": "evaluated",
+            "created_at": "2026-09-30T08:00:00Z",
+        }],
+        "handwritten_evaluations": [{
+            "id": evaluation,
+            "tenant_id": tenant,
+            "submission_id": submission,
+            "status": "completed",
+            "created_at": "2026-09-30T08:05:00Z",
+        }],
+        "handwritten_mistakes": [{
+            "id": mistake,
+            "tenant_id": tenant,
+            "evaluation_id": evaluation,
+            "question_result_id": str(uuid4()),
+            "category": "conceptual",
+            "severity": "major",
+            "description": "The legal principle was incomplete.",
+            "marks_lost": 3,
+            "suggestion": "Revise the governing provision.",
+            "chapter_name": "Sale of Goods Act",
+            "criterion_key": "legal principle",
+            "signature": "a" * 64,
+            "is_recurring": False,
+            "created_at": "2026-09-30T08:05:00Z",
+        }],
+    })
+
+    with patch("app.api.handwritten_learning.get_service_client", return_value=service):
+        output = mistake_library(
+            student_id=None,
+            subject_id=None,
+            severity=None,
+            profile=profile("student", tenant=tenant, user=student),
+        )
+
+    assert len(output["mistakes"]) == 1
+    row = output["mistakes"][0]
+    assert row["subject_id"] == subject
+    assert row["submission_id"] == submission
+    assert row["paper_title"] == "Business Law Paper 2"
 
 
 def test_weak_areas_are_computed_live_without_analytics_gap_fields():
