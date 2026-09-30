@@ -15,4 +15,4 @@ repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 # railway up uploads relative to the linked project root, not $PWD — scope
 # the build to backend/ explicitly, or it uploads the whole repo and fails.
 cd "$repo_root"
-railway up backend --path-as-root --service quiz-generator
+railway up backend --path-as-root --service quiz-generator-api

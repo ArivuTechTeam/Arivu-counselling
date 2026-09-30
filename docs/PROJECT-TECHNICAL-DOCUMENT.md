@@ -116,7 +116,7 @@ The application has one authoritative profile table (`profiles`) linked 1:1 to S
         └───────────────────────────────────────┘
 ```
 
-Railway also runs a **separate, private** `quiz-generator-worker` process from
+Railway also runs a **separate, private** `quiz-generator-faculty-worker` process from
 `backend/Dockerfile.worker`. The API stores durable faculty jobs in Supabase;
 the worker claims and processes those jobs, then writes results back. It is not
 an HTTP endpoint and is deployed independently of the API. The obsolete
@@ -638,8 +638,8 @@ GitHub (ArivuTechTeam/quiz-generator)
      │  push / merge to main
      ├──────────────► VERCEL   → builds & deploys FRONTEND automatically (Root Dir = frontend)
      │
-     └── (manual)  ──► RAILWAY  → API `quiz-generator` deployed by `scripts/deploy.sh`
-                                  worker `quiz-generator-worker` deployed separately
+     └── (manual)  ──► RAILWAY  → API `quiz-generator-api` deployed by `scripts/deploy.sh`
+                                  worker `quiz-generator-faculty-worker` deployed separately
                                   (no GitHub auto-deploy for either backend process)
 
 SUPABASE (dashboard-configured): Postgres + Auth + Storage — settings apply instantly
@@ -648,7 +648,7 @@ SUPABASE (dashboard-configured): Postgres + Auth + Storage — settings apply in
 ### 10.2 Deploy workflow
 - **Frontend change:** push to GitHub → **merge PR to `main`** → **Vercel auto-deploys**. (`next build` runs ESLint and fails on lint errors — always run `pnpm build` locally before merging, not just `tsc`.)
 - **Backend API change:** from a clean, synchronized `main`, run **`./scripts/deploy.sh`**. It scopes Railway to `backend/` with `--path-as-root`; a bare `railway up` from the repository root is invalid for this service. Keep Railway's custom Start Command blank so the Dockerfile `CMD` expands `$PORT` correctly.
-- **Worker or shared-job change:** deploy `quiz-generator-worker` independently from the same verified revision. The API deploy script does not update it; verify worker health and a queued job, not just API `/health`. The old retention cron was removed 2026-09-24.
+- **Worker or shared-job change:** deploy `quiz-generator-faculty-worker` independently from the same verified revision. The API deploy script does not update it; verify worker health and a queued job, not just API `/health`. The old retention cron was removed 2026-09-24.
 - **Supabase change:** dashboard settings (auth URLs, SMTP, RLS) apply immediately; schema changes are applied by running migration SQL in order.
 
 **Observed 2026-09-28:** PR #66 merged to `main` at `f5aa0f1`; the matching

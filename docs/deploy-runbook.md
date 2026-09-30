@@ -2,22 +2,31 @@
 
 A practical, repeatable guide to getting this app live. The frontend runs on
 Vercel; Railway production has two independently deployed backend processes:
-the public FastAPI service (`quiz-generator`) and the private durable faculty-job
-worker (`quiz-generator-worker`). They share one Supabase project.
+the public FastAPI service (`quiz-generator-api`) and the private durable faculty-job
+worker (`quiz-generator-faculty-worker`). They share one Supabase project.
 
 > Backend note: there is no `vercel.json`, so the FastAPI backend is **not**
 > set up for Vercel serverless. It runs on a host that runs `uvicorn` directly
 > (zero adapter work) — **Render** and **Railway** both work; **confirmed live
 > on Railway as of 2026-09-26** (verified via the Railway CLI: service
-> `quiz-generator`, project `quiz-generator`, environment `production`, domain
+> `quiz-generator` (since renamed `quiz-generator-api`), project `quiz-generator`, environment `production`, domain
 > `quiz-generator-production-7461.up.railway.app`). Render remains a valid
 > alternative if you're setting this up fresh, but isn't what's deployed today.
 > The frontend goes on Vercel.
 
 > **Production service inventory (last verified 2026-09-26):** only
-> `quiz-generator` and `quiz-generator-worker` remain. The old daily
+> `quiz-generator` and `quiz-generator-worker` remained (since renamed `quiz-generator-api`
+> and `quiz-generator-faculty-worker`; see the rename note below). The old daily
 > `quiz-generator-retention` service was deleted after migration 59 removed the
 > raw AI-log columns it cleaned. Do not recreate that cron for this schema.
+>
+> **Railway service names (renamed 2026-09-30, verified via the Railway CLI):** the
+> production services are now `quiz-generator-api`, `quiz-generator-faculty-worker`, and
+> `quiz-generator-evaluation-worker` in project `quiz-generator`. The rename did not
+> redeploy anything or change the API's public domain
+> (`quiz-generator-production-7461.up.railway.app`). Railway rewrote the faculty worker's
+> `${{quiz-generator.*}}` variable references to `${{quiz-generator-api.*}}`. Older notes
+> and logs in this repo may still use the previous names.
 
 ## Deployment security gates
 
@@ -421,7 +430,7 @@ function's owner and privileges match what it sets.
 - **Root directory:** there is **no** dashboard "root directory" setting for
   this service (confirmed `"rootDirectory": null`). Instead, every deploy
   must scope the build to `backend/` at the CLI level:
-  `railway up backend --path-as-root --service quiz-generator` (wrapped by
+  `railway up backend --path-as-root --service quiz-generator-api` (wrapped by
   `scripts/deploy.sh` — use that script rather than a bare `railway up`).
   Running `railway up` from the repo root without `--path-as-root` fails
   ("Railpack could not determine how to build the app").
@@ -445,7 +454,7 @@ the backend variables with them:
 
 | Service | Root | Dockerfile | Schedule / behavior |
 |---|---|---|---|
-| `quiz-generator-worker` | `backend` | `Dockerfile.worker` | Always running; no public domain |
+| `quiz-generator-faculty-worker` | `backend` | `Dockerfile.worker` | Always running; no public domain |
 
 Run only one worker initially. The database queue keeps jobs durable across
 restarts. Set `RAILWAY_DOCKERFILE_PATH=Dockerfile.worker` on the worker service. Use
@@ -453,7 +462,7 @@ Railway shared/reference variables for the existing backend configuration and
 secrets rather than copying secret values between services.
 
 The API and worker are separate deployments. `scripts/deploy.sh` updates **only**
-`quiz-generator`; it does not update `quiz-generator-worker`. When a backend
+`quiz-generator-api`; it does not update `quiz-generator-faculty-worker`. When a backend
 change affects worker code, shared job contracts, or settings, deploy the same
 verified `main` revision to the worker as a separate, explicitly scoped action.
 Confirm the worker uses `Dockerfile.worker`, has no public domain, and is healthy
@@ -573,7 +582,7 @@ in code; use `PAPER_BANK_ENABLED` for new configuration.
 
 **Deploying a change (Railway):** merge to `main` first, then run
 `scripts/deploy.sh` from `main` (or `railway up backend --path-as-root
---service quiz-generator` directly) — merging alone does not deploy, see
+--service quiz-generator-api` directly) — merging alone does not deploy, see
 Step 0. This command deploys the API only; assess worker compatibility and
 deploy the worker separately when its code or shared job contract changes. On
 first-ever setup (fresh Render project, or a from-scratch Railway
@@ -616,7 +625,7 @@ were not rerun after this deployment and remain a manual post-deploy check.
 (They point at each other; CORS on the backend already allows the configured
 origin, plus any `localhost` port for dev.)
 
-Production verification on 2026-09-07: Railway service `quiz-generator` has
+Production verification on 2026-09-07: Railway service `quiz-generator` (now `quiz-generator-api`) has
 `FRONTEND_ORIGIN=https://quiz-generator-drab-nine.vercel.app`. The frontend
 returned HTTP 200 and the backend CORS preflight returned that exact value in
 `Access-Control-Allow-Origin`. Change it only if the real Vercel production
@@ -695,7 +704,8 @@ hostname changes, then restart or redeploy the backend.
     Railway service `quiz-generator-evaluation-worker`.
 
     As verified with Railway CLI on 30 September 2026, the linked production
-    project had only `quiz-generator` and `quiz-generator-worker`; no dedicated
+    project had only `quiz-generator` and `quiz-generator-worker` (since renamed
+    `quiz-generator-api` and `quiz-generator-faculty-worker`); no dedicated
     evaluation-worker service existed. Create that service once in Railway,
     point it at `Dockerfile.evaluation-worker`, copy the API's required Supabase
     and AI environment variables, set `EVALUATION_JOBS_ENABLED=true`, and do not
