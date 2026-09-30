@@ -736,6 +736,10 @@ export type InstitutionFeatureFlags = {
 export const getDashboardProfile = () =>
   jsonRequest<DashboardProfile>("/api/v1/me/profile", "GET");
 
+export type ExamAppHandoff = { redirect_url: string };
+export const createExamAppHandoff = (next = "/") =>
+  jsonRequest<ExamAppHandoff>("/api/v1/handoff/examapp", "POST", { next });
+
 // --- Native handwritten evaluation (Phase A: upload + queue only) ---
 export const EVALUATION_UPLOAD_MAX_BYTES = 30 * 1024 * 1024;
 
@@ -2141,6 +2145,22 @@ export type PaperProfileFields = {
   paper: string | null;
   assessment_year: string | null;
   framework: string | null;
+  format_config?: PaperFormatConfig;
+};
+export type PaperFormatSection = {
+  name: string;
+  question_type?: string | null;
+  count: number;
+  min_marks?: number | null;
+  max_marks?: number | null;
+};
+export type PaperFormatConfig = {
+  sections: PaperFormatSection[];
+  duration_minutes?: number | null;
+  instructions: string[];
+  numbering_style: "numeric" | "q_numeric" | "roman";
+  currency_symbol?: string | null;
+  locale?: string | null;
 };
 export type CoursePaperProfile = {
   course_id: string;
@@ -2158,6 +2178,63 @@ export const setPaperProfile = (courseLevelId: string, fields: PaperProfileField
     `/api/v1/paper-profiles/${courseLevelId}`,
     "PUT",
     fields,
+  );
+
+export type GeneratedPaperQuestion = ReviewQuestion & {
+  number: string;
+  model_answer?: string | null;
+};
+export type GeneratedPaperPayload = {
+  exam_body?: string | null;
+  level?: string | null;
+  paper?: string | null;
+  assessment_year?: string | null;
+  framework?: string | null;
+  duration_minutes?: number | null;
+  numbering_style: string;
+  currency_symbol?: string | null;
+  locale?: string | null;
+  instructions: string[];
+  sections: { name: string; questions: GeneratedPaperQuestion[] }[];
+  total_marks: number;
+};
+export type GeneratedPaper = {
+  id: string;
+  course_level_id: string;
+  subject_id: string;
+  mode: "exact_mark" | "candidate_ai";
+  requested_total_marks: number;
+  selected_question_ids: string[];
+  status: "pending" | "processing" | "ready" | "failed";
+  instructions_text?: string | null;
+  paper_payload?: GeneratedPaperPayload | null;
+  error_message?: string | null;
+  created_by: string;
+  created_at: string;
+  completed_at?: string | null;
+};
+export type StartGeneratedPaperInput = {
+  request_key: string;
+  course_level_id: string;
+  subject_id: string;
+  mode: "exact_mark" | "candidate_ai";
+  requested_total_marks: number;
+  question_count: number;
+  chapter_ids: string[];
+  question_types: string[];
+};
+export const startGeneratedPaper = (input: StartGeneratedPaperInput) =>
+  jsonRequest<{ generated_paper_id: string; id: string; status: string }>(
+    "/api/v1/generated-papers",
+    "POST",
+    input,
+  );
+export const getGeneratedPaper = (id: string) =>
+  jsonRequest<GeneratedPaper>(`/api/v1/generated-papers/${id}`, "GET");
+export const listGeneratedPapers = (courseLevelId: string) =>
+  jsonRequest<GeneratedPaper[]>(
+    `/api/v1/generated-papers?course_level_id=${encodeURIComponent(courseLevelId)}`,
+    "GET",
   );
 
 export const deleteCourse = (id: string) =>
@@ -2455,6 +2532,7 @@ export type InstitutionRow = {
   logo_filename: string | null;
   primary_color: string;
   feature_flags: InstitutionFeatureFlags;
+  handwritten_evaluation_enabled: boolean;
 };
 export type ReviewPipelineFull = {
   pending_review: number;
@@ -2511,6 +2589,7 @@ export type InstitutionUpdateInput = {
   logo_content_type?: string;
   logo_filename?: string;
   primary_color?: string;
+  handwritten_evaluation_enabled?: boolean;
 };
 export type InstitutionDetails = {
   id: string;
@@ -2523,6 +2602,7 @@ export type InstitutionDetails = {
   logo_filename: string | null;
   primary_color: string;
   feature_flags: InstitutionFeatureFlags;
+  handwritten_evaluation_enabled: boolean;
 };
 export type InstitutionOfferingSubject = {
   id: string;

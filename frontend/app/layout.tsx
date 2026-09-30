@@ -32,6 +32,7 @@ export default async function RootLayout({
         {/* Apply the saved theme before paint to avoid a flash of light. */}
         <script
           nonce={nonce}
+          suppressHydrationWarning
           dangerouslySetInnerHTML={{
             __html:
               "try{if(localStorage.getItem('theme')==='dark')document.documentElement.classList.add('dark')}catch(e){}",

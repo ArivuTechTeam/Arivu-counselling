@@ -4,6 +4,7 @@ import { useState } from "react";
 
 import { getQuizSet, getStudentReport } from "@/lib/api";
 import { variantLabel } from "@/lib/format";
+import { useDashboardIdentity } from "@/components/shared/dashboard-identity-context";
 
 const btn =
   "inline-flex items-center gap-1 rounded-md border border-input px-3 py-1.5 text-xs font-medium text-foreground transition-colors hover:border-primary/50 hover:text-primary disabled:opacity-50";
@@ -20,6 +21,7 @@ export function QuestionPaperButtons({
   meta?: string;
   compact?: boolean;
 }) {
+  const { institution } = useDashboardIdentity();
   const [busy, setBusy] = useState<"q" | "a" | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -52,6 +54,7 @@ export function QuestionPaperButtons({
           meta={meta}
           sections={sections as never}
           withAnswers={withAnswers}
+          branding={institution}
         />,
         `${slug(title)}${withAnswers ? "-answer-key" : "-question-paper"}`,
       );
@@ -97,6 +100,7 @@ export function StudentDownloads({
   maxScore: number;
   results: ResultQ[];
 }) {
+  const { institution } = useDashboardIdentity();
   const [busy, setBusy] = useState<"r" | "p" | null>(null);
 
   async function report() {
@@ -112,6 +116,7 @@ export function StudentDownloads({
           score={score}
           maxScore={maxScore}
           results={results as never}
+          branding={institution}
         />,
         `${slug(quizTitle)}-report-card`,
       );
@@ -131,6 +136,7 @@ export function StudentDownloads({
           title={quizTitle}
           questions={results as never}
           withAnswers
+          branding={institution}
         />,
         `${slug(quizTitle)}-with-answers`,
       );
@@ -159,6 +165,7 @@ export function StudentReportButton({
   studentId: string;
   studentName: string;
 }) {
+  const { institution } = useDashboardIdentity();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -177,6 +184,7 @@ export function StudentReportButton({
           overall={r.overall}
           perQuiz={r.per_quiz}
           weakAreas={r.weak_areas}
+          branding={institution}
         />,
         `${slug(studentName)}-report`,
       );

@@ -433,6 +433,8 @@ function EditInstitutionDialog({
   const [subdomain, setSubdomain] = useState(institution.subdomain ?? "");
   const [plan, setPlan] = useState(institution.plan_tier ?? "free");
   const [isActive, setIsActive] = useState(institution.is_active);
+  const [handwrittenEvaluationEnabled, setHandwrittenEvaluationEnabled] =
+    useState(institution.handwritten_evaluation_enabled);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [logo, setLogo] = useState<File | null>(null);
@@ -483,6 +485,7 @@ function EditInstitutionDialog({
         logo_content_type: logo?.type,
         logo_filename: logo?.name,
         primary_color: normalizeInstitutionColor(primaryColor),
+        handwritten_evaluation_enabled: handwrittenEvaluationEnabled,
       });
       await onSaved();
       onClose();
@@ -654,6 +657,24 @@ function EditInstitutionDialog({
             <strong className="block font-medium">Institution active</strong>
             <span className="text-muted-foreground">
               Turn this off to suspend the institution without deleting its data.
+            </span>
+          </span>
+        </label>
+        <label className="flex items-start gap-3 rounded-lg border p-3 text-sm">
+          <input
+            type="checkbox"
+            checked={handwrittenEvaluationEnabled}
+            onChange={(event) =>
+              setHandwrittenEvaluationEnabled(event.target.checked)
+            }
+            className="mt-0.5 h-4 w-4 accent-primary"
+          />
+          <span>
+            <strong className="block font-medium">
+              Handwritten evaluation &amp; paper generation
+            </strong>
+            <span className="text-muted-foreground">
+              Allow this institution&apos;s users to open ExamApp through the secure handoff.
             </span>
           </span>
         </label>

@@ -31,7 +31,7 @@ import {
   X,
   Zap,
 } from "@/components/ui/icons";
-import { type DashboardProfile } from "@/lib/api";
+import { createExamAppHandoff, type DashboardProfile } from "@/lib/api";
 import {
   clearDashboardBootstrap,
   HOME_BY_ROLE,
@@ -41,6 +41,7 @@ import { createClient } from "@/lib/supabase";
 import { useCourses } from "@/lib/staff-queries";
 import { institutionLoginPath } from "@/lib/institution-portal";
 import { institutionThemeStyle } from "@/lib/institution-theme";
+import { isExamAppHandoffVisible } from "@/lib/examapp-handoff";
 import { useDashboardIdentity } from "@/components/shared/dashboard-identity-context";
 
 type IconComponent = (p: { size?: number; className?: string }) => React.JSX.Element;
@@ -55,6 +56,7 @@ type NavItem = {
   icon: IconComponent;
   feature?: keyof DashboardProfile["features"];
   evaluation?: boolean;
+  handoff?: boolean;
 };
 
 const PRIMARY_ACTION: Record<
@@ -128,6 +130,13 @@ const NAV: Record<string, NavItem[]> = {
       feature: "paper_bank",
     },
     {
+      label: "Generate exam paper",
+      href: "/dashboard/teacher/generate-paper",
+      section: "Content",
+      icon: FileText,
+      feature: "paper_bank",
+    },
+    {
       label: "Handwritten evaluation",
       href: "/dashboard/teacher/handwritten-evaluation",
       section: "Content",
@@ -151,6 +160,12 @@ const NAV: Record<string, NavItem[]> = {
       href: "/dashboard/teacher/settings",
       section: "Account",
       icon: Settings,
+    },
+    {
+      label: "Handwritten evaluation & paper generation",
+      section: "ExamApp",
+      icon: FileText,
+      handoff: true,
     },
   ],
   institution_admin: [
@@ -217,6 +232,12 @@ const NAV: Record<string, NavItem[]> = {
       section: "Account",
       icon: Settings,
     },
+    {
+      label: "Handwritten evaluation & paper generation",
+      section: "ExamApp",
+      icon: FileText,
+      handoff: true,
+    },
   ],
   super_admin: [
     {
@@ -260,6 +281,12 @@ const NAV: Record<string, NavItem[]> = {
       href: "/dashboard/super-admin/settings",
       section: "Account",
       icon: Settings,
+    },
+    {
+      label: "Handwritten evaluation & paper generation",
+      section: "ExamApp",
+      icon: FileText,
+      handoff: true,
     },
   ],
   student: [
@@ -360,6 +387,12 @@ const NAV: Record<string, NavItem[]> = {
       section: "Account",
       icon: Settings,
     },
+    {
+      label: "Handwritten evaluation & paper generation",
+      section: "ExamApp",
+      icon: FileText,
+      handoff: true,
+    },
   ],
 };
 
@@ -373,7 +406,8 @@ export function visibleNavItems(
   return (NAV[role] ?? []).filter(
     (item) =>
       (!item.feature || features[item.feature]) &&
-      (!item.evaluation || handwrittenEvaluationEnabled),
+      (!item.evaluation || handwrittenEvaluationEnabled) &&
+      (!item.handoff || isExamAppHandoffVisible(role, handwrittenEvaluationEnabled)),
   );
 }
 
@@ -398,12 +432,30 @@ function NavRow({
   item,
   active,
   onNavigate,
+  onHandoff,
+  handoffBusy,
 }: {
   item: NavItem;
   active: boolean;
   onNavigate: () => void;
+  onHandoff: () => void;
+  handoffBusy: boolean;
 }) {
   const Icon = item.icon;
+  if (item.handoff) {
+    return (
+      <button
+        type="button"
+        onClick={onHandoff}
+        disabled={handoffBusy}
+        aria-busy={handoffBusy}
+        className="flex items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm text-white/85 transition-colors hover:bg-white/10 disabled:cursor-wait disabled:opacity-70"
+      >
+        <Icon size={16} className="shrink-0" />
+        <span>{handoffBusy ? "Opening ExamApp…" : item.label}</span>
+      </button>
+    );
+  }
   if (!item.href) {
     return (
       <span className="flex items-center gap-2 rounded-lg px-2.5 py-2 text-sm text-white/50">
@@ -510,6 +562,8 @@ export function DashboardShell({
   const [pwOpen, setPwOpen] = useState(false);
   const [pwDone, setPwDone] = useState(false);
   const [navQuery, setNavQuery] = useState("");
+  const [handoffBusy, setHandoffBusy] = useState(false);
+  const [handoffError, setHandoffError] = useState<string | null>(null);
   const [openSections, setOpenSections] = useState<Set<string>>(
     () =>
       new Set(
@@ -629,6 +683,23 @@ export function DashboardShell({
     clearDashboardBootstrap();
     await supabase.auth.signOut({ scope: "local" });
     router.replace(tenantLogin);
+  }
+
+  async function openExamApp() {
+    if (handoffBusy) return;
+    setHandoffBusy(true);
+    setHandoffError(null);
+    try {
+      const { redirect_url } = await createExamAppHandoff();
+      window.location.assign(redirect_url);
+    } catch (reason) {
+      setHandoffError(
+        reason instanceof Error
+          ? reason.message
+          : "We couldn't open ExamApp. Please try again.",
+      );
+      setHandoffBusy(false);
+    }
   }
 
   const sections = groupBySection(items);
@@ -788,6 +859,8 @@ export function DashboardShell({
                           setNavOpen(false);
                           setNavQuery("");
                         }}
+                        onHandoff={openExamApp}
+                        handoffBusy={handoffBusy}
                       />
                     ))}
                   </nav>
@@ -795,6 +868,21 @@ export function DashboardShell({
               </div>
             );
           })}
+        {handoffError && (
+          <div
+            role="alert"
+            className="mt-3 rounded-lg border border-red-200/30 bg-red-950/25 px-3 py-2 text-xs text-red-50"
+          >
+            <p>{handoffError}</p>
+            <button
+              type="button"
+              onClick={openExamApp}
+              className="mt-1 font-semibold underline underline-offset-2"
+            >
+              Try again
+            </button>
+          </div>
+        )}
       </aside>
 
       {/* Main column */}

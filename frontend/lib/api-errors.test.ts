@@ -12,7 +12,12 @@ vi.mock("@/lib/safe-next", () => ({
   safeDashboardNext: (path: string) => path,
 }));
 
-import { ApiRequestError, finalizeAttemptForExit, getDashboardProfile } from "./api";
+import {
+  ApiRequestError,
+  createExamAppHandoff,
+  finalizeAttemptForExit,
+  getDashboardProfile,
+} from "./api";
 
 describe("shared API errors used by all dashboard roles", () => {
   beforeEach(() => {
@@ -74,6 +79,26 @@ describe("shared API errors used by all dashboard roles", () => {
 
     await expect(finalizeAttemptForExit("attempt-1", "quiz", [])).rejects.toBeInstanceOf(
       ApiRequestError,
+    );
+  });
+
+  it("creates an ExamApp handoff with an authenticated POST body", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          redirect_url: "https://examapp.example/auth/handoff#token=test&next=/papers",
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(createExamAppHandoff("/papers")).resolves.toEqual({
+      redirect_url: "https://examapp.example/auth/handoff#token=test&next=/papers",
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://localhost:8000/api/v1/handoff/examapp",
+      expect.objectContaining({ method: "POST", body: JSON.stringify({ next: "/papers" }) }),
     );
   });
 });
