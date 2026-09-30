@@ -7,7 +7,6 @@ import {
   Text,
   View,
 } from "@react-pdf/renderer";
-import { Fragment } from "react";
 
 import type { HandwrittenEvaluationReport } from "@/lib/api";
 import {
@@ -316,28 +315,28 @@ export function HandwrittenEvaluationReportDoc({
           <Text render={({ pageNumber, totalPages }) => `Page ${pageNumber} of ${totalPages}`} />
         </View>
       </Page>
-      <Page size="A4" style={[styles.page, styles.feedbackPage]} wrap>
-        <View
-          style={{ ...styles.repeatHeader, borderBottomColor: brand.primary_color }}
-          fixed
-        >
-          <Text style={{ ...styles.repeatHeaderBrand, color: brand.primary_color }}>
-            {brand.name.toUpperCase()}
-          </Text>
-          <Text style={styles.repeatHeaderTitle}>{report.paper.title}  ·  Student Evaluation Summary</Text>
-        </View>
+      {view.guidance.map((item, itemIndex) => (
+        <Page key={`${item.label}-${itemIndex}`} size="A4" style={[styles.page, styles.feedbackPage]} wrap>
+          <View
+            style={{ ...styles.repeatHeader, borderBottomColor: brand.primary_color }}
+            fixed
+          >
+            <Text style={{ ...styles.repeatHeaderBrand, color: brand.primary_color }}>
+              {brand.name.toUpperCase()}
+            </Text>
+            <Text style={styles.repeatHeaderTitle}>{report.paper.title}  ·  Student Evaluation Summary</Text>
+          </View>
 
-        <View style={styles.feedbackIntro} wrap={false}>
-          <Text style={{ ...styles.sectionEyebrow, color: brand.primary_color }}>FOCUSED FEEDBACK</Text>
-          <Text style={styles.sectionTitle}>Question-by-Question Guidance</Text>
-          <Text style={styles.meta}>Review what earned credit and what to improve on the next attempt.</Text>
-        </View>
+          {itemIndex === 0 ? (
+            <View style={styles.feedbackIntro} wrap={false}>
+              <Text style={{ ...styles.sectionEyebrow, color: brand.primary_color }}>FOCUSED FEEDBACK</Text>
+              <Text style={styles.sectionTitle}>Question-by-Question Guidance</Text>
+              <Text style={styles.meta}>Review what earned credit and what to improve on the next attempt.</Text>
+            </View>
+          ) : null}
 
-        {view.guidance.map((item) => (
-          <Fragment key={item.label}>
             <View
               style={{ ...styles.questionHeader, borderTopColor: brand.primary_color }}
-              wrap={false}
             >
               <View style={styles.questionHeaderText}>
                 <Text style={styles.questionLabel}>{item.label}</Text>
@@ -382,14 +381,12 @@ export function HandwrittenEvaluationReportDoc({
                 {item.expectedPoints.map((point) => <Text key={point} style={styles.compactText}>• {point}</Text>)}
               </View>
             ) : null}
-          </Fragment>
-        ))}
-
-        <View style={styles.footer} fixed>
-          <Text>{brand.name}  ·  {studentName}</Text>
-          <Text render={({ pageNumber, totalPages }) => `Page ${pageNumber} of ${totalPages}`} />
-        </View>
-      </Page>
+          <View style={styles.footer} fixed>
+            <Text>{brand.name}  ·  {studentName}</Text>
+            <Text render={({ pageNumber, totalPages }) => `Page ${pageNumber} of ${totalPages}`} />
+          </View>
+        </Page>
+      ))}
     </Document>
   );
 }

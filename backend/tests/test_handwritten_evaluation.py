@@ -186,6 +186,49 @@ def test_institution_admin_lists_every_paper_in_own_tenant():
     assert {paper.title for paper in response.papers} == {"Accounts mock", "Second subject"}
 
 
+def test_paper_management_response_includes_display_metadata_and_detail_extraction():
+    source = tables()
+    paper = source["evaluation_papers"][0]
+    course_id = str(uuid4())
+    source["subjects"] = [{
+        "id": paper["subject_id"], "tenant_id": TENANT,
+        "course_id": course_id, "course_level_id": paper["course_level_id"],
+        "name": "Business Laws",
+    }]
+    source["course_levels"] = [{
+        "id": paper["course_level_id"], "tenant_id": TENANT,
+        "course_id": course_id, "name": "Foundation",
+    }]
+    source["courses"] = [{"id": course_id, "tenant_id": TENANT, "name": "CA"}]
+    source["handwritten_submissions"] = [
+        {"id": str(uuid4()), "tenant_id": TENANT, "evaluation_paper_id": PAPER},
+        {"id": str(uuid4()), "tenant_id": TENANT, "evaluation_paper_id": PAPER},
+    ]
+    paper.update({
+        "question_paper_text": "Question No. 1 is compulsory.",
+        "suggested_answer_text": "Apply the relevant provision.",
+        "structured_qa": [{"question_ref": "1(a)", "question_text": "Explain."}],
+        "rubric_source": "official",
+        "rubric_error": "",
+    })
+    service = Service(source)
+    with patch("app.api.evaluation_papers.get_service_client", return_value=service), \
+         patch("app.api.evaluation_papers.signed_url", return_value="https://signed.example/paper"):
+        listed = asyncio.run(list_evaluation_papers(profile("institution_admin"))).papers[0]
+        detail = asyncio.run(get_evaluation_paper(UUID(PAPER), profile("institution_admin")))
+
+    assert (listed.course_name, listed.level_name, listed.subject_name) == (
+        "CA", "Foundation", "Business Laws"
+    )
+    assert listed.submission_count == 2
+    assert listed.has_suggested_answer is False
+    # Large extracted fields remain detail-only, like ExamApp's lightweight list.
+    assert listed.question_paper_text is None
+    assert detail.question_paper_text == "Question No. 1 is compulsory."
+    assert detail.suggested_answer_text == "Apply the relevant provision."
+    assert detail.structured_qa[0]["question_ref"] == "1(a)"
+
+
 def test_paper_update_delete_are_teacher_subject_scoped_and_admin_tenant_wide():
     class DeleteQuery(Query):
         deleting = False
@@ -231,6 +274,45 @@ def test_paper_update_delete_are_teacher_subject_scoped_and_admin_tenant_wide():
     delete_storage.assert_called_once_with(
         ["a/paper.pdf"], bucket="evaluation-papers"
     )
+
+
+def test_paper_edit_reclassification_validates_target_subject_scope():
+    source = tables()
+    paper = source["evaluation_papers"][0]
+    old_subject = paper["subject_id"]
+    old_level = paper["course_level_id"]
+    target_subject, target_level = str(uuid4()), str(uuid4())
+    source["teacher_subjects"] = [{
+        "tenant_id": TENANT,
+        "teacher_id": TEACHER,
+        "subject_id": old_subject,
+    }]
+    source["subjects"] = [
+        {"id": old_subject, "tenant_id": TENANT, "course_level_id": old_level},
+        {"id": target_subject, "tenant_id": TENANT, "course_level_id": target_level},
+    ]
+    service = Service(source)
+
+    with patch("app.api.evaluation_papers.get_service_client", return_value=service):
+        with pytest.raises(HTTPException) as denied:
+            asyncio.run(update_evaluation_paper(
+                UUID(PAPER),
+                course_level_id=UUID(target_level),
+                subject_id=UUID(target_subject),
+                profile=profile("teacher"),
+            ))
+    assert denied.value.status_code == 404
+
+    with patch("app.api.evaluation_papers.get_service_client", return_value=service), \
+         patch("app.api.evaluation_papers.signed_url", return_value="https://signed.example/paper"):
+        updated = asyncio.run(update_evaluation_paper(
+            UUID(PAPER),
+            course_level_id=UUID(target_level),
+            subject_id=UUID(target_subject),
+            profile=profile("institution_admin"),
+        ))
+    assert str(updated.course_level_id) == target_level
+    assert str(updated.subject_id) == target_subject
 
 
 def test_finalize_rejects_size_mismatch_deletes_object_and_marks_failed():

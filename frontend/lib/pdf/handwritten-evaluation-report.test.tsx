@@ -96,7 +96,7 @@ function longReport(): HandwrittenEvaluationReport {
 
 describe("HandwrittenEvaluationReportDoc", () => {
   it(
-    "renders long multi-question transcripts across A4 pages",
+    "isolates long multi-question transcripts on stable A4 question pages",
     async () => {
       const buffer = await renderToBuffer(
         createElement(HandwrittenEvaluationReportDoc, {
@@ -111,8 +111,11 @@ describe("HandwrittenEvaluationReportDoc", () => {
       expect(buffer.subarray(0, 4).toString()).toBe("%PDF");
       expect(buffer.byteLength).toBeGreaterThan(10_000);
       const pageCount = buffer.toString("latin1").match(/\/Type \/Page\b/g)?.length ?? 0;
-      expect(pageCount).toBeGreaterThan(1);
-      expect(pageCount).toBeLessThan(20);
+      // One summary page plus one page per question prevents a preceding
+      // answer's layout state from corrupting the next question. Especially
+      // long answers may add a small number of continuation pages.
+      expect(pageCount).toBeGreaterThanOrEqual(19);
+      expect(pageCount).toBeLessThanOrEqual(24);
     },
     30_000,
   );

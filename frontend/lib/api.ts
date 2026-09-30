@@ -751,17 +751,43 @@ export type EvaluationPaper = {
   title: string;
   total_marks: number;
   mcq_marks?: number | null;
-  rubric_status?: "not_started";
+  rubric_status?: "not_started" | "extracting" | "generating" | "ready" | "failed";
+  rubric_source?: "official" | "ai_derived" | null;
+  rubric_error?: string;
   is_active?: boolean;
   generated_paper_id?: string | null;
   created_by?: string;
   created_at?: string;
   question_paper_url?: string | null;
   suggested_answer_url?: string | null;
+  has_suggested_answer?: boolean;
   subject_name?: string | null;
   course_name?: string | null;
   level_name?: string | null;
   paper_type?: "mock_test";
+  question_paper_text?: string | null;
+  suggested_answer_text?: string | null;
+  structured_qa?: EvaluationPaperRubricQuestion[];
+  submission_count?: number;
+};
+
+export type EvaluationPaperRubricCriterion = {
+  criterion_id?: string;
+  description?: string;
+  criterion?: string;
+  marks?: number;
+  marks_available?: number;
+  category?: string;
+};
+
+export type EvaluationPaperRubricQuestion = {
+  question_ref?: string;
+  question_text?: string;
+  topic?: string;
+  suggested_answer?: string;
+  total_marks?: number;
+  question_type?: string;
+  criteria?: EvaluationPaperRubricCriterion[];
 };
 
 export type EvaluationSubmission = {
@@ -874,6 +900,54 @@ export async function listEvaluationPapers(): Promise<EvaluationPaper[]> {
     "GET",
   );
   return response.papers;
+}
+
+export const getEvaluationPaper = (paperId: string) =>
+  jsonRequest<EvaluationPaper>(
+    `/api/v1/evaluation-papers/${encodeURIComponent(paperId)}`,
+    "GET",
+  );
+
+export async function updateEvaluationPaper(
+  paperId: string,
+  input: {
+    course_level_id?: string;
+    subject_id?: string;
+    title?: string;
+    total_marks?: number;
+    mcq_marks?: number | null;
+    is_active?: boolean;
+    question_paper?: File;
+    suggested_answer?: File;
+  },
+): Promise<EvaluationPaper> {
+  const headers = await authHeader();
+  const form = new FormData();
+  if (input.course_level_id !== undefined) form.append("course_level_id", input.course_level_id);
+  if (input.subject_id !== undefined) form.append("subject_id", input.subject_id);
+  if (input.title !== undefined) form.append("title", input.title);
+  if (input.total_marks !== undefined) form.append("total_marks", String(input.total_marks));
+  if (input.mcq_marks === null) form.append("clear_mcq_marks", "true");
+  else if (input.mcq_marks !== undefined) form.append("mcq_marks", String(input.mcq_marks));
+  if (input.is_active !== undefined) form.append("is_active", String(input.is_active));
+  if (input.question_paper) form.append("question_paper", input.question_paper);
+  if (input.suggested_answer) form.append("suggested_answer", input.suggested_answer);
+  const response = await apiFetch(
+    `${API_BASE}/api/v1/evaluation-papers/${encodeURIComponent(paperId)}`,
+    { method: "PATCH", headers, body: form },
+    DOCUMENT_UPLOAD_TIMEOUT_MS,
+  );
+  if (!response.ok) return apiError(response, "We couldn't update the evaluation paper.");
+  return response.json();
+}
+
+export async function deleteEvaluationPaper(paperId: string): Promise<void> {
+  const headers = await authHeader();
+  const response = await apiFetch(
+    `${API_BASE}/api/v1/evaluation-papers/${encodeURIComponent(paperId)}`,
+    { method: "DELETE", headers },
+  );
+  if (!response.ok) return apiError(response, "We couldn't delete the evaluation paper.");
 }
 
 export async function listStudentEvaluationPapers(): Promise<EvaluationPaper[]> {

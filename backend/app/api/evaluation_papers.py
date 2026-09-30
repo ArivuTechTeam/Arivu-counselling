@@ -4,7 +4,7 @@ from typing import Any
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.lib.auth import CurrentProfile, get_current_profile
 from app.lib.role_checks import require_teacher
@@ -44,6 +44,16 @@ class EvaluationPaperResponse(BaseModel):
     created_at: str
     question_paper_url: str | None = None
     suggested_answer_url: str | None = None
+    has_suggested_answer: bool = False
+    question_paper_text: str | None = None
+    suggested_answer_text: str | None = None
+    structured_qa: list[dict[str, Any]] = Field(default_factory=list)
+    rubric_source: str | None = None
+    rubric_error: str = ""
+    subject_name: str | None = None
+    course_name: str | None = None
+    level_name: str | None = None
+    submission_count: int = 0
 
 
 class EvaluationPaperListResponse(BaseModel):
@@ -52,6 +62,9 @@ class EvaluationPaperListResponse(BaseModel):
 
 def _as_response(row: dict[str, Any], include_urls: bool = False) -> EvaluationPaperResponse:
     values = dict(row)
+    if not isinstance(values.get("structured_qa"), list):
+        values["structured_qa"] = []
+    values["has_suggested_answer"] = bool(values.get("suggested_answer_storage_path"))
     values["question_paper_url"] = None
     values["suggested_answer_url"] = None
     if include_urls:
@@ -63,6 +76,55 @@ def _as_response(row: dict[str, Any], include_urls: bool = False) -> EvaluationP
                 values["suggested_answer_storage_path"], 300, bucket=EVALUATION_PAPERS_BUCKET
             )
     return EvaluationPaperResponse.model_validate(values)
+
+
+def _first(client, table: str, columns: str, **filters: object) -> dict[str, Any] | None:
+    query = client.table(table).select(columns)
+    for key, value in filters.items():
+        query = query.eq(key, value)
+    result = query.limit(1).execute()
+    return result.data[0] if result.data else None
+
+
+def _decorate_paper(client, row: dict[str, Any], tenant_id: str) -> dict[str, Any]:
+    """Add the display metadata used by the teacher paper-management view."""
+    values = dict(row)
+    subject = _first(
+        client,
+        "subjects",
+        "id,name,course_id,course_level_id",
+        id=values.get("subject_id"),
+        tenant_id=tenant_id,
+    )
+    level = _first(
+        client,
+        "course_levels",
+        "id,name,course_id",
+        id=values.get("course_level_id"),
+        tenant_id=tenant_id,
+    )
+    course_id = (subject or {}).get("course_id") or (level or {}).get("course_id")
+    course = (
+        _first(client, "courses", "id,name", id=course_id, tenant_id=tenant_id)
+        if course_id
+        else None
+    )
+    submissions = (
+        client.table("handwritten_submissions")
+        .select("id")
+        .eq("tenant_id", tenant_id)
+        .eq("evaluation_paper_id", str(values["id"]))
+        .execute()
+        .data
+        or []
+    )
+    values.update(
+        subject_name=(subject or {}).get("name"),
+        level_name=(level or {}).get("name"),
+        course_name=(course or {}).get("name"),
+        submission_count=len(submissions),
+    )
+    return values
 
 
 def _manager_paper(client, profile: CurrentProfile, paper_id: UUID) -> dict[str, Any]:
@@ -84,6 +146,35 @@ def _manager_paper(client, profile: CurrentProfile, paper_id: UUID) -> dict[str,
             subject_id=str(row["subject_id"]),
         )
     return row
+
+
+def _require_target_paper_scope(
+    client,
+    profile: CurrentProfile,
+    *,
+    course_level_id: str,
+    subject_id: str,
+) -> None:
+    """Validate an edited paper's target classification inside the tenant."""
+    if profile.role == "teacher":
+        require_teacher_paper_scope(
+            client,
+            profile,
+            course_level_id=course_level_id,
+            subject_id=subject_id,
+        )
+        return
+    subject = (
+        client.table("subjects")
+        .select("id")
+        .eq("tenant_id", profile.tenant_id)
+        .eq("id", subject_id)
+        .eq("course_level_id", course_level_id)
+        .maybe_single()
+        .execute()
+    )
+    if not subject or not subject.data:
+        raise HTTPException(404, "Subject and course level not found.")
 
 
 async def _read_upload(upload: UploadFile) -> tuple[bytes, str, str]:
@@ -186,7 +277,10 @@ async def create_evaluation_paper(
         )
         if not inserted.data:
             raise RuntimeError("Evaluation paper insert returned no row")
-        return _as_response(inserted.data[0], include_urls=True)
+        return _as_response(
+            _decorate_paper(client, inserted.data[0], profile.tenant_id),
+            include_urls=True,
+        )
     except HTTPException:
         raise
     except Exception as exc:
@@ -206,14 +300,23 @@ async def list_evaluation_papers(
         raise HTTPException(status_code=403, detail="Evaluation-paper access denied")
     client = get_service_client()
     require_evaluation_enabled(client, profile)
-    query = client.table("evaluation_papers").select("*").eq("tenant_id", profile.tenant_id)
+    query = client.table("evaluation_papers").select(
+        "id,tenant_id,course_level_id,subject_id,title,total_marks,mcq_marks,"
+        "rubric_status,is_active,generated_paper_id,created_by,created_at,"
+        "suggested_answer_storage_path"
+    ).eq("tenant_id", profile.tenant_id)
     if profile.role == "teacher":
         subject_ids = assigned_evaluation_subject_ids(client, profile)
         if not subject_ids:
             return EvaluationPaperListResponse(papers=[])
         query = query.in_("subject_id", sorted(subject_ids))
     result = query.order("created_at", desc=True).execute()
-    return EvaluationPaperListResponse(papers=[_as_response(row) for row in (result.data or [])])
+    return EvaluationPaperListResponse(
+        papers=[
+            _as_response(_decorate_paper(client, row, profile.tenant_id))
+            for row in (result.data or [])
+        ]
+    )
 
 
 @router.get("/{paper_id}", response_model=EvaluationPaperResponse)
@@ -227,7 +330,10 @@ async def get_evaluation_paper(
     require_evaluation_enabled(client, profile)
     row = _manager_paper(client, profile, paper_id)
     try:
-        return _as_response(row, include_urls=True)
+        return _as_response(
+            _decorate_paper(client, row, profile.tenant_id),
+            include_urls=True,
+        )
     except Exception as exc:
         raise HTTPException(status_code=503, detail="Could not create download URLs") from exc
 
@@ -235,15 +341,22 @@ async def get_evaluation_paper(
 @router.patch("/{paper_id}", response_model=EvaluationPaperResponse)
 async def update_evaluation_paper(
     paper_id: UUID,
+    course_level_id: UUID | None = Form(None),
+    subject_id: UUID | None = Form(None),
     title: str | None = Form(None, min_length=1, max_length=200),
     total_marks: float | None = Form(None, gt=0),
     mcq_marks: float | None = Form(None, ge=0),
+    clear_mcq_marks: bool = Form(False),
     is_active: bool | None = Form(None),
     question_paper: UploadFile | None = File(None),
     suggested_answer: UploadFile | None = File(None),
     profile: CurrentProfile = Depends(get_current_profile),
 ) -> EvaluationPaperResponse:
     client = get_service_client()
+    if not isinstance(course_level_id, UUID):
+        course_level_id = None
+    if not isinstance(subject_id, UUID):
+        subject_id = None
     if not isinstance(mcq_marks, (int, float)):
         mcq_marks = None
     if not isinstance(total_marks, (int, float)):
@@ -252,29 +365,50 @@ async def update_evaluation_paper(
         title = None
     if not isinstance(is_active, bool):
         is_active = None
+    if not isinstance(clear_mcq_marks, bool):
+        clear_mcq_marks = False
     if not isinstance(question_paper, UploadFile):
         question_paper = None
     if not isinstance(suggested_answer, UploadFile):
         suggested_answer = None
     require_evaluation_enabled(client, profile)
     current = _manager_paper(client, profile, paper_id)
+    effective_level_id = str(course_level_id or current["course_level_id"])
+    effective_subject_id = str(subject_id or current["subject_id"])
+    if course_level_id is not None or subject_id is not None:
+        _require_target_paper_scope(
+            client,
+            profile,
+            course_level_id=effective_level_id,
+            subject_id=effective_subject_id,
+        )
     effective_total = total_marks if total_marks is not None else float(current["total_marks"])
-    effective_mcq = mcq_marks if mcq_marks is not None else current.get("mcq_marks")
+    effective_mcq = (
+        None if clear_mcq_marks
+        else mcq_marks if mcq_marks is not None
+        else current.get("mcq_marks")
+    )
     if effective_mcq is not None and float(effective_mcq) > effective_total:
         raise HTTPException(status_code=400, detail="MCQ marks cannot exceed total marks")
 
     changes: dict[str, Any] = {}
+    if course_level_id is not None:
+        changes["course_level_id"] = str(course_level_id)
+    if subject_id is not None:
+        changes["subject_id"] = str(subject_id)
     if title is not None:
         changes["title"] = title.strip()
     if total_marks is not None:
         changes["total_marks"] = total_marks
-    if mcq_marks is not None:
+    if clear_mcq_marks:
+        changes["mcq_marks"] = None
+    elif mcq_marks is not None:
         changes["mcq_marks"] = mcq_marks
     if is_active is not None:
         changes["is_active"] = is_active
     old_paths: list[str] = []
     uploaded_paths: list[str] = []
-    rubric_changed = total_marks is not None or mcq_marks is not None
+    rubric_changed = total_marks is not None or mcq_marks is not None or clear_mcq_marks
     try:
         if question_paper is not None:
             data, content_type, extension = await _read_upload(question_paper)
@@ -311,7 +445,10 @@ async def update_evaluation_paper(
             except Exception:
                 pass
         refreshed = _manager_paper(client, profile, paper_id)
-        return _as_response(refreshed, include_urls=True)
+        return _as_response(
+            _decorate_paper(client, refreshed, profile.tenant_id),
+            include_urls=True,
+        )
     except HTTPException:
         raise
     except Exception as exc:
