@@ -22,6 +22,7 @@ class ApiCallLogSummary(BaseModel):
     tenant_id: str | None = None
     document_id: str | None = None
     job_id: str | None = None
+    evaluation_job_id: str | None = None
     workflow_id: str | None = None
     call_type: str
     provider: Literal["gemini", "deepseek"]
@@ -69,6 +70,7 @@ def list_api_logs(
     tenant_id: UUID | None = None,
     document_id: UUID | None = None,
     workflow_id: UUID | None = None,
+    evaluation_job_id: UUID | None = None,
     legacy_only: bool = False,
     unlinked_only: bool = False,
     platform_only: bool = False,
@@ -80,12 +82,13 @@ def list_api_logs(
 ) -> dict:
     require_super_admin(profile)
     query = get_service_client().table("api_call_logs").select(
-        "id,tenant_id,document_id,job_id,workflow_id,call_type,provider,model,was_fallback,"
+        "id,tenant_id,document_id,job_id,evaluation_job_id,workflow_id,call_type,provider,model,was_fallback,"
         "input_tokens,output_tokens,cached_tokens,thinking_tokens,cost_usd,cost_inr,"
         "latency_ms,status,error_message,created_at",
         count="exact",
     )
-    for field, value in (("tenant_id", tenant_id), ("document_id", document_id), ("workflow_id", workflow_id),
+    for field, value in (("tenant_id", tenant_id), ("document_id", document_id),
+                         ("workflow_id", workflow_id), ("evaluation_job_id", evaluation_job_id),
                          ("call_type", call_type), ("provider", provider), ("status", status)):
         if value:
             query = query.eq(field, str(value))

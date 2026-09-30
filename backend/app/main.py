@@ -35,8 +35,13 @@ from app.api import (
     documents,
     exam_standards,
     extraction,
+    evaluation_papers,
     faculty_jobs,
     figures,
+    generated_papers,
+    handoff,
+    handwritten_learning,
+    handwritten_submissions,
     paper_profiles,
     practice,
     pyq,
@@ -59,7 +64,7 @@ from app.lib.api_errors import PublicAPIError
 from app.lib.config import get_settings
 from app.lib.request_trace import request_id_for_header
 from app.lib.storage import signed_url
-from app.lib.supabase import SupabaseUnavailableError
+from app.lib.supabase import SupabaseUnavailableError, get_service_client
 from app.services.tenant_features import effective_feature_flags
 
 logger = logging.getLogger(__name__)
@@ -294,8 +299,13 @@ app.include_router(super_admin.router)
 app.include_router(challenge.router)
 app.include_router(documents.router)
 app.include_router(extraction.router)
+app.include_router(evaluation_papers.router)
 app.include_router(faculty_jobs.router)
 app.include_router(figures.router)
+app.include_router(generated_papers.router)
+app.include_router(handoff.router)
+app.include_router(handwritten_learning.router)
+app.include_router(handwritten_submissions.router)
 app.include_router(practice.router)
 app.include_router(pyq.router)
 app.include_router(quiz.router)
@@ -333,6 +343,7 @@ class CurrentProfileOut(BaseModel):
     must_change_password: bool
     institution: InstitutionIdentityOut | None = None
     features: dict[str, bool]
+    handwritten_evaluation_enabled: bool
 
 
 @app.get("/api/v1/me", tags=["auth"], response_model=AuthenticatedIdentityOut)
@@ -392,9 +403,29 @@ def read_my_profile(
     features["regenerate_set"] = getattr(
         get_settings(), "regenerate_set_enabled", False
     )
+    handwritten_evaluation_enabled = profile.role == "super_admin"
+    if profile.role != "super_admin":
+        tenant_result = (
+            get_service_client()
+            .table("tenants")
+            .select("handwritten_evaluation_enabled")
+            .eq("id", profile.tenant_id)
+            .maybe_single()
+            .execute()
+        )
+        if tenant_result is None or not tenant_result.data:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Institution settings are temporarily unavailable.",
+            )
+        handwritten_evaluation_enabled = bool(
+            tenant_result.data.get("handwritten_evaluation_enabled", False)
+        )
+
     return CurrentProfileOut(
         role=profile.role,
         must_change_password=profile.must_change_password,
         institution=institution,
         features=features,
+        handwritten_evaluation_enabled=handwritten_evaluation_enabled,
     )

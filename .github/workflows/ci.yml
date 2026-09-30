@@ -28,6 +28,9 @@ jobs:
       - name: Verify migrations, leases and atomic job completion
         run: node scripts/test-faculty-jobs-db.mjs
 
+      - name: Verify handwritten-evaluation isolation and leases
+        run: node scripts/test-evaluation-jobs-db.mjs
+
       - name: Verify quiz copying and immutable publication
         run: node scripts/test-quiz-reuse-db.mjs
 
@@ -74,6 +77,8 @@ jobs:
       SUPABASE_ANON_KEY: ci-non-secret-${{ github.run_id }}-${{ github.run_attempt }}
       SUPABASE_SERVICE_ROLE_KEY: ci-non-secret-${{ github.run_id }}-${{ github.run_attempt }}
       SUPABASE_JWT_SECRET: ci-non-secret-${{ github.run_id }}-${{ github.run_attempt }}
+      HANDOFF_SHARED_SECRET: ci-handoff-non-secret-${{ github.run_id }}-${{ github.run_attempt }}
+      EXAMAPP_FRONTEND_URL: https://examapp.example.com
       FRONTEND_ORIGIN: https://app.example.com
       GEMINI_API_KEY: ci-non-secret-${{ github.run_id }}-${{ github.run_attempt }}
     defaults:

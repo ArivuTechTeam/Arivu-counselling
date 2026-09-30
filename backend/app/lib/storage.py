@@ -18,6 +18,8 @@ from app.lib.supabase import get_service_client
 BUCKET = "documents"
 # Private bucket for extracted figure PNGs (document-figure support).
 FIGURES_BUCKET = "question-figures"
+EVALUATION_PAPERS_BUCKET = "evaluation-papers"
+EVALUATION_SUBMISSIONS_BUCKET = "evaluation-submissions"
 
 
 def upload_bytes(
@@ -71,3 +73,13 @@ def signed_url(path: str, expires_in: int, *, bucket: str = BUCKET) -> str:
     if not isinstance(url, str) or not url:
         raise RuntimeError("Storage did not return a signed URL.")
     return url
+
+
+def signed_upload(path: str, *, bucket: str) -> dict[str, str]:
+    """Create a one-use signed upload target for a private bucket."""
+    result = get_service_client().storage.from_(bucket).create_signed_upload_url(path)
+    url = result.get("signed_url") or result.get("signedUrl") or result.get("signedURL")
+    token = result.get("token")
+    if not isinstance(url, str) or not url or not isinstance(token, str) or not token:
+        raise RuntimeError("Storage did not return a signed upload target.")
+    return {"signed_url": url, "token": token, "path": path}

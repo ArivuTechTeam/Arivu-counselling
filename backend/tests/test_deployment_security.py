@@ -20,6 +20,8 @@ def valid_environment() -> dict[str, str]:
         "SUPABASE_ANON_KEY": uuid4().hex,
         "SUPABASE_SERVICE_ROLE_KEY": uuid4().hex,
         "SUPABASE_JWT_SECRET": uuid4().hex,
+        "HANDOFF_SHARED_SECRET": f"handoff-{uuid4().hex}",
+        "EXAMAPP_FRONTEND_URL": "https://examapp.example.com",
         "FRONTEND_ORIGIN": "https://app.example.com",
         "GEMINI_API_KEY": uuid4().hex,
     }
@@ -32,6 +34,8 @@ class StartupConfigurationTests(unittest.TestCase):
             "SUPABASE_ANON_KEY",
             "SUPABASE_SERVICE_ROLE_KEY",
             "SUPABASE_JWT_SECRET",
+            "HANDOFF_SHARED_SECRET",
+            "EXAMAPP_FRONTEND_URL",
             "FRONTEND_ORIGIN",
         ):
             environment = valid_environment()
@@ -57,6 +61,20 @@ class StartupConfigurationTests(unittest.TestCase):
         with patch.dict(
             os.environ, environment, clear=True
         ), self.assertRaisesRegex(RuntimeError, "SUPABASE_SERVICE_ROLE_KEY"):
+            Settings()
+
+    def test_handoff_secret_is_independent_and_at_least_32_bytes(self) -> None:
+        too_short = {**valid_environment(), "HANDOFF_SHARED_SECRET": "short"}
+        with patch.dict(
+            os.environ, too_short, clear=True
+        ), self.assertRaisesRegex(RuntimeError, "at least 32 bytes"):
+            Settings()
+
+        reused = valid_environment()
+        reused["HANDOFF_SHARED_SECRET"] = reused["SUPABASE_JWT_SECRET"]
+        with patch.dict(
+            os.environ, reused, clear=True
+        ), self.assertRaisesRegex(RuntimeError, "must not reuse"):
             Settings()
 
     def test_debug_defaults_off_and_cannot_be_enabled_for_production_origin(self) -> None:

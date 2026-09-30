@@ -138,6 +138,8 @@ class RateLimitConfigurationTests(unittest.TestCase):
             "SUPABASE_ANON_KEY": uuid4().hex,
             "SUPABASE_SERVICE_ROLE_KEY": uuid4().hex,
             "SUPABASE_JWT_SECRET": uuid4().hex,
+            "HANDOFF_SHARED_SECRET": f"handoff-{uuid4().hex}",
+            "EXAMAPP_FRONTEND_URL": "https://examapp.example.com",
             "FRONTEND_ORIGIN": "https://app.example.com",
             "GEMINI_API_KEY": uuid4().hex,
             "RATE_LIMIT_QUIZ_GENERATION_PER_HOUR": "11",
@@ -148,6 +150,11 @@ class RateLimitConfigurationTests(unittest.TestCase):
             "RATE_LIMIT_QUIZ_EXTRACTION_PER_HOUR": "16",
             "RATE_LIMIT_CHALLENGE_JOIN_PER_HOUR": "17",
             "RATE_LIMIT_PAPER_GRADING_PER_HOUR": "18",
+            "RATE_LIMIT_HANDWRITTEN_EVALUATION_PER_HOUR": "19",
+            "PER_QUESTION_STAGE2_ENABLED": "true",
+            "PER_QUESTION_STAGE2_CONCURRENCY": "6",
+            "DEEPSEEK_MAX_CONCURRENCY": "25",
+            "DEEPSEEK_SLOT_WAIT_SECONDS": "31",
             "STUDENT_QUIZ_ATTEMPT_LIMIT": "7",
             "CHALLENGE_EXPIRY_DAYS": "45",
             "DEEPSEEK_MAX_OUTPUT_TOKENS": "8192",
@@ -163,10 +170,18 @@ class RateLimitConfigurationTests(unittest.TestCase):
         self.assertEqual(settings.rate_limit_quiz_extraction_per_hour, 16)
         self.assertEqual(settings.rate_limit_challenge_join_per_hour, 17)
         self.assertEqual(settings.rate_limit_paper_grading_per_hour, 18)
+        self.assertEqual(settings.rate_limit_handwritten_evaluation_per_hour, 19)
+        self.assertTrue(settings.per_question_stage2_enabled)
+        self.assertEqual(settings.per_question_stage2_concurrency, 6)
+        self.assertEqual(settings.deepseek_max_concurrency, 25)
+        self.assertEqual(settings.deepseek_slot_wait_seconds, 31)
         self.assertEqual(settings.student_quiz_attempt_limit, 7)
         self.assertEqual(settings.challenge_expiry_days, 45)
         self.assertEqual(settings.deepseek_max_output_tokens, 65536)
-        self.assertEqual(settings.deepseek_model, "deepseek-flash")
+        self.assertEqual(settings.deepseek_model, "deepseek-v4-flash")
+        self.assertEqual(settings.deepseek_stage2_max_tokens, 80000)
+        self.assertEqual(settings.deepseek_per_question_max_tokens, 32000)
+        self.assertEqual(settings.deepseek_stage2_thinking_effort, "high")
         self.assertFalse(settings.deepseek_thinking_enabled)
         self.assertEqual(settings.deepseek_structured_max_output_tokens, 16384)
         self.assertEqual(settings.deepseek_request_timeout_seconds, 240.0)

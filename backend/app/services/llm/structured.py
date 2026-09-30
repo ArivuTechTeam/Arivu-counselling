@@ -14,7 +14,9 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 import time
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -23,6 +25,140 @@ import app.services.llm as llm_router
 from app.services.llm.base import LLMError
 from app.services.llm.gemini_http import post_gemini
 from app.services.ai_call_logging import ai_provider_attempt, log_ai_call
+
+
+logger = logging.getLogger(__name__)
+
+# Match ExamApp's proven native-document transport boundary. These values count
+# base64 characters rather than decoded bytes so the request retains room for
+# prompts, schemas, and JSON framing. A file above the per-file threshold is
+# uploaded unchanged to Gemini Files API; cumulative inline evidence must never
+# exceed the second limit.
+GEMINI_FILES_API_THRESHOLD_B64 = 10_000_000
+GEMINI_INLINE_B64_LIMIT = 18_000_000
+GEMINI_FILE_READY_TIMEOUT_SECONDS = 120.0
+GEMINI_FILE_READY_POLL_SECONDS = 1.5
+
+
+def _requires_gemini_files_api(encoded_size: int, inline_b64_total: int) -> bool:
+    return (
+        encoded_size > GEMINI_FILES_API_THRESHOLD_B64
+        or inline_b64_total + encoded_size > GEMINI_INLINE_B64_LIMIT
+    )
+
+
+def _gemini_api_origin(base_url: str) -> str:
+    parsed = urlsplit(base_url)
+    if not parsed.scheme or not parsed.netloc:
+        raise LLMError("GEMINI_BASE_URL is invalid.")
+    return f"{parsed.scheme}://{parsed.netloc}"
+
+
+def _gemini_file_state(value: object) -> str:
+    if isinstance(value, dict):
+        value = value.get("name")
+    return str(value or "").strip().upper()
+
+
+def _wait_for_gemini_file_active(
+    *, file_uri: str, api_key: str, base_url: str, initial_state: object = None,
+    timeout_seconds: float = GEMINI_FILE_READY_TIMEOUT_SECONDS,
+    poll_seconds: float = GEMINI_FILE_READY_POLL_SECONDS,
+) -> bool:
+    """Wait until Gemini has finished processing an uploaded native file."""
+    state = _gemini_file_state(initial_state)
+    if state == "ACTIVE":
+        return True
+    if state in {"FAILED", "ERROR", "CANCELLED"}:
+        return False
+
+    status_url = str(file_uri or "").strip()
+    if not status_url:
+        return False
+    if not status_url.startswith(("http://", "https://")):
+        status_url = f"{base_url.rstrip('/')}/{status_url.lstrip('/')}"
+
+    deadline = time.monotonic() + max(timeout_seconds, 0.0)
+    while time.monotonic() < deadline:
+        try:
+            response = httpx.get(
+                status_url,
+                headers={"x-goog-api-key": api_key},
+                timeout=30.0,
+            )
+            response.raise_for_status()
+            body = response.json()
+        except (httpx.HTTPError, ValueError) as exc:
+            logger.warning(
+                "Gemini Files API readiness check failed (%s)", type(exc).__name__
+            )
+            return False
+        file_info = body.get("file", body) if isinstance(body, dict) else {}
+        state = _gemini_file_state((file_info or {}).get("state"))
+        if state == "ACTIVE":
+            return True
+        if state in {"FAILED", "ERROR", "CANCELLED"}:
+            return False
+        time.sleep(max(poll_seconds, 0.0))
+    logger.warning("Gemini Files API upload did not become active before timeout")
+    return False
+
+
+def _upload_to_gemini_files_api(
+    *, raw: bytes, mime_type: str, display_name: str, api_key: str,
+    base_url: str,
+) -> str:
+    """Upload one unchanged document and return its active Gemini file URI."""
+    upload_url = f"{_gemini_api_origin(base_url)}/upload/v1beta/files"
+    try:
+        initialized = httpx.post(
+            upload_url,
+            json={"file": {"display_name": display_name}},
+            headers={
+                "x-goog-api-key": api_key,
+                "X-Goog-Upload-Protocol": "resumable",
+                "X-Goog-Upload-Command": "start",
+                "X-Goog-Upload-Header-Content-Length": str(len(raw)),
+                "X-Goog-Upload-Header-Content-Type": mime_type,
+                "Content-Type": "application/json",
+            },
+            timeout=30.0,
+        )
+        initialized.raise_for_status()
+        resumable_url = initialized.headers.get("X-Goog-Upload-URL")
+        if not resumable_url:
+            raise LLMError("Gemini Files API did not return an upload URL.")
+
+        uploaded = httpx.post(
+            resumable_url,
+            content=raw,
+            headers={
+                "Content-Length": str(len(raw)),
+                "X-Goog-Upload-Offset": "0",
+                "X-Goog-Upload-Command": "upload, finalize",
+            },
+            timeout=300.0,
+        )
+        uploaded.raise_for_status()
+        body = uploaded.json()
+    except (httpx.HTTPError, ValueError) as exc:
+        raise LLMError("Gemini Files API upload failed.") from exc
+
+    file_info = body.get("file", {}) if isinstance(body, dict) else {}
+    file_uri = str(file_info.get("uri") or "").strip()
+    if not file_uri:
+        raise LLMError("Gemini Files API did not return a file URI.")
+    if not _wait_for_gemini_file_active(
+        file_uri=file_uri,
+        api_key=api_key,
+        base_url=base_url,
+        initial_state=file_info.get("state"),
+    ):
+        raise LLMError("Gemini Files API upload did not become active.")
+    logger.info(
+        "Gemini Files API upload active (mime=%s, bytes=%d)", mime_type, len(raw)
+    )
+    return file_uri
 
 
 def gemini_json(
@@ -148,7 +284,8 @@ def complete_json_with_fallback(
 
 
 def _gemini_json_large(
-    system_prompt: str, user_prompt: str, *, model: str, max_output_tokens: int
+    system_prompt: str, user_prompt: str, *, model: str, max_output_tokens: int,
+    schema: dict | None = None, temperature: float = 0.2,
 ) -> dict:
     """Text-only Gemini JSON call tuned for LARGE output: 'thinking' disabled so
     the whole budget goes to the answer, and a high output cap so the response
@@ -158,12 +295,14 @@ def _gemini_json_large(
         "systemInstruction": {"parts": [{"text": system_prompt}]},
         "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
         "generationConfig": {
-            "temperature": 0.2,
+            "temperature": temperature,
             "responseMimeType": "application/json",
             "thinkingConfig": {"thinkingBudget": 0},
             "maxOutputTokens": max_output_tokens,
         },
     }
+    if schema is not None:
+        payload["generationConfig"]["responseSchema"] = schema
     headers = {"x-goog-api-key": settings.gemini_api_key, "Content-Type": "application/json"}
     try:
         resp = post_gemini(
@@ -196,7 +335,8 @@ def _gemini_json_large(
 
 
 def _deepseek_json_large(
-    system_prompt: str, user_prompt: str, *, max_tokens: int
+    system_prompt: str, user_prompt: str, *, max_tokens: int,
+    temperature: float = 0.2,
 ) -> dict:
     """DeepSeek JSON call with a raised output cap + truncation detection (its
     default cap silently cuts large JSON, which then fails to parse)."""
@@ -208,7 +348,7 @@ def _deepseek_json_large(
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
         ],
-        "temperature": 0.2,
+        "temperature": temperature,
         "response_format": {"type": "json_object"},
         "thinking": {
             "type": (
@@ -278,6 +418,8 @@ def complete_json_large(
     user_prompt: str,
     *,
     preferred_provider: str | None = None,
+    schema: dict | None = None,
+    temperature: float = 0.2,
 ) -> tuple[dict, str]:
     """JSON call for LARGE outputs (the Map-Reduce MAP/REDUCE steps).
 
@@ -286,6 +428,12 @@ def complete_json_large(
     and truncation is reported clearly rather than as an opaque parse failure.
     """
     settings = get_settings()
+    if schema is not None:
+        system_prompt = (
+            system_prompt
+            + "\n\nReturn one JSON object matching this JSON Schema exactly:\n"
+            + json.dumps(schema, separators=(",", ":"), ensure_ascii=False)
+        )
     failures: list[str] = []
     preferred = preferred_provider or "gemini"
     fallback = getattr(settings, "ai_fallback_provider", "gemini")
@@ -299,6 +447,7 @@ def complete_json_large(
                             system_prompt,
                             user_prompt,
                             max_tokens=settings.deepseek_max_output_tokens,
+                            temperature=temperature,
                         ),
                         "deepseek",
                     )
@@ -309,6 +458,8 @@ def complete_json_large(
                             user_prompt,
                             model=settings.gemini_model,
                             max_output_tokens=settings.generation_map_max_output_tokens,
+                            schema=schema,
+                            temperature=temperature,
                         ),
                         "gemini",
                     )
@@ -328,16 +479,20 @@ def gemini_json_multimodal(
     *,
     model: str | None = None,
     temperature: float = 0.1,
+    schema: dict | None = None,
+    max_output_tokens: int | None = None,
+    thinking_budget: int | None = None,
+    allow_model_fallback: bool = True,
 ) -> dict:
     """
-    Multimodal Gemini call: send document/image bytes (PDF, PNG, JPG) inline
-    alongside a text instruction, and return the parsed top-level JSON object.
+    Multimodal Gemini call using inline bytes for small evidence and Gemini's
+    Files API for larger documents, then return the parsed JSON object.
 
     `files` is a list of (mime_type, raw_bytes). This is what lets quiz
     EXTRACTION read a scanned or typed paper directly with Gemini's vision — no
-    OCR needed. Output is forced to JSON via responseMimeType; validate with
-    Pydantic afterwards (the question `correct_answer` field is polymorphic, so
-    a rigid responseSchema does not fit — same reasoning as `gemini_json`).
+    OCR needed. Output is forced to JSON via responseMimeType. Callers with a
+    fixed contract may pass `schema`; legacy polymorphic extraction callers omit
+    it and retain their existing validation path.
 
     Defaults to the full `gemini_model` (not the cheap Flash-Lite tier) because
     vision extraction accuracy matters. Raises LLMError on any failure.
@@ -349,29 +504,64 @@ def gemini_json_multimodal(
     model = model or settings.gemini_model
 
     parts: list[dict] = [{"text": user_prompt}]
-    for mime_type, raw in files:
-        parts.append(
-            {
-                "inline_data": {
-                    "mime_type": mime_type,
-                    "data": base64.b64encode(raw).decode("ascii"),
-                }
-            }
+    inline_b64_total = 0
+    for index, (mime_type, raw) in enumerate(files):
+        encoded = base64.b64encode(raw).decode("ascii")
+        needs_files_api = _requires_gemini_files_api(
+            len(encoded), inline_b64_total
         )
+        if needs_files_api:
+            try:
+                file_uri = _upload_to_gemini_files_api(
+                    raw=raw,
+                    mime_type=mime_type,
+                    display_name=f"evaluation_document_{index}",
+                    api_key=settings.gemini_api_key,
+                    base_url=settings.gemini_base_url,
+                )
+            except LLMError as exc:
+                # Falling back is safe only if the complete evidence still fits.
+                # Never drop a required document merely to let extraction run.
+                if inline_b64_total + len(encoded) > GEMINI_INLINE_B64_LIMIT:
+                    raise LLMError(
+                        "Gemini Files API failed and the complete document is too "
+                        "large for the safe inline request budget."
+                    ) from exc
+                logger.warning(
+                    "Gemini Files API failed; using complete evidence inline "
+                    "within the safe request budget"
+                )
+                parts.append({
+                    "inline_data": {"mime_type": mime_type, "data": encoded}
+                })
+                inline_b64_total += len(encoded)
+            else:
+                parts.append({
+                    "file_data": {"mime_type": mime_type, "file_uri": file_uri}
+                })
+        else:
+            parts.append({
+                "inline_data": {"mime_type": mime_type, "data": encoded}
+            })
+            inline_b64_total += len(encoded)
 
+    generation_config = {
+        "temperature": temperature,
+        "responseMimeType": "application/json",
+        "thinkingConfig": {
+            "thinkingBudget": 0 if thinking_budget is None else thinking_budget
+        },
+        "maxOutputTokens": (
+            settings.gemini_extraction_max_output_tokens
+            if max_output_tokens is None else max_output_tokens
+        ),
+    }
+    if schema is not None:
+        generation_config["responseSchema"] = schema
     payload = {
         "systemInstruction": {"parts": [{"text": system_prompt}]},
         "contents": [{"role": "user", "parts": parts}],
-        "generationConfig": {
-            "temperature": temperature,
-            "responseMimeType": "application/json",
-            # Extraction is verbatim parsing, not reasoning — turn OFF Gemini
-            # 2.5's default "thinking" so it doesn't waste latency or eat the
-            # output budget. This is the single biggest latency win here.
-            "thinkingConfig": {"thinkingBudget": 0},
-            # Headroom so a long paper's questions aren't truncated mid-JSON.
-            "maxOutputTokens": settings.gemini_extraction_max_output_tokens,
-        },
+        "generationConfig": generation_config,
     }
     headers = {
         "x-goog-api-key": settings.gemini_api_key,
@@ -385,6 +575,7 @@ def gemini_json_multimodal(
             payload=payload,
             headers=headers,
             timeout=settings.gemini_vision_timeout_seconds,
+            allow_model_fallback=allow_model_fallback,
         )
     except httpx.HTTPStatusError as exc:
         raise LLMError(f"Gemini returned HTTP {exc.response.status_code}.") from exc

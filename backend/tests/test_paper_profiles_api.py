@@ -120,6 +120,7 @@ class _Service:
                     "paper": "Paper 4",
                     "assessment_year": "2026",
                     "framework": None,
+                    "format_config": {},
                 },
                 {
                     "id": "other-profile",
@@ -172,6 +173,21 @@ class PaperProfileApiTests(unittest.TestCase):
         self.assertEqual(result, {"profile": None})
         self.assertEqual([row["id"] for row in service.data["paper_profiles"]], ["other-profile"])
 
+    def test_frontend_default_format_is_still_treated_as_blank(self):
+        service = _Service()
+        body = PaperProfileUpdate.model_validate({
+            "format_config": {
+                "sections": [],
+                "instructions": [],
+                "numbering_style": "numeric",
+            }
+        })
+        with patch.object(mod, "get_service_client", return_value=service):
+            result = mod.set_paper_profile(LEVEL, body, _admin())
+
+        self.assertEqual(result, {"profile": None})
+        self.assertEqual([row["id"] for row in service.data["paper_profiles"]], ["other-profile"])
+
     def test_other_tenant_level_is_not_addressable(self):
         service = _Service()
         with patch.object(mod, "get_service_client", return_value=service):
@@ -187,6 +203,36 @@ class PaperProfileApiTests(unittest.TestCase):
         with self.assertRaises(HTTPException) as error:
             mod.set_paper_profile(LEVEL, PaperProfileUpdate(exam_body="ICAI"), _teacher())
         self.assertEqual(error.exception.status_code, 403)
+
+    def test_format_config_is_validated_and_tenant_scoped(self):
+        service = _Service()
+        body = PaperProfileUpdate.model_validate({
+            "exam_body": "ICAI",
+            "format_config": {
+                "sections": [{"name": "Objective", "question_type": "mcq_single", "count": 20,
+                              "min_marks": 1, "max_marks": 2}],
+                "duration_minutes": 180,
+                "instructions": ["Answer all questions"],
+                "numbering_style": "q_numeric",
+                "currency_symbol": "₹",
+                "locale": "en-IN",
+            },
+        })
+        with patch.object(mod, "get_service_client", return_value=service):
+            result = mod.set_paper_profile(LEVEL, body, _admin())
+        own = next(row for row in service.data["paper_profiles"] if row["id"] == "profile-1")
+        other = next(row for row in service.data["paper_profiles"] if row["id"] == "other-profile")
+        self.assertEqual(result["profile"]["format_config"]["duration_minutes"], 180)
+        self.assertEqual(own["format_config"]["locale"], "en-IN")
+        self.assertNotIn("format_config", other)
+
+    def test_format_config_rejects_inverted_mark_range(self):
+        with self.assertRaises(ValueError):
+            PaperProfileUpdate.model_validate({
+                "format_config": {
+                    "sections": [{"name": "Bad", "count": 1, "min_marks": 5, "max_marks": 2}],
+                }
+            })
 
 
 if __name__ == "__main__":

@@ -24,6 +24,8 @@ PROFILE = CurrentProfile(user_id=str(uuid4()), tenant_id=str(uuid4()), role="tea
 SETTINGS = SimpleNamespace(faculty_jobs_enabled=True, rate_limit_blueprint_per_hour=10,
                            rate_limit_quiz_extraction_per_hour=10,
                            rate_limit_quiz_generation_per_hour=10,
+                           rate_limit_paper_generation_per_hour=10,
+                           paper_bank_enabled=True,
                            regenerate_set_enabled=True,
                            regenerate_set_max_questions=40,
                            regenerate_set_concurrency=5)
@@ -168,6 +170,38 @@ def test_worker_regenerates_in_background_and_completes_with_safe_counts() -> No
         result = process_job(service, row)
     assert result == {"quiz_set_id": "quiz", "regenerated": 8, "kept": 2, "total": 10}
     regenerate.assert_called_once_with("quiz", PROFILE.tenant_id, max_questions=40, concurrency=5)
+    assert service.rpc.call_args.args[0] == "update_faculty_job"
+    assert service.rpc.call_args.args[1]["p_action"] == "complete"
+
+
+def test_worker_generates_paper_after_rechecking_teacher_scope() -> None:
+    service = authorized_service()
+    paper_id, level_id, subject_id = str(uuid4()), str(uuid4()), str(uuid4())
+    row = job(kind="generate_paper", request={
+        "generated_paper_id": paper_id,
+        "course_level_id": level_id,
+        "subject_id": subject_id,
+        "mode": "exact_mark",
+        "requested_total_marks": 10,
+        "question_count": 2,
+    })
+    service.tables["generated_papers"] = [{
+        "id": paper_id,
+        "tenant_id": PROFILE.tenant_id,
+        "created_by": PROFILE.user_id,
+        "course_level_id": level_id,
+        "subject_id": subject_id,
+        "status": "pending",
+    }]
+    generated = {"generated_paper_id": paper_id, "total": 2, "provider": "fixture"}
+    with patch("app.services.faculty_worker.get_settings", return_value=SETTINGS), \
+         patch("app.services.faculty_worker.teacher_has_subject", return_value=True) as assigned, \
+         patch("app.services.faculty_worker.generate_paper", return_value=generated) as generate:
+        result = process_job(service, row)
+
+    assert result == generated
+    assigned.assert_called_once()
+    generate.assert_called_once_with(service, row)
     assert service.rpc.call_args.args[0] == "update_faculty_job"
     assert service.rpc.call_args.args[1]["p_action"] == "complete"
 

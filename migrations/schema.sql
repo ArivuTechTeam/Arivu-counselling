@@ -45,6 +45,7 @@ create table tenants (
   logo_filename text check (logo_filename is null or char_length(logo_filename) <= 255),
   primary_color text not null default '#2E8857' check (primary_color ~ '^#[0-9A-Fa-f]{6}$'),
   feature_flags jsonb not null default '{"faculty_jobs":true,"quiz_reuse":true,"batches":true,"scoring_policies":true,"commerce_pack":true,"figure_attach":true}'::jsonb check (jsonb_typeof(feature_flags) = 'object'),
+  handwritten_evaluation_enabled boolean not null default false,
   secondary_color text default '#1E293B',
   plan_tier text not null default 'free',  -- fk-like reference to plan_limits.plan_tier
   is_active boolean not null default true,
@@ -1865,6 +1866,9 @@ grant execute on function public.guard_released_question(),public.guard_released
  public.publish_quiz_atomic(uuid,uuid,uuid,text),public.copy_quiz_draft(uuid,uuid,uuid,uuid,text) to service_role;
 commit;
 notify pgrst,'reload schema';
+
+
+
 -- Migration 52 — Level-aware batches, memberships and quiz assignments.
 -- Apply after migrations 49-51 and the existing Course -> Level migration 47.
 -- Browser roles remain denied; all application writes use the tenant-scoped API.
@@ -2451,3 +2455,1365 @@ revoke all on function public.publish_quiz_to_batches_atomic(uuid,uuid,uuid,text
  from public,anon,authenticated;
 grant execute on function public.publish_quiz_to_batches_atomic(uuid,uuid,uuid,text,uuid[],boolean)
  to service_role;
+
+-- Migration 77: tenant paper formats and durable generated exam papers.
+alter table public.paper_profiles
+ add column if not exists format_config jsonb not null default '{}'::jsonb;
+alter table public.paper_profiles drop constraint if exists paper_profiles_format_config_object;
+alter table public.paper_profiles add constraint paper_profiles_format_config_object
+ check(jsonb_typeof(format_config)='object');
+
+create unique index if not exists uq_course_levels_id_tenant
+ on public.course_levels(id,tenant_id);
+
+create table if not exists public.generated_papers(
+ id uuid primary key default gen_random_uuid(),
+ tenant_id uuid not null references public.tenants(id) on delete cascade,
+ course_level_id uuid not null,
+ subject_id uuid not null,
+ mode text not null check(mode in('exact_mark','candidate_ai')),
+ requested_total_marks numeric not null check(requested_total_marks>0 and requested_total_marks*2=trunc(requested_total_marks*2)),
+ selected_question_ids uuid[] not null default '{}'::uuid[],
+ status text not null default 'pending' check(status in('pending','processing','ready','failed')),
+ instructions_text text,
+ paper_payload jsonb check(paper_payload is null or jsonb_typeof(paper_payload)='object'),
+ error_message text,
+ created_by uuid not null,
+ created_at timestamptz not null default now(),
+ completed_at timestamptz,
+ constraint generated_papers_level_tenant_fk foreign key(course_level_id,tenant_id)
+  references public.course_levels(id,tenant_id) on delete cascade,
+ constraint generated_papers_subject_tenant_fk foreign key(subject_id,tenant_id)
+  references public.subjects(id,tenant_id) on delete cascade,
+ constraint generated_papers_creator_tenant_fk foreign key(created_by,tenant_id)
+  references public.profiles(id,tenant_id) on delete cascade
+);
+create index if not exists generated_papers_history on public.generated_papers(tenant_id,course_level_id,created_at desc);
+create index if not exists generated_papers_owner on public.generated_papers(tenant_id,created_by,created_at desc);
+alter table public.generated_papers enable row level security;
+revoke all on public.generated_papers from public,anon,authenticated;
+grant select,insert,update,delete on public.generated_papers to service_role;
+create policy "read own tenant generated papers" on public.generated_papers for select
+ using(tenant_id=current_tenant_id() or is_super_admin());
+create policy "staff manage generated papers" on public.generated_papers for all
+ using(tenant_id=current_tenant_id() and is_staff())
+ with check(tenant_id=current_tenant_id() and is_staff());
+
+alter table public.faculty_jobs drop constraint if exists faculty_jobs_kind_check;
+alter table public.faculty_jobs add constraint faculty_jobs_kind_check
+ check(kind in('blueprint','analysis_quiz','extraction','regenerate_set','generate_paper'));
+alter table public.ai_rate_limits drop constraint if exists ai_rate_limits_endpoint_check;
+alter table public.ai_rate_limits add constraint ai_rate_limits_endpoint_check check(endpoint in(
+ 'quiz_generation','blueprint_generation','topic_extraction','question_regenerate',
+ 'question_explain','quiz_extraction','challenge_join','descriptive_grading','paper_generation'
+));
+
+create or replace function public.consume_ai_rate_limit(
+ p_tenant_id uuid,p_user_id uuid,p_endpoint text,p_limit integer
+) returns table(allowed boolean,retry_after_seconds integer,remaining integer)
+language plpgsql security invoker set search_path='' as $$
+declare request_time timestamptz:=clock_timestamp(); consumed_count integer; active_window_start timestamptz;
+begin
+ if p_limit<1 then raise exception 'Rate limit must be a positive integer'; end if;
+ if p_endpoint not in('quiz_generation','blueprint_generation','topic_extraction','question_regenerate',
+  'question_explain','quiz_extraction','challenge_join','descriptive_grading','paper_generation')
+  then raise exception 'Unknown rate-limit endpoint'; end if;
+ insert into public.ai_rate_limits as limits(tenant_id,user_id,endpoint,window_started_at,request_count,updated_at)
+ values(p_tenant_id,p_user_id,p_endpoint,request_time,1,request_time)
+ on conflict(tenant_id,user_id,endpoint) do update set
+  window_started_at=case when limits.window_started_at<=request_time-interval '1 hour' then request_time else limits.window_started_at end,
+  request_count=case when limits.window_started_at<=request_time-interval '1 hour' then 1 else limits.request_count+1 end,
+  updated_at=request_time
+ where limits.window_started_at<=request_time-interval '1 hour' or limits.request_count<p_limit
+ returning limits.request_count,limits.window_started_at into consumed_count,active_window_start;
+ if found then return query select true,0,greatest(p_limit-consumed_count,0); return; end if;
+ select limits.window_started_at into active_window_start from public.ai_rate_limits limits
+  where limits.tenant_id=p_tenant_id and limits.user_id=p_user_id and limits.endpoint=p_endpoint;
+ return query select false,greatest(1,ceil(extract(epoch from(active_window_start+interval '1 hour'-request_time)))::integer),0;
+end $$;
+
+create or replace function public.enqueue_generated_paper_job(
+ p_id uuid,p_tenant uuid,p_actor uuid,p_key uuid,p_request jsonb,p_hash text,p_limit integer
+) returns jsonb language plpgsql security invoker set search_path='' as $$
+declare existing public.faculty_jobs; created public.faculty_jobs; quota record;
+ requested_subject_id uuid:=nullif(p_request->>'subject_id','')::uuid;
+ requested_level_id uuid:=nullif(p_request->>'course_level_id','')::uuid;
+ requested numeric:=nullif(p_request->>'requested_total_marks','')::numeric;
+ selected_mode text:=p_request->>'mode';
+begin
+ perform pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(p_tenant::text||p_actor::text||p_key::text,0));
+ select * into existing from public.faculty_jobs where tenant_id=p_tenant and created_by=p_actor and request_key=p_key;
+ if found then
+  if existing.request_hash<>p_hash or existing.kind<>'generate_paper' then return jsonb_build_object('conflict',true); end if;
+  return to_jsonb(existing);
+ end if;
+ if selected_mode not in('exact_mark','candidate_ai') or requested<=0 or requested*2<>trunc(requested*2)
+  then raise exception 'Invalid paper request'; end if;
+ if not exists(select 1 from public.profiles p join public.tenants t on t.id=p.tenant_id
+    where p.id=p_actor and p.tenant_id=p_tenant and p.role='teacher' and t.is_active)
+  or not exists(select 1 from public.teacher_subjects a where a.tenant_id=p_tenant and a.teacher_id=p_actor and a.subject_id=requested_subject_id)
+  or not exists(select 1 from public.subjects s where s.id=requested_subject_id and s.tenant_id=p_tenant and s.course_level_id=requested_level_id)
+  or not exists(select 1 from public.paper_profiles p where p.tenant_id=p_tenant and p.course_level_id=requested_level_id)
+  then raise exception 'Paper scope unavailable'; end if;
+ select * into quota from public.consume_ai_rate_limit(p_tenant,p_actor,'paper_generation',p_limit);
+ if not quota.allowed then return jsonb_build_object('rate_limited',true,'retry_after_seconds',quota.retry_after_seconds); end if;
+ insert into public.generated_papers(id,tenant_id,course_level_id,subject_id,mode,requested_total_marks,created_by)
+ values(p_id,p_tenant,requested_level_id,requested_subject_id,selected_mode,requested,p_actor);
+ p_request:=p_request||jsonb_build_object('generated_paper_id',p_id);
+ insert into public.faculty_jobs(tenant_id,created_by,request_key,request_hash,kind,request)
+ values(p_tenant,p_actor,p_key,p_hash,'generate_paper',p_request) returning * into created;
+ return to_jsonb(created);
+end $$;
+revoke all on function public.consume_ai_rate_limit(uuid,uuid,text,integer),
+ public.enqueue_generated_paper_job(uuid,uuid,uuid,uuid,jsonb,text,integer) from public,anon,authenticated;
+grant execute on function public.consume_ai_rate_limit(uuid,uuid,text,integer),
+ public.enqueue_generated_paper_job(uuid,uuid,uuid,uuid,jsonb,text,integer) to service_role;
+
+-- Migration 78: native handwritten-answer evaluation Phase A.
+insert into storage.buckets(id,name,public,file_size_limit,allowed_mime_types)
+values
+ ('evaluation-papers','evaluation-papers',false,31457280,
+  array['application/pdf','image/png','image/jpeg']),
+ ('evaluation-submissions','evaluation-submissions',false,31457280,
+  array['application/pdf','image/png','image/jpeg'])
+on conflict(id) do update set
+ public=false,
+ file_size_limit=excluded.file_size_limit,
+ allowed_mime_types=excluded.allowed_mime_types;
+
+create unique index if not exists uq_generated_papers_id_tenant
+ on public.generated_papers(id,tenant_id);
+create unique index if not exists uq_subjects_id_tenant_level
+ on public.subjects(id,tenant_id,course_level_id);
+
+create table if not exists public.evaluation_papers(
+ id uuid primary key default gen_random_uuid(),
+ tenant_id uuid not null references public.tenants(id) on delete cascade,
+ course_level_id uuid not null,
+ subject_id uuid not null,
+ title text not null check(char_length(trim(title)) between 1 and 200),
+ question_paper_storage_path text not null unique,
+ suggested_answer_storage_path text unique,
+ total_marks numeric not null check(total_marks>0),
+ generated_paper_id uuid,
+ rubric_status text not null default 'not_started' check(rubric_status in('not_started')),
+ is_active boolean not null default true,
+ created_by uuid not null,
+ created_at timestamptz not null default now(),
+ constraint evaluation_papers_subject_level_tenant_fk
+  foreign key(subject_id,tenant_id,course_level_id)
+  references public.subjects(id,tenant_id,course_level_id) on delete cascade,
+ constraint evaluation_papers_generated_tenant_fk
+  foreign key(generated_paper_id,tenant_id)
+  references public.generated_papers(id,tenant_id) on delete set null(generated_paper_id),
+ constraint evaluation_papers_creator_tenant_fk
+  foreign key(created_by,tenant_id)
+  references public.profiles(id,tenant_id) on delete cascade,
+ unique(id,tenant_id)
+);
+create index if not exists evaluation_papers_catalog
+ on public.evaluation_papers(tenant_id,course_level_id,subject_id,created_at desc);
+
+create table if not exists public.evaluation_upload_intents(
+ id uuid primary key default gen_random_uuid(),
+ tenant_id uuid not null references public.tenants(id) on delete cascade,
+ student_id uuid not null,
+ evaluation_paper_id uuid not null,
+ storage_path text not null unique,
+ original_filename text not null check(char_length(original_filename) between 1 and 255),
+ content_type text not null check(content_type in('application/pdf','image/png','image/jpeg')),
+ expected_size bigint not null check(expected_size between 1 and 31457280),
+ status text not null default 'pending' check(status in('pending','verified','consumed','failed')),
+ expires_at timestamptz not null default(now()+interval '2 hours'),
+ verified_at timestamptz,
+ created_at timestamptz not null default now(),
+ constraint evaluation_intents_student_tenant_fk
+  foreign key(student_id,tenant_id)
+  references public.profiles(id,tenant_id) on delete cascade,
+ constraint evaluation_intents_paper_tenant_fk
+  foreign key(evaluation_paper_id,tenant_id)
+  references public.evaluation_papers(id,tenant_id) on delete cascade,
+ unique(id,tenant_id,student_id,evaluation_paper_id)
+);
+create index if not exists evaluation_intents_owner
+ on public.evaluation_upload_intents(tenant_id,student_id,created_at desc);
+create index if not exists evaluation_intents_expiry
+ on public.evaluation_upload_intents(expires_at) where status='pending';
+
+create table if not exists public.handwritten_submissions(
+ id uuid primary key default gen_random_uuid(),
+ tenant_id uuid not null references public.tenants(id) on delete cascade,
+ student_id uuid not null,
+ evaluation_paper_id uuid not null,
+ upload_intent_id uuid not null unique,
+ answer_script_path text not null unique,
+ additional_pages_path text,
+ status text not null default 'pending' check(status in(
+  'pending','queued','processing','pending_stage1','evaluated','review','failed'
+ )),
+ error_message text,
+ retrigger_count integer not null default 0 check(retrigger_count>=0),
+ regraded_from uuid,
+ created_at timestamptz not null default now(),
+ updated_at timestamptz not null default now(),
+ constraint handwritten_submissions_intent_scope_fk
+  foreign key(upload_intent_id,tenant_id,student_id,evaluation_paper_id)
+  references public.evaluation_upload_intents(id,tenant_id,student_id,evaluation_paper_id)
+  on delete restrict,
+ constraint handwritten_submissions_student_tenant_fk
+  foreign key(student_id,tenant_id)
+  references public.profiles(id,tenant_id) on delete cascade,
+ constraint handwritten_submissions_paper_tenant_fk
+  foreign key(evaluation_paper_id,tenant_id)
+  references public.evaluation_papers(id,tenant_id) on delete cascade,
+ unique(id,tenant_id,student_id)
+);
+alter table public.handwritten_submissions
+ drop constraint if exists handwritten_submissions_regraded_scope_fk;
+alter table public.handwritten_submissions
+ add constraint handwritten_submissions_regraded_scope_fk
+ foreign key(regraded_from,tenant_id,student_id)
+ references public.handwritten_submissions(id,tenant_id,student_id)
+ on delete set null(regraded_from);
+create index if not exists handwritten_submissions_owner
+ on public.handwritten_submissions(tenant_id,student_id,created_at desc);
+create index if not exists handwritten_submissions_paper
+ on public.handwritten_submissions(tenant_id,evaluation_paper_id,created_at desc);
+
+create table if not exists public.evaluation_jobs(
+ id uuid primary key default gen_random_uuid(),
+ tenant_id uuid not null references public.tenants(id) on delete cascade,
+ submission_id uuid not null unique,
+ kind text not null default 'evaluate_submission' check(kind in('evaluate_submission')),
+ status text not null default 'queued' check(status in('queued','claimed','processing','done','failed')),
+ owner_student_id uuid not null,
+ claimed_by uuid,
+ claimed_at timestamptz,
+ lease_expires_at timestamptz,
+ attempts integer not null default 0 check(attempts between 0 and 3),
+ created_at timestamptz not null default now(),
+ updated_at timestamptz not null default now(),
+ constraint evaluation_jobs_submission_scope_fk
+  foreign key(submission_id,tenant_id,owner_student_id)
+  references public.handwritten_submissions(id,tenant_id,student_id) on delete cascade
+);
+create index if not exists evaluation_jobs_queue
+ on public.evaluation_jobs(status,created_at)
+ where status in('queued','claimed','processing');
+create index if not exists evaluation_jobs_owner
+ on public.evaluation_jobs(tenant_id,owner_student_id,created_at desc);
+
+alter table public.evaluation_papers enable row level security;
+alter table public.evaluation_upload_intents enable row level security;
+alter table public.handwritten_submissions enable row level security;
+alter table public.evaluation_jobs enable row level security;
+revoke all on public.evaluation_papers,public.evaluation_upload_intents,
+ public.handwritten_submissions,public.evaluation_jobs from public,anon,authenticated;
+grant select,insert,update,delete on public.evaluation_papers,
+ public.evaluation_upload_intents,public.handwritten_submissions,public.evaluation_jobs
+ to service_role;
+
+drop policy if exists "staff read tenant evaluation papers" on public.evaluation_papers;
+create policy "staff read tenant evaluation papers" on public.evaluation_papers
+ for select using(tenant_id=current_tenant_id() and is_staff());
+drop policy if exists "staff manage tenant evaluation papers" on public.evaluation_papers;
+create policy "staff manage tenant evaluation papers" on public.evaluation_papers
+ for all using(tenant_id=current_tenant_id() and is_staff())
+ with check(tenant_id=current_tenant_id() and is_staff());
+drop policy if exists "owners read evaluation intents" on public.evaluation_upload_intents;
+create policy "owners read evaluation intents" on public.evaluation_upload_intents
+ for select using(tenant_id=current_tenant_id() and (student_id=auth.uid() or is_staff()));
+drop policy if exists "owners read handwritten submissions" on public.handwritten_submissions;
+create policy "owners read handwritten submissions" on public.handwritten_submissions
+ for select using(tenant_id=current_tenant_id() and (student_id=auth.uid() or is_staff()));
+drop policy if exists "owners read evaluation jobs" on public.evaluation_jobs;
+create policy "owners read evaluation jobs" on public.evaluation_jobs
+ for select using(tenant_id=current_tenant_id() and (owner_student_id=auth.uid() or is_staff()));
+
+create or replace function public.create_handwritten_submission_job(
+ p_tenant uuid,p_student uuid,p_intent uuid
+) returns jsonb language plpgsql security invoker set search_path='' as $$
+declare intent public.evaluation_upload_intents;
+ submission public.handwritten_submissions;
+ job public.evaluation_jobs;
+begin
+ perform pg_catalog.pg_advisory_xact_lock(
+  pg_catalog.hashtextextended(p_tenant::text||':'||p_student::text||':'||p_intent::text,0)
+ );
+ select * into intent from public.evaluation_upload_intents
+  where id=p_intent and tenant_id=p_tenant and student_id=p_student for update;
+ if not found then raise exception 'evaluation_intent_unavailable' using errcode='PT404'; end if;
+ select * into submission from public.handwritten_submissions
+  where upload_intent_id=p_intent and tenant_id=p_tenant and student_id=p_student;
+ if found then
+  select * into job from public.evaluation_jobs where submission_id=submission.id;
+  return jsonb_build_object('submission',to_jsonb(submission),'job',to_jsonb(job));
+ end if;
+ if intent.status<>'verified' or intent.expires_at<=now() then
+  raise exception 'evaluation_intent_not_verified' using errcode='PT409';
+ end if;
+ if not exists(
+  select 1 from public.profiles p join public.tenants t on t.id=p.tenant_id
+   where p.id=p_student and p.tenant_id=p_tenant and p.role='student' and t.is_active
+ ) or not exists(
+  select 1 from public.evaluation_papers ep
+  join public.subjects s on s.id=ep.subject_id and s.tenant_id=ep.tenant_id
+  join public.enrollments e on e.tenant_id=ep.tenant_id
+   and e.profile_id=p_student and e.course_id=s.course_id
+   and e.course_level_id=ep.course_level_id
+  where ep.id=intent.evaluation_paper_id and ep.tenant_id=p_tenant and ep.is_active
+ ) then raise exception 'evaluation_access_denied' using errcode='PT403'; end if;
+ insert into public.handwritten_submissions(
+  tenant_id,student_id,evaluation_paper_id,upload_intent_id,answer_script_path,status
+ ) values(p_tenant,p_student,intent.evaluation_paper_id,intent.id,intent.storage_path,'queued')
+ returning * into submission;
+ update public.evaluation_upload_intents set status='consumed'
+  where id=intent.id and tenant_id=p_tenant and student_id=p_student;
+ insert into public.evaluation_jobs(tenant_id,submission_id,owner_student_id)
+ values(p_tenant,submission.id,p_student) returning * into job;
+ return jsonb_build_object('submission',to_jsonb(submission),'job',to_jsonb(job));
+end $$;
+
+create or replace function public.claim_evaluation_job(p_worker uuid)
+returns jsonb language plpgsql security invoker set search_path='' as $$
+declare selected public.evaluation_jobs;
+begin
+ update public.evaluation_jobs j set
+  status='failed',claimed_by=null,lease_expires_at=null,updated_at=now()
+ where j.status in('claimed','processing') and j.lease_expires_at<now() and j.attempts>=3;
+ update public.handwritten_submissions s set
+  status='failed',error_message='Processing could not finish after repeated interruptions.',updated_at=now()
+ where exists(select 1 from public.evaluation_jobs j
+  where j.submission_id=s.id and j.status='failed' and j.attempts>=3)
+  and s.status in('queued','processing');
+ select * into selected from public.evaluation_jobs j
+  where (j.status='queued' or (j.status in('claimed','processing') and j.lease_expires_at<now()))
+   and j.attempts<3
+  order by j.created_at,j.id for update skip locked limit 1;
+ if not found then return null; end if;
+ update public.evaluation_jobs set
+  status='claimed',claimed_by=p_worker,claimed_at=now(),
+  lease_expires_at=now()+interval '120 seconds',attempts=attempts+1,updated_at=now()
+ where id=selected.id returning * into selected;
+ return to_jsonb(selected);
+end $$;
+
+create or replace function public.start_evaluation_job(p_id uuid,p_worker uuid)
+returns boolean language plpgsql security invoker set search_path='' as $$
+declare selected public.evaluation_jobs;
+begin
+ select * into selected from public.evaluation_jobs
+  where id=p_id and status='claimed' and claimed_by=p_worker
+   and lease_expires_at>now() for update;
+ if not found then return false; end if;
+ if not exists(
+  select 1 from public.handwritten_submissions s
+  join public.profiles p on p.id=s.student_id and p.tenant_id=s.tenant_id
+  where s.id=selected.submission_id and s.tenant_id=selected.tenant_id
+   and s.student_id=selected.owner_student_id and p.role='student'
+ ) then return false; end if;
+ update public.evaluation_jobs set status='processing',updated_at=now() where id=selected.id;
+ update public.handwritten_submissions set status='processing',error_message=null,updated_at=now()
+  where id=selected.submission_id and tenant_id=selected.tenant_id
+   and student_id=selected.owner_student_id;
+ return true;
+end $$;
+
+create or replace function public.finish_evaluation_stub_job(p_id uuid,p_worker uuid)
+returns boolean language plpgsql security invoker set search_path='' as $$
+declare selected public.evaluation_jobs;
+begin
+ select * into selected from public.evaluation_jobs
+  where id=p_id and status='processing' and claimed_by=p_worker
+   and lease_expires_at>now() for update;
+ if not found then return false; end if;
+ update public.handwritten_submissions set
+  status='pending_stage1',error_message=null,updated_at=now()
+  where id=selected.submission_id and tenant_id=selected.tenant_id
+   and student_id=selected.owner_student_id;
+ if not found then return false; end if;
+ update public.evaluation_jobs set
+  status='done',claimed_by=null,lease_expires_at=null,updated_at=now()
+  where id=selected.id;
+ return true;
+end $$;
+
+create or replace function public.fail_evaluation_job(
+ p_id uuid,p_worker uuid,p_retryable boolean
+) returns boolean language plpgsql security invoker set search_path='' as $$
+declare selected public.evaluation_jobs; retrying boolean;
+begin
+ select * into selected from public.evaluation_jobs
+  where id=p_id and status in('claimed','processing') and claimed_by=p_worker
+   and lease_expires_at>now() for update;
+ if not found then return false; end if;
+ retrying:=p_retryable and selected.attempts<3;
+ update public.evaluation_jobs set
+  status=case when retrying then 'queued' else 'failed' end,
+  claimed_by=null,lease_expires_at=null,updated_at=now() where id=selected.id;
+ update public.handwritten_submissions set
+  status=case when retrying then 'queued' else 'failed' end,
+  error_message=case when retrying then null else 'Evaluation preparation failed.' end,
+  updated_at=now()
+  where id=selected.submission_id and tenant_id=selected.tenant_id
+   and student_id=selected.owner_student_id;
+ return true;
+end $$;
+
+revoke all on function public.create_handwritten_submission_job(uuid,uuid,uuid),
+ public.claim_evaluation_job(uuid),public.start_evaluation_job(uuid,uuid),
+ public.finish_evaluation_stub_job(uuid,uuid),
+ public.fail_evaluation_job(uuid,uuid,boolean) from public,anon,authenticated;
+grant execute on function public.create_handwritten_submission_job(uuid,uuid,uuid),
+ public.claim_evaluation_job(uuid),public.start_evaluation_job(uuid,uuid),
+ public.finish_evaluation_stub_job(uuid,uuid),
+ public.fail_evaluation_job(uuid,uuid,boolean) to service_role;
+
+commit;
+notify pgrst,'reload schema';
+
+-- Migration 79: handwritten evaluation Stage 1 OCR/transcription.
+begin;
+alter table public.handwritten_submissions
+ add column if not exists stage1_extraction jsonb not null default '{}'::jsonb,
+ add column if not exists stage1_extraction_source text,
+ add column if not exists page_mapping jsonb;
+alter table public.handwritten_submissions
+ drop constraint if exists handwritten_submissions_status_check;
+alter table public.handwritten_submissions
+ add constraint handwritten_submissions_status_check check(status in(
+  'pending','queued','processing','pending_stage1','processing_stage1',
+  'stage1_complete','evaluated','review','failed'
+ ));
+
+create or replace function public.claim_evaluation_job(p_worker uuid)
+returns jsonb language plpgsql security invoker set search_path='' as $$
+declare selected public.evaluation_jobs;
+begin
+ update public.evaluation_jobs j set status='failed',claimed_by=null,
+  lease_expires_at=null,updated_at=now()
+ where j.status in('claimed','processing') and j.lease_expires_at<now() and j.attempts>=3;
+ update public.handwritten_submissions s set status='failed',
+  error_message='Processing could not finish after repeated interruptions.',updated_at=now()
+ where exists(select 1 from public.evaluation_jobs j where j.submission_id=s.id
+  and j.status='failed' and j.attempts>=3)
+  and s.status in('queued','processing','pending_stage1','processing_stage1');
+ select * into selected from public.evaluation_jobs j
+  where (j.status='queued' or (j.status in('claimed','processing') and j.lease_expires_at<now()))
+   and j.attempts<3 order by j.created_at,j.id for update skip locked limit 1;
+ if not found then return null; end if;
+ update public.evaluation_jobs set status='claimed',claimed_by=p_worker,claimed_at=now(),
+  lease_expires_at=now()+interval '120 seconds',attempts=attempts+1,updated_at=now()
+  where id=selected.id returning * into selected;
+ return to_jsonb(selected);
+end $$;
+
+create or replace function public.start_evaluation_job(p_id uuid,p_worker uuid)
+returns boolean language plpgsql security invoker set search_path='' as $$
+declare selected public.evaluation_jobs;
+begin
+ select * into selected from public.evaluation_jobs where id=p_id
+  and status='claimed' and claimed_by=p_worker and lease_expires_at>now() for update;
+ if not found then return false; end if;
+ if not exists(select 1 from public.handwritten_submissions s
+  join public.profiles p on p.id=s.student_id and p.tenant_id=s.tenant_id
+  join public.tenants t on t.id=s.tenant_id
+  where s.id=selected.submission_id and s.tenant_id=selected.tenant_id
+   and s.student_id=selected.owner_student_id and p.role='student'
+   and t.is_active and t.handwritten_evaluation_enabled) then return false; end if;
+ update public.evaluation_jobs set status='processing',updated_at=now() where id=selected.id;
+ update public.handwritten_submissions set status='processing_stage1',
+  error_message=null,updated_at=now() where id=selected.submission_id
+  and tenant_id=selected.tenant_id and student_id=selected.owner_student_id;
+ return true;
+end $$;
+create or replace function public.heartbeat_evaluation_job(p_id uuid,p_worker uuid)
+returns boolean language plpgsql security invoker set search_path='' as $$
+begin
+ update public.evaluation_jobs set lease_expires_at=now()+interval '120 seconds',
+  updated_at=now() where id=p_id and status in('claimed','processing')
+  and claimed_by=p_worker and lease_expires_at>now();
+ return found;
+end $$;
+create or replace function public.finish_evaluation_stage1_job(
+ p_id uuid,p_worker uuid,p_extraction jsonb,p_source text,p_mapping jsonb,
+ p_requires_review boolean
+) returns boolean language plpgsql security invoker set search_path='' as $$
+declare selected public.evaluation_jobs;
+begin
+ select * into selected from public.evaluation_jobs where id=p_id
+  and status='processing' and claimed_by=p_worker and lease_expires_at>now() for update;
+ if not found then return false; end if;
+ if jsonb_typeof(p_extraction)<>'object' or p_source is null or p_source='' then return false; end if;
+ update public.handwritten_submissions set stage1_extraction=p_extraction,
+  stage1_extraction_source=p_source,
+  page_mapping=coalesce(page_mapping,nullif(p_mapping,'{}'::jsonb)),
+  status=case when p_requires_review then 'review' else 'stage1_complete' end,
+  error_message=null,updated_at=now() where id=selected.submission_id
+  and tenant_id=selected.tenant_id and student_id=selected.owner_student_id;
+ if not found then return false; end if;
+ update public.evaluation_jobs set status='done',claimed_by=null,
+  lease_expires_at=null,updated_at=now() where id=selected.id;
+ return true;
+end $$;
+revoke all on function public.heartbeat_evaluation_job(uuid,uuid),
+ public.finish_evaluation_stage1_job(uuid,uuid,jsonb,text,jsonb,boolean)
+ from public,anon,authenticated;
+grant execute on function public.heartbeat_evaluation_job(uuid,uuid),
+ public.finish_evaluation_stage1_job(uuid,uuid,jsonb,text,jsonb,boolean)
+ to service_role;
+
+commit;
+notify pgrst,'reload schema';
+-- Phase E: frozen handwritten-evaluation rubric generation.
+begin;
+
+alter table public.evaluation_papers
+ add column if not exists structured_qa jsonb not null default '{}'::jsonb,
+ add column if not exists question_structure jsonb,
+ add column if not exists rubric_source text,
+ add column if not exists rubric_error text not null default '',
+ add column if not exists question_paper_text text,
+ add column if not exists suggested_answer_text text;
+
+alter table public.evaluation_papers
+ drop constraint if exists evaluation_papers_rubric_status_check;
+alter table public.evaluation_papers
+ drop constraint if exists evaluation_papers_rubric_source_check,
+ drop constraint if exists evaluation_papers_structured_qa_json_check,
+ drop constraint if exists evaluation_papers_question_structure_json_check;
+alter table public.evaluation_papers
+ add constraint evaluation_papers_rubric_status_check check(
+  rubric_status in('not_started','extracting','generating','ready','failed')
+ );
+alter table public.evaluation_papers
+ add constraint evaluation_papers_rubric_source_check check(
+  rubric_source is null or rubric_source in('official','ai_derived')
+ );
+alter table public.evaluation_papers
+ add constraint evaluation_papers_structured_qa_json_check check(
+  jsonb_typeof(structured_qa) in('object','array')
+ );
+alter table public.evaluation_papers
+ add constraint evaluation_papers_question_structure_json_check check(
+  question_structure is null or jsonb_typeof(question_structure)='object'
+ );
+create unique index if not exists uq_evaluation_papers_creator_scope
+ on public.evaluation_papers(id,tenant_id,created_by);
+
+alter table public.evaluation_jobs
+ drop constraint if exists evaluation_jobs_submission_scope_fk;
+alter table public.evaluation_jobs
+ alter column submission_id drop not null,
+ alter column owner_student_id drop not null,
+ add column if not exists evaluation_paper_id uuid,
+ add column if not exists owner_teacher_id uuid;
+alter table public.evaluation_jobs
+ add constraint evaluation_jobs_submission_scope_fk
+  foreign key(submission_id,tenant_id,owner_student_id)
+  references public.handwritten_submissions(id,tenant_id,student_id) on delete cascade;
+alter table public.evaluation_jobs
+ drop constraint if exists evaluation_jobs_paper_scope_fk;
+alter table public.evaluation_jobs
+ add constraint evaluation_jobs_paper_scope_fk
+  foreign key(evaluation_paper_id,tenant_id,owner_teacher_id)
+  references public.evaluation_papers(id,tenant_id,created_by) on delete cascade;
+alter table public.evaluation_jobs
+ drop constraint if exists evaluation_jobs_kind_check;
+alter table public.evaluation_jobs
+ add constraint evaluation_jobs_kind_check check(
+  kind in('evaluate_submission','build_rubric')
+ );
+alter table public.evaluation_jobs
+ drop constraint if exists evaluation_jobs_target_check;
+alter table public.evaluation_jobs
+ add constraint evaluation_jobs_target_check check(
+  (kind='evaluate_submission' and submission_id is not null
+   and owner_student_id is not null and evaluation_paper_id is null
+   and owner_teacher_id is null)
+  or
+  (kind='build_rubric' and submission_id is null
+   and owner_student_id is null and evaluation_paper_id is not null
+   and owner_teacher_id is not null)
+ );
+create unique index if not exists uq_evaluation_jobs_rubric_paper
+ on public.evaluation_jobs(evaluation_paper_id)
+ where kind='build_rubric';
+create index if not exists evaluation_jobs_teacher_owner
+ on public.evaluation_jobs(tenant_id,owner_teacher_id,created_at desc)
+ where owner_teacher_id is not null;
+
+drop policy if exists "owners read evaluation jobs" on public.evaluation_jobs;
+create policy "owners read evaluation jobs" on public.evaluation_jobs
+ for select using(
+  tenant_id=current_tenant_id()
+  and (owner_student_id=auth.uid() or owner_teacher_id=auth.uid() or is_staff())
+ );
+
+create or replace function public.enqueue_evaluation_rubric_job()
+returns trigger language plpgsql security invoker set search_path='' as $$
+begin
+ perform pg_catalog.pg_advisory_xact_lock(
+  pg_catalog.hashtextextended(new.tenant_id::text||':rubric:'||new.id::text,0)
+ );
+ if not exists(
+  select 1 from public.profiles p join public.tenants t on t.id=p.tenant_id
+  where p.id=new.created_by and p.tenant_id=new.tenant_id and p.role='teacher'
+   and t.is_active and t.handwritten_evaluation_enabled
+ ) then
+  raise exception 'rubric_job_teacher_not_authorized' using errcode='PT403';
+ end if;
+ insert into public.evaluation_jobs(
+  tenant_id,evaluation_paper_id,owner_teacher_id,kind
+ ) values(new.tenant_id,new.id,new.created_by,'build_rubric')
+ on conflict(evaluation_paper_id) where kind='build_rubric' do nothing;
+ return new;
+end $$;
+drop trigger if exists enqueue_evaluation_rubric_job on public.evaluation_papers;
+create trigger enqueue_evaluation_rubric_job
+ after insert on public.evaluation_papers for each row
+ execute function public.enqueue_evaluation_rubric_job();
+
+create or replace function public.claim_evaluation_job(p_worker uuid)
+returns jsonb language plpgsql security invoker set search_path='' as $$
+declare selected public.evaluation_jobs;
+begin
+ update public.evaluation_jobs j set status='failed',claimed_by=null,
+  lease_expires_at=null,updated_at=now()
+ where j.status in('claimed','processing') and j.lease_expires_at<now() and j.attempts>=3;
+ update public.handwritten_submissions s set status='failed',
+  error_message='Processing could not finish after repeated interruptions.',updated_at=now()
+ where exists(select 1 from public.evaluation_jobs j where j.submission_id=s.id
+  and j.kind='evaluate_submission' and j.status='failed' and j.attempts>=3)
+  and s.status in('queued','processing','pending_stage1','processing_stage1');
+ update public.evaluation_papers p set rubric_status='failed',
+  rubric_error='Rubric generation could not finish after repeated interruptions.'
+ where exists(select 1 from public.evaluation_jobs j where j.evaluation_paper_id=p.id
+  and j.tenant_id=p.tenant_id and j.kind='build_rubric'
+  and j.status='failed' and j.attempts>=3)
+  and p.rubric_status in('not_started','extracting','generating');
+ select * into selected from public.evaluation_jobs j
+  where (j.status='queued' or (j.status in('claimed','processing') and j.lease_expires_at<now()))
+   and j.attempts<3 order by j.created_at,j.id for update skip locked limit 1;
+ if not found then return null; end if;
+ update public.evaluation_jobs set status='claimed',claimed_by=p_worker,claimed_at=now(),
+  lease_expires_at=now()+interval '120 seconds',attempts=attempts+1,updated_at=now()
+  where id=selected.id returning * into selected;
+ return to_jsonb(selected);
+end $$;
+
+create or replace function public.start_evaluation_job(p_id uuid,p_worker uuid)
+returns boolean language plpgsql security invoker set search_path='' as $$
+declare selected public.evaluation_jobs;
+begin
+ select * into selected from public.evaluation_jobs where id=p_id
+  and status='claimed' and claimed_by=p_worker and lease_expires_at>now() for update;
+ if not found then return false; end if;
+ if selected.kind='evaluate_submission' then
+  if not exists(select 1 from public.handwritten_submissions s
+   join public.profiles p on p.id=s.student_id and p.tenant_id=s.tenant_id
+   join public.tenants t on t.id=s.tenant_id
+   where s.id=selected.submission_id and s.tenant_id=selected.tenant_id
+    and s.student_id=selected.owner_student_id and p.role='student'
+    and t.is_active and t.handwritten_evaluation_enabled) then return false; end if;
+  update public.handwritten_submissions set status='processing_stage1',
+   error_message=null,updated_at=now() where id=selected.submission_id
+   and tenant_id=selected.tenant_id and student_id=selected.owner_student_id;
+ elsif selected.kind='build_rubric' then
+  if not exists(select 1 from public.evaluation_papers ep
+   join public.profiles p on p.id=ep.created_by and p.tenant_id=ep.tenant_id
+   join public.tenants t on t.id=ep.tenant_id
+   where ep.id=selected.evaluation_paper_id and ep.tenant_id=selected.tenant_id
+    and ep.created_by=selected.owner_teacher_id and ep.is_active and p.role='teacher'
+    and t.is_active and t.handwritten_evaluation_enabled
+    and ep.rubric_status not in('ready')) then return false; end if;
+  update public.evaluation_papers set rubric_status='extracting',rubric_error=''
+   where id=selected.evaluation_paper_id and tenant_id=selected.tenant_id
+    and created_by=selected.owner_teacher_id;
+ else return false;
+ end if;
+ update public.evaluation_jobs set status='processing',updated_at=now()
+  where id=selected.id;
+ return true;
+end $$;
+
+create or replace function public.checkpoint_evaluation_rubric_texts(
+ p_id uuid,p_worker uuid,p_question_text text,p_answer_text text
+) returns boolean language plpgsql security invoker set search_path='' as $$
+declare selected public.evaluation_jobs;
+begin
+ select * into selected from public.evaluation_jobs where id=p_id
+  and kind='build_rubric' and status='processing' and claimed_by=p_worker
+  and lease_expires_at>now() for update;
+ if not found or nullif(trim(p_question_text),'') is null then return false; end if;
+ update public.evaluation_papers set question_paper_text=p_question_text,
+  suggested_answer_text=nullif(p_answer_text,''),rubric_status='generating',rubric_error=''
+  where id=selected.evaluation_paper_id and tenant_id=selected.tenant_id
+   and created_by=selected.owner_teacher_id;
+ return found;
+end $$;
+
+create or replace function public.finish_evaluation_rubric_job(
+ p_id uuid,p_worker uuid,p_structured_qa jsonb,p_structure jsonb,p_source text
+) returns boolean language plpgsql security invoker set search_path='' as $$
+declare selected public.evaluation_jobs;
+begin
+ select * into selected from public.evaluation_jobs where id=p_id
+  and kind='build_rubric' and status='processing' and claimed_by=p_worker
+  and lease_expires_at>now() for update;
+ if not found or jsonb_typeof(p_structured_qa)<>'array'
+  or (p_structure is not null and jsonb_typeof(p_structure)<>'object')
+  or p_source not in('official','ai_derived') then return false; end if;
+ update public.evaluation_papers set structured_qa=p_structured_qa,
+  question_structure=p_structure,rubric_source=p_source,rubric_status='ready',
+  rubric_error='' where id=selected.evaluation_paper_id
+  and tenant_id=selected.tenant_id and created_by=selected.owner_teacher_id;
+ if not found then return false; end if;
+ update public.evaluation_jobs set status='done',claimed_by=null,
+  lease_expires_at=null,updated_at=now() where id=selected.id;
+ return true;
+end $$;
+
+create or replace function public.fail_evaluation_rubric_job(
+ p_id uuid,p_worker uuid,p_retryable boolean,p_error text
+) returns boolean language plpgsql security invoker set search_path='' as $$
+declare selected public.evaluation_jobs; retrying boolean;
+begin
+ select * into selected from public.evaluation_jobs where id=p_id
+  and kind='build_rubric' and status in('claimed','processing')
+  and claimed_by=p_worker and lease_expires_at>now() for update;
+ if not found then return false; end if;
+ retrying:=p_retryable and selected.attempts<3;
+ update public.evaluation_jobs set status=case when retrying then 'queued' else 'failed' end,
+  claimed_by=null,lease_expires_at=null,updated_at=now() where id=selected.id;
+ update public.evaluation_papers set
+  rubric_status=case when retrying then 'not_started' else 'failed' end,
+  rubric_error=case when retrying then '' else left(coalesce(p_error,'Rubric generation failed.'),2000) end
+  where id=selected.evaluation_paper_id and tenant_id=selected.tenant_id
+   and created_by=selected.owner_teacher_id;
+ return true;
+end $$;
+
+revoke all on function public.enqueue_evaluation_rubric_job(),
+ public.checkpoint_evaluation_rubric_texts(uuid,uuid,text,text),
+ public.finish_evaluation_rubric_job(uuid,uuid,jsonb,jsonb,text),
+ public.fail_evaluation_rubric_job(uuid,uuid,boolean,text)
+ from public,anon,authenticated;
+grant execute on function public.checkpoint_evaluation_rubric_texts(uuid,uuid,text,text),
+ public.finish_evaluation_rubric_job(uuid,uuid,jsonb,jsonb,text),
+ public.fail_evaluation_rubric_job(uuid,uuid,boolean,text)
+ to service_role;
+
+commit;
+notify pgrst,'reload schema';
+
+-- Phase C: fixed-rubric direct-score-v2 handwritten evaluation.
+begin;
+
+alter table public.handwritten_submissions
+ drop constraint if exists handwritten_submissions_status_check;
+alter table public.handwritten_submissions
+ add constraint handwritten_submissions_status_check check(status in(
+  'pending','queued','processing','pending_stage1','processing_stage1',
+  'stage1_complete','processing_stage2','evaluated','review','failed'
+ ));
+create unique index if not exists uq_handwritten_submissions_id_tenant
+ on public.handwritten_submissions(id,tenant_id);
+
+create table if not exists public.handwritten_evaluations(
+ id uuid primary key default gen_random_uuid(),
+ tenant_id uuid not null references public.tenants(id) on delete cascade,
+ submission_id uuid not null unique,
+ status text not null default 'completed' check(status='completed'),
+ total_marks_obtained numeric not null check(total_marks_obtained>=0),
+ total_marks_possible numeric not null check(total_marks_possible>=0),
+ percentage numeric not null check(percentage>=0),
+ overall_feedback text not null default '',
+ strengths jsonb not null default '[]'::jsonb check(jsonb_typeof(strengths)='array'),
+ areas_to_improve jsonb not null default '[]'::jsonb check(jsonb_typeof(areas_to_improve)='array'),
+ is_ai_evaluated boolean not null default true check(is_ai_evaluated),
+ created_at timestamptz not null default now(),
+ constraint handwritten_evaluations_submission_scope_fk
+  foreign key(submission_id,tenant_id)
+  references public.handwritten_submissions(id,tenant_id) on delete cascade,
+ unique(id,tenant_id)
+);
+
+create table if not exists public.handwritten_question_evaluations(
+ id uuid primary key default gen_random_uuid(),
+ tenant_id uuid not null references public.tenants(id) on delete cascade,
+ evaluation_id uuid not null,
+ question_ref text not null,
+ question_text text not null default '',
+ marks_obtained numeric not null check(marks_obtained>=0),
+ marks_possible numeric not null check(marks_possible>=0),
+ not_attempted boolean not null default false,
+ not_evaluated boolean not null default false,
+ not_counted boolean not null default false,
+ mapping_status text not null check(mapping_status in('matched','recovered','unsafe','blank')),
+ feedback text not null default '',
+ student_guidance jsonb not null default '{}'::jsonb check(jsonb_typeof(student_guidance)='object'),
+ student_answer_excerpt text not null default '',
+ handwriting_legibility text not null default 'clear',
+ grading_confidence numeric not null default 1 check(grading_confidence between 0 and 1),
+ criteria_breakdown jsonb not null default '[]'::jsonb check(jsonb_typeof(criteria_breakdown)='array'),
+ created_at timestamptz not null default now(),
+ constraint handwritten_question_evaluations_scope_fk
+  foreign key(evaluation_id,tenant_id)
+  references public.handwritten_evaluations(id,tenant_id) on delete cascade,
+ unique(evaluation_id,question_ref)
+);
+
+create table if not exists public.handwritten_stage2_artifacts(
+ id uuid primary key default gen_random_uuid(),
+ tenant_id uuid not null references public.tenants(id) on delete cascade,
+ evaluation_id uuid not null,
+ sequence integer not null check(sequence>0),
+ route text not null check(route in('grouped','whole_paper')),
+ model text not null default '',
+ prompt_revision text not null default '',
+ raw_content text not null default '',
+ content_bytes integer not null check(content_bytes>=0),
+ content_sha256 text not null check(content_sha256~'^[0-9a-f]{64}$'),
+ content_omitted boolean not null default false,
+ created_at timestamptz not null default now(),
+ constraint handwritten_stage2_artifacts_scope_fk
+  foreign key(evaluation_id,tenant_id)
+  references public.handwritten_evaluations(id,tenant_id) on delete cascade,
+ unique(evaluation_id,sequence)
+);
+
+create index if not exists handwritten_evaluations_tenant_created
+ on public.handwritten_evaluations(tenant_id,created_at desc);
+create index if not exists handwritten_question_evaluations_tenant_evaluation
+ on public.handwritten_question_evaluations(tenant_id,evaluation_id);
+create index if not exists handwritten_stage2_artifacts_tenant_evaluation
+ on public.handwritten_stage2_artifacts(tenant_id,evaluation_id,sequence);
+
+alter table public.handwritten_evaluations enable row level security;
+alter table public.handwritten_question_evaluations enable row level security;
+alter table public.handwritten_stage2_artifacts enable row level security;
+revoke all on public.handwritten_evaluations,public.handwritten_question_evaluations,
+ public.handwritten_stage2_artifacts from public,anon,authenticated;
+grant select,insert,update,delete on public.handwritten_evaluations,
+ public.handwritten_question_evaluations,public.handwritten_stage2_artifacts to service_role;
+
+create table if not exists public.ai_provider_slots(
+ provider text not null,
+ holder_id uuid not null,
+ expires_at timestamptz not null,
+ created_at timestamptz not null default now(),
+ primary key(provider,holder_id)
+);
+alter table public.ai_provider_slots enable row level security;
+revoke all on public.ai_provider_slots from public,anon,authenticated;
+grant select,insert,update,delete on public.ai_provider_slots to service_role;
+create index if not exists ai_provider_slots_expiry on public.ai_provider_slots(provider,expires_at);
+
+create or replace function public.acquire_ai_provider_slot(
+ p_provider text,p_holder uuid,p_limit integer,p_ttl_seconds integer
+) returns boolean language plpgsql security invoker set search_path='' as $$
+declare active_count integer;
+begin
+ if p_limit<1 or p_ttl_seconds<1 then return false; end if;
+ perform pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended('ai-slot:'||p_provider,0));
+ delete from public.ai_provider_slots where provider=p_provider and expires_at<=clock_timestamp();
+ if exists(select 1 from public.ai_provider_slots where provider=p_provider and holder_id=p_holder) then
+  update public.ai_provider_slots set expires_at=clock_timestamp()+make_interval(secs=>p_ttl_seconds)
+   where provider=p_provider and holder_id=p_holder;
+  return true;
+ end if;
+ select count(*) into active_count from public.ai_provider_slots where provider=p_provider;
+ if active_count>=p_limit then return false; end if;
+ insert into public.ai_provider_slots(provider,holder_id,expires_at)
+ values(p_provider,p_holder,clock_timestamp()+make_interval(secs=>p_ttl_seconds));
+ return true;
+end $$;
+
+create or replace function public.release_ai_provider_slot(p_provider text,p_holder uuid)
+returns boolean language plpgsql security invoker set search_path='' as $$
+begin
+ delete from public.ai_provider_slots where provider=p_provider and holder_id=p_holder;
+ return found;
+end $$;
+
+alter table public.ai_rate_limits drop constraint if exists ai_rate_limits_endpoint_check;
+alter table public.ai_rate_limits add constraint ai_rate_limits_endpoint_check check(endpoint in(
+ 'quiz_generation','blueprint_generation','topic_extraction','question_regenerate',
+ 'question_explain','quiz_extraction','challenge_join','descriptive_grading',
+ 'paper_generation','handwritten_evaluation'
+));
+create or replace function public.consume_ai_rate_limit(
+ p_tenant_id uuid,p_user_id uuid,p_endpoint text,p_limit integer
+) returns table(allowed boolean,retry_after_seconds integer,remaining integer)
+language plpgsql security invoker set search_path='' as $$
+declare request_time timestamptz:=clock_timestamp(); consumed_count integer; active_window_start timestamptz;
+begin
+ if p_limit<1 then raise exception 'Rate limit must be a positive integer'; end if;
+ if p_endpoint not in('quiz_generation','blueprint_generation','topic_extraction','question_regenerate',
+  'question_explain','quiz_extraction','challenge_join','descriptive_grading','paper_generation',
+  'handwritten_evaluation') then raise exception 'Unknown rate-limit endpoint'; end if;
+ insert into public.ai_rate_limits as limits(tenant_id,user_id,endpoint,window_started_at,request_count,updated_at)
+ values(p_tenant_id,p_user_id,p_endpoint,request_time,1,request_time)
+ on conflict(tenant_id,user_id,endpoint) do update set
+  window_started_at=case when limits.window_started_at<=request_time-interval '1 hour' then request_time else limits.window_started_at end,
+  request_count=case when limits.window_started_at<=request_time-interval '1 hour' then 1 else limits.request_count+1 end,
+  updated_at=request_time
+ where limits.window_started_at<=request_time-interval '1 hour' or limits.request_count<p_limit
+ returning limits.request_count,limits.window_started_at into consumed_count,active_window_start;
+ if found then return query select true,0,greatest(p_limit-consumed_count,0); return; end if;
+ select limits.window_started_at into active_window_start from public.ai_rate_limits limits
+  where limits.tenant_id=p_tenant_id and limits.user_id=p_user_id and limits.endpoint=p_endpoint;
+ return query select false,greatest(1,ceil(extract(epoch from(active_window_start+interval '1 hour'-request_time)))::integer),0;
+end $$;
+
+create or replace function public.claim_evaluation_job(p_worker uuid)
+returns jsonb language plpgsql security invoker set search_path='' as $$
+declare selected public.evaluation_jobs;
+begin
+ update public.evaluation_jobs j set status='failed',claimed_by=null,
+  lease_expires_at=null,updated_at=now()
+ where j.status in('claimed','processing') and j.lease_expires_at<now() and j.attempts>=3;
+ update public.handwritten_submissions s set status='failed',
+  error_message='Processing could not finish after repeated interruptions.',updated_at=now()
+ where exists(select 1 from public.evaluation_jobs j where j.submission_id=s.id
+  and j.kind='evaluate_submission' and j.status='failed' and j.attempts>=3)
+  and s.status in('queued','processing','pending_stage1','processing_stage1',
+   'stage1_complete','processing_stage2');
+ update public.evaluation_papers p set rubric_status='failed',
+  rubric_error='Rubric generation could not finish after repeated interruptions.'
+ where exists(select 1 from public.evaluation_jobs j where j.evaluation_paper_id=p.id
+  and j.tenant_id=p.tenant_id and j.kind='build_rubric'
+  and j.status='failed' and j.attempts>=3)
+  and p.rubric_status in('not_started','extracting','generating');
+ select * into selected from public.evaluation_jobs j
+  where (j.status='queued' or (j.status in('claimed','processing') and j.lease_expires_at<now()))
+   and j.attempts<3 order by j.created_at,j.id for update skip locked limit 1;
+ if not found then return null; end if;
+ update public.evaluation_jobs set status='claimed',claimed_by=p_worker,claimed_at=now(),
+  lease_expires_at=now()+interval '120 seconds',attempts=attempts+1,updated_at=now()
+  where id=selected.id returning * into selected;
+ return to_jsonb(selected);
+end $$;
+
+create or replace function public.start_evaluation_job(p_id uuid,p_worker uuid)
+returns boolean language plpgsql security invoker set search_path='' as $$
+declare selected public.evaluation_jobs; current_submission public.handwritten_submissions;
+begin
+ select * into selected from public.evaluation_jobs where id=p_id
+  and status='claimed' and claimed_by=p_worker and lease_expires_at>now() for update;
+ if not found then return false; end if;
+ if selected.kind='evaluate_submission' then
+  select s.* into current_submission from public.handwritten_submissions s
+   join public.profiles p on p.id=s.student_id and p.tenant_id=s.tenant_id
+   join public.tenants t on t.id=s.tenant_id
+   where s.id=selected.submission_id and s.tenant_id=selected.tenant_id
+    and s.student_id=selected.owner_student_id and p.role='student'
+    and t.is_active and t.handwritten_evaluation_enabled for update of s;
+  if not found then return false; end if;
+  update public.handwritten_submissions set
+   status=case when current_submission.status in('stage1_complete','processing_stage2')
+    then 'processing_stage2' else 'processing_stage1' end,
+   error_message=null,updated_at=now() where id=current_submission.id;
+ elsif selected.kind='build_rubric' then
+  if not exists(select 1 from public.evaluation_papers ep
+   join public.profiles p on p.id=ep.created_by and p.tenant_id=ep.tenant_id
+   join public.tenants t on t.id=ep.tenant_id
+   where ep.id=selected.evaluation_paper_id and ep.tenant_id=selected.tenant_id
+    and ep.created_by=selected.owner_teacher_id and ep.is_active and p.role='teacher'
+    and t.is_active and t.handwritten_evaluation_enabled and ep.rubric_status<>'ready') then return false; end if;
+  update public.evaluation_papers set rubric_status='extracting',rubric_error=''
+   where id=selected.evaluation_paper_id and tenant_id=selected.tenant_id
+    and created_by=selected.owner_teacher_id;
+ else return false; end if;
+ update public.evaluation_jobs set status='processing',updated_at=now() where id=selected.id;
+ return true;
+end $$;
+
+create or replace function public.finish_evaluation_stage1_job(
+ p_id uuid,p_worker uuid,p_extraction jsonb,p_source text,p_mapping jsonb,p_requires_review boolean
+) returns boolean language plpgsql security invoker set search_path='' as $$
+declare selected public.evaluation_jobs;
+begin
+ select * into selected from public.evaluation_jobs where id=p_id and kind='evaluate_submission'
+  and status='processing' and claimed_by=p_worker and lease_expires_at>now() for update;
+ if not found or jsonb_typeof(p_extraction)<>'object' or nullif(p_source,'') is null then return false; end if;
+ update public.handwritten_submissions set stage1_extraction=p_extraction,
+  stage1_extraction_source=p_source,page_mapping=coalesce(page_mapping,nullif(p_mapping,'{}'::jsonb)),
+ status=case when p_requires_review then 'review' else 'stage1_complete' end,
+  error_message=null,updated_at=now() where id=selected.submission_id
+  and tenant_id=selected.tenant_id and student_id=selected.owner_student_id;
+ if not found then return false; end if;
+ if p_requires_review then
+  update public.evaluation_jobs set status='done',claimed_by=null,lease_expires_at=null,updated_at=now()
+   where id=selected.id;
+ elsif not exists(select 1 from public.handwritten_submissions s
+  join public.evaluation_papers p on p.id=s.evaluation_paper_id and p.tenant_id=s.tenant_id
+  where s.id=selected.submission_id and s.tenant_id=selected.tenant_id
+   and p.rubric_status='ready') then
+  update public.evaluation_jobs set status='done',claimed_by=null,lease_expires_at=null,updated_at=now()
+   where id=selected.id;
+ end if;
+ return true;
+end $$;
+
+create or replace function public.resume_stage2_on_rubric_ready()
+returns trigger language plpgsql security invoker set search_path='' as $$
+begin
+ if new.rubric_status='ready' and old.rubric_status is distinct from 'ready' then
+  update public.evaluation_jobs j set status='queued',claimed_by=null,
+   lease_expires_at=null,attempts=0,updated_at=now()
+  from public.handwritten_submissions s
+  where s.evaluation_paper_id=new.id and s.tenant_id=new.tenant_id
+   and s.status='stage1_complete' and j.submission_id=s.id
+   and j.tenant_id=s.tenant_id and j.kind='evaluate_submission' and j.status='done'
+   and not exists(select 1 from public.handwritten_evaluations e where e.submission_id=s.id);
+ end if;
+ return new;
+end $$;
+drop trigger if exists resume_stage2_on_rubric_ready on public.evaluation_papers;
+create trigger resume_stage2_on_rubric_ready after update of rubric_status
+ on public.evaluation_papers for each row execute function public.resume_stage2_on_rubric_ready();
+
+create or replace function public.begin_evaluation_stage2(p_id uuid,p_worker uuid)
+returns boolean language plpgsql security invoker set search_path='' as $$
+declare selected public.evaluation_jobs;
+begin
+ select * into selected from public.evaluation_jobs where id=p_id and kind='evaluate_submission'
+  and status='processing' and claimed_by=p_worker and lease_expires_at>now() for update;
+ if not found then return false; end if;
+ update public.handwritten_submissions s set status='processing_stage2',updated_at=now()
+  from public.evaluation_papers p where s.id=selected.submission_id
+  and s.tenant_id=selected.tenant_id and s.student_id=selected.owner_student_id
+  and p.id=s.evaluation_paper_id and p.tenant_id=s.tenant_id and p.rubric_status='ready';
+ return found;
+end $$;
+
+create or replace function public.finish_evaluation_stage2_job(
+ p_id uuid,p_worker uuid,p_evaluation uuid,p_summary jsonb,p_questions jsonb,p_artifacts jsonb,p_review boolean
+) returns boolean language plpgsql security invoker set search_path='' as $$
+declare selected public.evaluation_jobs; row jsonb;
+begin
+ select * into selected from public.evaluation_jobs where id=p_id and kind='evaluate_submission'
+  and status='processing' and claimed_by=p_worker and lease_expires_at>now() for update;
+ if not found or jsonb_typeof(p_summary)<>'object' or jsonb_typeof(p_questions)<>'array'
+  or jsonb_typeof(p_artifacts)<>'array' then return false; end if;
+ insert into public.handwritten_evaluations(
+  id,tenant_id,submission_id,total_marks_obtained,total_marks_possible,percentage,
+  overall_feedback,strengths,areas_to_improve
+ ) values(
+  p_evaluation,selected.tenant_id,selected.submission_id,
+  (p_summary->>'total_marks_obtained')::numeric,(p_summary->>'total_marks_possible')::numeric,
+  (p_summary->>'percentage')::numeric,coalesce(p_summary->>'overall_feedback',''),
+  coalesce(p_summary->'strengths','[]'::jsonb),coalesce(p_summary->'areas_to_improve','[]'::jsonb)
+ );
+ for row in select value from jsonb_array_elements(p_questions) loop
+  insert into public.handwritten_question_evaluations(
+   tenant_id,evaluation_id,question_ref,question_text,marks_obtained,marks_possible,
+   not_attempted,not_evaluated,not_counted,mapping_status,feedback,student_guidance,
+   student_answer_excerpt,handwriting_legibility,grading_confidence,criteria_breakdown
+  ) values(selected.tenant_id,p_evaluation,row->>'question_ref',coalesce(row->>'question_text',''),
+   (row->>'marks_obtained')::numeric,(row->>'marks_possible')::numeric,
+   coalesce((row->>'not_attempted')::boolean,false),coalesce((row->>'not_evaluated')::boolean,false),
+   coalesce((row->>'not_counted')::boolean,false),row->>'mapping_status',coalesce(row->>'feedback',''),
+   coalesce(row->'student_guidance','{}'::jsonb),coalesce(row->>'student_answer_excerpt',''),
+   coalesce(row->>'handwriting_legibility','clear'),coalesce((row->>'grading_confidence')::numeric,1),
+   coalesce(row->'criteria_breakdown','[]'::jsonb));
+ end loop;
+ for row in select value from jsonb_array_elements(p_artifacts) loop
+  insert into public.handwritten_stage2_artifacts(
+   tenant_id,evaluation_id,sequence,route,model,prompt_revision,raw_content,
+   content_bytes,content_sha256,content_omitted
+  ) values(selected.tenant_id,p_evaluation,(row->>'sequence')::integer,row->>'route',
+   coalesce(row->>'model',''),coalesce(row->>'prompt_revision',''),coalesce(row->>'raw_content',''),
+   (row->>'content_bytes')::integer,row->>'content_sha256',coalesce((row->>'content_omitted')::boolean,false));
+ end loop;
+ update public.handwritten_submissions set status=case when p_review then 'review' else 'evaluated' end,
+  error_message=null,updated_at=now() where id=selected.submission_id
+  and tenant_id=selected.tenant_id and student_id=selected.owner_student_id;
+ update public.evaluation_jobs set status='done',claimed_by=null,lease_expires_at=null,updated_at=now()
+  where id=selected.id;
+ return true;
+end $$;
+
+create or replace function public.fail_evaluation_job(p_id uuid,p_worker uuid,p_retryable boolean)
+returns boolean language plpgsql security invoker set search_path='' as $$
+declare selected public.evaluation_jobs; retrying boolean; has_stage1 boolean;
+begin
+ select * into selected from public.evaluation_jobs where id=p_id and kind='evaluate_submission'
+  and status in('claimed','processing') and claimed_by=p_worker and lease_expires_at>now() for update;
+ if not found then return false; end if;
+ retrying:=p_retryable and selected.attempts<3;
+ select coalesce(jsonb_typeof(stage1_extraction)='object' and stage1_extraction<>'{}'::jsonb,false)
+  into has_stage1 from public.handwritten_submissions where id=selected.submission_id;
+ update public.evaluation_jobs set status=case when retrying then 'queued' else 'failed' end,
+  claimed_by=null,lease_expires_at=null,updated_at=now() where id=selected.id;
+ update public.handwritten_submissions set
+  status=case when retrying and has_stage1 then 'stage1_complete' when retrying then 'queued' else 'failed' end,
+  error_message=case when retrying then null else 'Evaluation processing failed.' end,updated_at=now()
+  where id=selected.submission_id and tenant_id=selected.tenant_id and student_id=selected.owner_student_id;
+ return true;
+end $$;
+
+update public.evaluation_jobs j set status='queued',claimed_by=null,lease_expires_at=null,updated_at=now()
+from public.handwritten_submissions s where j.submission_id=s.id and j.kind='evaluate_submission'
+ and j.status='done' and s.status='stage1_complete'
+ and not exists(select 1 from public.handwritten_evaluations e where e.submission_id=s.id);
+
+revoke all on function public.acquire_ai_provider_slot(text,uuid,integer,integer),
+ public.release_ai_provider_slot(text,uuid),public.begin_evaluation_stage2(uuid,uuid),
+ public.finish_evaluation_stage2_job(uuid,uuid,uuid,jsonb,jsonb,jsonb,boolean),
+ public.resume_stage2_on_rubric_ready()
+ from public,anon,authenticated;
+grant execute on function public.acquire_ai_provider_slot(text,uuid,integer,integer),
+ public.release_ai_provider_slot(text,uuid),public.begin_evaluation_stage2(uuid,uuid),
+ public.finish_evaluation_stage2_job(uuid,uuid,uuid,jsonb,jsonb,jsonb,boolean)
+ to service_role;
+
+commit;
+notify pgrst,'reload schema';
+-- Phase D: mistake library, revision reconciliation, and student analytics.
+begin;
+
+create unique index if not exists uq_handwritten_question_evaluations_id_tenant
+ on public.handwritten_question_evaluations(id,tenant_id);
+
+create table if not exists public.handwritten_mistakes(
+ id uuid primary key default gen_random_uuid(),
+ tenant_id uuid not null references public.tenants(id) on delete cascade,
+ evaluation_id uuid not null,
+ question_result_id uuid,
+ category text not null check(category in(
+  'not_attempted','conceptual','application','presentation','calculation',
+  'step_loss','keyword','format','time_management'
+ )),
+ severity text not null check(severity in('minor','moderate','major')),
+ description text not null,
+ marks_lost numeric not null check(marks_lost>0),
+ suggestion text not null default '',
+ chapter_name text not null,
+ criterion_key text not null check(char_length(criterion_key) between 1 and 120),
+ signature text not null check(signature~'^[0-9a-f]{64}$'),
+ is_recurring boolean not null default false,
+ created_at timestamptz not null default now(),
+ constraint handwritten_mistakes_evaluation_scope_fk
+  foreign key(evaluation_id,tenant_id)
+  references public.handwritten_evaluations(id,tenant_id) on delete cascade,
+ constraint handwritten_mistakes_question_scope_fk
+  foreign key(question_result_id,tenant_id)
+  references public.handwritten_question_evaluations(id,tenant_id) on delete cascade
+);
+
+create table if not exists public.handwritten_revision_items(
+ id uuid primary key default gen_random_uuid(),
+ tenant_id uuid not null references public.tenants(id) on delete cascade,
+ student_id uuid not null,
+ subject_id uuid not null,
+ chapter text not null,
+ title text not null,
+ description text not null default '',
+ priority text not null check(priority in('high','medium','low')),
+ is_resolved boolean not null default false,
+ occurrence_count integer not null default 0 check(occurrence_count>=0),
+ marks_at_risk numeric not null default 0 check(marks_at_risk>=0),
+ source_count integer not null default 0 check(source_count>=0),
+ resolution_source text not null default '' check(resolution_source in('','reviewed','improved')),
+ resolved_at timestamptz,
+ last_seen_at timestamptz not null default now(),
+ created_at timestamptz not null default now(),
+ updated_at timestamptz not null default now(),
+ constraint handwritten_revision_items_student_scope_fk
+  foreign key(student_id,tenant_id) references public.profiles(id,tenant_id) on delete cascade,
+ constraint handwritten_revision_items_subject_scope_fk
+  foreign key(subject_id,tenant_id) references public.subjects(id,tenant_id) on delete cascade,
+ unique(tenant_id,student_id,subject_id,title)
+);
+
+create table if not exists public.handwritten_student_analytics(
+ id uuid primary key default gen_random_uuid(),
+ tenant_id uuid not null references public.tenants(id) on delete cascade,
+ student_id uuid not null,
+ subject_id uuid not null,
+ total_attempts integer not null default 0 check(total_attempts>=0),
+ avg_percentage numeric not null default 0,
+ best_percentage numeric not null default 0,
+ latest_percentage numeric not null default 0,
+ score_history jsonb not null default '[]'::jsonb check(jsonb_typeof(score_history)='array'),
+ current_level text not null default 'beginner' check(current_level in(
+  'beginner','improving','proficient','advanced','exam_ready'
+ )),
+ improvement_rate numeric not null default 0,
+ updated_at timestamptz not null default now(),
+ constraint handwritten_student_analytics_student_scope_fk
+  foreign key(student_id,tenant_id) references public.profiles(id,tenant_id) on delete cascade,
+ constraint handwritten_student_analytics_subject_scope_fk
+  foreign key(subject_id,tenant_id) references public.subjects(id,tenant_id) on delete cascade,
+ unique(tenant_id,student_id,subject_id)
+);
+
+create index if not exists handwritten_mistakes_evaluation
+ on public.handwritten_mistakes(tenant_id,evaluation_id);
+create index if not exists handwritten_mistakes_signature
+ on public.handwritten_mistakes(tenant_id,signature,is_recurring);
+create index if not exists handwritten_revision_items_student_subject
+ on public.handwritten_revision_items(tenant_id,student_id,subject_id,is_resolved);
+create index if not exists handwritten_student_analytics_student
+ on public.handwritten_student_analytics(tenant_id,student_id,updated_at desc);
+
+alter table public.handwritten_mistakes enable row level security;
+alter table public.handwritten_revision_items enable row level security;
+alter table public.handwritten_student_analytics enable row level security;
+revoke all on public.handwritten_mistakes,public.handwritten_revision_items,
+ public.handwritten_student_analytics from public,anon,authenticated;
+grant select,insert,update,delete on public.handwritten_mistakes,
+ public.handwritten_revision_items,public.handwritten_student_analytics to service_role;
+
+create or replace function public.replace_handwritten_mistakes(
+ p_tenant uuid,p_evaluation uuid,p_rows jsonb
+) returns integer language plpgsql security invoker set search_path='' as $$
+declare item jsonb; inserted integer:=0;
+begin
+ if jsonb_typeof(p_rows)<>'array' then raise exception 'mistake rows must be an array'; end if;
+ if not exists(
+  select 1 from public.handwritten_evaluations e
+  join public.handwritten_submissions s on s.id=e.submission_id and s.tenant_id=e.tenant_id
+  where e.id=p_evaluation and e.tenant_id=p_tenant and e.status='completed'
+   and s.status='evaluated'
+ ) then raise exception 'evaluation is not committed for learning'; end if;
+ delete from public.handwritten_mistakes where tenant_id=p_tenant and evaluation_id=p_evaluation;
+ for item in select value from jsonb_array_elements(p_rows) loop
+  if nullif(item->>'question_result_id','') is not null and not exists(
+   select 1 from public.handwritten_question_evaluations q
+   where q.id=(item->>'question_result_id')::uuid and q.tenant_id=p_tenant
+    and q.evaluation_id=p_evaluation
+  ) then raise exception 'question result is outside evaluation scope'; end if;
+  insert into public.handwritten_mistakes(
+   tenant_id,evaluation_id,question_result_id,category,severity,description,
+   marks_lost,suggestion,chapter_name,criterion_key,signature
+  ) values(
+   p_tenant,p_evaluation,nullif(item->>'question_result_id','')::uuid,
+   item->>'category',item->>'severity',item->>'description',
+   (item->>'marks_lost')::numeric,coalesce(item->>'suggestion',''),
+   item->>'chapter_name',item->>'criterion_key',item->>'signature'
+  );
+  inserted:=inserted+1;
+ end loop;
+ return inserted;
+end $$;
+
+create or replace function public.reconcile_handwritten_revision_items(
+ p_tenant uuid,p_student uuid,p_subject uuid
+) returns boolean language plpgsql security invoker set search_path='' as $$
+declare topic_row record; reconciled_at timestamptz:=clock_timestamp();
+begin
+ if not exists(select 1 from public.profiles p where p.id=p_student
+  and p.tenant_id=p_tenant and p.role='student' for update) then return false; end if;
+ if not exists(select 1 from public.subjects s where s.id=p_subject and s.tenant_id=p_tenant) then return false; end if;
+
+ update public.handwritten_mistakes m set is_recurring=false
+ where m.tenant_id=p_tenant and exists(
+  select 1 from public.handwritten_evaluations e
+  join public.handwritten_submissions hs on hs.id=e.submission_id and hs.tenant_id=e.tenant_id
+  join public.evaluation_papers ep on ep.id=hs.evaluation_paper_id and ep.tenant_id=hs.tenant_id
+  where e.id=m.evaluation_id and hs.student_id=p_student and ep.subject_id=p_subject
+ );
+
+ with ranked as(
+  select e.id evaluation_id,hs.evaluation_paper_id,
+   row_number() over(partition by hs.evaluation_paper_id order by hs.created_at desc,hs.id desc) position
+  from public.handwritten_evaluations e
+  join public.handwritten_submissions hs on hs.id=e.submission_id and hs.tenant_id=e.tenant_id
+  join public.evaluation_papers ep on ep.id=hs.evaluation_paper_id and ep.tenant_id=hs.tenant_id
+  where e.tenant_id=p_tenant and hs.student_id=p_student and ep.subject_id=p_subject
+   and e.status='completed' and hs.status='evaluated'
+ ), recurring as(
+  select m.signature
+  from public.handwritten_mistakes m join ranked r on r.evaluation_id=m.evaluation_id and r.position=1
+  where m.tenant_id=p_tenant and m.signature<>''
+  group by m.signature having count(distinct r.evaluation_paper_id)>=2
+ )
+ update public.handwritten_mistakes m set is_recurring=true
+ from ranked r,recurring x where r.position=1 and m.evaluation_id=r.evaluation_id
+  and m.tenant_id=p_tenant and m.signature=x.signature;
+
+ for topic_row in
+  with ranked as(
+   select e.id evaluation_id,hs.evaluation_paper_id,
+    row_number() over(partition by hs.evaluation_paper_id order by hs.created_at desc,hs.id desc) position
+   from public.handwritten_evaluations e
+   join public.handwritten_submissions hs on hs.id=e.submission_id and hs.tenant_id=e.tenant_id
+   join public.evaluation_papers ep on ep.id=hs.evaluation_paper_id and ep.tenant_id=hs.tenant_id
+   where e.tenant_id=p_tenant and hs.student_id=p_student and ep.subject_id=p_subject
+    and e.status='completed' and hs.status='evaluated'
+  )
+  select m.chapter_name,round(sum(m.marks_lost),1) marks,
+   count(distinct r.evaluation_paper_id)::integer paper_count,
+   (array_agg(coalesce(nullif(m.suggestion,''),m.description)
+    order by m.marks_lost desc,m.created_at desc))[1] description
+  from public.handwritten_mistakes m join ranked r on r.evaluation_id=m.evaluation_id and r.position=1
+  where m.tenant_id=p_tenant and m.chapter_name<>''
+  group by m.chapter_name
+ loop
+  insert into public.handwritten_revision_items(
+   tenant_id,student_id,subject_id,chapter,title,description,priority,
+   is_resolved,occurrence_count,marks_at_risk,source_count,resolution_source,
+   resolved_at,last_seen_at,updated_at
+  ) values(
+   p_tenant,p_student,p_subject,topic_row.chapter_name,left(topic_row.chapter_name,300),
+   left(coalesce(topic_row.description,''),1000),
+   case when topic_row.marks>=3 or topic_row.paper_count>=3 then 'high'
+    when topic_row.marks>=1 or topic_row.paper_count>=2 then 'medium' else 'low' end,
+   false,topic_row.paper_count,topic_row.marks,topic_row.paper_count,'',null,reconciled_at,reconciled_at
+  ) on conflict(tenant_id,student_id,subject_id,title) do update set
+   chapter=excluded.chapter,description=excluded.description,priority=excluded.priority,
+   is_resolved=false,occurrence_count=excluded.occurrence_count,
+   marks_at_risk=excluded.marks_at_risk,source_count=excluded.source_count,
+   resolution_source='',resolved_at=null,last_seen_at=excluded.last_seen_at,updated_at=excluded.updated_at;
+ end loop;
+
+ with ranked as(
+  select e.id evaluation_id,hs.evaluation_paper_id,
+   row_number() over(partition by hs.evaluation_paper_id order by hs.created_at desc,hs.id desc) position
+  from public.handwritten_evaluations e
+  join public.handwritten_submissions hs on hs.id=e.submission_id and hs.tenant_id=e.tenant_id
+  join public.evaluation_papers ep on ep.id=hs.evaluation_paper_id and ep.tenant_id=hs.tenant_id
+  where e.tenant_id=p_tenant and hs.student_id=p_student and ep.subject_id=p_subject
+   and e.status='completed' and hs.status='evaluated'
+ ), desired as(
+  select distinct m.chapter_name from public.handwritten_mistakes m
+  join ranked r on r.evaluation_id=m.evaluation_id and r.position=1
+  where m.tenant_id=p_tenant and m.chapter_name<>''
+ )
+ update public.handwritten_revision_items ri set is_resolved=true,
+  resolution_source='improved',resolved_at=reconciled_at,marks_at_risk=0,updated_at=reconciled_at
+ where ri.tenant_id=p_tenant and ri.student_id=p_student and ri.subject_id=p_subject
+  and not ri.is_resolved and not exists(select 1 from desired d where left(d.chapter_name,300)=ri.title);
+ return true;
+end $$;
+
+revoke all on function public.replace_handwritten_mistakes(uuid,uuid,jsonb),
+ public.reconcile_handwritten_revision_items(uuid,uuid,uuid)
+ from public,anon,authenticated;
+grant execute on function public.replace_handwritten_mistakes(uuid,uuid,jsonb),
+ public.reconcile_handwritten_revision_items(uuid,uuid,uuid) to service_role;
+
+commit;
+notify pgrst,'reload schema';
+-- Link AI-call telemetry to handwritten evaluation jobs without reusing the
+-- quiz_generation_jobs foreign key.
+begin;
+
+alter table public.api_call_logs
+ add column if not exists evaluation_job_id uuid;
+
+alter table public.api_call_logs
+ drop constraint if exists api_call_logs_evaluation_job_id_fkey;
+alter table public.api_call_logs
+ add constraint api_call_logs_evaluation_job_id_fkey
+ foreign key(evaluation_job_id) references public.evaluation_jobs(id) on delete set null;
+
+create index if not exists api_call_logs_evaluation_job_time
+ on public.api_call_logs(evaluation_job_id,created_at desc);
+
+commit;
+notify pgrst,'reload schema';

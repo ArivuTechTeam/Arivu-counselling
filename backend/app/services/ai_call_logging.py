@@ -22,7 +22,8 @@ logger = logging.getLogger(__name__)
 
 _context: ContextVar[dict[str, str | bool | None]] = ContextVar(
     "ai_call_log_context",
-    default={"call_type": "unclassified", "tenant_id": None, "document_id": None, "job_id": None},
+    default={"call_type": "unclassified", "tenant_id": None, "document_id": None,
+             "job_id": None, "evaluation_job_id": None},
 )
 
 
@@ -33,6 +34,7 @@ def ai_call_context(
     tenant_id: str | None = None,
     document_id: str | None = None,
     job_id: str | None = None,
+    evaluation_job_id: str | None = None,
 ) -> Iterator[None]:
     """Attach pipeline ownership to every provider call made in this scope."""
     token = _context.set(
@@ -42,6 +44,7 @@ def ai_call_context(
             "tenant_id": tenant_id,
             "document_id": document_id,
             "job_id": job_id,
+            "evaluation_job_id": evaluation_job_id,
         }
     )
     try:
@@ -192,6 +195,7 @@ def log_ai_call(
         "tenant_id": context["tenant_id"],
         "document_id": context["document_id"],
         "job_id": context["job_id"],
+        "evaluation_job_id": context["evaluation_job_id"],
         "provider": provider,
         "model": model,
         "was_fallback": was_fallback or bool(context.get("provider_fallback")),

@@ -106,6 +106,49 @@ class Settings:
     def __init__(self) -> None:
         # Enable only after the additive faculty-job migration and worker are ready.
         self.faculty_jobs_enabled = _boolean("FACULTY_JOBS_ENABLED", False)
+        self.evaluation_jobs_enabled = _boolean("EVALUATION_JOBS_ENABLED", False)
+        self.evaluation_worker_poll_seconds = _positive_int(
+            "EVALUATION_WORKER_POLL_SECONDS", 3
+        )
+        self.gemini_stage1_max_output_tokens = _positive_int(
+            "GEMINI_STAGE1_MAX_OUTPUT_TOKENS", 32000
+        )
+        self.gemini_stage1_thinking_budget = _positive_int(
+            "GEMINI_STAGE1_THINKING_BUDGET", 4000
+        )
+        self.handwritten_rubric_provider: str = _provider_name(
+            "HANDWRITTEN_RUBRIC_PROVIDER", "gemini"
+        )
+        self.per_question_stage2_enabled = _boolean(
+            "PER_QUESTION_STAGE2_ENABLED", True
+        )
+        self.per_question_stage2_concurrency = _positive_int(
+            "PER_QUESTION_STAGE2_CONCURRENCY", 5
+        )
+        # Match ExamApp's proven Stage 2 budgets. Whole-paper calls need the
+        # larger ceiling because hidden reasoning shares the completion budget.
+        self.deepseek_per_question_max_tokens = _positive_int(
+            "DEEPSEEK_PER_QUESTION_MAX_TOKENS", 32000
+        )
+        self.deepseek_stage2_max_tokens = _positive_int(
+            "DEEPSEEK_MAX_TOKENS", 80000
+        )
+        self.deepseek_stage2_thinking_effort = os.getenv(
+            "DEEPSEEK_THINKING_EFFORT", "high"
+        ).strip().lower()
+        if self.deepseek_stage2_thinking_effort not in {"low", "medium", "high"}:
+            raise RuntimeError(
+                "DEEPSEEK_THINKING_EFFORT must be low, medium, or high."
+            )
+        self.deepseek_max_concurrency = _positive_int(
+            "DEEPSEEK_MAX_CONCURRENCY", 24
+        )
+        self.deepseek_slot_wait_seconds = _positive_int(
+            "DEEPSEEK_SLOT_WAIT_SECONDS", 30
+        )
+        self.rate_limit_handwritten_evaluation_per_hour = _positive_int(
+            "RATE_LIMIT_HANDWRITTEN_EVALUATION_PER_HOUR", 10
+        )
         self.quiz_reuse_enabled = _boolean("QUIZ_REUSE_ENABLED", False)
         # Batch-scoped delivery (Phase 6.1). This is an emergency platform
         # switch; production enables it for every commerce institution.
@@ -121,6 +164,9 @@ class Settings:
         # this with no live worker lease, the worker is treated as stalled/absent
         # (surfaced by the deployment preflight and super-admin worker-health).
         self.faculty_worker_stale_seconds = _positive_int("FACULTY_WORKER_STALE_SECONDS", 120)
+        self.rate_limit_paper_generation_per_hour = _positive_int(
+            "RATE_LIMIT_PAPER_GENERATION_PER_HOUR", 10
+        )
         # Document-figure support (Phase 1: extract captioned figures during
         # analysis). Production enables it after the private bucket is ready;
         # the switch remains a platform-wide emergency control.
@@ -184,6 +230,18 @@ class Settings:
         # The secret Supabase signs its JWTs with. We use it to verify tokens
         # locally (HS256) instead of calling Supabase on every request.
         self.supabase_jwt_secret: str = _require("SUPABASE_JWT_SECRET")
+        # One-way ExamApp handoff. This must be an independent random secret,
+        # never the key used to verify Supabase sessions.
+        self.handoff_shared_secret: str = _require("HANDOFF_SHARED_SECRET")
+        if len(self.handoff_shared_secret.encode("utf-8")) < 32:
+            raise RuntimeError("HANDOFF_SHARED_SECRET must be at least 32 bytes.")
+        if self.handoff_shared_secret == self.supabase_jwt_secret:
+            raise RuntimeError(
+                "HANDOFF_SHARED_SECRET must not reuse SUPABASE_JWT_SECRET."
+            )
+        self.examapp_frontend_url: str = _validated_url(
+            "EXAMAPP_FRONTEND_URL", allow_local_http=allow_local_http
+        )
         # Keep each Data API read attempt well below the browser's ordinary
         # 20-second request deadline. The transport can then retry a stalled
         # idempotent read instead of the browser timing out before recovery.
@@ -215,7 +273,9 @@ class Settings:
         self.deepseek_base_url: str = os.getenv(
             "DEEPSEEK_BASE_URL", "https://api.deepseek.com"
         )
-        self.deepseek_model: str = os.getenv("DEEPSEEK_MODEL", "deepseek-flash")
+        self.deepseek_model: str = os.getenv(
+            "DEEPSEEK_MODEL", "deepseek-v4-flash"
+        ).strip() or "deepseek-v4-flash"
         # Extraction and generation are structured transformation tasks. Keep
         # thinking disabled by default so hidden reasoning does not add latency
         # or output-token cost; it remains an explicit environment override.
@@ -244,6 +304,11 @@ class Settings:
             "GEMINI_BASE_URL", "https://generativelanguage.googleapis.com/v1beta"
         )
         self.gemini_model: str = os.getenv("GEMINI_MODEL", "gemini-3.5-flash")
+        # Keep handwritten OCR on the model used by ExamApp's proven Stage 1
+        # path without changing unrelated Gemini generation/extraction stages.
+        self.gemini_stage1_model: str = os.getenv(
+            "GEMINI_STAGE1_MODEL", "gemini-2.5-flash"
+        ).strip() or "gemini-2.5-flash"
         # A stale/retired model can remain visible in models.list while its
         # generateContent route returns 404. Retry that one condition with this
         # current model before moving to the cross-provider fallback.

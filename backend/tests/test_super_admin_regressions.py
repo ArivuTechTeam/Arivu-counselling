@@ -415,6 +415,7 @@ class SuperAdminRegressionTests(unittest.TestCase):
                     plan_tier="growth",
                     is_active=False,
                     primary_color="#7c3aed",
+                    handwritten_evaluation_enabled=True,
                 ),
                 SUPER,
             )
@@ -424,11 +425,14 @@ class SuperAdminRegressionTests(unittest.TestCase):
         self.assertEqual(result["plan_tier"], "growth")
         self.assertFalse(result["is_active"])
         self.assertEqual(result["primary_color"], "#7C3AED")
+        self.assertTrue(result["handwritten_evaluation_enabled"])
         stored = next(row for row in service.tables["tenants"] if row["id"] == "tenant-a")
         self.assertEqual(stored["name"], "Renamed Institution")
         self.assertEqual(stored["subdomain"], "renamed-institution")
         self.assertFalse(stored["is_active"])
         self.assertEqual(stored["primary_color"], "#7C3AED")
+        self.assertTrue(stored["handwritten_evaluation_enabled"])
+        self.assertNotIn("handwritten_evaluation_enabled", stored.get("feature_flags", {}))
 
     def test_tenant_brand_color_must_be_six_digit_hex(self) -> None:
         with self.assertRaises(ValidationError):

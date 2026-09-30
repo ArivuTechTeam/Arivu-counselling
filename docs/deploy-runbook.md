@@ -193,16 +193,28 @@ migration-71-query-plan-indexes.sql
 migration-72-atomic-quiz-persistence.sql
 migration-73-ai-quiz-cost-workflows.sql
 migration-74-role-aware-support.sql
+migration-75-atomic-review-and-regeneration.sql
+migration-76-examapp-handoff.sql
+migration-77-generated-exam-papers.sql
+migration-78-handwritten-evaluation-phase-a.sql
+migration-79-handwritten-stage1.sql
+migration-80-handwritten-rubric.sql
+migration-81-handwritten-stage2.sql
+migration-82-handwritten-learning.sql
 ```
 
-Filenames above were verified 2026-09-28 against `migrations/`, through migration
-74. The operator reported migrations through 74 applied, but this documentation
+Filenames above include the current repository migrations through migration 82.
+The operator reported migrations through 74 applied, but this documentation
 pass did not independently inspect the target Supabase migration history or all
 function privileges. Migrations 63–65 support the paper bank, migration 66 adds
 durable private paper attempts, and migration 67 adds atomic
 publish-and-batch-assignment. The paper-import worker is unchanged. Before a
 new-environment rollout, run a staging paper-import/publish/student-grade drill;
 repository tests cannot verify live SQL or provider behavior.
+Migration 77 adds tenant paper-format JSON, generated-paper snapshots, the
+service-role-only atomic enqueue function, and the `generate_paper` faculty-job
+kind. Apply it before deploying the matching API/worker/frontend, then enable
+both `PAPER_BANK_ENABLED` and `FACULTY_JOBS_ENABLED` for the rollout.
 The batch-publication frontend calls a new `/publish-to-batches` API route so it
 fails closed against an older Railway API while Vercel updates after merge;
 deploy the API promptly after migration 67 and the main-branch merge.
@@ -502,9 +514,11 @@ explicitly in Railway so the production policy is visible and easy to edit:
 | `SUPABASE_ANON_KEY` | anon public key |
 | `SUPABASE_SERVICE_ROLE_KEY` | service role key (server-only, **secret**) |
 | `SUPABASE_JWT_SECRET` | verifies legacy HS256 JWTs; ES256/RS256 JWTs are verified with Supabase JWKS |
+| `HANDOFF_SHARED_SECRET` | independent random secret of at least 32 bytes, shared only with ExamApp; never reuse the Supabase JWT secret |
+| `EXAMAPP_FRONTEND_URL` | ExamApp HTTPS browser origin; the backend appends the handoff path and URL fragment |
 | `FRONTEND_ORIGIN` | exact deployed **frontend origin** (scheme + hostname, no path or trailing slash) for CORS |
 | `DEEPSEEK_API_KEY` | preferred provider credential for current text stages |
-| `DEEPSEEK_MODEL` | text model (default `deepseek-flash`) |
+| `DEEPSEEK_MODEL` | text model (default `deepseek-v4-flash`) |
 | `DEEPSEEK_THINKING_ENABLED` | keep `false` for predictable structured-output cost/latency unless deliberately testing reasoning |
 | `DEEPSEEK_STRUCTURED_MAX_OUTPUT_TOKENS` / `DEEPSEEK_MAX_OUTPUT_TOKENS` | ordinary and large-JSON output budgets |
 | `DEEPSEEK_REQUEST_TIMEOUT_SECONDS` | ordinary DeepSeek request timeout |
@@ -530,6 +544,7 @@ explicitly in Railway so the production policy is visible and easy to edit:
 | `RATE_LIMIT_QUESTION_EXPLAIN_PER_HOUR` | per-user question explanations per rolling hour (default `10`) |
 | `RATE_LIMIT_QUIZ_EXTRACTION_PER_HOUR` | per-user existing-quiz document extractions per rolling hour (default `10`) |
 | `RATE_LIMIT_CHALLENGE_JOIN_PER_HOUR` | per-student friend-challenge code lookups per rolling hour (default `30`) |
+| `RATE_LIMIT_PAPER_GENERATION_PER_HOUR` | per-teacher generated exam-paper requests per rolling hour (default `10`; requires migration 77 and the faculty worker) |
 | `STUDENT_QUIZ_ATTEMPT_LIMIT` | maximum starts per student for the same published quiz variant (default `2`; on Railway redeploy after changing; for local Docker run `docker compose up -d --force-recreate backend` because restarting Docker Desktop preserves the existing container environment) |
 | `DAILY_CHALLENGE_TIMEZONE` | IANA timezone used to decide each student's institution-facing Daily Challenge calendar day (default `Asia/Kolkata`) |
 | `CHALLENGE_EXPIRY_DAYS` | number of days a new friend challenge accepts new participants (default `30`; existing sessions may still resume) |
@@ -630,6 +645,42 @@ hostname changes, then restart or redeploy the backend.
    is retryable. Check that another student cannot load the attempt.
 9. As an institution admin, open Edit teacher with a long subject list and
    verify Save/Cancel remain visible while the subjects scroll.
+10. For native handwritten evaluation Phase A, apply migration 78, set
+    `EVALUATION_JOBS_ENABLED=true` on both the API and the dedicated evaluation
+    worker, and set `EVALUATION_WORKER_POLL_SECONDS` if the default three-second
+    poll is unsuitable. Start the worker with
+    `python -m app.services.evaluation_worker` (or the Docker Compose
+    `evaluation-jobs` profile). Confirm the private `evaluation-papers` and
+    `evaluation-submissions` buckets exist, then test teacher paper upload and
+    a same-course/same-level student upload through to `pending_stage1`.
+11. For frozen rubric generation, apply migrations 79 and 80 before starting the
+    evaluation worker. Set `HANDWRITTEN_RUBRIC_PROVIDER` (default `gemini`).
+    Create a paper once with an official suggested answer and once without;
+    confirm each automatically queues one `build_rubric` job and reaches
+    `rubric_status=ready` with `rubric_source=official` and `ai_derived`,
+    respectively. A failed deterministic validation must show a specific
+    `rubric_error` and must not persist a candidate rubric.
+12. Before enabling native handwritten evaluation Stage 2, apply migration 81
+    and configure `RATE_LIMIT_HANDWRITTEN_EVALUATION_PER_HOUR` (default `10`).
+    Grouped top-level-question scoring is enabled by default with
+    `PER_QUESTION_STAGE2_ENABLED=true` and
+    `PER_QUESTION_STAGE2_CONCURRENCY=5`. Unmatched evidence deliberately falls
+    back to one whole-paper request so evidence ownership is decided once.
+    The ExamApp-matched limits are `DEEPSEEK_PER_QUESTION_MAX_TOKENS=32000`,
+    `DEEPSEEK_MAX_TOKENS=80000`, and `DEEPSEEK_THINKING_EFFORT=high` using
+    `deepseek-v4-flash`. Fleet-wide DeepSeek calls use leased
+    database slots (`DEEPSEEK_MAX_CONCURRENCY=24`, 30-second acquisition wait);
+    semaphore storage errors fail open, while a healthy full semaphore retries
+    the evaluation job. Stage 2 deliberately uses DeepSeek text response mode
+    and persists visible content only—never provider reasoning traces or full
+    envelopes. After completion, the student report is read from the persisted
+    evaluation and question-evaluation rows; opening a report never re-runs AI.
+13. Apply migration 82 before deploying handwritten learning data. Complete one
+    non-review evaluation and confirm its mistake rows, revision topic, and
+    subject analytics appear. Repeat the same paper and confirm only its latest
+    evaluated submission contributes to revision risk. Verify the weak-area API
+    computes chapters and category patterns live; the analytics table
+    intentionally omits ExamApp's four unused summary fields.
 
 If a page 500s, check the backend logs and that all env vars are set + migrations run.
 

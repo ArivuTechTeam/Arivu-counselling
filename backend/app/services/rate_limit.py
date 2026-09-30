@@ -20,6 +20,8 @@ QUESTION_EXPLAIN = "question_explain"
 QUIZ_EXTRACTION = "quiz_extraction"
 CHALLENGE_JOIN = "challenge_join"
 DESCRIPTIVE_GRADING = "descriptive_grading"
+PAPER_GENERATION = "paper_generation"
+HANDWRITTEN_EVALUATION = "handwritten_evaluation"
 
 
 def enforce_rate_limit(

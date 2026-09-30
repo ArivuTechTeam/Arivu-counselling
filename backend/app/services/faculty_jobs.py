@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from fastapi import HTTPException
 
@@ -24,12 +24,15 @@ def public_job(row: dict) -> dict:
         raw_result = result["result"]
         result["result"] = {
             key: raw_result.get(key)
-            for key in ("quiz_set_id", "regenerated", "kept", "total")
+            for key in ("quiz_set_id", "generated_paper_id", "regenerated", "kept", "total")
             if raw_result.get(key) is not None
         }
     elif row.get("quiz_set_id"):
         result["result"] = {"quiz_set_id": row["quiz_set_id"]}
-    result["source_document_id"] = (row.get("request") or {}).get("document_id")
+    request = row.get("request") or {}
+    result["source_document_id"] = request.get("document_id")
+    if request.get("generated_paper_id"):
+        result["generated_paper_id"] = request["generated_paper_id"]
     return result
 
 
@@ -94,6 +97,40 @@ def enqueue(profile: CurrentProfile, key: str, kind: str, request: dict) -> dict
     if row.get("rate_limited"):
         raise HTTPException(429, "You have reached the hourly limit. Please try again later.",
                             headers={"Retry-After": str(row.get("retry_after_seconds", 60))})
+    return public_job(row)
+
+
+def enqueue_generated_paper(profile: CurrentProfile, key: str, request: dict) -> dict:
+    """Atomically create a generated-paper record and its leased worker job."""
+    require_profile_feature(profile, "faculty_jobs", label="Background processing")
+    if profile.role != "teacher":
+        raise HTTPException(403, "Only teachers can generate exam papers.")
+    try:
+        key = str(UUID(key))
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(400, "Invalid request identifier.") from exc
+    fingerprint = hashlib.sha256(
+        json.dumps({"kind": "generate_paper", "request": request}, sort_keys=True).encode()
+    ).hexdigest()
+    row = get_service_client().rpc("enqueue_generated_paper_job", {
+        "p_id": str(uuid4()),
+        "p_tenant": profile.tenant_id,
+        "p_actor": profile.user_id,
+        "p_key": key,
+        "p_request": request,
+        "p_hash": fingerprint,
+        "p_limit": get_settings().rate_limit_paper_generation_per_hour,
+    }).execute().data
+    if not isinstance(row, dict):
+        raise HTTPException(503, "Could not confirm the paper request. Check your history before retrying.")
+    if row.get("conflict"):
+        raise HTTPException(409, "This request identifier belongs to different settings. Start a new request.")
+    if row.get("rate_limited"):
+        raise HTTPException(
+            429,
+            "You have reached the hourly paper-generation limit. Please try again later.",
+            headers={"Retry-After": str(row.get("retry_after_seconds", 60))},
+        )
     return public_job(row)
 
 

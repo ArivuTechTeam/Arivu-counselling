@@ -21,6 +21,8 @@ from app.services.quiz_extraction import (
     pyq_insert_fields,
 )
 from app.services.quiz_generator_service import QuizGeneratorService
+from app.services.paper_generation import generate_paper
+from app.services.teacher_access import teacher_has_subject
 from app.services.tenant_features import tenant_feature_enabled
 
 logger = logging.getLogger(__name__)
@@ -112,6 +114,28 @@ def process_job(service, job: dict) -> dict:
               .maybe_single().execute().data)
     if not owner or owner.get("role") != "teacher" or not tenant or not tenant.get("is_active"):
         raise ValueError("Teacher or institution is no longer active")
+
+    if job["kind"] == "generate_paper":
+        if not getattr(get_settings(), "paper_bank_enabled", False):
+            raise ValueError("Paper generation is not enabled")
+        if not teacher_has_subject(service, profile, request["subject_id"]):
+            raise ValueError("Subject is no longer assigned to this teacher")
+        paper = (
+            service.table("generated_papers").select("id,status,course_level_id,subject_id")
+            .eq("id", request["generated_paper_id"])
+            .eq("tenant_id", profile.tenant_id)
+            .eq("created_by", profile.user_id)
+            .maybe_single().execute().data
+        )
+        if not paper or paper.get("status") not in ("pending", "processing"):
+            raise ValueError("Generated paper is no longer available")
+        if str(paper.get("course_level_id")) != str(request["course_level_id"]) or str(paper.get("subject_id")) != str(request["subject_id"]):
+            raise ValueError("Generated paper scope changed")
+        result = generate_paper(service, job)
+        if not update_job(service, job, "complete", p_payload=result):
+            raise LeaseLost("Worker no longer owns this job")
+        return result
+
     validate_source(service, profile, request)
 
     if job["kind"] == "regenerate_set":
@@ -197,6 +221,17 @@ def run_one(service=None, *, heartbeat_seconds: float = 20) -> bool:
         # failures are bounded to three attempts; invalid inputs fail immediately.
         retryable = isinstance(exc, LLMError) or not isinstance(exc, (ValueError, HTTPException))
         try:
+            if job.get("kind") == "generate_paper":
+                retrying = retryable and int(job.get("attempts") or 0) < 3
+                service.table("generated_papers").update({
+                    "status": "pending" if retrying else "failed",
+                    "error_message": (
+                        "Processing was interrupted. A retry is queued."
+                        if retrying
+                        else "We could not generate this paper from the selected bank and format."
+                    ),
+                }).eq("id", (job.get("request") or {}).get("generated_paper_id")) \
+                  .eq("tenant_id", job.get("tenant_id")).execute()
             update_job(service, job, "fail", p_retryable=retryable)
         except Exception:
             logger.warning("Could not record job failure; lease recovery will resume it.")

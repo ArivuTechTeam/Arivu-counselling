@@ -4,21 +4,31 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import { PGlite } from "../.tmp/pg-test/node_modules/@electric-sql/pglite/dist/index.js";
 
-process.on("uncaughtException", () => { console.error("Database migration test failed."); process.exit(1); });
+process.on("uncaughtException", error => {
+  console.error("Database migration test failed.", error instanceof Error ? error.message : error);
+  process.exit(1);
+});
 
 const db = new PGlite();
 const schema = fs.readFileSync("migrations/schema.sql", "utf8");
-await db.exec("create role anon; create role authenticated; create role service_role bypassrls; create schema auth; create table auth.users(id uuid primary key);");
+await db.exec(`create role anon; create role authenticated; create role service_role bypassrls;
+  create schema auth; create table auth.users(id uuid primary key);
+  create function public.current_tenant_id() returns uuid language sql stable as $$ select null::uuid $$;
+  create function public.is_super_admin() returns boolean language sql stable as $$ select false $$;
+  create function public.is_staff() returns boolean language sql stable as $$ select false $$;`);
 for (const type of schema.matchAll(/^create type .*?;$/gm)) await db.exec(type[0]);
 await db.exec("alter type question_source add value 'extracted';");
-for (const name of ["tenants", "profiles", "catalog_courses", "catalog_course_levels", "catalog_course_subjects", "courses", "course_levels", "subjects", "teacher_subjects", "chapters", "topics", "documents", "ai_extraction_jobs", "questions", "quiz_sets", "quiz_variants", "quiz_variant_questions", "quiz_generation_jobs"]) {
+for (const name of ["tenants", "profiles", "catalog_courses", "catalog_course_levels", "catalog_course_subjects", "courses", "course_levels", "subjects", "teacher_subjects", "chapters", "topics", "documents", "ai_extraction_jobs", "questions", "quiz_sets", "quiz_variants", "quiz_variant_questions", "quiz_generation_jobs", "ai_rate_limits"]) {
   const definition = schema.match(new RegExp(`create table ${name} \\([\\s\\S]*?\\n\\);`));
   assert.ok(definition, name);
   await db.exec(definition[0].replace(/^.*embedding vector.*\r?\n/m, ""));
-  if (name === "profiles" || name === "subjects") {
+  if (name === "profiles" || name === "subjects" || name === "courses") {
     await db.exec(`create unique index on ${name}(id,tenant_id)`);
   }
 }
+const paperProfilesDefinition=schema.match(/create table if not exists public\.paper_profiles \([\s\S]*?\n\);/);
+assert.ok(paperProfilesDefinition,"paper_profiles");
+await db.exec(paperProfilesDefinition[0]);
 const eventSchema=fs.readFileSync("migrations/migration-02-events.sql","utf8");
 await db.exec(eventSchema.match(/create table if not exists events \([\s\S]*?\n\);/)[0]);
 // The existing quota function is independently tested by the backend suite.
@@ -121,5 +131,41 @@ await db.query("update tenants set is_active=false where id=$1",[tenant]);
 await assert.rejects(finish(claimed));
 assert.equal(await scalar("select status from faculty_jobs where id=$1",[claimed.id]),"running");
 await assert.rejects(enqueue());
-console.log("PASS: idempotency, quota replay, leases, atomic rollback, cancellation, checkpoint recovery, tenant cap, retry exhaustion, authorization, generated topics/answers/events");
+
+// Migration 77: generated-paper creation and queueing are one tenant-safe,
+// idempotent transaction and remain inaccessible to browser roles.
+const paperMigration=fs.readFileSync("migrations/migration-77-generated-exam-papers.sql","utf8");
+await db.exec(paperMigration);
+await db.exec(paperMigration);
+const paperTenant=uuid(), paperActor=uuid(), paperCourse=uuid(), paperLevel=uuid(), paperSubject=uuid();
+await db.query("insert into tenants(id,name,subdomain) values($1,'Paper tenant','paper')",[paperTenant]);
+await db.query("insert into auth.users values($1)",[paperActor]);
+await db.query("insert into profiles(id,tenant_id,role) values($1,$2,'teacher')",[paperActor,paperTenant]);
+await db.query("insert into courses(id,tenant_id,name) values($1,$2,'Commerce')",[paperCourse,paperTenant]);
+await db.query("insert into course_levels(id,tenant_id,course_id,name) values($1,$2,$3,'Foundation')",[paperLevel,paperTenant,paperCourse]);
+await db.query("insert into subjects(id,tenant_id,course_id,course_level_id,name) values($1,$2,$3,$4,'Accounts')",[paperSubject,paperTenant,paperCourse,paperLevel]);
+await db.query("insert into teacher_subjects(tenant_id,teacher_id,subject_id) values($1,$2,$3)",[paperTenant,paperActor,paperSubject]);
+await db.query("insert into paper_profiles(tenant_id,course_id,course_level_id,exam_body,created_by,format_config) values($1,$2,$3,'Test board',$4,$5)",[paperTenant,paperCourse,paperLevel,paperActor,{sections:[{name:"Section A",count:2}]}]);
+const paperKey=uuid(), paperId=uuid();
+const paperRequest={course_level_id:paperLevel,subject_id:paperSubject,mode:"exact_mark",requested_total_marks:10,question_count:2};
+const enqueuePaper = (id=paperId, hash="paper-same") => scalar(
+  "select enqueue_generated_paper_job($1,$2,$3,$4,$5,$6,10)",
+  [id,paperTenant,paperActor,paperKey,paperRequest,hash],
+);
+const queuedPaper=await enqueuePaper();
+assert.equal(queuedPaper.kind,"generate_paper");
+assert.equal(queuedPaper.request.generated_paper_id,paperId);
+assert.equal((await enqueuePaper(uuid())).id,queuedPaper.id,"paper enqueue replay is idempotent");
+assert.equal((await enqueuePaper(uuid(),"different")).conflict,true);
+assert.equal(await scalar("select count(*)::int from generated_papers where tenant_id=$1",[paperTenant]),1);
+await assert.rejects(db.query(
+  "insert into generated_papers(tenant_id,course_level_id,subject_id,mode,requested_total_marks,created_by) values($1,$2,$3,'exact_mark',10,$4)",
+  [paperTenant,level,paperSubject,paperActor],
+),undefined,"course levels from another tenant must be rejected");
+await db.exec("set role authenticated");
+await assert.rejects(db.query("select * from generated_papers"));
+await assert.rejects(db.query("select enqueue_generated_paper_job(gen_random_uuid(),gen_random_uuid(),gen_random_uuid(),gen_random_uuid(),'{}','x',10)"));
+await db.exec("reset role");
+
+console.log("PASS: faculty leases/atomicity plus generated-paper migration, idempotency, tenant FKs and browser denial");
 await db.close();

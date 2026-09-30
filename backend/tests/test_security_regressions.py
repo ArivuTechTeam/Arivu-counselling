@@ -589,13 +589,22 @@ class PasswordGateTests(unittest.TestCase):
             tenant_logo_path="tenant-logos/alliance.png",
             tenant_primary_color="#7C3AED",
         )
-        with patch("app.main.signed_url", return_value="https://signed.example/logo"):
+        service = SimpleNamespace(
+            table=lambda _name: _ProfileQuery(
+                {"handwritten_evaluation_enabled": True}
+            )
+        )
+        with (
+            patch("app.main.signed_url", return_value="https://signed.example/logo"),
+            patch("app.main.get_service_client", return_value=service),
+        ):
             result = read_my_profile(profile)
 
         self.assertEqual(result.institution.name, "Alliance University")
         self.assertEqual(result.institution.subdomain, "alliance")
         self.assertEqual(result.institution.logo_url, "https://signed.example/logo")
         self.assertEqual(result.institution.primary_color, "#7C3AED")
+        self.assertTrue(result.handwritten_evaluation_enabled)
 
 
 class PasswordPolicyTests(unittest.TestCase):

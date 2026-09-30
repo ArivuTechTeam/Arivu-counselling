@@ -52,7 +52,7 @@ def resolve_paper_profile(service, tenant_id: str, subject_id: str) -> dict | No
             return None
         row = (
             service.table("paper_profiles")
-            .select(", ".join(("course_id", "course_level_id", *PROFILE_FIELDS)))
+            .select(", ".join(("course_id", "course_level_id", *PROFILE_FIELDS, "format_config")))
             .eq("course_id", course_id).eq("course_level_id", course_level_id)
             .eq("tenant_id", tenant_id)
             .maybe_single().execute()

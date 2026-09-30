@@ -213,6 +213,7 @@ class InstitutionRow(StrictApiResponse):
     logo_filename: str | None = None
     primary_color: str = "#2E8857"
     feature_flags: dict[str, bool] = Field(default_factory=dict)
+    handwritten_evaluation_enabled: bool = False
 
 
 class PlatformActivityPoint(StrictApiResponse):
@@ -263,6 +264,7 @@ class TenantDetails(StrictApiResponse):
     logo_filename: str | None = None
     primary_color: str = "#2E8857"
     feature_flags: dict[str, bool] = Field(default_factory=dict)
+    handwritten_evaluation_enabled: bool = False
 
 
 class OfferingSubject(StrictApiResponse):
@@ -2382,7 +2384,10 @@ async def platform_overview(
         offerings = institution_offerings_by_tenant(service, tenant_ids)
         branding_rows = (
             service.table("tenants")
-            .select("id, logo_url, logo_filename, primary_color, feature_flags")
+            .select(
+                "id, logo_url, logo_filename, primary_color, feature_flags,"
+                "handwritten_evaluation_enabled"
+            )
             .in_("id", tenant_ids)
             .execute()
             .data
@@ -2403,6 +2408,9 @@ async def platform_overview(
                     "logo_filename": branding.get("logo_filename"),
                     "primary_color": branding.get("primary_color") or "#2E8857",
                     "feature_flags": normalize_feature_flags(branding.get("feature_flags")),
+                    "handwritten_evaluation_enabled": bool(
+                        branding.get("handwritten_evaluation_enabled", False)
+                    ),
                 }
             )
         return {**overview, "institutions_table": enriched_rows}
@@ -2476,6 +2484,7 @@ class TenantUpdate(BaseModel):
     logo_content_type: str | None = None
     logo_filename: str | None = Field(default=None, max_length=255)
     primary_color: str | None = None
+    handwritten_evaluation_enabled: bool | None = None
 
     @field_validator("primary_color")
     @classmethod
@@ -2769,7 +2778,8 @@ def update_institution(
     existing = (
         service.table("tenants")
         .select(
-            "id, subdomain, logo_url, logo_filename, primary_color, feature_flags"
+            "id, subdomain, logo_url, logo_filename, primary_color, feature_flags,"
+            "handwritten_evaluation_enabled"
         )
         .eq("id", tenant_id)
         .maybe_single()
@@ -2856,6 +2866,9 @@ def update_institution(
         "logo_filename": row.get("logo_filename"),
         "primary_color": row.get("primary_color") or "#2E8857",
         "feature_flags": normalize_feature_flags(row.get("feature_flags")),
+        "handwritten_evaluation_enabled": bool(
+            row.get("handwritten_evaluation_enabled", False)
+        ),
     }
 
 

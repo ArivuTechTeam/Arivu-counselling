@@ -135,6 +135,28 @@ class LoggingPayloadTests(unittest.TestCase):
         self.assertNotIn("raw_request", written[0])
         self.assertNotIn("raw_response", written[0])
 
+    def test_evaluation_context_uses_dedicated_job_foreign_key(self) -> None:
+        written: list[dict] = []
+        with patch.object(
+            logs, "get_settings",
+            return_value=SimpleNamespace(app_env="production", usd_to_inr_rate=83),
+        ), patch.object(logs, "_write", side_effect=written.append), patch.object(
+            logs.threading, "Thread", side_effect=lambda target, args, daemon: type(
+                "Immediate", (), {"start": lambda self: target(*args)}
+            )()
+        ):
+            with logs.ai_call_context(
+                "evaluation_stage1", tenant_id="tenant",
+                evaluation_job_id="evaluation-job",
+            ):
+                logs.log_ai_call(
+                    provider="gemini", model="gemini-3.5-flash", request={}, response={},
+                    was_fallback=False, started_at=0, error_message="HTTP 400",
+                )
+        assert written[0]["evaluation_job_id"] == "evaluation-job"
+        assert written[0]["job_id"] is None
+        assert written[0]["document_id"] is None
+
     def test_deepseek_usage_mapping(self) -> None:
         self.assertEqual(
             logs._usage("deepseek", {"usage": {"prompt_tokens": 9, "completion_tokens": 4,
