@@ -77,4 +77,25 @@ describe("HandwrittenEvaluation upload", () => {
       "/dashboard/student/handwritten-evaluation/submissions/submission-1",
     ), { timeout: 1500 });
   });
+
+  it("blocks the upload and explains when the completed-attempt quota is exhausted", async () => {
+    getQuota.mockResolvedValue({
+      paper_id: "paper-1",
+      completed_attempts: 2,
+      attempt_limit: 2,
+      remaining_attempts: 0,
+      active: false,
+    });
+    const user = userEvent.setup();
+    render(<HandwrittenEvaluation />);
+    await user.click(await screen.findByRole("button", { name: /Attempt This Paper/i }));
+
+    const dialog = screen.getByRole("dialog", { name: /Business Law Paper 2/i });
+    expect(await within(dialog).findByText(
+      "You have already used all 2 completed attempts for this paper.",
+    )).toBeTruthy();
+    expect(within(dialog).getByRole("button", { name: "No Attempts Remaining" }).hasAttribute("disabled")).toBe(true);
+    expect(within(dialog).getByLabelText(/Choose answer script/i).hasAttribute("disabled")).toBe(true);
+    expect(submitAnswer).not.toHaveBeenCalled();
+  });
 });

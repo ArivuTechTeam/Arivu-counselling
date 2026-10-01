@@ -106,6 +106,18 @@ function AttemptModal({ paper, onClose }: { paper: EvaluationPaper; onClose: () 
   const [submitted, setSubmitted] = useState(false);
   const [quota, setQuota] = useState<HandwrittenSubmissionQuota | null>(null);
 
+  function quotaBlocksSubmission(value: HandwrittenSubmissionQuota): boolean {
+    const reservedAttempts = value.completed_attempts + (value.active ? 1 : 0);
+    return value.remaining_attempts <= 0 || reservedAttempts >= value.attempt_limit;
+  }
+
+  function quotaMessage(value: HandwrittenSubmissionQuota): string {
+    if (value.remaining_attempts <= 0) {
+      return `You have already used all ${value.attempt_limit} completed attempts for this paper.`;
+    }
+    return "An evaluation is already using your final available attempt. Wait for it to finish before trying again.";
+  }
+
   useEffect(() => {
     let active = true;
     getHandwrittenSubmissionQuota(paper.id)
@@ -127,6 +139,15 @@ function AttemptModal({ paper, onClose }: { paper: EvaluationPaper; onClose: () 
     setBusy(true);
     setError(null);
     try {
+      // Recheck immediately before upload so a stale modal cannot upload a file
+      // that the server will reject after the student's quota changes.
+      const currentQuota = await getHandwrittenSubmissionQuota(paper.id);
+      setQuota(currentQuota);
+      if (quotaBlocksSubmission(currentQuota)) {
+        setError(quotaMessage(currentQuota));
+        setBusy(false);
+        return;
+      }
       const submission = await submitHandwrittenAnswer(paper.id, file, setProgress);
       setSubmitted(true);
       window.setTimeout(() => {
@@ -138,6 +159,8 @@ function AttemptModal({ paper, onClose }: { paper: EvaluationPaper; onClose: () 
       setBusy(false);
     }
   }
+
+  const quotaBlocked = quota ? quotaBlocksSubmission(quota) : false;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-4" role="dialog" aria-modal="true" aria-labelledby="attempt-title">
@@ -169,10 +192,10 @@ function AttemptModal({ paper, onClose }: { paper: EvaluationPaper; onClose: () 
                   ].map((instruction) => <li key={instruction} className="flex gap-2 rounded-lg bg-background p-2.5 leading-5"><Check size={15} className="mt-0.5 shrink-0 text-emerald-600" /><span>{instruction}</span></li>)}
                 </ul>
               </section>
-              {quota ? <div className="flex flex-col justify-between gap-1 rounded-xl border border-primary/20 bg-primary/5 px-4 py-3 text-sm sm:flex-row sm:items-center"><span className="font-semibold">Evaluation attempts</span><span className="text-muted-foreground">{quota.remaining_attempts} of {quota.attempt_limit} completed attempts remaining{quota.active ? " · one evaluation is already in progress" : ""}</span></div> : null}
-              <label className={`flex min-h-36 flex-col items-center justify-center rounded-2xl border-2 border-dashed border-primary/25 bg-primary/5 px-5 text-center transition ${busy ? "cursor-wait opacity-70" : "cursor-pointer hover:border-primary/50"}`}>
+              {quota ? <div className={`flex flex-col justify-between gap-1 rounded-xl border px-4 py-3 text-sm sm:flex-row sm:items-center ${quotaBlocked ? "border-destructive/30 bg-destructive/5 text-destructive" : "border-primary/20 bg-primary/5"}`}><span className="font-semibold">Evaluation attempts</span><span className={quotaBlocked ? "font-semibold" : "text-muted-foreground"}>{quotaBlocked ? quotaMessage(quota) : `${quota.remaining_attempts} of ${quota.attempt_limit} completed attempts remaining${quota.active ? " · one evaluation is already in progress" : ""}`}</span></div> : null}
+              <label className={`flex min-h-36 flex-col items-center justify-center rounded-2xl border-2 border-dashed border-primary/25 bg-primary/5 px-5 text-center transition ${busy || quotaBlocked ? "cursor-not-allowed opacity-55" : "cursor-pointer hover:border-primary/50"}`}>
                 <Upload size={26} className="text-primary" /><span className="mt-3 text-sm font-semibold">{file ? file.name : "Choose answer script"}</span><span className="mt-1 text-xs text-muted-foreground">PDF, PNG or JPEG · maximum 30 MB</span>
-                <input type="file" accept={ACCEPTED} disabled={busy} className="sr-only" onChange={(event) => setFile(event.target.files?.[0] ?? null)} />
+                <input type="file" accept={ACCEPTED} disabled={busy || quotaBlocked} className="sr-only" onChange={(event) => setFile(event.target.files?.[0] ?? null)} />
               </label>
               {progress ? <div className="rounded-xl border border-primary/20 bg-primary/5 p-4" aria-live="polite"><div className="flex items-center justify-between gap-3 text-sm"><span className="font-semibold">{progressCopy[progress.stage]}</span><span className="font-bold text-primary">{progress.percent}%</span></div><div className="mt-3 h-2 overflow-hidden rounded-full bg-primary/10"><div className="h-full rounded-full bg-primary transition-all duration-500" style={{ width: `${progress.percent}%` }} /></div><p className="mt-2 text-xs text-muted-foreground">Keep this page open until the upload is complete.</p></div> : null}
             </>
@@ -180,7 +203,7 @@ function AttemptModal({ paper, onClose }: { paper: EvaluationPaper; onClose: () 
         </div>
         {!submitted ? <div className="flex flex-col-reverse gap-2 border-t p-5 sm:flex-row sm:justify-end">
           <button type="button" onClick={onClose} disabled={busy} className="min-h-11 rounded-lg border px-5 text-sm font-semibold hover:bg-muted">Cancel</button>
-          <button type="button" onClick={() => void submit()} disabled={busy || !file} className="min-h-11 rounded-lg bg-primary px-5 text-sm font-bold text-primary-foreground disabled:opacity-50">{busy ? "Submitting securely…" : "Submit for Evaluation"}</button>
+          <button type="button" onClick={() => void submit()} disabled={busy || !file || quotaBlocked} className="min-h-11 rounded-lg bg-primary px-5 text-sm font-bold text-primary-foreground disabled:cursor-not-allowed disabled:opacity-50">{quotaBlocked ? "No Attempts Remaining" : busy ? "Submitting securely…" : "Submit for Evaluation"}</button>
         </div> : null}
       </div>
     </div>

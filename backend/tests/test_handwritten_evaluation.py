@@ -9,6 +9,7 @@ from uuid import UUID, uuid4
 
 import pytest
 from fastapi import HTTPException, UploadFile
+from postgrest.exceptions import APIError as PostgrestAPIError
 from starlette.datastructures import Headers
 
 from app.api.evaluation_papers import (
@@ -508,6 +509,36 @@ def test_teacher_cannot_retrieve_unassigned_subject_submission_or_report():
             asyncio.run(get_evaluation_report(UUID(submission_b), teacher))
     assert submission_denied.value.status_code == 404
     assert report_denied.value.status_code == 404
+
+
+def test_submission_attempt_limit_conflict_returns_clear_409_message():
+    service = Service({
+        "tenants": [{"id": TENANT, "handwritten_evaluation_enabled": True}],
+    })
+    rpc = Mock()
+    rpc.execute.side_effect = PostgrestAPIError({
+        "code": "PT409",
+        "message": "evaluation_attempt_limit_reached",
+        "details": None,
+        "hint": None,
+    })
+    service.rpc = Mock(return_value=rpc)
+    settings = SimpleNamespace(
+        evaluation_jobs_enabled=True,
+        handwritten_evaluation_attempts_per_paper=2,
+    )
+    with patch("app.api.handwritten_submissions.get_service_client", return_value=service), \
+         patch("app.api.handwritten_submissions.get_settings", return_value=settings), \
+         pytest.raises(HTTPException) as rejected:
+        asyncio.run(create_submission(
+            CreateSubmissionRequest(upload_intent_id=UUID(INTENT)),
+            profile(),
+        ))
+
+    assert rejected.value.status_code == 409
+    assert rejected.value.detail == (
+        "You have already used all 2 completed attempts for this paper."
+    )
 
 
 def test_teacher_lists_only_assigned_paper_submissions_and_opens_answer_sheet():

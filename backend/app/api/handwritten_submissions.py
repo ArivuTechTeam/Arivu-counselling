@@ -5,6 +5,7 @@ from typing import Any
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from postgrest.exceptions import APIError as PostgrestAPIError
 from pydantic import BaseModel, Field
 
 from app.lib.auth import CurrentProfile, get_current_profile
@@ -416,17 +417,30 @@ async def create_submission(
     profile: CurrentProfile = Depends(get_current_profile),
 ) -> SubmissionResponse:
     await _require_student_feature(profile)
-    if not get_settings().evaluation_jobs_enabled:
+    settings = get_settings()
+    if not settings.evaluation_jobs_enabled:
         raise HTTPException(status_code=503, detail="Evaluation processing is currently disabled")
-    result = get_service_client().rpc(
-        "create_limited_handwritten_submission_job",
-        {
-            "p_tenant": profile.tenant_id,
-            "p_student": profile.user_id,
-            "p_intent": str(body.upload_intent_id),
-            "p_limit": get_settings().handwritten_evaluation_attempts_per_paper,
-        },
-    ).execute()
+    try:
+        result = get_service_client().rpc(
+            "create_limited_handwritten_submission_job",
+            {
+                "p_tenant": profile.tenant_id,
+                "p_student": profile.user_id,
+                "p_intent": str(body.upload_intent_id),
+                "p_limit": settings.handwritten_evaluation_attempts_per_paper,
+            },
+        ).execute()
+    except PostgrestAPIError as exc:
+        if exc.message == "evaluation_attempt_limit_reached":
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "You have already used all "
+                    f"{settings.handwritten_evaluation_attempts_per_paper} "
+                    "completed attempts for this paper."
+                ),
+            ) from exc
+        raise
     if not result.data:
         raise HTTPException(status_code=409, detail="Could not create submission")
     payload = result.data[0] if isinstance(result.data, list) else result.data
