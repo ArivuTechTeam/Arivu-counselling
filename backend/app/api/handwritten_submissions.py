@@ -48,6 +48,10 @@ class EvaluationPaperSummary(BaseModel):
     level_name: str | None = None
     paper_type: str = "mock_test"
     created_at: str | None = None
+    completed_attempts: int
+    attempt_limit: int
+    remaining_attempts: int
+    quota_active: bool
 
 
 class EvaluationPaperSummaryList(BaseModel):
@@ -266,6 +270,83 @@ def _paper_metadata(client, paper: dict[str, Any], tenant_id: str) -> dict[str, 
     }
 
 
+def _submission_quotas_by_paper(
+    client,
+    *,
+    tenant_id: str,
+    student_id: str,
+    paper_ids: list[str],
+    attempt_limit: int,
+) -> dict[str, dict[str, int | bool]]:
+    """Load attempt usage for one or more papers with three bounded queries."""
+    quotas = {
+        paper_id: {
+            "completed_attempts": 0,
+            "attempt_limit": attempt_limit,
+            "remaining_attempts": attempt_limit,
+            "quota_active": False,
+        }
+        for paper_id in paper_ids
+    }
+    if not paper_ids:
+        return quotas
+
+    submissions = (
+        client.table("handwritten_submissions")
+        .select("id,evaluation_paper_id")
+        .eq("tenant_id", tenant_id)
+        .eq("student_id", student_id)
+        .in_("evaluation_paper_id", paper_ids)
+        .execute()
+        .data
+        or []
+    )
+    submission_ids = [str(row["id"]) for row in submissions]
+    if not submission_ids:
+        return quotas
+
+    completed_ids = {
+        str(row["submission_id"])
+        for row in (
+            client.table("handwritten_evaluations")
+            .select("submission_id")
+            .eq("tenant_id", tenant_id)
+            .in_("submission_id", submission_ids)
+            .execute()
+            .data
+            or []
+        )
+    }
+    active_ids = {
+        str(row["submission_id"])
+        for row in (
+            client.table("evaluation_jobs")
+            .select("submission_id,status")
+            .eq("tenant_id", tenant_id)
+            .in_("submission_id", submission_ids)
+            .execute()
+            .data
+            or []
+        )
+        if row.get("status") in {"queued", "claimed", "processing"}
+        and str(row["submission_id"]) not in completed_ids
+    }
+
+    for submission in submissions:
+        paper_id = str(submission["evaluation_paper_id"])
+        submission_id = str(submission["id"])
+        quota = quotas[paper_id]
+        if submission_id in completed_ids:
+            quota["completed_attempts"] = int(quota["completed_attempts"]) + 1
+        if submission_id in active_ids:
+            quota["quota_active"] = True
+    for quota in quotas.values():
+        quota["remaining_attempts"] = max(
+            attempt_limit - int(quota["completed_attempts"]), 0
+        )
+    return quotas
+
+
 @router.get("/papers", response_model=EvaluationPaperSummaryList)
 async def list_available_papers(
     profile: CurrentProfile = Depends(get_current_profile),
@@ -284,16 +365,28 @@ async def list_available_papers(
         .execute()
     )
     client = get_service_client()
+    accessible_rows = [
+        paper for paper in (result.data or [])
+        if student_can_access_paper(client, profile, paper)
+    ]
+    settings = get_settings()
+    quotas = _submission_quotas_by_paper(
+        client,
+        tenant_id=profile.tenant_id,
+        student_id=profile.user_id,
+        paper_ids=[str(paper["id"]) for paper in accessible_rows],
+        attempt_limit=settings.handwritten_evaluation_attempts_per_paper,
+    )
     accessible: list[EvaluationPaperSummary] = []
-    for paper in result.data or []:
-        if student_can_access_paper(client, profile, paper):
-            paper["question_paper_url"] = signed_url(
-                paper["question_paper_storage_path"],
-                300,
-                bucket=EVALUATION_PAPERS_BUCKET,
-            )
-            paper.update(_paper_metadata(client, paper, profile.tenant_id))
-            accessible.append(EvaluationPaperSummary.model_validate(paper))
+    for paper in accessible_rows:
+        paper["question_paper_url"] = signed_url(
+            paper["question_paper_storage_path"],
+            300,
+            bucket=EVALUATION_PAPERS_BUCKET,
+        )
+        paper.update(_paper_metadata(client, paper, profile.tenant_id))
+        paper.update(quotas[str(paper["id"])])
+        accessible.append(EvaluationPaperSummary.model_validate(paper))
     return EvaluationPaperSummaryList(papers=accessible)
 
 
@@ -967,26 +1060,20 @@ async def get_submission_quota(
     await _require_student_feature(profile)
     await _load_paper(profile, paper_id)
     client = get_service_client()
-    submissions = (
-        client.table("handwritten_submissions").select("id")
-        .eq("tenant_id", profile.tenant_id).eq("student_id", profile.user_id)
-        .eq("evaluation_paper_id", str(paper_id)).execute().data or []
-    )
-    completed = 0
-    active = False
-    for submission in submissions:
-        evaluation = client.table("handwritten_evaluations").select("id").eq(
-            "submission_id", submission["id"]
-        ).limit(1).execute().data
-        completed += 1 if evaluation else 0
-        job = client.table("evaluation_jobs").select("status").eq(
-            "submission_id", submission["id"]
-        ).limit(1).execute().data
-        active = active or bool(job and job[0].get("status") in {"queued", "claimed", "processing"})
     limit = get_settings().handwritten_evaluation_attempts_per_paper
+    quota = _submission_quotas_by_paper(
+        client,
+        tenant_id=profile.tenant_id,
+        student_id=profile.user_id,
+        paper_ids=[str(paper_id)],
+        attempt_limit=limit,
+    )[str(paper_id)]
     return SubmissionQuotaResponse(
-        paper_id=paper_id, completed_attempts=completed, attempt_limit=limit,
-        remaining_attempts=max(limit - completed, 0), active=active,
+        paper_id=paper_id,
+        completed_attempts=int(quota["completed_attempts"]),
+        attempt_limit=limit,
+        remaining_attempts=int(quota["remaining_attempts"]),
+        active=bool(quota["quota_active"]),
     )
 
 

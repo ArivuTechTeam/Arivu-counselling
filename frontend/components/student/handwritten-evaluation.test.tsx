@@ -18,22 +18,28 @@ const listPapers = vi.mocked(api.listStudentEvaluationPapers);
 const getQuota = vi.mocked(api.getHandwrittenSubmissionQuota);
 const submitAnswer = vi.mocked(api.submitHandwrittenAnswer);
 
+const PAPER = {
+  id: "paper-1",
+  course_level_id: "level-1",
+  subject_id: "subject-1",
+  title: "Business Law Paper 2",
+  total_marks: 100,
+  subject_name: "Business Laws",
+  course_name: "CA",
+  level_name: "Foundation",
+  completed_attempts: 0,
+  attempt_limit: 5,
+  remaining_attempts: 5,
+  quota_active: false,
+};
+
 beforeEach(() => {
-  listPapers.mockResolvedValue([{
-    id: "paper-1",
-    course_level_id: "level-1",
-    subject_id: "subject-1",
-    title: "Business Law Paper 2",
-    total_marks: 100,
-    subject_name: "Business Laws",
-    course_name: "CA",
-    level_name: "Foundation",
-  }]);
+  listPapers.mockResolvedValue([PAPER]);
   getQuota.mockResolvedValue({
     paper_id: "paper-1",
     completed_attempts: 0,
-    attempt_limit: 2,
-    remaining_attempts: 2,
+    attempt_limit: 5,
+    remaining_attempts: 5,
     active: false,
   });
   submitAnswer.mockImplementation(async (_paperId, _file, onProgress) => {
@@ -66,7 +72,7 @@ describe("HandwrittenEvaluation upload", () => {
     expect(within(dialog).getByText("Before you upload")).toBeTruthy();
     expect(within(dialog).getByText(/full left margin visible/)).toBeTruthy();
     expect(within(dialog).getByText(/combine them into one file/)).toBeTruthy();
-    expect(await within(dialog).findByText(/2 of 2 completed attempts remaining/)).toBeTruthy();
+    expect(within(dialog).getByText(/5 of 5 completed attempts remaining/)).toBeTruthy();
 
     const file = new File(["answer"], "answers.pdf", { type: "application/pdf" });
     await user.upload(within(dialog).getByLabelText(/Choose answer script/i), file);
@@ -79,6 +85,12 @@ describe("HandwrittenEvaluation upload", () => {
   });
 
   it("blocks the upload and explains when the completed-attempt quota is exhausted", async () => {
+    listPapers.mockResolvedValue([{
+      ...PAPER,
+      completed_attempts: 2,
+      attempt_limit: 2,
+      remaining_attempts: 0,
+    }]);
     getQuota.mockResolvedValue({
       paper_id: "paper-1",
       completed_attempts: 2,
@@ -97,5 +109,16 @@ describe("HandwrittenEvaluation upload", () => {
     expect(within(dialog).getByRole("button", { name: "No Attempts Remaining" }).hasAttribute("disabled")).toBe(true);
     expect(within(dialog).getByLabelText(/Choose answer script/i).hasAttribute("disabled")).toBe(true);
     expect(submitAnswer).not.toHaveBeenCalled();
+  });
+
+  it("renders the preloaded attempt count immediately while the refresh is pending", async () => {
+    getQuota.mockReturnValue(new Promise(() => undefined));
+    const user = userEvent.setup();
+    render(<HandwrittenEvaluation />);
+    await user.click(await screen.findByRole("button", { name: /Attempt This Paper/i }));
+
+    const dialog = screen.getByRole("dialog", { name: /Business Law Paper 2/i });
+    expect(within(dialog).getByText("5 of 5 completed attempts remaining")).toBeTruthy();
+    expect(within(dialog).queryByText("Checking attempt availability…")).toBeNull();
   });
 });

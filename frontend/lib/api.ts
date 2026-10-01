@@ -769,6 +769,10 @@ export type EvaluationPaper = {
   suggested_answer_text?: string | null;
   structured_qa?: EvaluationPaperRubricQuestion[];
   submission_count?: number;
+  completed_attempts?: number;
+  attempt_limit?: number;
+  remaining_attempts?: number;
+  quota_active?: boolean;
 };
 
 export type EvaluationPaperRubricCriterion = {

@@ -29,6 +29,8 @@ from app.api.handwritten_submissions import (
     get_evaluation_report,
     get_stage2_artifacts,
     get_submission,
+    get_submission_quota,
+    list_available_papers,
     list_paper_submissions,
     list_submissions,
     mark_submission_failed,
@@ -539,6 +541,55 @@ def test_submission_attempt_limit_conflict_returns_clear_409_message():
     assert rejected.value.detail == (
         "You have already used all 2 completed attempts for this paper."
     )
+
+
+def test_student_paper_list_preloads_current_attempt_quota():
+    source = tables()
+    paper = source["evaluation_papers"][0]
+    course_id = str(uuid4())
+    source["subjects"] = [{
+        "id": paper["subject_id"], "tenant_id": TENANT,
+        "course_id": course_id, "course_level_id": paper["course_level_id"],
+        "name": "Business Laws",
+    }]
+    source["course_levels"] = [{
+        "id": paper["course_level_id"], "tenant_id": TENANT,
+        "course_id": course_id, "name": "Foundation",
+    }]
+    source["courses"] = [{"id": course_id, "tenant_id": TENANT, "name": "CA"}]
+    source["enrollments"] = [{
+        "id": str(uuid4()), "tenant_id": TENANT, "profile_id": STUDENT,
+        "course_id": course_id, "course_level_id": paper["course_level_id"],
+    }]
+    submission_ids = [str(uuid4()) for _ in range(3)]
+    source["handwritten_submissions"] = [{
+        "id": submission_id, "tenant_id": TENANT, "student_id": STUDENT,
+        "evaluation_paper_id": PAPER,
+    } for submission_id in submission_ids]
+    source["handwritten_evaluations"] = [{
+        "id": str(uuid4()), "tenant_id": TENANT, "submission_id": submission_id,
+    } for submission_id in submission_ids[:2]]
+    source["evaluation_jobs"] = [{
+        "id": str(uuid4()), "tenant_id": TENANT,
+        "submission_id": submission_ids[2], "status": "failed",
+    }]
+    service = Service(source)
+    settings = SimpleNamespace(handwritten_evaluation_attempts_per_paper=5)
+
+    with patch("app.api.handwritten_submissions.get_service_client", return_value=service), \
+         patch("app.api.handwritten_submissions.get_settings", return_value=settings), \
+         patch("app.api.handwritten_submissions.signed_url", return_value="https://signed.example/paper"):
+        listed = asyncio.run(list_available_papers(profile())).papers[0]
+        quota = asyncio.run(get_submission_quota(UUID(PAPER), profile()))
+
+    assert listed.completed_attempts == 2
+    assert listed.attempt_limit == 5
+    assert listed.remaining_attempts == 3
+    assert listed.quota_active is False
+    assert quota.completed_attempts == 2
+    assert quota.attempt_limit == 5
+    assert quota.remaining_attempts == 3
+    assert quota.active is False
 
 
 def test_teacher_lists_only_assigned_paper_submissions_and_opens_answer_sheet():

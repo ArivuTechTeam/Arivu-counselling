@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   BookOpen,
@@ -29,6 +29,21 @@ import { ErrorCard } from "@/components/ui/error-card";
 import { SkeletonCards } from "@/components/ui/skeleton";
 
 const ACCEPTED = "application/pdf,image/png,image/jpeg";
+
+function paperQuota(paper: EvaluationPaper): HandwrittenSubmissionQuota | null {
+  if (
+    typeof paper.completed_attempts !== "number"
+    || typeof paper.attempt_limit !== "number"
+    || typeof paper.remaining_attempts !== "number"
+  ) return null;
+  return {
+    paper_id: paper.id,
+    completed_attempts: paper.completed_attempts,
+    attempt_limit: paper.attempt_limit,
+    remaining_attempts: paper.remaining_attempts,
+    active: paper.quota_active ?? false,
+  };
+}
 
 function safeFilename(value: string): string {
   return value.replace(/[^a-z0-9]+/gi, "-").replace(/^-|-$/g, "").toLowerCase() || "question-paper";
@@ -104,7 +119,9 @@ function AttemptModal({ paper, onClose }: { paper: EvaluationPaper; onClose: () 
   const [error, setError] = useState<string | null>(null);
   const [progress, setProgress] = useState<HandwrittenUploadProgress | null>(null);
   const [submitted, setSubmitted] = useState(false);
-  const [quota, setQuota] = useState<HandwrittenSubmissionQuota | null>(null);
+  const [quota, setQuota] = useState<HandwrittenSubmissionQuota | null>(() => paperQuota(paper));
+  const [quotaLoading, setQuotaLoading] = useState(() => paperQuota(paper) === null);
+  const [quotaError, setQuotaError] = useState<string | null>(null);
 
   function quotaBlocksSubmission(value: HandwrittenSubmissionQuota): boolean {
     const reservedAttempts = value.completed_attempts + (value.active ? 1 : 0);
@@ -118,13 +135,26 @@ function AttemptModal({ paper, onClose }: { paper: EvaluationPaper; onClose: () 
     return "An evaluation is already using your final available attempt. Wait for it to finish before trying again.";
   }
 
-  useEffect(() => {
-    let active = true;
-    getHandwrittenSubmissionQuota(paper.id)
-      .then((value) => { if (active) setQuota(value); })
-      .catch(() => undefined);
-    return () => { active = false; };
+  const refreshQuota = useCallback(async (signal?: { active: boolean }) => {
+    setQuotaLoading(true);
+    setQuotaError(null);
+    try {
+      const value = await getHandwrittenSubmissionQuota(paper.id);
+      if (!signal || signal.active) setQuota(value);
+    } catch {
+      if (!signal || signal.active) {
+        setQuotaError("Attempt availability could not be refreshed. Please try again.");
+      }
+    } finally {
+      if (!signal || signal.active) setQuotaLoading(false);
+    }
   }, [paper.id]);
+
+  useEffect(() => {
+    const signal = { active: true };
+    void refreshQuota(signal);
+    return () => { signal.active = false; };
+  }, [refreshQuota]);
 
   const progressCopy: Record<HandwrittenUploadProgress["stage"], string> = {
     authorizing: "Preparing a secure upload…",
@@ -160,7 +190,7 @@ function AttemptModal({ paper, onClose }: { paper: EvaluationPaper; onClose: () 
     }
   }
 
-  const quotaBlocked = quota ? quotaBlocksSubmission(quota) : false;
+  const quotaBlocked = quota ? quotaBlocksSubmission(quota) : true;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-4" role="dialog" aria-modal="true" aria-labelledby="attempt-title">
@@ -192,7 +222,8 @@ function AttemptModal({ paper, onClose }: { paper: EvaluationPaper; onClose: () 
                   ].map((instruction) => <li key={instruction} className="flex gap-2 rounded-lg bg-background p-2.5 leading-5"><Check size={15} className="mt-0.5 shrink-0 text-emerald-600" /><span>{instruction}</span></li>)}
                 </ul>
               </section>
-              {quota ? <div className={`flex flex-col justify-between gap-1 rounded-xl border px-4 py-3 text-sm sm:flex-row sm:items-center ${quotaBlocked ? "border-destructive/30 bg-destructive/5 text-destructive" : "border-primary/20 bg-primary/5"}`}><span className="font-semibold">Evaluation attempts</span><span className={quotaBlocked ? "font-semibold" : "text-muted-foreground"}>{quotaBlocked ? quotaMessage(quota) : `${quota.remaining_attempts} of ${quota.attempt_limit} completed attempts remaining${quota.active ? " · one evaluation is already in progress" : ""}`}</span></div> : null}
+              {quota ? <div className={`flex flex-col justify-between gap-1 rounded-xl border px-4 py-3 text-sm sm:flex-row sm:items-center ${quotaBlocked ? "border-destructive/30 bg-destructive/5 text-destructive" : "border-primary/20 bg-primary/5"}`}><span className="font-semibold">Evaluation attempts</span><span className={quotaBlocked ? "font-semibold" : "text-muted-foreground"}>{quotaBlocked ? quotaMessage(quota) : `${quota.remaining_attempts} of ${quota.attempt_limit} completed attempts remaining${quota.active ? " · one evaluation is already in progress" : ""}`}</span></div> : quotaLoading ? <div className="flex items-center justify-between rounded-xl border border-primary/20 bg-primary/5 px-4 py-3 text-sm" aria-live="polite"><span className="font-semibold">Evaluation attempts</span><span className="text-muted-foreground">Checking attempt availability…</span></div> : <div role="alert" className="flex flex-col justify-between gap-2 rounded-xl border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive sm:flex-row sm:items-center"><span>{quotaError ?? "Attempt availability is unavailable."}</span><button type="button" onClick={() => void refreshQuota()} className="font-bold underline underline-offset-2">Try again</button></div>}
+              {quota && quotaError ? <p role="status" className="text-xs text-amber-700 dark:text-amber-300">{quotaError} The last known attempt count is shown.</p> : null}
               <label className={`flex min-h-36 flex-col items-center justify-center rounded-2xl border-2 border-dashed border-primary/25 bg-primary/5 px-5 text-center transition ${busy || quotaBlocked ? "cursor-not-allowed opacity-55" : "cursor-pointer hover:border-primary/50"}`}>
                 <Upload size={26} className="text-primary" /><span className="mt-3 text-sm font-semibold">{file ? file.name : "Choose answer script"}</span><span className="mt-1 text-xs text-muted-foreground">PDF, PNG or JPEG · maximum 30 MB</span>
                 <input type="file" accept={ACCEPTED} disabled={busy || quotaBlocked} className="sr-only" onChange={(event) => setFile(event.target.files?.[0] ?? null)} />
@@ -203,7 +234,7 @@ function AttemptModal({ paper, onClose }: { paper: EvaluationPaper; onClose: () 
         </div>
         {!submitted ? <div className="flex flex-col-reverse gap-2 border-t p-5 sm:flex-row sm:justify-end">
           <button type="button" onClick={onClose} disabled={busy} className="min-h-11 rounded-lg border px-5 text-sm font-semibold hover:bg-muted">Cancel</button>
-          <button type="button" onClick={() => void submit()} disabled={busy || !file || quotaBlocked} className="min-h-11 rounded-lg bg-primary px-5 text-sm font-bold text-primary-foreground disabled:cursor-not-allowed disabled:opacity-50">{quotaBlocked ? "No Attempts Remaining" : busy ? "Submitting securely…" : "Submit for Evaluation"}</button>
+          <button type="button" onClick={() => void submit()} disabled={busy || !file || quotaBlocked} className="min-h-11 rounded-lg bg-primary px-5 text-sm font-bold text-primary-foreground disabled:cursor-not-allowed disabled:opacity-50">{!quota ? quotaLoading ? "Checking Attempts…" : "Attempts Unavailable" : quotaBlocked ? "No Attempts Remaining" : busy ? "Submitting securely…" : "Submit for Evaluation"}</button>
         </div> : null}
       </div>
     </div>
