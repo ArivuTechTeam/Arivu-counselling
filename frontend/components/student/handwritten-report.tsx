@@ -5,15 +5,23 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowLeft,
   ChevronRight,
+  Clock3,
   Download,
   FileText,
   LayoutDashboard,
+  RefreshCw,
+  Sparkles,
 } from "lucide-react";
 
 import { useDashboardIdentity } from "@/components/shared/dashboard-identity-context";
 import { ErrorCard } from "@/components/ui/error-card";
 import { Skeleton } from "@/components/ui/skeleton";
-import { type HandwrittenEvaluationReport, getHandwrittenEvaluationReport } from "@/lib/api";
+import {
+  type EvaluationSubmission,
+  type HandwrittenEvaluationReport,
+  getEvaluationSubmission,
+  getHandwrittenEvaluationReport,
+} from "@/lib/api";
 import { parseAnswerTranscript } from "@/lib/answer-transcript";
 import {
   type QuestionGuidance,
@@ -79,9 +87,55 @@ function QuestionDetail({ item }: { item: QuestionGuidance }) {
   );
 }
 
-export function HandwrittenReport({ submissionId }: { submissionId: string }) {
+const WAITING_TIPS = [
+  "Keep your question paper nearby so you can review each answer with the feedback.",
+  "The evaluator reads your script, maps answers to questions, and then applies the fixed rubric.",
+  "You may leave this page and return from My Submissions at any time.",
+];
+
+function waitingMessage(submission: EvaluationSubmission): string {
+  const status = `${submission.status} ${submission.job_status ?? ""}`.toLowerCase();
+  if (status.includes("stage2") || status.includes("scor")) return "Applying the marking rubric to each answer…";
+  if (status.includes("stage1") || status.includes("extract") || status.includes("transcrib")) return "Reading and organizing your handwritten answers…";
+  if (status.includes("process") || status.includes("claim")) return "Your answer sheet is being prepared for evaluation…";
+  return "Your submission is safely queued for evaluation…";
+}
+
+function EvaluationWaitingScreen({ submission, backHref }: { submission: EvaluationSubmission; backHref: string }) {
+  const [now, setNow] = useState(() => Date.now());
+  const [tipIndex, setTipIndex] = useState(0);
+  useEffect(() => {
+    const clock = window.setInterval(() => setNow(Date.now()), 1000);
+    const tips = window.setInterval(() => setTipIndex((current) => (current + 1) % WAITING_TIPS.length), 6000);
+    return () => { window.clearInterval(clock); window.clearInterval(tips); };
+  }, []);
+  const started = new Date(submission.submitted_at).getTime();
+  const elapsedSeconds = Number.isFinite(started) ? Math.max(0, Math.floor((now - started) / 1000)) : 0;
+  const elapsed = `${Math.floor(elapsedSeconds / 60)}:${String(elapsedSeconds % 60).padStart(2, "0")}`;
+  return (
+    <div className="relative flex min-h-[calc(100vh-8.5rem)] items-center justify-center overflow-hidden rounded-3xl bg-gradient-to-br from-primary via-primary/95 to-primary/75 p-5 text-primary-foreground shadow-xl sm:p-8">
+      <div className="absolute -left-24 -top-24 h-72 w-72 rounded-full bg-white/[0.06]" /><div className="absolute -bottom-32 -right-20 h-96 w-96 rounded-full bg-white/[0.06]" />
+      <div className="relative w-full max-w-2xl rounded-3xl border border-white/20 bg-white/[0.10] p-6 text-center shadow-2xl backdrop-blur sm:p-10">
+        <span className="mx-auto grid h-20 w-20 place-items-center rounded-full border border-white/25 bg-white/10"><RefreshCw size={35} className="animate-spin" /></span>
+        <p className="mt-6 text-xs font-extrabold uppercase tracking-[0.18em] text-white/70">AI examiner activated</p>
+        <h1 className="mt-2 text-3xl font-black tracking-tight">AI Evaluation In Progress</h1>
+        <p className="mx-auto mt-3 max-w-lg text-sm leading-6 text-white/80">{waitingMessage(submission)}</p>
+        <div className="mx-auto mt-7 grid max-w-md grid-cols-2 gap-3">
+          <div className="rounded-2xl border border-white/15 bg-black/10 p-4"><Clock3 size={18} className="mx-auto text-white/75" /><p className="mt-2 text-[11px] font-bold uppercase tracking-wider text-white/60">Elapsed</p><p className="mt-1 text-xl font-black tabular-nums">{elapsed}</p></div>
+          <div className="rounded-2xl border border-white/15 bg-black/10 p-4"><FileText size={18} className="mx-auto text-white/75" /><p className="mt-2 text-[11px] font-bold uppercase tracking-wider text-white/60">Paper</p><p className="mt-1 truncate text-sm font-bold">{submission.paper_title || "Answer script"}</p></div>
+        </div>
+        <div className="mx-auto mt-5 max-w-xl rounded-2xl border border-white/15 bg-black/10 p-4 text-left" aria-live="polite"><div className="flex items-start gap-3"><Sparkles size={18} className="mt-0.5 shrink-0" /><div><p className="text-xs font-bold uppercase tracking-wider text-white/60">While you wait</p><p className="mt-1 text-sm leading-6 text-white/85">{WAITING_TIPS[tipIndex]}</p></div></div></div>
+        <p className="mt-5 text-xs text-white/65">This page refreshes automatically. Your report will open as soon as evaluation finishes.</p>
+        <Link href={backHref} className="mt-6 inline-flex min-h-11 items-center gap-2 rounded-xl border border-white/30 bg-white/10 px-5 text-sm font-bold transition hover:bg-white/20"><ArrowLeft size={16} /> Back to My Submissions</Link>
+      </div>
+    </div>
+  );
+}
+
+export function HandwrittenReport({ submissionId, backHref = "/dashboard/student/handwritten-evaluation/submissions" }: { submissionId: string; backHref?: string }) {
   const { institution, email } = useDashboardIdentity();
   const [report, setReport] = useState<HandwrittenEvaluationReport | null>(null);
+  const [submission, setSubmission] = useState<EvaluationSubmission | null>(null);
   const [activeSection, setActiveSection] = useState("overview");
   const [loading, setLoading] = useState(true);
   const [downloading, setDownloading] = useState(false);
@@ -92,11 +146,36 @@ export function HandwrittenReport({ submissionId }: { submissionId: string }) {
 
   useEffect(() => {
     let active = true;
-    getHandwrittenEvaluationReport(submissionId)
-      .then((value) => { if (active) setReport(value); })
-      .catch((reason) => { if (active) setError(reason instanceof Error ? reason.message : "Couldn't load the evaluation report."); })
-      .finally(() => { if (active) setLoading(false); });
-    return () => { active = false; };
+    let timer: number | undefined;
+    async function poll() {
+      try {
+        const current = await getEvaluationSubmission(submissionId);
+        if (!active) return;
+        setSubmission(current);
+        const terminalFailure = current.status === "failed"
+          || current.status === "blocked_rubric_failed"
+          || current.job_status === "failed";
+        if (terminalFailure) {
+          setError(current.error_message || "Evaluation could not be completed. Please return to My Submissions to retry.");
+          setLoading(false);
+          return;
+        }
+        if (current.report_available) {
+          const value = await getHandwrittenEvaluationReport(submissionId);
+          if (active) { setReport(value); setError(null); setLoading(false); }
+          return;
+        }
+        setLoading(false);
+        timer = window.setTimeout(() => void poll(), 5000);
+      } catch (reason) {
+        if (active) {
+          setError(reason instanceof Error ? reason.message : "Couldn't load the evaluation report.");
+          setLoading(false);
+        }
+      }
+    }
+    void poll();
+    return () => { active = false; if (timer !== undefined) window.clearTimeout(timer); };
   }, [submissionId]);
 
   const view = useMemo(() => report ? buildHandwrittenReportView(report) : null, [report]);
@@ -134,6 +213,7 @@ export function HandwrittenReport({ submissionId }: { submissionId: string }) {
 
   if (loading) return <div className="mx-auto max-w-[1440px] space-y-4"><Skeleton className="h-20 rounded-2xl" /><div className="grid gap-5 lg:grid-cols-[235px_minmax(0,1fr)]"><Skeleton className="h-96 rounded-2xl" /><Skeleton className="h-[520px] rounded-2xl" /></div></div>;
   if (error && !report) return <div className="mx-auto max-w-2xl"><ErrorCard title="We couldn't open this report" message={error} onRetry={() => window.location.reload()} /></div>;
+  if (submission && !report) return <EvaluationWaitingScreen submission={submission} backHref={backHref} />;
   if (!report || !view) return null;
   const evaluatedDate = new Date(report.evaluation_date).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" });
 
@@ -141,7 +221,7 @@ export function HandwrittenReport({ submissionId }: { submissionId: string }) {
     <div className="min-h-full bg-muted/30">
       <header className="sticky top-0 z-20 flex min-h-[68px] flex-col gap-3 border-b bg-card/95 px-4 py-3 shadow-sm backdrop-blur sm:flex-row sm:items-center sm:justify-between sm:px-6">
         <div className="flex min-w-0 items-center gap-3.5">
-          <Link href="/dashboard/student/handwritten-evaluation/submissions" className="grid h-11 w-11 shrink-0 place-items-center rounded-[10px] border bg-muted/40 hover:bg-muted" aria-label="Back to submissions"><ArrowLeft size={18} /></Link>
+          <Link href={backHref} className="grid h-11 w-11 shrink-0 place-items-center rounded-[10px] border bg-muted/40 hover:bg-muted" aria-label="Back to submissions"><ArrowLeft size={18} /></Link>
           <div className="min-w-0"><h1 className="text-base font-extrabold">Evaluation Report</h1><p className="mt-0.5 truncate text-xs text-muted-foreground">{report.paper.title}</p></div>
         </div>
         <div className="flex flex-wrap justify-end gap-2.5">

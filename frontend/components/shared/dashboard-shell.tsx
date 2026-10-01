@@ -553,7 +553,7 @@ export function DashboardShell({
 }) {
   const { features, handwrittenEvaluationEnabled } = useDashboardIdentity();
   const pathname = usePathname();
-  const isHandwrittenReport = /^\/dashboard\/student\/handwritten-evaluation\/submissions\/[^/]+$/.test(pathname);
+  const isHandwrittenReport = /^\/dashboard\/(?:student|teacher)\/handwritten-evaluation\/submissions\/[^/]+$/.test(pathname);
   const router = useRouter();
   const [menuOpen, setMenuOpen] = useState(false);
   const [navOpen, setNavOpen] = useState(false);

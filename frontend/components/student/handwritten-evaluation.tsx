@@ -6,16 +6,22 @@ import { useRouter } from "next/navigation";
 import {
   BookOpen,
   CalendarDays,
+  Check,
+  CheckCircle2,
   Download,
   Eye,
   FileText,
   Search,
+  ShieldCheck,
   Upload,
   X,
 } from "lucide-react";
 
 import {
   type EvaluationPaper,
+  type HandwrittenSubmissionQuota,
+  type HandwrittenUploadProgress,
+  getHandwrittenSubmissionQuota,
   listStudentEvaluationPapers,
   submitHandwrittenAnswer,
 } from "@/lib/api";
@@ -96,39 +102,86 @@ function AttemptModal({ paper, onClose }: { paper: EvaluationPaper; onClose: () 
   const [file, setFile] = useState<File | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [progress, setProgress] = useState<HandwrittenUploadProgress | null>(null);
+  const [submitted, setSubmitted] = useState(false);
+  const [quota, setQuota] = useState<HandwrittenSubmissionQuota | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    getHandwrittenSubmissionQuota(paper.id)
+      .then((value) => { if (active) setQuota(value); })
+      .catch(() => undefined);
+    return () => { active = false; };
+  }, [paper.id]);
+
+  const progressCopy: Record<HandwrittenUploadProgress["stage"], string> = {
+    authorizing: "Preparing a secure upload…",
+    uploading: "Uploading your answer sheet…",
+    verifying: "Checking that every page arrived safely…",
+    queuing: "Starting your AI evaluation…",
+    complete: "Submission received. Opening the evaluation tracker…",
+  };
 
   async function submit() {
     if (!file) { setError("Choose your completed answer script first."); return; }
     setBusy(true);
     setError(null);
     try {
-      await submitHandwrittenAnswer(paper.id, file);
-      router.push("/dashboard/student/handwritten-evaluation/submissions");
+      const submission = await submitHandwrittenAnswer(paper.id, file, setProgress);
+      setSubmitted(true);
+      window.setTimeout(() => {
+        router.push(`/dashboard/student/handwritten-evaluation/submissions/${submission.id}`);
+      }, 700);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "The answer script could not be submitted.");
+      setProgress(null);
       setBusy(false);
     }
   }
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-4" role="dialog" aria-modal="true" aria-labelledby="attempt-title">
-      <div className="w-full max-w-xl overflow-hidden rounded-2xl border bg-card shadow-2xl">
+      <div className="flex max-h-[94vh] w-full max-w-2xl flex-col overflow-hidden rounded-2xl border bg-card shadow-2xl">
         <div className="flex items-start justify-between gap-4 border-b p-5">
-          <div><p className="text-xs font-bold uppercase tracking-[0.16em] text-primary">Attempt paper</p><h2 id="attempt-title" className="mt-1 text-xl font-bold">{paper.title}</h2><p className="mt-1 text-sm text-muted-foreground">Upload one PDF, PNG, or JPEG containing your completed handwritten answers.</p></div>
+          <div><p className="text-xs font-bold uppercase tracking-[0.16em] text-primary">Upload answer sheet</p><h2 id="attempt-title" className="mt-1 text-xl font-bold">{paper.title}</h2><p className="mt-1 text-sm text-muted-foreground">Review the checks below before submitting your handwritten work.</p></div>
           <button type="button" onClick={onClose} disabled={busy} className="grid h-10 w-10 shrink-0 place-items-center rounded-full border hover:bg-muted" aria-label="Close upload dialog"><X size={18} /></button>
         </div>
-        <div className="space-y-4 p-5">
+        <div className="min-h-0 space-y-4 overflow-y-auto p-5">
           {error ? <p role="alert" className="rounded-lg border border-destructive/25 bg-destructive/5 p-3 text-sm text-destructive">{error}</p> : null}
-          <label className="flex min-h-40 cursor-pointer flex-col items-center justify-center rounded-2xl border-2 border-dashed border-primary/25 bg-primary/5 px-5 text-center transition hover:border-primary/50">
-            <Upload size={26} className="text-primary" /><span className="mt-3 text-sm font-semibold">{file ? file.name : "Choose answer script"}</span><span className="mt-1 text-xs text-muted-foreground">PDF, PNG or JPEG · maximum 30 MB</span>
-            <input type="file" accept={ACCEPTED} className="sr-only" onChange={(event) => setFile(event.target.files?.[0] ?? null)} />
-          </label>
-          <div className="rounded-xl border bg-muted/30 p-3 text-xs leading-5 text-muted-foreground">Keep all pages upright and in order. Evaluation progress appears automatically under My Submissions.</div>
+          {submitted ? (
+            <div className="flex min-h-72 flex-col items-center justify-center rounded-2xl border border-emerald-200 bg-emerald-50 p-8 text-center dark:border-emerald-900 dark:bg-emerald-950/25">
+              <span className="grid h-14 w-14 place-items-center rounded-full bg-emerald-600 text-white"><CheckCircle2 size={29} /></span>
+              <h3 className="mt-4 text-lg font-bold">Submitted successfully</h3>
+              <p className="mt-2 max-w-md text-sm leading-6 text-muted-foreground">Upload complete — evaluation queued. You can leave the tracker later and return from My Submissions.</p>
+            </div>
+          ) : (
+            <>
+              <section className="rounded-2xl border bg-muted/25 p-4">
+                <div className="flex items-center gap-2"><ShieldCheck size={18} className="text-primary" /><h3 className="font-bold">Before you upload</h3></div>
+                <p className="mt-1 text-xs text-muted-foreground">Check every page so the evaluator can match each answer correctly.</p>
+                <ul className="mt-3 grid gap-2 text-sm sm:grid-cols-2">
+                  {[
+                    "Keep every question number and the full left margin visible.",
+                    "Write your name and label answers clearly, such as Q1 or Q2(a).",
+                    "Keep pages upright, well lit, readable, and free from blur.",
+                    "Upload one PDF, PNG, or JPEG no larger than 30 MB.",
+                    "For multiple pages, combine them into one file in the correct order.",
+                  ].map((instruction) => <li key={instruction} className="flex gap-2 rounded-lg bg-background p-2.5 leading-5"><Check size={15} className="mt-0.5 shrink-0 text-emerald-600" /><span>{instruction}</span></li>)}
+                </ul>
+              </section>
+              {quota ? <div className="flex flex-col justify-between gap-1 rounded-xl border border-primary/20 bg-primary/5 px-4 py-3 text-sm sm:flex-row sm:items-center"><span className="font-semibold">Evaluation attempts</span><span className="text-muted-foreground">{quota.remaining_attempts} of {quota.attempt_limit} completed attempts remaining{quota.active ? " · one evaluation is already in progress" : ""}</span></div> : null}
+              <label className={`flex min-h-36 flex-col items-center justify-center rounded-2xl border-2 border-dashed border-primary/25 bg-primary/5 px-5 text-center transition ${busy ? "cursor-wait opacity-70" : "cursor-pointer hover:border-primary/50"}`}>
+                <Upload size={26} className="text-primary" /><span className="mt-3 text-sm font-semibold">{file ? file.name : "Choose answer script"}</span><span className="mt-1 text-xs text-muted-foreground">PDF, PNG or JPEG · maximum 30 MB</span>
+                <input type="file" accept={ACCEPTED} disabled={busy} className="sr-only" onChange={(event) => setFile(event.target.files?.[0] ?? null)} />
+              </label>
+              {progress ? <div className="rounded-xl border border-primary/20 bg-primary/5 p-4" aria-live="polite"><div className="flex items-center justify-between gap-3 text-sm"><span className="font-semibold">{progressCopy[progress.stage]}</span><span className="font-bold text-primary">{progress.percent}%</span></div><div className="mt-3 h-2 overflow-hidden rounded-full bg-primary/10"><div className="h-full rounded-full bg-primary transition-all duration-500" style={{ width: `${progress.percent}%` }} /></div><p className="mt-2 text-xs text-muted-foreground">Keep this page open until the upload is complete.</p></div> : null}
+            </>
+          )}
         </div>
-        <div className="flex flex-col-reverse gap-2 border-t p-5 sm:flex-row sm:justify-end">
+        {!submitted ? <div className="flex flex-col-reverse gap-2 border-t p-5 sm:flex-row sm:justify-end">
           <button type="button" onClick={onClose} disabled={busy} className="min-h-11 rounded-lg border px-5 text-sm font-semibold hover:bg-muted">Cancel</button>
-          <button type="button" onClick={() => void submit()} disabled={busy || !file} className="min-h-11 rounded-lg bg-primary px-5 text-sm font-bold text-primary-foreground disabled:opacity-50">{busy ? "Uploading and submitting…" : "Submit for Evaluation"}</button>
-        </div>
+          <button type="button" onClick={() => void submit()} disabled={busy || !file} className="min-h-11 rounded-lg bg-primary px-5 text-sm font-bold text-primary-foreground disabled:opacity-50">{busy ? "Submitting securely…" : "Submit for Evaluation"}</button>
+        </div> : null}
       </div>
     </div>
   );

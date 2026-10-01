@@ -103,6 +103,20 @@ class SubmissionResponseList(BaseModel):
     submissions: list[SubmissionResponse]
 
 
+class FacultySubmissionResponse(SubmissionResponse):
+    student_id: UUID
+    student_name: str | None = None
+    student_email: str | None = None
+
+
+class FacultySubmissionResponseList(BaseModel):
+    submissions: list[FacultySubmissionResponse]
+
+
+class AnswerScriptUrlResponse(BaseModel):
+    url: str
+
+
 class EvaluationReportPaper(BaseModel):
     id: UUID | None
     title: str
@@ -489,6 +503,42 @@ def _submission_response(client, row: dict[str, Any]) -> SubmissionResponse:
     )
 
 
+def _student_identity(
+    client, *, student_id: str, tenant_id: str
+) -> tuple[str | None, str | None]:
+    student_profile = _first(
+        client,
+        "profiles",
+        "id,full_name",
+        id=student_id,
+        tenant_id=tenant_id,
+    )
+    student_email: str | None = None
+    try:
+        auth_response = client.auth.admin.get_user_by_id(student_id)
+        auth_user = getattr(auth_response, "user", auth_response)
+        student_email = getattr(auth_user, "email", None)
+    except Exception:
+        # A temporary Auth directory problem must not hide the submission list.
+        pass
+    return (student_profile or {}).get("full_name"), student_email
+
+
+def _faculty_submission_response(client, row: dict[str, Any]) -> FacultySubmissionResponse:
+    submission = _submission_response(client, row)
+    student_name, student_email = _student_identity(
+        client,
+        student_id=str(row["student_id"]),
+        tenant_id=str(row["tenant_id"]),
+    )
+    return FacultySubmissionResponse(
+        **submission.model_dump(),
+        student_id=row["student_id"],
+        student_name=student_name,
+        student_email=student_email,
+    )
+
+
 @router.get("/submissions", response_model=SubmissionResponseList)
 async def list_submissions(
     profile: CurrentProfile = Depends(get_current_profile),
@@ -510,6 +560,56 @@ async def list_submissions(
     )
     return SubmissionResponseList(
         submissions=[_submission_response(client, row) for row in result.data or []]
+    )
+
+
+@router.get(
+    "/papers/{paper_id}/submissions",
+    response_model=FacultySubmissionResponseList,
+)
+async def list_paper_submissions(
+    paper_id: UUID,
+    profile: CurrentProfile = Depends(get_current_profile),
+) -> FacultySubmissionResponseList:
+    """List one paper's submissions for assigned faculty or tenant admins."""
+    require_evaluation_enabled(get_service_client(), profile)
+    if profile.role not in {"teacher", "institution_admin"}:
+        raise HTTPException(status_code=403, detail="Faculty access required")
+    client = get_service_client()
+    if profile.role == "teacher":
+        require_teacher_evaluation_paper_access(
+            client,
+            profile,
+            paper_id=str(paper_id),
+        )
+    else:
+        paper = _first(
+            client,
+            "evaluation_papers",
+            "id",
+            id=str(paper_id),
+            tenant_id=profile.tenant_id,
+        )
+        if not paper:
+            raise HTTPException(status_code=404, detail="Evaluation paper not found")
+
+    result = (
+        client.table("handwritten_submissions")
+        .select(
+            "id,tenant_id,student_id,evaluation_paper_id,upload_intent_id,status,"
+            "error_message,retrigger_count,regraded_from,paper_title_snapshot,"
+            "subject_name_snapshot,created_at"
+        )
+        .eq("tenant_id", profile.tenant_id)
+        .eq("evaluation_paper_id", str(paper_id))
+        .order("created_at", desc=True)
+        .limit(100)
+        .execute()
+    )
+    return FacultySubmissionResponseList(
+        submissions=[
+            _faculty_submission_response(client, row) for row in result.data or []
+        ]
     )
 
 
@@ -547,6 +647,49 @@ async def get_submission(
             paper_id=str(result.data[0]["evaluation_paper_id"]),
         )
     return _submission_response(client, result.data[0])
+
+
+@router.get(
+    "/submissions/{submission_id}/answer-script-url",
+    response_model=AnswerScriptUrlResponse,
+)
+async def get_answer_script_url(
+    submission_id: UUID,
+    profile: CurrentProfile = Depends(get_current_profile),
+) -> AnswerScriptUrlResponse:
+    """Issue a short-lived answer-sheet URL after faculty authorization."""
+    require_evaluation_enabled(get_service_client(), profile)
+    if profile.role not in {"teacher", "institution_admin"}:
+        raise HTTPException(status_code=403, detail="Faculty access required")
+    client = get_service_client()
+    result = (
+        client.table("handwritten_submissions")
+        .select("id,tenant_id,evaluation_paper_id,answer_script_path")
+        .eq("id", str(submission_id))
+        .eq("tenant_id", profile.tenant_id)
+        .limit(1)
+        .execute()
+    )
+    if not result.data:
+        raise HTTPException(status_code=404, detail="Submission not found")
+    submission = result.data[0]
+    if profile.role == "teacher":
+        if submission.get("evaluation_paper_id") is None:
+            raise HTTPException(status_code=404, detail="Submission not found")
+        require_teacher_evaluation_paper_access(
+            client,
+            profile,
+            paper_id=str(submission["evaluation_paper_id"]),
+        )
+    if not submission.get("answer_script_path"):
+        raise HTTPException(status_code=404, detail="Answer script not found")
+    return AnswerScriptUrlResponse(
+        url=signed_url(
+            submission["answer_script_path"],
+            300,
+            bucket=EVALUATION_SUBMISSIONS_BUCKET,
+        )
+    )
 
 
 @router.get(

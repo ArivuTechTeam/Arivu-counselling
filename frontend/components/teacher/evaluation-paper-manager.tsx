@@ -1,13 +1,17 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
 
 import { Dialog } from "@/components/ui/dialog";
 import {
   AlertTriangle,
+  BarChart3,
   BookOpen,
   Check,
   ChevronDown,
+  Clock,
+  Eye,
   FileText,
   Inbox,
   Pencil,
@@ -21,9 +25,12 @@ import {
   createEvaluationPaper,
   deleteEvaluationPaper,
   EvaluationPaper,
+  FacultyEvaluationSubmission,
   getEvaluationPaper,
+  getEvaluationSubmissionAnswerScriptUrl,
   listCourses,
   listEvaluationPapers,
+  listEvaluationPaperSubmissions,
   updateEvaluationPaper,
 } from "@/lib/api";
 
@@ -90,6 +97,7 @@ function PaperCard({
   busyAction,
   onOpenPdf,
   onExtracted,
+  onSubmissions,
   onToggleActive,
   onEdit,
   onDelete,
@@ -98,6 +106,7 @@ function PaperCard({
   busyAction: string | null;
   onOpenPdf: (paper: EvaluationPaper, kind: "question" | "answer") => void;
   onExtracted: (paper: EvaluationPaper) => void;
+  onSubmissions: (paper: EvaluationPaper) => void;
   onToggleActive: (paper: EvaluationPaper) => void;
   onEdit: (paper: EvaluationPaper) => void;
   onDelete: (paper: EvaluationPaper) => void;
@@ -131,9 +140,9 @@ function PaperCard({
           <span className="inline-flex items-center gap-1.5 rounded-lg border bg-muted/30 px-3 py-2 text-xs font-semibold">
             <FileText size={14} /> {paper.total_marks}m
           </span>
-          <span className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-100 bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-700">
+          <button type="button" onClick={() => onSubmissions(paper)} aria-label={`View ${paper.submission_count ?? 0} submissions for ${paper.title}`} className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-100 bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-700 transition hover:border-emerald-300 hover:bg-emerald-100">
             <Inbox size={14} /> {paper.submission_count ?? 0} submissions
-          </span>
+          </button>
           <span className="inline-flex items-center gap-1.5 rounded-lg border bg-muted/30 px-3 py-2 text-xs font-semibold text-muted-foreground">
             {statusLabel(paper.rubric_status)}
           </span>
@@ -167,6 +176,53 @@ function PaperCard({
         </div>
       </div>
     </article>
+  );
+}
+
+function facultySubmissionStatus(submission: FacultyEvaluationSubmission) {
+  if (submission.report_available) return { label: "Evaluated", tone: "border-emerald-200 bg-emerald-50 text-emerald-700" };
+  if (submission.status === "failed" || submission.status === "blocked_rubric_failed" || submission.job_status === "failed") return { label: "Failed", tone: "border-destructive/25 bg-destructive/5 text-destructive" };
+  return { label: "Evaluating", tone: "border-amber-200 bg-amber-50 text-amber-800" };
+}
+
+function PaperSubmissionsDialog({
+  paper,
+  submissions,
+  loading,
+  error,
+  openingAnswer,
+  onClose,
+  onOpenAnswer,
+  onRetry,
+}: {
+  paper: EvaluationPaper;
+  submissions: FacultyEvaluationSubmission[];
+  loading: boolean;
+  error: string | null;
+  openingAnswer: string | null;
+  onClose: () => void;
+  onOpenAnswer: (submission: FacultyEvaluationSubmission) => void;
+  onRetry: () => void;
+}) {
+  return (
+    <Dialog onClose={onClose} ariaLabel="Student submissions" overlayClassName="fixed inset-0 z-[80] flex items-center justify-center bg-slate-950/75 p-3 backdrop-blur-sm sm:p-6" contentClassName="flex max-h-[92vh] w-full max-w-5xl flex-col overflow-hidden rounded-2xl border bg-card shadow-2xl">
+      <header className="flex shrink-0 items-start justify-between gap-4 bg-slate-950 px-5 py-4 text-white sm:px-6">
+        <div><p className="text-[11px] font-bold uppercase tracking-[0.16em] text-white/55">Faculty review</p><h2 className="mt-0.5 text-lg font-bold">Student submissions</h2><p className="mt-1 text-sm text-white/65">{paper.title}</p></div>
+        <button type="button" onClick={onClose} aria-label="Close student submissions" className="flex h-9 w-9 items-center justify-center rounded-lg bg-white/10 transition hover:bg-white/20"><X size={17} /></button>
+      </header>
+      <div className="min-h-0 flex-1 overflow-y-auto p-5 sm:p-6">
+        {error ? <div role="alert" className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-destructive/25 bg-destructive/5 p-4 text-sm text-destructive"><span>{error}</span><button type="button" onClick={onRetry} className="rounded-lg border border-destructive/30 px-3 py-2 text-xs font-bold">Try again</button></div> : null}
+        {loading ? <div className="flex min-h-56 items-center justify-center rounded-2xl border"><RefreshCw size={20} className="animate-spin text-primary" /><span className="ml-3 text-sm font-semibold">Loading student submissions…</span></div> : submissions.length === 0 && !error ? <div className="rounded-2xl border border-dashed p-10 text-center"><Inbox size={32} className="mx-auto text-muted-foreground" /><h3 className="mt-3 font-bold">No submissions yet</h3><p className="mt-1 text-sm text-muted-foreground">Student answer sheets for this paper will appear here.</p></div> : (
+          <div className="space-y-3">
+            {submissions.map((submission) => {
+              const status = facultySubmissionStatus(submission);
+              const submitted = new Date(submission.submitted_at).toLocaleString("en-IN", { day: "numeric", month: "short", year: "numeric", hour: "numeric", minute: "2-digit" });
+              return <article key={submission.id} className="rounded-2xl border bg-background p-4 shadow-sm"><div className="flex flex-col justify-between gap-4 lg:flex-row lg:items-center"><div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><h3 className="truncate font-bold">{submission.student_name || submission.student_email || "Student"}</h3><span className={`rounded-full border px-2.5 py-1 text-[11px] font-bold ${status.tone}`}>{status.label}</span></div>{submission.student_name && submission.student_email ? <p className="mt-1 truncate text-xs text-muted-foreground">{submission.student_email}</p> : null}<p className="mt-2 inline-flex items-center gap-1.5 text-xs text-muted-foreground"><Clock size={13} /> Submitted {submitted}</p></div><div className="flex flex-wrap items-center gap-2">{submission.report_available && submission.marks_possible != null ? <span className="rounded-lg border bg-muted/35 px-3 py-2 text-sm font-bold">{submission.marks_obtained ?? 0}/{submission.marks_possible}</span> : null}<button type="button" disabled={openingAnswer === submission.id} onClick={() => onOpenAnswer(submission)} className="inline-flex min-h-10 items-center gap-2 rounded-lg border px-3 text-xs font-bold text-primary hover:bg-primary/5 disabled:opacity-50"><Eye size={14} />{openingAnswer === submission.id ? "Opening…" : "Answer Sheet"}</button>{submission.report_available ? <Link href={`/dashboard/teacher/handwritten-evaluation/submissions/${submission.id}`} className="inline-flex min-h-10 items-center gap-2 rounded-lg bg-primary px-3 text-xs font-bold text-primary-foreground"><BarChart3 size={14} /> View Report</Link> : null}</div></div>{submission.error_message && status.label === "Failed" ? <p className="mt-3 rounded-lg border border-destructive/20 bg-destructive/5 p-3 text-xs text-destructive">{submission.error_message}</p> : null}</article>;
+            })}
+          </div>
+        )}
+      </div>
+    </Dialog>
   );
 }
 
@@ -298,6 +354,11 @@ export function EvaluationPaperManager() {
   const [extracted, setExtracted] = useState<{ paper: EvaluationPaper | null; loading: boolean } | null>(null);
   const [editing, setEditing] = useState<EvaluationPaper | null>(null);
   const [deleting, setDeleting] = useState<EvaluationPaper | null>(null);
+  const [submissionPaper, setSubmissionPaper] = useState<EvaluationPaper | null>(null);
+  const [paperSubmissions, setPaperSubmissions] = useState<FacultyEvaluationSubmission[]>([]);
+  const [submissionsLoading, setSubmissionsLoading] = useState(false);
+  const [submissionsError, setSubmissionsError] = useState<string | null>(null);
+  const [openingAnswer, setOpeningAnswer] = useState<string | null>(null);
   const questionInputRef = useRef<HTMLInputElement>(null);
   const answerInputRef = useRef<HTMLInputElement>(null);
 
@@ -489,6 +550,37 @@ export function EvaluationPaperManager() {
     }
   }
 
+  async function loadPaperSubmissions(paper: EvaluationPaper) {
+    setSubmissionPaper(paper);
+    setSubmissionsLoading(true);
+    setSubmissionsError(null);
+    try {
+      setPaperSubmissions(await listEvaluationPaperSubmissions(paper.id));
+    } catch (reason) {
+      setPaperSubmissions([]);
+      setSubmissionsError(reason instanceof Error ? reason.message : "Couldn't load student submissions.");
+    } finally {
+      setSubmissionsLoading(false);
+    }
+  }
+
+  async function openAnswerScript(submission: FacultyEvaluationSubmission) {
+    setOpeningAnswer(submission.id);
+    setSubmissionsError(null);
+    const answerTab = window.open("about:blank", "_blank");
+    if (answerTab) answerTab.opener = null;
+    try {
+      const url = await getEvaluationSubmissionAnswerScriptUrl(submission.id);
+      if (answerTab) answerTab.location.replace(url);
+      else window.location.assign(url);
+    } catch (reason) {
+      answerTab?.close();
+      setSubmissionsError(reason instanceof Error ? reason.message : "Couldn't open the answer sheet.");
+    } finally {
+      setOpeningAnswer(null);
+    }
+  }
+
   return (
     <div className="mx-auto flex max-w-7xl flex-col gap-7">
       <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-end">
@@ -566,7 +658,7 @@ export function EvaluationPaperManager() {
                     <span className="rounded-full bg-primary/10 px-2 py-0.5 text-xs font-bold text-primary">{group.papers.length}</span>
                     <span className="text-xs text-muted-foreground">· {group.submissions} submissions</span>
                   </button>
-                  {!collapsed ? <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">{group.papers.map((paper) => <PaperCard key={paper.id} paper={paper} busyAction={busyAction} onOpenPdf={(item, kind) => void openPdf(item, kind)} onExtracted={(item) => void openExtracted(item)} onToggleActive={(item) => void toggleActive(item)} onEdit={(item) => void openEdit(item)} onDelete={setDeleting} />)}</div> : null}
+                  {!collapsed ? <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">{group.papers.map((paper) => <PaperCard key={paper.id} paper={paper} busyAction={busyAction} onOpenPdf={(item, kind) => void openPdf(item, kind)} onExtracted={(item) => void openExtracted(item)} onSubmissions={(item) => void loadPaperSubmissions(item)} onToggleActive={(item) => void toggleActive(item)} onEdit={(item) => void openEdit(item)} onDelete={setDeleting} />)}</div> : null}
                 </div>
               );
             })}
@@ -575,6 +667,7 @@ export function EvaluationPaperManager() {
       </section>
 
       {extracted ? <EvaluationPaperExtractedDialog paper={extracted.paper} loading={extracted.loading} onClose={() => setExtracted(null)} /> : null}
+      {submissionPaper ? <PaperSubmissionsDialog paper={submissionPaper} submissions={paperSubmissions} loading={submissionsLoading} error={submissionsError} openingAnswer={openingAnswer} onClose={() => setSubmissionPaper(null)} onOpenAnswer={(submission) => void openAnswerScript(submission)} onRetry={() => void loadPaperSubmissions(submissionPaper)} /> : null}
       {editing ? <EditPaperDialog paper={editing} courses={courses} busy={busy} onClose={() => setEditing(null)} onSave={(values) => void saveEdit(values)} /> : null}
       {deleting ? (
         <Dialog onClose={() => setDeleting(null)} ariaLabel="Delete evaluation paper" contentClassName="w-full max-w-md rounded-2xl border bg-card p-6 text-center shadow-2xl">

@@ -9,7 +9,9 @@ vi.mock("@/lib/api", () => ({
   createEvaluationPaper: vi.fn(),
   deleteEvaluationPaper: vi.fn(),
   getEvaluationPaper: vi.fn(),
+  getEvaluationSubmissionAnswerScriptUrl: vi.fn(),
   listCourses: vi.fn(),
+  listEvaluationPaperSubmissions: vi.fn(),
   listEvaluationPapers: vi.fn(),
   updateEvaluationPaper: vi.fn(),
 }));
@@ -21,6 +23,7 @@ const listCourses = vi.mocked(api.listCourses);
 const listPapers = vi.mocked(api.listEvaluationPapers);
 const getPaper = vi.mocked(api.getEvaluationPaper);
 const updatePaper = vi.mocked(api.updateEvaluationPaper);
+const listPaperSubmissions = vi.mocked(api.listEvaluationPaperSubmissions);
 
 const COURSES: Course[] = [{
   id: "course-1",
@@ -67,6 +70,21 @@ beforeEach(() => {
   listPapers.mockResolvedValue([PAPER]);
   getPaper.mockResolvedValue(DETAIL);
   updatePaper.mockImplementation(async (_id, input) => ({ ...DETAIL, ...input }));
+  listPaperSubmissions.mockResolvedValue([{
+    id: "submission-1",
+    paper_id: "paper-1",
+    upload_intent_id: "intent-1",
+    status: "evaluated",
+    submitted_at: "2026-08-12T10:00:00Z",
+    job_status: "done",
+    report_available: true,
+    marks_obtained: 72,
+    marks_possible: 100,
+    retrigger_count: 0,
+    student_id: "student-1",
+    student_name: "Arjun Student",
+    student_email: "arjun@example.com",
+  }]);
   vi.spyOn(window, "open").mockImplementation(() => null);
 });
 
@@ -108,6 +126,24 @@ describe("EvaluationPaperManager", () => {
     await user.click(within(dialog).getByRole("tab", { name: /Grading Schema/ }));
     expect(within(dialog).getByText("Explain the legal position.")).toBeTruthy();
     expect(within(dialog).getByText("States the provision")).toBeTruthy();
+  });
+
+  it("opens the paper's student submissions with answer-sheet and report actions", async () => {
+    const user = userEvent.setup();
+    render(<EvaluationPaperManager />);
+    await screen.findByText("Business law 100%");
+
+    await user.click(screen.getByRole("button", { name: "View 11 submissions for Business law 100%" }));
+
+    const dialog = await screen.findByRole("dialog", { name: "Student submissions" });
+    await waitFor(() => expect(listPaperSubmissions).toHaveBeenCalledWith("paper-1"));
+    expect(within(dialog).getByText("Arjun Student")).toBeTruthy();
+    expect(within(dialog).getByText("arjun@example.com")).toBeTruthy();
+    expect(within(dialog).getByText("72/100")).toBeTruthy();
+    expect(within(dialog).getByRole("button", { name: "Answer Sheet" })).toBeTruthy();
+    expect(within(dialog).getByRole("link", { name: "View Report" }).getAttribute("href")).toBe(
+      "/dashboard/teacher/handwritten-evaluation/submissions/submission-1",
+    );
   });
 
   it("unpublishes through the existing paper update endpoint", async () => {

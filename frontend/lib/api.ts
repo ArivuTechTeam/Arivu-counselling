@@ -810,6 +810,24 @@ export type EvaluationSubmission = {
   regraded_from?: string | null;
 };
 
+export type FacultyEvaluationSubmission = EvaluationSubmission & {
+  student_id: string;
+  student_name?: string | null;
+  student_email?: string | null;
+};
+
+export type HandwrittenUploadStage =
+  | "authorizing"
+  | "uploading"
+  | "verifying"
+  | "queuing"
+  | "complete";
+
+export type HandwrittenUploadProgress = {
+  stage: HandwrittenUploadStage;
+  percent: number;
+};
+
 export type EvaluationCriterionResult = {
   criterion_id: string;
   criterion?: string;
@@ -961,10 +979,12 @@ export async function listStudentEvaluationPapers(): Promise<EvaluationPaper[]> 
 export async function submitHandwrittenAnswer(
   paperId: string,
   file: File,
+  onProgress?: (progress: HandwrittenUploadProgress) => void,
 ): Promise<EvaluationSubmission> {
   if (file.size === 0 || file.size > EVALUATION_UPLOAD_MAX_BYTES) {
     throw new Error("Choose a non-empty PDF, PNG or JPEG no larger than 30 MB.");
   }
+  onProgress?.({ stage: "authorizing", percent: 10 });
   const intent = await jsonRequest<{
     id: string;
     upload_url: string;
@@ -976,6 +996,7 @@ export async function submitHandwrittenAnswer(
     content_type: file.type,
     size_bytes: file.size,
   });
+  onProgress?.({ stage: "uploading", percent: 35 });
   const { error: uploadError } = await createClient()
     .storage
     .from("evaluation-submissions")
@@ -983,15 +1004,19 @@ export async function submitHandwrittenAnswer(
       contentType: file.type,
     });
   if (uploadError) throw new Error("The answer script could not be uploaded. Please try again.");
+  onProgress?.({ stage: "verifying", percent: 78 });
   await jsonRequest(
     `/api/v1/handwritten-evaluations/upload-intents/${intent.id}/finalize`,
     "POST",
   );
-  return jsonRequest<EvaluationSubmission>(
+  onProgress?.({ stage: "queuing", percent: 92 });
+  const submission = await jsonRequest<EvaluationSubmission>(
     "/api/v1/handwritten-evaluations/submissions",
     "POST",
     { upload_intent_id: intent.id },
   );
+  onProgress?.({ stage: "complete", percent: 100 });
+  return submission;
 }
 
 export const getEvaluationSubmission = (id: string) =>
@@ -1006,6 +1031,26 @@ export async function listStudentEvaluationSubmissions(): Promise<EvaluationSubm
     "GET",
   );
   return response.submissions;
+}
+
+export async function listEvaluationPaperSubmissions(
+  paperId: string,
+): Promise<FacultyEvaluationSubmission[]> {
+  const response = await jsonRequest<{ submissions: FacultyEvaluationSubmission[] }>(
+    `/api/v1/handwritten-evaluations/papers/${encodeURIComponent(paperId)}/submissions`,
+    "GET",
+  );
+  return response.submissions;
+}
+
+export async function getEvaluationSubmissionAnswerScriptUrl(
+  submissionId: string,
+): Promise<string> {
+  const response = await jsonRequest<{ url: string }>(
+    `/api/v1/handwritten-evaluations/submissions/${encodeURIComponent(submissionId)}/answer-script-url`,
+    "GET",
+  );
+  return response.url;
 }
 
 export const getHandwrittenEvaluationReport = (submissionId: string) =>

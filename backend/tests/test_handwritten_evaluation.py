@@ -24,9 +24,11 @@ from app.api.handwritten_submissions import (
     create_upload_intent,
     create_submission,
     finalize_upload_intent,
+    get_answer_script_url,
     get_evaluation_report,
     get_stage2_artifacts,
     get_submission,
+    list_paper_submissions,
     list_submissions,
     mark_submission_failed,
     MarkFailedRequest,
@@ -506,6 +508,61 @@ def test_teacher_cannot_retrieve_unassigned_subject_submission_or_report():
             asyncio.run(get_evaluation_report(UUID(submission_b), teacher))
     assert submission_denied.value.status_code == 404
     assert report_denied.value.status_code == 404
+
+
+def test_teacher_lists_only_assigned_paper_submissions_and_opens_answer_sheet():
+    subject_a, subject_b = str(uuid4()), str(uuid4())
+    paper_a, paper_b = str(uuid4()), str(uuid4())
+    submission_a, submission_b = str(uuid4()), str(uuid4())
+    now = datetime.now(UTC).isoformat()
+    service = Service({
+        "tenants": [{"id": TENANT, "handwritten_evaluation_enabled": True}],
+        "teacher_subjects": [{
+            "tenant_id": TENANT, "teacher_id": TEACHER, "subject_id": subject_a,
+        }],
+        "evaluation_papers": [
+            {"id": paper_a, "tenant_id": TENANT, "subject_id": subject_a,
+             "course_level_id": "level-1", "title": "Assigned paper"},
+            {"id": paper_b, "tenant_id": TENANT, "subject_id": subject_b,
+             "course_level_id": "level-1", "title": "Hidden paper"},
+        ],
+        "handwritten_submissions": [
+            {"id": submission_a, "tenant_id": TENANT, "student_id": STUDENT,
+             "evaluation_paper_id": paper_a, "upload_intent_id": str(uuid4()),
+             "answer_script_path": "tenant/student/assigned.pdf", "status": "queued",
+             "error_message": None, "created_at": now},
+            {"id": submission_b, "tenant_id": TENANT, "student_id": str(uuid4()),
+             "evaluation_paper_id": paper_b, "upload_intent_id": str(uuid4()),
+             "answer_script_path": "tenant/student/hidden.pdf", "status": "queued",
+             "error_message": None, "created_at": now},
+        ],
+        "profiles": [{"id": STUDENT, "tenant_id": TENANT,
+                      "role": "student", "full_name": "Arjun Student"}],
+        "evaluation_jobs": [],
+        "handwritten_evaluations": [],
+    })
+    service.auth = SimpleNamespace(admin=SimpleNamespace(
+        get_user_by_id=lambda user_id: SimpleNamespace(
+            user=SimpleNamespace(id=user_id, email="arjun@example.com")
+        )
+    ))
+    teacher = profile("teacher")
+    with patch("app.api.handwritten_submissions.get_service_client", return_value=service), \
+         patch("app.api.handwritten_submissions.signed_url", return_value="https://signed.example/assigned"):
+        listed = asyncio.run(list_paper_submissions(UUID(paper_a), teacher))
+        answer = asyncio.run(get_answer_script_url(UUID(submission_a), teacher))
+        with pytest.raises(HTTPException) as paper_denied:
+            asyncio.run(list_paper_submissions(UUID(paper_b), teacher))
+        with pytest.raises(HTTPException) as answer_denied:
+            asyncio.run(get_answer_script_url(UUID(submission_b), teacher))
+
+    assert len(listed.submissions) == 1
+    assert listed.submissions[0].student_name == "Arjun Student"
+    assert listed.submissions[0].student_email == "arjun@example.com"
+    assert str(listed.submissions[0].student_id) == STUDENT
+    assert answer.url == "https://signed.example/assigned"
+    assert paper_denied.value.status_code == 404
+    assert answer_denied.value.status_code == 404
 
 
 def test_worker_persists_stage1_only_after_authorization_recheck():
