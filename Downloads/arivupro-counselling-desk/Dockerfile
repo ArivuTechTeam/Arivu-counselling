@@ -1,12 +1,11 @@
 FROM node:22-alpine AS base
 RUN apk add --no-cache python3 make g++
-RUN corepack enable && corepack prepare pnpm@11.25.0 --activate
 
 # ── install deps ──────────────────────────────────────────────────────────────
 FROM base AS deps
 WORKDIR /app
-COPY package.json pnpm-lock.yaml .npmrc ./
-RUN pnpm install --no-frozen-lockfile --config.strictDepBuilds=false
+COPY package.json ./
+RUN npm install --legacy-peer-deps
 
 # ── build ─────────────────────────────────────────────────────────────────────
 FROM base AS builder
@@ -15,7 +14,7 @@ COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 ENV NODE_ENV=production
 ENV RAILWAY=true
-RUN pnpm next build
+RUN node_modules/.bin/next build
 
 # ── production image ──────────────────────────────────────────────────────────
 FROM node:22-alpine AS runner
