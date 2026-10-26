@@ -12,7 +12,9 @@
     "start": "node --import ./scripts/sites-env.mjs ./node_modules/wrangler/bin/wrangler.js dev --config dist/server/wrangler.json --local --persist-to .wrangler/state --ip 127.0.0.1 --inspector-port 0",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
     "db:generate": "drizzle-kit generate",
-    "db:migrate": "node --experimental-sqlite scripts/migrate-local.mjs"
+    "db:migrate": "node --experimental-sqlite scripts/migrate-local.mjs",
+    "railway:migrate": "node scripts/migrate-railway.mjs",
+    "railway:start": "node scripts/migrate-railway.mjs && node server.js"
   },
   "dependencies": {
     "@base-ui/react": "^1.7.0",
@@ -22,6 +24,7 @@
     "clsx": "2.1.1",
     "cmdk": "^1.1.1",
     "date-fns": "^4.4.0",
+    "better-sqlite3": "^11.0.0",
     "drizzle-orm": "0.45.2",
     "embla-carousel-react": "^8.6.0",
     "input-otp": "^1.4.2",
@@ -41,6 +44,7 @@
     "zod": "^3.25.76"
   },
   "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
     "@cloudflare/vite-plugin": "1.37.1",
     "@cloudflare/workers-types": "4.20260515.1",
     "@tailwindcss/postcss": "4.2.1",

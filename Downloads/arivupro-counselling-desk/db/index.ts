@@ -1,13 +1,25 @@
-import { env } from "cloudflare:workers";
-import { drizzle } from "drizzle-orm/d1";
 import * as schema from "./schema";
 
+// On Railway (Node.js), use better-sqlite3. On Cloudflare Workers, use D1.
 export function getDb() {
-  if (!env.DB) {
-    throw new Error(
-      "Cloudflare D1 binding `DB` is unavailable. Set the `d1` field in .openai/hosting.json to `DB` or let your control plane inject the real binding values before using the database."
-    );
+  if (process.env.RAILWAY === "true" || process.env.NODE_ENV === "test") {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const Database = require("better-sqlite3");
+    const { drizzle } = require("drizzle-orm/better-sqlite3");
+    const dbPath = process.env.DATABASE_PATH || "/data/counselling.db";
+    const sqlite = new Database(dbPath);
+    sqlite.pragma("journal_mode = WAL");
+    return drizzle(sqlite, { schema });
   }
 
+  // Cloudflare Workers path
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { env } = require("cloudflare:workers");
+  const { drizzle } = require("drizzle-orm/d1");
+  if (!env.DB) {
+    throw new Error(
+      "Cloudflare D1 binding `DB` is unavailable."
+    );
+  }
   return drizzle(env.DB, { schema });
 }
