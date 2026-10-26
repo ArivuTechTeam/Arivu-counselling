@@ -1,4 +1,6 @@
 FROM node:22-alpine AS base
+# build tools needed for native addons (better-sqlite3)
+RUN apk add --no-cache python3 make g++
 RUN corepack enable && corepack prepare pnpm@11.25.0 --activate
 
 # ── install deps ──────────────────────────────────────────────────────────────
@@ -22,7 +24,6 @@ WORKDIR /app
 ENV NODE_ENV=production
 ENV RAILWAY=true
 
-RUN corepack enable && corepack prepare pnpm@11.25.0 --activate
 RUN addgroup --system --gid 1001 nodejs && adduser --system --uid 1001 nextjs
 
 COPY --from=builder /app/package.json ./package.json
@@ -39,5 +40,4 @@ EXPOSE 3000
 ENV PORT=3000
 ENV HOSTNAME=0.0.0.0
 
-# Migrate DB first, then start Next.js
 CMD ["sh", "-c", "node scripts/migrate-railway.mjs && node server.js"]
