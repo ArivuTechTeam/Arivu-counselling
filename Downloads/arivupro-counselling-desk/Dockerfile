@@ -1,5 +1,4 @@
 FROM node:22-alpine AS base
-# build tools needed for native addons (better-sqlite3)
 RUN apk add --no-cache python3 make g++
 RUN corepack enable && corepack prepare pnpm@11.25.0 --activate
 
