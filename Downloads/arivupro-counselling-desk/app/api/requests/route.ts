@@ -33,7 +33,7 @@ const submission=z.object({
   course:z.string().refine(c=>courses.includes(c),'Select a valid course'),
   level:z.string().trim().min(1).max(100),
   concern:z.string().trim().min(10).max(2000),
-  consent:z.literal(true,'Consent is required'),
+  consent:z.literal(true),
   wantsCall:z.boolean(),
   otpVerified:z.boolean().optional(),
   slot:z.string().optional(),
