@@ -2,7 +2,7 @@
 minimumReleaseAge: 10080
 minimumReleaseAgeIgnoreMissingTime: false
 trustLockfile: false
-strictDepBuilds: true
+strictDepBuilds: false
 allowBuilds:
   better-sqlite3: true
   esbuild: true
