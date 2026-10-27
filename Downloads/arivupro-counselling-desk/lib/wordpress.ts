@@ -37,7 +37,9 @@ async function fetchPublicPage(path: string): Promise<string> {
 
 async function fetchCoursesApi(): Promise<string> {
   if (!COURSES_API_KEY) return "";
-  const response = await fetch(`${COURSES_API_URL}?per_page=100`, {
+  const apiUrl = new URL(COURSES_API_URL);
+  apiUrl.searchParams.set("per_page", "100");
+  const response = await fetch(apiUrl, {
     headers: { Accept: "application/json", "X-API-KEY": COURSES_API_KEY },
     cache: "no-store",
     signal: AbortSignal.timeout(8000),
