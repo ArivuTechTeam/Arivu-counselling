@@ -134,7 +134,6 @@ export default function StudentPage(){
         {stage==='form'&&(
           <div className="studentgrid">
             <section className="card formcard">
-              <div className="formprogress"><div className="formprogress-fill" style={{'--pw':charCount>0||formValues.name?'45%':'15%'} as React.CSSProperties}/></div>
               {error&&<div className="notice" role="alert">{error}</div>}
               <form onSubmit={handleFormSubmit}>
                 <div className="fieldsection">
@@ -295,7 +294,9 @@ export default function StudentPage(){
 function SiteHeader(){
   return(
     <header>
-      <a className="brand" href="/"><span className="brandmark"><GraduationCap size={25}/></span><span>arivu<span className="brandgreen">pro</span><small>COUNSELLING DESK</small></span></a>
+      <a href="/" style={{display:'flex',alignItems:'center'}}>
+        <img src="/arivupro-horizontal.png" alt="ArivuPro Academy" style={{height:'48px',width:'auto'}}/>
+      </a>
     </header>
   );
 }

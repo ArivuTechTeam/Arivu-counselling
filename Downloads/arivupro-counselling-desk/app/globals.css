@@ -154,9 +154,7 @@
 }
 .publicsite input,.publicsite select,.publicsite textarea{transition:border-color .2s,box-shadow .2s,transform .15s}
 
-/* Progress bar at top of form */
-.formprogress{height:3px;background:#e8f2eb;border-radius:0 0 3px 3px;overflow:hidden;margin:-28px -28px 24px;position:relative}
-.formprogress-fill{height:100%;background:linear-gradient(90deg,#2e8857,#4db87a);border-radius:0 2px 2px 0;transition:width .5s cubic-bezier(.22,.68,0,1.1)}
+/* Progress bar removed — was causing green line at top of form */
 
 /* Submit button pulse when ready */
 .primary:not(:disabled){animation:none}
