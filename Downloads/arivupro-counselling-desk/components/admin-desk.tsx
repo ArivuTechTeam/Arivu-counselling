@@ -4,7 +4,7 @@ import {
   ArrowUpRight,CalendarDays,Check,ChevronRight,Clipboard,GraduationCap,
   LayoutDashboard,MessageCircle,Search,ShieldCheck,Sparkles,Users,
   Clock,BookOpen,ArrowRight,Video,Mail,Phone,RefreshCw,ExternalLink,Loader2,
-  CheckCircle2,AlertCircle,XCircle,HelpCircle,Send,
+  CheckCircle2,AlertCircle,XCircle,HelpCircle,Send,LogOut,
 } from 'lucide-react';
 import DirectAnswers from '@/components/direct-answers';
 import {courses,statuses} from '@/lib/courses';
@@ -168,6 +168,17 @@ export default function AdminDesk(){
           <div className="headerend">
             <span className="pill">ArivuPro Academy</span>
             <span className="avatar">AP</span>
+            <button
+              className="actionbtn"
+              style={{fontSize:'11px',gap:'6px'}}
+              onClick={async()=>{
+                await fetch('/api/admin-login',{method:'DELETE'});
+                window.location.href='/admin-login';
+              }}
+              title="Sign out"
+            >
+              <LogOut size={13}/>Sign out
+            </button>
           </div>
         </header>
 
