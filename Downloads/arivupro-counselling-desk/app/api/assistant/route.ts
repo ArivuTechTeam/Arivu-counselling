@@ -1,25 +1,34 @@
 import {getChatGPTUser} from "../../chatgpt-auth";
 import {talkingPoints} from "@/lib/counselling-answers";
+import {fetchWordPressContext} from "@/lib/wordpress";
 export const dynamic="force-dynamic";
 
-const system=`You are an expert Professional Commerce SME counsellor at ArivuPro Academy, one of India's leading coaching institutes for CA, CS, CMA, ACCA, CFA, FRM, EA, CPA, CFP, CIA, Class 11/12 Commerce and B.Com.
+const system = `You are a counsellor at ArivuPro Academy. You reply like a knowledgeable senior friend texting back — SHORT, CRISP, and helpful.
 
-RESPONSE FORMAT — always follow this structure:
-1. Direct answer (2-3 sentences addressing the question immediately)
-2. Key details (bullet points with specific, actionable information)
-3. ArivuPro advantage (1 sentence on how ArivuPro supports this)
-4. Two follow-up questions to understand the student better
-5. Verification note (what to confirm with official body or programme team)
+LANGUAGE RULE — CRITICAL:
+Reply in the EXACT same language/mix the student used.
+- Tamil → Tamil | Hindi → Hindi | Tanglish → Tanglish | Hinglish → Hinglish | English → English
+- Sound like a native speaker texting, NOT a formal document.
+
+LENGTH RULE — CRITICAL:
+Keep the entire reply under 120 words. Student is reading on mobile. No long paragraphs.
+Use this format:
+[1-2 line direct answer]
+
+[3–5 bullet points max — only the most important facts]
+
+[1 line ArivuPro plug]
+
+[2 short follow-up questions]
+
+[1 line: what to verify]
 
 RULES:
-- Answer in clear, warm Indian English — like a knowledgeable senior friend
-- Be specific and complete — never cut off mid-answer
-- For CA Foundation: mention 4 papers (Accounting, Business Laws, Maths/Stats, Business Economics), twice-yearly exams (May/November), ICAI registration requirement
-- For CS: mention Foundation/Executive/Professional structure, ICSI registration
-- For CMA India: mention Foundation/Inter/Final structure, ICMAI, distinguish clearly from US CMA
-- Never invent fees, exam dates, pass rates, salary guarantees or placement promises
-- Mark time-sensitive facts as "Verify with ICAI/ICSI/ICMAI/ArivuPro team"
-- Distinguish CMA India (ICMAI) from US CMA (IMA) every time both are possible`;
+- Never invent fees, dates, pass rates or placement guarantees
+- CA Foundation: 4 papers, May/Nov exams, ICAI registration
+- CMA India (ICMAI) ≠ US CMA (IMA) — always clarify if relevant
+- Mark changing facts: "Verify with ICAI/ArivuPro team"
+- No headers like "Key details:" or "Verification note:" — just write naturally`;
 
 async function geminiCall(key: string, prompt: string, maxTokens: number, temperature: number): Promise<string | null> {
   const res = await fetch(
@@ -36,6 +45,17 @@ async function geminiCall(key: string, prompt: string, maxTokens: number, temper
   if (!res.ok) return null;
   const data = await res.json() as {candidates?: Array<{content?: {parts?: Array<{text?: string}>}}>};
   return data.candidates?.[0]?.content?.parts?.map(p => p.text || "").join("") || null;
+}
+
+// Detect if the question is non-English (Tamil/Hindi/Telugu script chars or Tanglish/Hinglish keywords)
+function isNonEnglish(text: string): boolean {
+  // Non-ASCII characters = Indian language scripts (Tamil, Hindi, Telugu, Malayalam etc.)
+  if (/[^\x00-\x7F]/.test(text)) return true;
+  // Common Tanglish words
+  if (/\b(pathi|venum|epdi|iruku|irukku|naan|enna|yenna|sollu|solu|theriyum|therila|konjam|romba|super|chance|vera|level|machi|da|di|bro|anna|akka|sir|madam|enga|unga|inga|onga|arivupro|batch|course|panna|panrom|aachu|illa|illai|thaan|than)\b/i.test(text)) return true;
+  // Common Hinglish words
+  if (/\b(kya|hai|hain|mujhe|aap|kaise|chahiye|batao|bata|karo|karein|accha|theek|bilkul|zaroor|bohot|bahut|sirf|abhi|pehle|baad|lekin|aur|ya|toh|na|nahi|kyun|kab|kahan|kaun|kitna|kitne)\b/i.test(text)) return true;
+  return false;
 }
 
 // Build a compact script index for the classifier prompt
@@ -55,12 +75,13 @@ export async function POST(req: Request) {
     if (!key) return Response.json({error: "Gemini API key is not configured. Add GEMINI_API_KEY to your .env file."}, {status: 503});
 
     const course = b.course || "the course you are considering";
+    const nonEnglish = isNonEnglish(b.question);
 
-    // Step 1 — ask Gemini to classify: does this question match any curated script?
-    const classifyPrompt = `You are a classifier. A student asked this question:
+    // Step 1 — Gemini classifies: does this question match any curated script?
+    const classifyPrompt = `You are a classifier. A student asked this question (may be in any Indian language or mix):
 "${b.question}"
 
-Below are 15 counselling script topics. If the student's question is essentially about the SAME topic as one of these scripts (even if worded differently), reply with ONLY the script id like: MATCH:fees
+Below are 15 counselling script topics. If the student's question is essentially about the SAME topic as one of these scripts (even if worded differently or in another language), reply with ONLY: MATCH:<id>
 If the question does not match any script, reply with ONLY: NO_MATCH
 
 Scripts:
@@ -76,16 +97,40 @@ Reply with one line only — either MATCH:<id> or NO_MATCH.`;
         const matchedId = trimmed.replace("MATCH:", "").trim();
         const script = talkingPoints.find(p => p.id === matchedId);
         if (script) {
-          const answer = script.answer.replace(/\{course\}/g, course);
-          const followupText = script.followups.map((f, i) => `${i + 1}. ${f}`).join("\n");
-          const full = `${answer}\n\n**Follow-up questions to ask the student:**\n${followupText}\n\n**Before sharing:** ${script.verify}`;
+          const rawAnswer = script.answer.replace(/\{course\}/g, course);
+          const rawFollowups = script.followups.map((f, i) => `${i + 1}. ${f}`).join("\n");
+          const rawVerify = script.verify;
+
+          // Non-English question — translate the curated script into student's language/style
+          if (nonEnglish) {
+            const translatePrompt = `Student asked: "${b.question}"
+
+Adapt this counsellor response into the EXACT same language/mix the student used. Sound like a senior friend texting — short, crisp, under 100 words total. No formal headers. Just natural.
+
+Answer: ${rawAnswer}
+Follow-ups: ${rawFollowups}
+Verify: ${rawVerify}`;
+
+            const translated = await geminiCall(key, translatePrompt, 1200, 0.4);
+            if (translated) {
+              return Response.json({answer: translated, source: "curated", scriptTitle: script.title});
+            }
+          }
+
+          // English — return curated script as-is
+          const full = `${rawAnswer}\n\n**Follow-up questions to ask the student:**\n${rawFollowups}\n\n**Before sharing:** ${rawVerify}`;
           return Response.json({answer: full, source: "curated", scriptTitle: script.title});
         }
       }
     }
 
-    // Step 2 — no curated match, generate a full Gemini answer
-    const prompt = `${system}\n\nCourse: ${course}\nLevel: ${b.level || "Not specified"}\nStudent question: ${b.question}\n\nProvide a complete, helpful answer following the format above. Do not cut off — finish the full response.`;
+    // Step 2 — No curated match — fetch live WordPress context + full Gemini answer
+    const wpContext = await fetchWordPressContext(b.question);
+    const wpSection = wpContext
+      ? `\n\nLive data from ArivuPro website (use this for batch/fee/schedule questions):\n${wpContext}\n`
+      : "";
+
+    const prompt = `${system}${wpSection}\n\nCourse: ${course}\nLevel: ${b.level || "Not specified"}\nStudent question: ${b.question}\n\nIMPORTANT: Detect the student's language/mix from their question above and reply in that EXACT same language and style throughout your entire answer. Do not cut off — finish the full response.`;
 
     const geminiAnswer = await geminiCall(key, prompt, 2000, 0.35);
 

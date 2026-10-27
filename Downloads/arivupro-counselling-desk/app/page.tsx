@@ -243,6 +243,7 @@ export default function StudentPage(){
                 src={calendlyUrl}
                 title="Book a counselling session"
                 allowFullScreen
+                sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-top-navigation-by-user-activation"
               />
             </div>
 
