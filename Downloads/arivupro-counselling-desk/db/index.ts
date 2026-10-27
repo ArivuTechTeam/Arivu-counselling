@@ -7,7 +7,9 @@ let _db: ReturnType<typeof drizzleBetter> | null = null;
 export function getDb() {
   if (process.env.RAILWAY === "true") {
     if (!_db) {
-      const dbPath = process.env.DATABASE_PATH || "/data/counselling.db";
+      // Use DATABASE_PATH env var, but strip any Windows-style Git Bash path mangling
+    const rawPath = process.env.DATABASE_PATH || "/data/counselling.db";
+    const dbPath = rawPath.startsWith("/data/") ? rawPath : "/data/counselling.db";
       const sqlite = new BetterSqlite3(dbPath);
       sqlite.pragma("journal_mode = WAL");
       _db = drizzleBetter(sqlite, { schema });

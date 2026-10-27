@@ -5,7 +5,8 @@ import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 
 const require = createRequire(import.meta.url);
-const dbPath = process.env.DATABASE_PATH || "/data/counselling.db";
+const rawPath = process.env.DATABASE_PATH || "/data/counselling.db";
+const dbPath = rawPath.startsWith("/data/") ? rawPath : "/data/counselling.db";
 
 mkdirSync(dirname(dbPath), { recursive: true });
 
