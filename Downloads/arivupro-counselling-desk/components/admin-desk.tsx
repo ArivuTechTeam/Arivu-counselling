@@ -66,6 +66,8 @@ export default function AdminDesk({initialRows=[]}:{initialRows?:Row[]}){
   const [level,setLevel]=useState('');
   const [question,setQuestion]=useState('');
   const [aiAnswer,setAiAnswer]=useState('');
+  const [aiSource,setAiSource]=useState<'curated'|'gemini'|''>('');
+  const [aiScriptTitle,setAiScriptTitle]=useState('');
   const [aiBusy,setAiBusy]=useState(false);
   const [copied,setCopied]=useState('');
 
@@ -108,16 +110,18 @@ export default function AdminDesk({initialRows=[]}:{initialRows?:Row[]}){
 
   async function askAI(){
     if(!question.trim())return;
-    setAiBusy(true);setAiAnswer('');
+    setAiBusy(true);setAiAnswer('');setAiSource('');setAiScriptTitle('');
     try{
       const r=await fetch('/api/assistant',{
         method:'POST',
         headers:{'Content-Type':'application/json'},
         body:JSON.stringify({course,level,question}),
       });
-      const d=await r.json() as {answer?:string;error?:string};
+      const d=await r.json() as {answer?:string;error?:string;source?:'curated'|'gemini';scriptTitle?:string};
       if(!r.ok)throw Error(d.error||'AI error');
       setAiAnswer(d.answer||'No answer returned.');
+      setAiSource(d.source||'gemini');
+      setAiScriptTitle(d.scriptTitle||'');
     }catch(e){setAiAnswer((e as Error).message);}
     finally{setAiBusy(false);}
   }
@@ -360,12 +364,24 @@ export default function AdminDesk({initialRows=[]}:{initialRows?:Row[]}){
                   {aiAnswer&&(
                     <article className="answercard" style={{marginTop:20}}>
                       <div className="answerheading">
-                        <span><Sparkles size={15}/>GEMINI AI RESPONSE</span>
+                        {aiSource==='curated'
+                          ?<span style={{display:'flex',alignItems:'center',gap:6,color:'#166534'}}><Check size={15}/>CURATED SCRIPT{aiScriptTitle&&<small style={{fontWeight:400,opacity:.7}}>— {aiScriptTitle}</small>}</span>
+                          :<span><Sparkles size={15}/>GEMINI AI RESPONSE</span>
+                        }
                         <button className="textbtn" onClick={()=>copyText(aiAnswer,'AI answer')}>
                           <Clipboard size={14}/>{copied==='AI answer'?'Copied!':'Copy'}
                         </button>
                       </div>
-                      <p className="spokenanswer">{aiAnswer}</p>
+                      <div className="spokenanswer" style={{whiteSpace:'pre-wrap'}}>
+                        {aiAnswer.split('\n').map((line,i)=>{
+                          if(line.startsWith('**')&&line.endsWith('**'))
+                            return <p key={i} style={{fontWeight:700,marginTop:10,marginBottom:2}}>{line.replace(/\*\*/g,'')}</p>;
+                          if(line.startsWith('- ')||line.startsWith('• '))
+                            return <p key={i} style={{paddingLeft:14,marginBottom:2}}>{'• '+line.slice(2)}</p>;
+                          if(line.trim()==='') return <br key={i}/>;
+                          return <p key={i} style={{marginBottom:4}}>{line}</p>;
+                        })}
+                      </div>
                       <div className="actionrow">
                         <button className="actionbtn" onClick={()=>copyText(aiAnswer,'AI answer')}><Clipboard size={13}/>Copy answer</button>
                       </div>
