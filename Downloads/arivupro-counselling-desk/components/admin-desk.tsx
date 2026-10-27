@@ -50,10 +50,10 @@ function gmailComposeUrl(to:string,subject:string,body:string):string{
   return `https://mail.google.com/mail/?view=cm&fs=1&to=${encodeURIComponent(to)}&su=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
 }
 
-export default function AdminDesk(){
+export default function AdminDesk({initialRows=[]}:{initialRows?:Row[]}){
   const [view,setView]=useState<'team'|'assistant'>('team');
-  const [rows,setRows]=useState<Row[]>([]);
-  const [loading,setLoading]=useState(true);
+  const [rows,setRows]=useState<Row[]>(initialRows as Row[]);
+  const [loading,setLoading]=useState(false);
   const [message,setMessage]=useState('');
   const [busy,setBusy]=useState(false);
   const [selected,setSelected]=useState<Row|null>(null);
