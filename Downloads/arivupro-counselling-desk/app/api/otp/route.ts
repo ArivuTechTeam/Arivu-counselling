@@ -12,8 +12,18 @@ function generateOTP():string{
 
 // POST /api/otp — send OTP to phone via SMS (stubbed: returns OTP in dev, sends via gateway in prod)
 // Body: {phone: string, action: "send" | "verify", code?: string}
+function isSameOrigin(req:Request):boolean{
+  const origin=req.headers.get('origin');
+  if(!origin)return true;
+  try{
+    const reqHost=new URL(req.url).hostname;
+    const originHost=new URL(origin).hostname;
+    return reqHost===originHost||reqHost==='0.0.0.0'||reqHost==='localhost'||originHost===process.env.NEXT_PUBLIC_HOST;
+  }catch{return false;}
+}
+
 export async function POST(req:Request){
-  if(req.headers.get('origin')!==new URL(req.url).origin)return reply({error:'Invalid origin'},403);
+  if(!isSameOrigin(req))return reply({error:'Invalid origin'},403);
   try{
     const b=z.object({
       phone:z.string().regex(/^\+?[0-9]{10,15}$/,'Enter a valid 10-digit mobile number'),

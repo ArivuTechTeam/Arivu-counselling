@@ -40,8 +40,19 @@ const submission=z.object({
   website:z.string().max(0).optional(),
 });
 
+function isSameOrigin(req:Request):boolean{
+  const origin=req.headers.get('origin');
+  if(!origin)return true; // server-to-server, allow
+  try{
+    const reqHost=new URL(req.url).hostname;
+    const originHost=new URL(origin).hostname;
+    // Allow same hostname OR localhost (Railway proxies the public hostname)
+    return reqHost===originHost||reqHost==='0.0.0.0'||reqHost==='localhost'||originHost===process.env.NEXT_PUBLIC_HOST;
+  }catch{return false;}
+}
+
 export async function POST(req:Request){
-  if(req.headers.get('origin')!==new URL(req.url).origin)return reply({error:'Invalid origin'},403);
+  if(!isSameOrigin(req))return reply({error:'Invalid origin'},403);
   if(Number(req.headers.get('content-length')||0)>16000)return reply({error:'Request too large.'},413);
   try{
     const b=submission.parse(await req.json());
@@ -96,7 +107,7 @@ export async function POST(req:Request){
 }
 
 export async function PATCH(req:Request){
-  if(req.headers.get('origin')!==new URL(req.url).origin)return reply({error:'Invalid origin'},403);
+  if(!isSameOrigin(req))return reply({error:'Invalid origin'},403);
   const {isStaff}=await access();
   if(!isStaff)return reply({error:'Admin access required.'},403);
   try{
