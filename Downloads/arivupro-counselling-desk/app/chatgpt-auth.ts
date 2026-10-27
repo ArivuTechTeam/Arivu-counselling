@@ -19,10 +19,21 @@ const SIGN_OUT_PATH = "/signout-with-chatgpt";
 const CALLBACK_PATH = "/callback";
 
 export async function getChatGPTUser(): Promise<ChatGPTUser | null> {
-  // In local development, bypass auth and use the dev admin email from .env
+  // Local dev bypass
   if (process.env.NODE_ENV !== 'production') {
     const devEmail = process.env.DEV_ADMIN_EMAIL || 'tech@arivupro.com';
     return { userId: 'dev-local', displayName: devEmail, email: devEmail, fullName: null };
+  }
+  // Railway: use cookie-based password auth instead of ChatGPT SIWC
+  if (process.env.RAILWAY === 'true') {
+    const { cookies } = await import('next/headers');
+    const jar = await cookies();
+    const token = jar.get('admin_token')?.value;
+    const adminEmail = process.env.ADMIN_EMAIL || 'marketing@arivupro.com';
+    if (token === process.env.ADMIN_PASSWORD) {
+      return { userId: 'railway-admin', displayName: adminEmail, email: adminEmail, fullName: null };
+    }
+    return null;
   }
 
   const requestHeaders = await headers();
@@ -51,6 +62,9 @@ export async function requireChatGPTUser(
   const user = await getChatGPTUser();
   if (user) return user;
 
+  if (process.env.RAILWAY === 'true') {
+    redirect(`/admin-login?return_to=${encodeURIComponent(returnTo)}`);
+  }
   redirect(chatGPTSignInPath(returnTo));
 }
 
