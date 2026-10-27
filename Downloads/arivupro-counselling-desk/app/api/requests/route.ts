@@ -14,12 +14,19 @@ async function access(){
   return {user,isStaff:['marketing@arivupro.com','tech@arivupro.com'].includes(user?.email.toLowerCase()||'')};
 }
 
-export async function GET(){
+export async function GET(req:Request){
   const {user,isStaff}=await access();
   if(!user)return reply({error:'Please sign in to the admin dashboard.'},401);
   if(!isStaff)return reply({error:'Admin access required.'},403);
   try{
-    return reply({rows:await getDb().select().from(requests).orderBy(desc(requests.created)).limit(500),isStaff:true,needsSetup:false});
+    const rows=await getDb().select().from(requests).orderBy(desc(requests.created)).limit(5000);
+    if(new URL(req.url).searchParams.get('format')==='csv'){
+      const headers=['Created At','Name','Email','Phone','Course','Level','Slot','Concern','Status','Notes','Meet Link','OTP Verified','Email Sent'];
+      const esc=(v:unknown)=>`"${String(v??'').replace(/"/g,'""').replace(/\r?\n/g,' ') }"`;
+      const lines=[headers.join(','),...rows.map(r=>[r.created,r.name,r.email,r.phone,r.course,r.level,r.slot,r.concern,r.status,r.notes,r.meetLink,r.otpVerified?'Yes':'No',r.emailSent?'Yes':'No'].map(esc).join(','))];
+      return new Response(lines.join('\r\n'),{status:200,headers:{'Content-Type':'text/csv; charset=utf-8','Content-Disposition':'attachment; filename="arivupro-student-requests.csv"','Cache-Control':'no-store'}});
+    }
+    return reply({rows:rows.slice(0,500),isStaff:true,needsSetup:false});
   }catch{
     return reply({error:'Unable to load enquiries. Please try again.'},503);
   }

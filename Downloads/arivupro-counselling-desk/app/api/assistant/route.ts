@@ -58,6 +58,11 @@ function isNonEnglish(text: string): boolean {
   return false;
 }
 
+function needsLiveWebsiteData(text: string): boolean {
+  return /\b(fee|fees|price|cost|batch|start|starts|starting|schedule|timing|date|available|availability|offer|discount|admission|enrol|enroll|join)\b/i.test(text)
+    || /[\u0B80-\u0BFF\u0900-\u097F]/.test(text);
+}
+
 // Build a compact script index for the classifier prompt
 const scriptIndex = talkingPoints.map((p, i) => `${i}. [${p.id}] ${p.title}`).join("\n");
 
@@ -76,6 +81,7 @@ export async function POST(req: Request) {
 
     const course = b.course || "the course you are considering";
     const nonEnglish = isNonEnglish(b.question);
+    const liveQuestion = needsLiveWebsiteData(b.question);
 
     // Step 1 — Gemini classifies: does this question match any curated script?
     const classifyPrompt = `You are a classifier. A student asked this question (may be in any Indian language or mix):
@@ -89,7 +95,7 @@ ${scriptIndex}
 
 Reply with one line only — either MATCH:<id> or NO_MATCH.`;
 
-    const classification = await geminiCall(key, classifyPrompt, 20, 0.1);
+    const classification = liveQuestion ? null : await geminiCall(key, classifyPrompt, 20, 0.1);
 
     if (classification) {
       const trimmed = classification.trim();
@@ -125,7 +131,7 @@ Verify: ${rawVerify}`;
     }
 
     // Step 2 — No curated match — fetch live WordPress context + full Gemini answer
-    const wpContext = await fetchWordPressContext(b.question);
+    const wpContext = await fetchWordPressContext(b.question, course, b.level);
     const wpSection = wpContext
       ? `\n\nLive data from ArivuPro website (use this for batch/fee/schedule questions):\n${wpContext}\n`
       : "";
@@ -138,7 +144,7 @@ Verify: ${rawVerify}`;
       return Response.json({error: "Gemini service could not answer right now."}, {status: 502});
     }
 
-    return Response.json({answer: geminiAnswer, source: "gemini"});
+    return Response.json({answer: geminiAnswer, source: liveQuestion ? "live-website" : "gemini"});
 
   } catch {
     return Response.json({error: "Unable to generate an answer right now."}, {status: 500});

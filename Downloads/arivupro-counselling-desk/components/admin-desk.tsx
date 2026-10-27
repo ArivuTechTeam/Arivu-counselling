@@ -208,7 +208,10 @@ export default function AdminDesk({initialRows=[]}:{initialRows?:Row[]}){
                 <section className="card">
                   <div className="heading">
                     <h2>Student requests</h2>
-                    <button className="textbtn" onClick={refresh} disabled={loading}><RefreshCw size={14}/>{loading?'Loading…':'Refresh'}</button>
+                    <div style={{display:'flex',gap:'8px'}}>
+                      <button className="textbtn" onClick={()=>{window.location.href='/api/requests?format=csv';}} title="Download all student requests as CSV"><ExternalLink size={14}/>Export CSV</button>
+                      <button className="textbtn" onClick={refresh} disabled={loading}><RefreshCw size={14}/>{loading?'Loading…':'Refresh'}</button>
+                    </div>
                   </div>
 
                   <div className="toolbar">
