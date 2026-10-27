@@ -122,3 +122,69 @@
 
 /* ── Mobile ── */
 @media(max-width:600px){.calwhobanner{padding:12px 14px}.calwhoavatar{width:32px;height:32px;font-size:13px}.calcard-header{padding:14px 16px}.herobadges{gap:7px}.herobadge{font-size:11px;padding:5px 10px}.donecard{padding:28px 18px}}
+
+/* ── Form animations ── */
+@keyframes fadeSlideUp{from{opacity:0;transform:translateY(22px)}to{opacity:1;transform:translateY(0)}}
+@keyframes fadeIn{from{opacity:0}to{opacity:1}}
+@keyframes pulseGreen{0%,100%{box-shadow:0 0 0 0 #2e885730}50%{box-shadow:0 0 0 6px #2e885710}}
+@keyframes badgePop{from{opacity:0;transform:scale(.85) translateY(6px)}to{opacity:1;transform:scale(1) translateY(0)}}
+@keyframes progressFill{from{width:0}to{width:var(--pw)}}
+
+/* Hero entrance */
+.herosection{animation:fadeSlideUp .55s cubic-bezier(.22,.68,0,1.1) both}
+.herobadge:nth-child(1){animation:badgePop .4s .3s both}
+.herobadge:nth-child(2){animation:badgePop .4s .42s both}
+.herobadge:nth-child(3){animation:badgePop .4s .54s both}
+
+/* Form card entrance */
+.publicsite .formcard{animation:fadeSlideUp .5s .1s both}
+.publicsite .rightstack>*:nth-child(1){animation:fadeSlideUp .5s .2s both}
+.publicsite .rightstack>*:nth-child(2){animation:fadeSlideUp .5s .32s both}
+
+/* Field section stagger */
+.fieldsection:nth-child(1){animation:fadeSlideUp .45s .15s both}
+.fieldsection:nth-child(2){animation:fadeSlideUp .45s .28s both}
+
+/* Input focus glow */
+.publicsite input:focus,.publicsite select:focus,.publicsite textarea:focus{
+  border-color:#2e8857;
+  box-shadow:0 0 0 3px #2e885718;
+  transform:translateY(-1px);
+  transition:border-color .2s,box-shadow .2s,transform .15s;
+}
+.publicsite input,.publicsite select,.publicsite textarea{transition:border-color .2s,box-shadow .2s,transform .15s}
+
+/* Progress bar at top of form */
+.formprogress{height:3px;background:#e8f2eb;border-radius:0 0 3px 3px;overflow:hidden;margin:-28px -28px 24px;position:relative}
+.formprogress-fill{height:100%;background:linear-gradient(90deg,#2e8857,#4db87a);border-radius:0 2px 2px 0;transition:width .5s cubic-bezier(.22,.68,0,1.1)}
+
+/* Submit button pulse when ready */
+.primary:not(:disabled){animation:none}
+.primary:not(:disabled):hover{transform:translateY(-1px);box-shadow:0 6px 20px #2e885530;transition:transform .15s,box-shadow .15s,background .15s}
+.primary:active{transform:translateY(0)!important}
+
+/* Step indicator pill */
+.publicsite .formcard:before{
+  animation:fadeIn .4s .05s both;
+  background:linear-gradient(90deg,#eaf4ed,#f3f9f3);
+  border:1px solid #c8e0cf;
+}
+
+/* Consent checkbox */
+.publicsite .consent{animation:fadeIn .4s .4s both}
+
+/* Done stage entrance */
+.donestage{animation:fadeSlideUp .5s both}
+.donecard{animation:fadeSlideUp .5s .05s both}
+.donestep:nth-child(1){animation:badgePop .4s .2s both}
+.donestep:nth-child(3){animation:badgePop .4s .35s both}
+.donestep:nth-child(5){animation:badgePop .4s .5s both}
+
+/* Calendly stage entrance */
+.calstage .calwhobanner{animation:fadeSlideUp .4s both}
+.calstage .calfullbleed{animation:fadeIn .5s .1s both}
+.calstage .calbackrow{animation:fadeIn .4s .2s both}
+
+/* Notice/error pop */
+.notice{animation:badgePop .3s both}
+.fielderror{animation:fadeSlideUp .2s both}
