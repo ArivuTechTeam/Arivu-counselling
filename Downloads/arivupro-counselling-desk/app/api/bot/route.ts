@@ -61,14 +61,19 @@ interface BotResponse {
 
 const BOT_SYSTEM = `You are Arivu, a friendly AI counsellor at ArivuPro Academy. You talk directly to students.
 
-LANGUAGE RULE: Reply in the EXACT same language/mix the student used.
-- Tamil → Tamil | Tanglish → Tanglish | Hindi → Hindi | Hinglish → Hinglish | English → English
+LANGUAGE RULE — CRITICAL: Detect what language the student wrote in and reply in that EXACT same language or mix.
+- English only → reply only in English
+- Tamil script → reply in Tamil
+- Tanglish (Tamil words in English letters like "pesu", "venum", "sollu") → reply in Tanglish
+- Hindi → reply in Hindi
+- Hinglish → reply in Hinglish
+- If student says "speak in tamil" or "tamil la pesu" → switch to Tanglish/Tamil immediately
 
-LENGTH: Max 80 words. Student is on mobile. Be like a knowledgeable friend texting back.
-Format: 1-2 line answer, 2-3 bullet points max, 1 follow-up question.
+LENGTH: Max 80 words. No markdown, no asterisks, no headers. Plain conversational text only.
+Format: 1-2 line direct answer, 2-3 short points, 1 follow-up question.
 
 NEVER: invent fees, dates, batch details, or guarantees.
-ALWAYS: if asked for specific batch dates/fees → say "Let me check the latest for you" and use provided context.`;
+ALWAYS: use provided live data for batch dates and fees if available.`;
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -159,7 +164,7 @@ async function geminiSTT(key: string, audioBase64: string): Promise<string> {
         contents: [{
           parts: [
             { text: 'Transcribe this audio exactly as spoken. Return only the transcription, nothing else.' },
-            { inline_data: { mime_type: 'audio/webm', data: audioBase64 } }
+            { inline_data: { mime_type: 'audio/ogg', data: audioBase64 } }
           ]
         }],
         generationConfig: { maxOutputTokens: 200, temperature: 0 }
@@ -311,9 +316,10 @@ Verify: ${rawVerify}`;
 
 Student: ${message}
 
-Respond ONLY as valid JSON: {"reply": "your response here", "sentiment": "neutral"}
-
-Sentiment must be one of: positive, neutral, mild_negative, negative, strong_negative, distress`;
+IMPORTANT: Your entire response must be ONLY a valid JSON object on a single line, no other text before or after it.
+Format: {"reply":"your answer here","sentiment":"neutral"}
+Sentiment options: positive, neutral, mild_negative, negative, strong_negative, distress
+No markdown, no code fences, no explanation — just the raw JSON object.`;
 
       const rawGeminiResponse = await geminiCall(key, fullPrompt, 600, 0.35);
 
@@ -332,10 +338,13 @@ Sentiment must be one of: positive, neutral, mild_negative, negative, strong_neg
           .replace(/^```(?:json)?\s*/i, "")
           .replace(/\s*```$/, "")
           .trim();
-        const parsed = JSON.parse(jsonStr) as { reply?: string; sentiment?: string };
-        reply = parsed.reply?.trim() || rawGeminiResponse;
+        // Extract JSON object even if there's surrounding text
+        const jsonMatch = jsonStr.match(/\{[\s\S]*\}/);
+        const parsed = JSON.parse(jsonMatch?.[0] ?? jsonStr) as { reply?: string; sentiment?: string };
+        reply = parsed.reply?.trim() || rawGeminiResponse.trim();
         parsedSentiment = parsed.sentiment?.trim() || "neutral";
       } catch {
+        // Gemini returned plain text — use it directly
         reply = rawGeminiResponse.trim();
         parsedSentiment = "neutral";
       }

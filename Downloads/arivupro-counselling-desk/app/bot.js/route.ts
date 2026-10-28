@@ -137,11 +137,20 @@ export async function GET() {
   document.body.appendChild(win);
 
   // ── Helpers ────────────────────────────────────────────────────────────
+  function stripMarkdown(text) {
+    return text
+      .replace(/\*\*(.*?)\*\*/g, '$1')
+      .replace(/\*(.*?)\*/g, '$1')
+      .replace(/^\s*[\*\-]\s+/gm, '• ')
+      .replace(/#{1,6}\s+/g, '')
+      .trim();
+  }
+
   function appendMsg(role, text) {
     var msgs = document.getElementById('arivu-bot-messages');
     var div = document.createElement('div');
     div.className = 'arivu-msg ' + role;
-    div.textContent = text;
+    div.textContent = role === 'bot' ? stripMarkdown(text) : text;
     msgs.appendChild(div);
     msgs.scrollTop = msgs.scrollHeight;
     return div;
@@ -155,7 +164,7 @@ export async function GET() {
   }
 
   function greet() {
-    appendMsg('bot', "Hi! I'm Arivu, your ArivuPro counsellor 🎓\\nAsk me anything about CA, CMA, ACCA, or any course.\\nநான் தமிழிலயும் பேசுவேன் 😊");
+    appendMsg('bot', "Hi! I\\'m Arivu, your ArivuPro AI Counsellor 🎓\\n\\nAsk me anything about CA, CMA, ACCA, CFA or any course we offer.\\n\\nFeel free to ask in your own language — English, Hindi, Tamil, or any mix you\\'re comfortable with!");
   }
 
   // ── Voice recording ────────────────────────────────────────────────────
