@@ -1,5 +1,5 @@
 'use client';
-import {useRef,useState} from 'react';
+import {useRef,useState,useEffect} from 'react';
 import {ArrowRight,Check,GraduationCap,ShieldCheck,CalendarDays,Loader2,User,Phone,Mail,BookOpen,HelpCircle,Sparkles} from 'lucide-react';
 import {courses} from '@/lib/courses';
 
@@ -58,6 +58,15 @@ type Stage='form'|'calendly'|'done';
 
 export default function StudentPage(){
   const [stage,setStage]=useState<Stage>('form');
+
+  useEffect(()=>{
+    if(document.getElementById('arivu-bot-script'))return;
+    const s=document.createElement('script');
+    s.id='arivu-bot-script';
+    s.src='/bot.js';
+    s.async=true;
+    document.body.appendChild(s);
+  },[]);
   const [busy,setBusy]=useState(false);
   const [error,setError]=useState('');
   const [emailErr,setEmailErr]=useState('');
