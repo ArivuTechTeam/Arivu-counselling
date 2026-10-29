@@ -1,0 +1,12 @@
+<svg width="32" height="32" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- Green background rounded square -->
+  <rect width="32" height="32" rx="7" fill="#2e8857"/>
+  <!-- Book right page -->
+  <rect x="16" y="4" width="11" height="24" rx="2.5" fill="white" opacity="0.9"/>
+  <!-- Book left page -->
+  <rect x="5" y="4" width="11" height="24" rx="2.5" fill="white"/>
+  <!-- Spine line -->
+  <rect x="15" y="4" width="2" height="24" fill="#2e8857" opacity="0.3"/>
+  <!-- Letter "a" -->
+  <text x="16" y="22" font-family="Georgia, serif" font-size="14" font-weight="700" fill="#2e8857" text-anchor="middle">a</text>
+</svg>
