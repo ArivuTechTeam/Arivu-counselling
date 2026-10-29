@@ -1,6 +1,6 @@
 import {getChatGPTUser} from "../../chatgpt-auth";
 import {talkingPoints} from "@/lib/counselling-answers";
-import {fetchWordPressContext} from "@/lib/wordpress";
+import {fetchWordPressContext, formatCoursesForBot} from "@/lib/wordpress";
 export const dynamic="force-dynamic";
 
 const system = `You are an AI briefing tool for ArivuPro Academy counsellors. You are NOT talking to the student — you are giving the counsellor a ready-to-use briefing so they can answer the student confidently.
@@ -84,7 +84,7 @@ export async function POST(req: Request) {
     return Response.json({error: "Counsellor access required."}, {status: 403});
 
   try {
-    const b = await req.json() as {course?: string; level?: string; question?: string};
+    const b = await req.json() as {course?: string; level?: string; question?: string; wpData?: unknown};
     if (!b.question?.trim()) return Response.json({error: "Enter a student question."}, {status: 400});
 
     const key = process.env.GEMINI_API_KEY;
@@ -142,8 +142,15 @@ Verify: ${rawVerify}`;
     }
 
     // Step 2 — No curated match — fetch live WordPress context + full Gemini answer
-    // fetchWordPressContext(query, course) — pass level+question together so filter picks correct level
-    const wpContext = await fetchWordPressContext(`${b.level || ''} ${b.question}`, course);
+    // If client sent pre-fetched WP data (bypasses Railway IP block), format it directly.
+    // Otherwise fall back to server-side fetch.
+    let wpContext: string;
+    if (Array.isArray(b.wpData) && b.wpData.length > 0) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      wpContext = formatCoursesForBot(b.wpData as any[], `${b.level || ''} ${b.question}`);
+    } else {
+      wpContext = await fetchWordPressContext(`${b.level || ''} ${b.question}`, course);
+    }
     const wpSection = wpContext
       ? `\n\n=== LIVE BATCH DATA FROM ARIVUPRO WORDPRESS ===\n${wpContext}\n=== END LIVE DATA ===\n\nIMPORTANT: Use the live batch data above for all dates, fees, timings, and locations. Do not guess or use general knowledge for these fields.`
       : `\n\nNO LIVE BATCH DATA AVAILABLE — tell the counsellor to check with the team for current dates and fees.`;

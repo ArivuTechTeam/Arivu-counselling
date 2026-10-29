@@ -60,7 +60,7 @@ async function fetchCoursesAPI(): Promise<CourseRecord[]> {
   }
 }
 
-function formatCoursesForBot(courses: CourseRecord[], query: string): string {
+export function formatCoursesForBot(courses: CourseRecord[], query: string): string {
   if (!courses.length) return '';
   const q = query.toLowerCase();
 

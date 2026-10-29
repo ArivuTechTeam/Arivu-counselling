@@ -128,10 +128,18 @@ export default function AdminDesk({initialRows=[]}:{initialRows?:Row[]}){
     if(!question.trim())return;
     setAiBusy(true);setAiAnswer('');setAiSource('');setAiScriptTitle('');
     try{
+      // Fetch WordPress course data from the browser (user's IP — Cloudflare won't block it)
+      // then pass it to the assistant so the server never needs to call WordPress directly.
+      let wpData: unknown[]|undefined;
+      try{
+        const wp=await fetch('/api/admin/courses',{cache:'no-store'});
+        if(wp.ok){const d=await wp.json();if(Array.isArray(d))wpData=d;}
+      }catch{/* non-fatal — assistant will try server-side fetch as fallback */}
+
       const r=await fetch('/api/assistant',{
         method:'POST',
         headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({course,level,question}),
+        body:JSON.stringify({course,level,question,...(wpData?{wpData}:{})}),
       });
       const d=await r.json() as {answer?:string;error?:string;source?:'curated'|'gemini';scriptTitle?:string};
       if(!r.ok)throw Error(d.error||'AI error');
