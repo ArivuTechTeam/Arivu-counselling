@@ -34,7 +34,17 @@ async function fetchCoursesAPI(): Promise<CourseRecord[]> {
     const separator = base.includes('?') ? '&' : '?';
     const fetchUrl = `${base}${separator}per_page=100`;
     const fetchPromise = fetch(fetchUrl, {
-      headers: { Accept: 'application/json', 'X-API-KEY': key },
+      headers: {
+        'Accept': 'application/json,text/html,*/*',
+        'X-API-KEY': key,
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Accept-Encoding': 'gzip, deflate, br',
+        'Referer': 'https://www.arivupro.com/',
+        'Origin': 'https://www.arivupro.com',
+        'Cache-Control': 'no-cache',
+      },
+      cache: 'no-store',
     });
     const res = await Promise.race([
       fetchPromise,

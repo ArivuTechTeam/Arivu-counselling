@@ -51,7 +51,7 @@ function gmailComposeUrl(to:string,subject:string,body:string):string{
 }
 
 export default function AdminDesk({initialRows=[]}:{initialRows?:Row[]}){
-  const [view,setView]=useState<'team'|'assistant'>('team');
+  const [view,setView]=useState<'team'|'assistant'|'api'>('team');
   const [rows,setRows]=useState<Row[]>(initialRows as Row[]);
   const [loading,setLoading]=useState(false);
   const [message,setMessage]=useState('');
@@ -70,6 +70,22 @@ export default function AdminDesk({initialRows=[]}:{initialRows?:Row[]}){
   const [aiScriptTitle,setAiScriptTitle]=useState('');
   const [aiBusy,setAiBusy]=useState(false);
   const [copied,setCopied]=useState('');
+  const [apiPerPage,setApiPerPage]=useState('10');
+  const [apiPage,setApiPage]=useState('1');
+  const [apiBusy,setApiBusy]=useState(false);
+  const [apiOutput,setApiOutput]=useState('');
+  const [apiError,setApiError]=useState('');
+
+  async function testCoursesApi(){
+    setApiBusy(true);setApiError('');setApiOutput('');
+    try{
+      const r=await fetch(`/api/admin/courses-test?per_page=${encodeURIComponent(apiPerPage)}&page=${encodeURIComponent(apiPage)}`);
+      const d=await r.json() as {error?:string;data?:unknown};
+      if(!r.ok)throw Error(d.error||'API request failed.');
+      setApiOutput(JSON.stringify(d.data,null,2));
+    }catch(e){setApiError((e as Error).message);}
+    finally{setApiBusy(false);}
+  }
 
   async function refresh(){
     setLoading(true);
@@ -154,6 +170,9 @@ export default function AdminDesk({initialRows=[]}:{initialRows?:Row[]}){
         </button>
         <button className={view==='assistant'?'nav active':'nav'} onClick={()=>{setView('assistant');setMessage('');}}>
           <Sparkles size={19}/>Direct answers &amp; AI
+        </button>
+        <button className={view==='api'?'nav active':'nav'} onClick={()=>{setView('api');setMessage('');}}>
+          <ShieldCheck size={19}/>API testing
         </button>
         <div className="asidecard">
           <div className="miniicon"><MessageCircle size={20}/></div>
@@ -324,6 +343,21 @@ export default function AdminDesk({initialRows=[]}:{initialRows?:Row[]}){
           )}
 
           {/* ── Assistant view ── */}
+          {view==='api'&&(
+            <section className="card" style={{maxWidth:'1100px'}}>
+              <div className="eyebrow">WORDPRESS DATA CONNECTION</div>
+              <h1>API testing</h1>
+              <p className="subtitle">Test the server-side WordPress courses API. The API key stays on Railway and is never sent to the browser.</p>
+              <div className="toolbar" style={{justifyContent:'flex-start',gap:'12px'}}>
+                <label>Items per page<select value={apiPerPage} onChange={e=>setApiPerPage(e.target.value)}><option>10</option><option>25</option><option>50</option><option>100</option></select></label>
+                <label>Page<input value={apiPage} onChange={e=>setApiPage(e.target.value)} inputMode="numeric" style={{width:'80px'}}/></label>
+                <button className="actionbtn" onClick={testCoursesApi} disabled={apiBusy}>{apiBusy?<Loader2 size={14} className="spin"/>:<RefreshCw size={14}/>} {apiBusy?'Fetching…':'Get data'}</button>
+              </div>
+              {apiError&&<div className="notice" role="alert">{apiError}</div>}
+              {apiOutput&&<pre style={{marginTop:'20px',maxHeight:'600px',overflow:'auto',padding:'16px',borderRadius:'12px',background:'#101915',color:'#d7f5e2',fontSize:'12px',whiteSpace:'pre-wrap'}}>{apiOutput}</pre>}
+            </section>
+          )}
+
           {view==='assistant'&&(
             <>
               <div className="eyebrow">PROFESSIONAL COMMERCE SME</div>
