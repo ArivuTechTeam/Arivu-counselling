@@ -5,9 +5,9 @@ export const metadata:Metadata={
   description:'A clearer next step for every commerce student.',
   icons:{
     icon:[
-      {url:'/favicon.svg',type:'image/svg+xml'},
+      {url:'/favicon.jpg',type:'image/jpeg'},
     ],
-    apple:{url:'/arivupro-logo.png'},
+    apple:{url:'/favicon.jpg'},
   },
 };
 export default function Layout({children}:{children:React.ReactNode}){return <html lang="en"><body>{children}</body></html>}
