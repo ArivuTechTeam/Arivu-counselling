@@ -3,32 +3,34 @@ import {talkingPoints} from "@/lib/counselling-answers";
 import {fetchWordPressContext} from "@/lib/wordpress";
 export const dynamic="force-dynamic";
 
-const system = `You are a counsellor at ArivuPro Academy. You reply like a knowledgeable senior friend texting back — SHORT, CRISP, and helpful.
+const system = `You are an AI briefing tool for ArivuPro Academy counsellors. You are NOT talking to the student — you are giving the counsellor a ready-to-use briefing so they can answer the student confidently.
 
-LANGUAGE RULE — CRITICAL:
-Reply in the EXACT same language/mix the student used.
-- Tamil → Tamil | Hindi → Hindi | Tanglish → Tanglish | Hinglish → Hinglish | English → English
-- Sound like a native speaker texting, NOT a formal document.
+OUTPUT FORMAT (always follow this exactly):
 
-LENGTH RULE — CRITICAL:
-Keep the entire reply under 120 words. Student is reading on mobile. No long paragraphs.
-Use this format:
-[1-2 line direct answer]
+STUDENT'S QUESTION SUMMARY
+One line restating what the student wants to know.
 
-[3–5 bullet points max — only the most important facts]
+ANSWER TO GIVE THE STUDENT
+2-4 sentences the counsellor can say directly to the student. Conversational, not robotic.
+If live batch data is available, include the exact start date, timing, location, fee — no vague statements.
 
-[1 line ArivuPro plug]
+KEY FACTS
+• Fact 1
+• Fact 2
+• Fact 3 (3-5 bullets max — only things the counsellor needs to know)
 
-[2 short follow-up questions]
+SUGGESTED FOLLOW-UP QUESTIONS
+• Question to ask the student to continue the conversation
 
-[1 line: what to verify]
+WHAT TO VERIFY
+One line on what to double-check before sharing (fees, dates, exam window etc.)
 
 RULES:
-- Never invent fees, dates, pass rates or placement guarantees
-- CA Foundation: 4 papers, May/Nov exams, ICAI registration
-- CMA India (ICMAI) ≠ US CMA (IMA) — always clarify if relevant
-- Mark changing facts: "Verify with ICAI/ArivuPro team"
-- No headers like "Key details:" or "Verification note:" — just write naturally`;
+- Never invent batch dates, fees, or guarantees — only use the live WordPress data provided
+- If batch data is available, state it clearly: "Next batch starts 14 Nov 2026, 10 AM–1 PM, Chennai classroom, Fee: ₹X"
+- If no live data available, say so plainly: "Batch details not in system — check with team"
+- CMA India (ICMAI) ≠ CMA USA (IMA) — always clarify
+- Never use asterisks or markdown bold — plain text only`;
 
 async function geminiCall(key: string, prompt: string, maxTokens: number, temperature: number): Promise<string | null> {
   for (const model of ['gemini-3.5-flash', 'gemini-3.5-flash-lite']) {
@@ -132,8 +134,8 @@ Verify: ${rawVerify}`;
             }
           }
 
-          // English — return curated script as-is
-          const full = `${rawAnswer}\n\n**Follow-up questions to ask the student:**\n${rawFollowups}\n\n**Before sharing:** ${rawVerify}`;
+          // English — format as counsellor briefing
+          const full = `STUDENT'S QUESTION SUMMARY\n${script.title}\n\nANSWER TO GIVE THE STUDENT\n${rawAnswer}\n\nSUGGESTED FOLLOW-UP QUESTIONS\n${rawFollowups}\n\nWHAT TO VERIFY\n${rawVerify}`;
           return Response.json({answer: full, source: "curated", scriptTitle: script.title});
         }
       }
@@ -143,10 +145,16 @@ Verify: ${rawVerify}`;
     // fetchWordPressContext(query, course) — pass level+question together so filter picks correct level
     const wpContext = await fetchWordPressContext(`${b.level || ''} ${b.question}`, course);
     const wpSection = wpContext
-      ? `\n\nLIVE ARIVUPRO COURSE DATA (the only source for current batch details):\n${wpContext}\n`
-      : "";
+      ? `\n\n=== LIVE BATCH DATA FROM ARIVUPRO WORDPRESS ===\n${wpContext}\n=== END LIVE DATA ===\n\nIMPORTANT: Use the live batch data above for all dates, fees, timings, and locations. Do not guess or use general knowledge for these fields.`
+      : `\n\nNO LIVE BATCH DATA AVAILABLE — tell the counsellor to check with the team for current dates and fees.`;
 
-    const prompt = `${system}${wpSection}\n\nCourse: ${course}\nLevel: ${b.level || "Not specified"}\nStudent question: ${b.question}\n\nCURRENT-DATA RULE: For batch dates, fees, timings, locations, modes, exam attempts, and availability, use only the LIVE ARIVUPRO COURSE DATA above. Never use general knowledge, old dates, or guesses. If a requested field is empty or absent, say that the exact detail is not available in the live website data and offer a counsellor. Do not write vague dates such as "early November" when no exact date is present.\nIMPORTANT: Detect the student's language/mix from their question above and reply in that EXACT same language and style throughout your entire answer. Do not cut off — finish the full response.`;
+    const prompt = `${system}${wpSection}
+
+Course: ${course}
+Level / Stage: ${b.level || 'Not specified'}
+Student's question: ${b.question}
+
+Write the counsellor briefing now:`;
 
     const geminiAnswer = await geminiCall(key, prompt, 2000, 0.35);
 
