@@ -1,3 +1,5 @@
+import {BATCH_DATA} from './batch-data';
+
 const WP_BASE = "https://www.arivupro.com/wp-json/wp/v2";
 const CACHE_TTL_MS = 10 * 60 * 1000; // 10 min — aligned with COURSES_CACHE_TTL
 
@@ -21,43 +23,9 @@ let coursesCache: { data: CourseRecord[]; ts: number } | null = null;
 const COURSES_CACHE_TTL = 10 * 60 * 1000; // 10 min
 
 async function fetchCoursesAPI(): Promise<CourseRecord[]> {
-  if (coursesCache && Date.now() - coursesCache.ts < COURSES_CACHE_TTL) {
-    return coursesCache.data;
-  }
-  const base = process.env.ARIVUPRO_COURSES_API_URL;
-  const key = process.env.ARIVUPRO_COURSES_API_KEY;
-  if (!base || !key) return [];
-  try {
-    // Append per_page as a raw string — do NOT use new URL() / searchParams
-    // because it percent-encodes commas in the _fields param (id%2Ctitle...)
-    // which breaks WordPress field filtering.
-    const separator = base.includes('?') ? '&' : '?';
-    const fetchUrl = `${base}${separator}per_page=100`;
-    const fetchPromise = fetch(fetchUrl, {
-      headers: {
-        'Accept': 'application/json,text/html,*/*',
-        'X-API-KEY': key,
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-        'Accept-Language': 'en-US,en;q=0.9',
-        'Accept-Encoding': 'gzip, deflate, br',
-        'Referer': 'https://www.arivupro.com/',
-        'Origin': 'https://www.arivupro.com',
-        'Cache-Control': 'no-cache',
-      },
-      cache: 'no-store',
-    });
-    const res = await Promise.race([
-      fetchPromise,
-      new Promise<never>((_, reject) => setTimeout(() => reject(new Error('timeout')), 8000)),
-    ]);
-    if (!res.ok) return [];
-    const data = await res.json() as CourseRecord[];
-    if (!Array.isArray(data)) return [];
-    coursesCache = { data, ts: Date.now() };
-    return data;
-  } catch {
-    return [];
-  }
+  // Use static batch data — WordPress API is blocked by SiteGround/Cloudflare from Railway IPs.
+  // To update: edit lib/batch-data.ts and redeploy.
+  return BATCH_DATA as CourseRecord[];
 }
 
 export function formatCoursesForBot(courses: CourseRecord[], query: string): string {
@@ -148,12 +116,24 @@ export function formatCoursesForBot(courses: CourseRecord[], query: string): str
     return `• ${title}${parts ? ' — ' + parts : ''}${note ? ' [' + note + ']' : ''}`;
   };
 
-  if (upcoming.length > 0) {
-    return `UPCOMING BATCHES FROM ARIVUPRO:\n${upcoming.slice(0, 15).map(c => formatLine(c)).join('\n')}`;
+  // Only show Nov 2026 onwards as upcoming
+  const NOV_2026 = new Date('2026-11-01').getTime();
+  const trulyUpcoming = upcoming.filter(c => {
+    const sd = c.start_date || '';
+    if (sd === 'Purchase Anytime') return true; // recorded courses always available
+    return parseDateMs(sd) >= NOV_2026;
+  });
+  const recentPast = past.filter(c => {
+    const sd = c.start_date || '';
+    return sd !== 'Purchase Anytime' && parseDateMs(sd) < NOV_2026 && parseDateMs(sd) !== Infinity;
+  });
+
+  if (trulyUpcoming.length > 0) {
+    return `UPCOMING BATCHES FROM ARIVUPRO (November 2026 onwards):\n${trulyUpcoming.slice(0, 15).map(c => formatLine(c)).join('\n')}`;
   }
 
-  if (past.length > 0) {
-    return `NOTE: No upcoming batches in our system right now. These batches have already started or ended — tell the student and ask them to contact ArivuPro or visit arivupro.com for the next confirmed batch date.\nPAST BATCHES (already started/ended):\n${past.slice(0, 10).map(c => formatLine(c, 'ENDED')).join('\n')}`;
+  if (recentPast.length > 0) {
+    return `NOTE: No upcoming batches found for this query. The batches below have already started — advise the student to visit arivupro.com or contact the team for the next batch date.\nPAST BATCHES (already started/ended):\n${recentPast.slice(0, 5).map(c => formatLine(c, 'ALREADY STARTED')).join('\n')}`;
   }
 
   return '';
