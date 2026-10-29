@@ -31,30 +31,39 @@ RULES:
 - No headers like "Key details:" or "Verification note:" — just write naturally`;
 
 async function geminiCall(key: string, prompt: string, maxTokens: number, temperature: number): Promise<string | null> {
-  const res = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${key}`,
-    {
-      method: "POST",
-      headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({
-        contents: [{parts: [{text: prompt}]}],
-        generationConfig: {maxOutputTokens: maxTokens, temperature},
-      }),
-    }
-  );
-  if (!res.ok) return null;
-  const data = await res.json() as {candidates?: Array<{content?: {parts?: Array<{text?: string}>}}>};
-  return data.candidates?.[0]?.content?.parts?.map(p => p.text || "").join("") || null;
+  for (const model of ['gemini-3.5-flash', 'gemini-3.5-flash-lite']) {
+    try {
+      const res = await Promise.race([
+        fetch(
+          `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`,
+          {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({
+              contents: [{parts: [{text: prompt}]}],
+              generationConfig: {maxOutputTokens: maxTokens, temperature},
+            }),
+          }
+        ),
+        new Promise<never>((_, reject) => setTimeout(() => reject(new Error('timeout')), 12000)),
+      ]);
+      if (!res.ok) continue;
+      const data = await res.json() as {candidates?: Array<{content?: {parts?: Array<{text?: string}>}}>};
+      const text = data.candidates?.[0]?.content?.parts?.map(p => p.text || "").join("") || null;
+      if (text) return text;
+    } catch { continue; }
+  }
+  return null;
 }
 
-// Detect if the question is non-English (Tamil/Hindi/Telugu script chars or Tanglish/Hinglish keywords)
+// Detect non-English — requires clear Tamil/Hindi signals, not generic English words
 function isNonEnglish(text: string): boolean {
-  // Non-ASCII characters = Indian language scripts (Tamil, Hindi, Telugu, Malayalam etc.)
   if (/[^\x00-\x7F]/.test(text)) return true;
-  // Common Tanglish words
-  if (/\b(pathi|venum|epdi|iruku|irukku|naan|enna|yenna|sollu|solu|theriyum|therila|konjam|romba|super|chance|vera|level|machi|da|di|bro|anna|akka|sir|madam|enga|unga|inga|onga|arivupro|batch|course|panna|panrom|aachu|illa|illai|thaan|than)\b/i.test(text)) return true;
-  // Common Hinglish words
-  if (/\b(kya|hai|hain|mujhe|aap|kaise|chahiye|batao|bata|karo|karein|accha|theek|bilkul|zaroor|bohot|bahut|sirf|abhi|pehle|baad|lekin|aur|ya|toh|na|nahi|kyun|kab|kahan|kaun|kitna|kitne)\b/i.test(text)) return true;
+  // Tanglish: needs 2+ unambiguous Tamil-origin words (not generic English like batch/course/sir)
+  const tanglish = /\b(pathi|venum|epdi|iruku|irukku|naan|enna|yenna|sollu|solu|theriyum|therila|konjam|romba|machi|enga|unga|inga|panna|panrom|aachu|illa|illai|thaan|aiyo|adei|ennada|serthuk|evlo|aaagum|serunga|vanakkam|eppo|theriyuma)\b/gi;
+  if ((text.match(tanglish) || []).length >= 2) return true;
+  // Hinglish: single clear Hindi word is enough
+  if (/\b(kya|hai|hain|mujhe|aap|kaise|chahiye|batao|bata|karo|karein|accha|theek|bilkul|zaroor|bohot|bahut|abhi|pehle|baad|lekin|nahi|kyun|kab|kahan|kaun|kitna|kitne)\b/i.test(text)) return true;
   return false;
 }
 
@@ -131,12 +140,13 @@ Verify: ${rawVerify}`;
     }
 
     // Step 2 — No curated match — fetch live WordPress context + full Gemini answer
-    const wpContext = await fetchWordPressContext(b.question, course, b.level);
+    // fetchWordPressContext(query, course) — pass level+question together so filter picks correct level
+    const wpContext = await fetchWordPressContext(`${b.level || ''} ${b.question}`, course);
     const wpSection = wpContext
-      ? `\n\nLive data from ArivuPro website (use this for batch/fee/schedule questions):\n${wpContext}\n`
+      ? `\n\nLIVE ARIVUPRO COURSE DATA (the only source for current batch details):\n${wpContext}\n`
       : "";
 
-    const prompt = `${system}${wpSection}\n\nCourse: ${course}\nLevel: ${b.level || "Not specified"}\nStudent question: ${b.question}\n\nIMPORTANT: Detect the student's language/mix from their question above and reply in that EXACT same language and style throughout your entire answer. Do not cut off — finish the full response.`;
+    const prompt = `${system}${wpSection}\n\nCourse: ${course}\nLevel: ${b.level || "Not specified"}\nStudent question: ${b.question}\n\nCURRENT-DATA RULE: For batch dates, fees, timings, locations, modes, exam attempts, and availability, use only the LIVE ARIVUPRO COURSE DATA above. Never use general knowledge, old dates, or guesses. If a requested field is empty or absent, say that the exact detail is not available in the live website data and offer a counsellor. Do not write vague dates such as "early November" when no exact date is present.\nIMPORTANT: Detect the student's language/mix from their question above and reply in that EXACT same language and style throughout your entire answer. Do not cut off — finish the full response.`;
 
     const geminiAnswer = await geminiCall(key, prompt, 2000, 0.35);
 

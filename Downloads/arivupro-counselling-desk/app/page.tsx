@@ -6,13 +6,23 @@ import {courses} from '@/lib/courses';
 const CALENDLY_BASE=process.env.NEXT_PUBLIC_CALENDLY_URL||'https://calendly.com/tech-arivupro/30min';
 
 const DOMAIN_TYPOS:Record<string,string>={
+  // Gmail typos
   'gail.com':'gmail.com','gmial.com':'gmail.com','gamil.com':'gmail.com',
   'gmail.co':'gmail.com','gmal.com':'gmail.com','gmali.com':'gmail.com',
   'gnail.com':'gmail.com','gmall.com':'gmail.com','gmail.con':'gmail.com',
+  'gmila.com':'gmail.com','gimail.com':'gmail.com','gmaill.com':'gmail.com',
+  'gmail.cpm':'gmail.com','gmail.ocm':'gmail.com','gmail.cm':'gmail.com',
+  'gemail.com':'gmail.com','gmai.com':'gmail.com','gmailcom':'gmail.com',
+  // Yahoo typos
   'yaho.com':'yahoo.com','yahooo.com':'yahoo.com','yahoo.co':'yahoo.com',
+  'yahoo.con':'yahoo.com','yhoo.com':'yahoo.com','yaho.co.in':'yahoo.co.in',
+  // Hotmail typos
   'hotmial.com':'hotmail.com','hotmal.com':'hotmail.com','hotmail.co':'hotmail.com',
-  'outlok.com':'outlook.com','outloook.com':'outlook.com',
-  'redifmail.com':'rediffmail.com','redifmail.in':'rediffmail.com',
+  'hotmaill.com':'hotmail.com','hotmail.con':'hotmail.com',
+  // Outlook typos
+  'outlok.com':'outlook.com','outloook.com':'outlook.com','outlook.con':'outlook.com',
+  // Rediffmail typos
+  'redifmail.com':'rediffmail.com','redifmail.in':'rediffmail.com','rediffmal.com':'rediffmail.com',
 };
 
 function validateEmail(v:string):string{
