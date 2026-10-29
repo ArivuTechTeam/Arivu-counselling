@@ -1,13 +1,14 @@
 'use client';
-import {useEffect,useState} from 'react';
+import {useEffect,useState,useMemo} from 'react';
 import {
   ArrowUpRight,CalendarDays,Check,ChevronRight,Clipboard,GraduationCap,
-  LayoutDashboard,MessageCircle,Search,ShieldCheck,Sparkles,Users,
+  LayoutDashboard,MessageCircle,Search,Sparkles,Users,
   Clock,BookOpen,ArrowRight,Video,Mail,Phone,RefreshCw,ExternalLink,Loader2,
   CheckCircle2,AlertCircle,XCircle,HelpCircle,Send,LogOut,
 } from 'lucide-react';
 import DirectAnswers from '@/components/direct-answers';
 import {courses,statuses} from '@/lib/courses';
+import {BATCH_DATA} from '@/lib/batch-data';
 
 type Row={
   id:string;name:string;email:string;phone:string;course:string;level:string;
@@ -15,11 +16,22 @@ type Row={
   otpVerified:boolean;emailSent:boolean;created:string;
 };
 
+interface BatchItem {
+  id:number;
+  title:{rendered:string};
+  course_level:string;
+  location:string;
+  start_date:string;
+  day_timing:string;
+  exam_attempt:string;
+  fee:string;
+  status:string;
+}
+
 const fmtDate=(s:string)=>{
   if(!s)return 'No slot';
-  // Try native parse first (ISO strings); if invalid, return the raw string as-is
   const d=new Date(s);
-  if(isNaN(d.getTime()))return s; // plain string like "15 Nov 2026 · 10:00 AM"
+  if(isNaN(d.getTime()))return s;
   return d.toLocaleString('en-IN',{timeZone:'Asia/Kolkata',day:'numeric',month:'short',year:'numeric',hour:'numeric',minute:'2-digit'});
 };
 
@@ -50,8 +62,69 @@ function gmailComposeUrl(to:string,subject:string,body:string):string{
   return `https://mail.google.com/mail/?view=cm&fs=1&to=${encodeURIComponent(to)}&su=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
 }
 
+// ── Batch helpers ──────────────────────────────────────────────────────────────
+
+const MONTH_MAP:Record<string,number>={
+  january:0,february:1,march:2,april:3,may:4,june:5,
+  july:6,august:7,september:8,october:9,november:10,december:11,
+};
+
+function parseBatchDate(s:string):Date|null{
+  if(!s||s==='Purchase Anytime'||s==='Will be updated'||s==='----')return null;
+  // Format: DD-Month-YYYY e.g. "14-November-2026"
+  const parts=s.split('-');
+  if(parts.length!==3)return null;
+  const day=parseInt(parts[0],10);
+  const month=MONTH_MAP[parts[1].toLowerCase()];
+  const year=parseInt(parts[2],10);
+  if(isNaN(day)||month===undefined||isNaN(year))return null;
+  return new Date(year,month,day);
+}
+
+// Cutoff: Nov 1 2026
+const UPCOMING_CUTOFF=new Date(2026,10,1);
+
+type BatchStatus='upcoming'|'past'|'recorded';
+
+function getBatchStatus(b:BatchItem):BatchStatus{
+  const sd=b.start_date;
+  if(!sd||sd==='Purchase Anytime'||sd==='Will be updated'||sd==='----')return 'recorded';
+  const d=parseBatchDate(sd);
+  if(!d)return 'recorded';
+  return d>=UPCOMING_CUTOFF?'upcoming':'past';
+}
+
+function detectCourseType(b:BatchItem):string{
+  const t=b.title.rendered+' '+b.course_level;
+  if(/CA Inter|CA Foundation|CA Final/i.test(t))return 'CA';
+  if(/CMA USA/i.test(t))return 'CMA USA';
+  if(/CMA India|CMA Foundation|CMA Inter|CMA Final|Tambaram CMA/i.test(t))return 'CMA India';
+  if(/ACCA/i.test(t))return 'ACCA';
+  if(/CSEET|CS /i.test(t))return 'CS';
+  if(/CFA/i.test(t))return 'CFA';
+  if(/FRM/i.test(t))return 'FRM';
+  if(/\bEA\b/i.test(t))return 'EA';
+  return 'Other';
+}
+
+function detectLocation(b:BatchItem):string{
+  const t=b.title.rendered+' '+b.location;
+  if(/Koramangala|Malleshwaram|Bangalore/i.test(t))return 'Bangalore';
+  if(/Coimbatore/i.test(t))return 'Coimbatore';
+  if(/Hyderabad/i.test(t))return 'Hyderabad';
+  if(/Trivandrum/i.test(t))return 'Trivandrum';
+  if(/Online|Recorded|Live.?online/i.test(t)||b.start_date==='Purchase Anytime')return 'Online';
+  if(/Chennai|Tambaram|Nungambakkam/i.test(t))return 'Chennai';
+  return 'Other';
+}
+
+const COURSE_TYPE_OPTIONS=['All','CA','CMA India','CMA USA','ACCA','CS','CFA','FRM','EA'];
+const LOCATION_OPTIONS=['All','Chennai','Bangalore','Coimbatore','Hyderabad','Online'];
+
+// ── Main component ──────────────────────────────────────────────────────────────
+
 export default function AdminDesk({initialRows=[]}:{initialRows?:Row[]}){
-  const [view,setView]=useState<'team'|'assistant'|'api'>('team');
+  const [view,setView]=useState<'team'|'assistant'|'batches'>('team');
   const [rows,setRows]=useState<Row[]>(initialRows as Row[]);
   const [loading,setLoading]=useState(false);
   const [message,setMessage]=useState('');
@@ -70,22 +143,10 @@ export default function AdminDesk({initialRows=[]}:{initialRows?:Row[]}){
   const [aiScriptTitle,setAiScriptTitle]=useState('');
   const [aiBusy,setAiBusy]=useState(false);
   const [copied,setCopied]=useState('');
-  const [apiPerPage,setApiPerPage]=useState('10');
-  const [apiPage,setApiPage]=useState('1');
-  const [apiBusy,setApiBusy]=useState(false);
-  const [apiOutput,setApiOutput]=useState('');
-  const [apiError,setApiError]=useState('');
 
-  async function testCoursesApi(){
-    setApiBusy(true);setApiError('');setApiOutput('');
-    try{
-      const r=await fetch(`/api/admin/courses-test?per_page=${encodeURIComponent(apiPerPage)}&page=${encodeURIComponent(apiPage)}`);
-      const d=await r.json() as {error?:string;data?:unknown};
-      if(!r.ok)throw Error(d.error||'API request failed.');
-      setApiOutput(JSON.stringify(d.data,null,2));
-    }catch(e){setApiError((e as Error).message);}
-    finally{setApiBusy(false);}
-  }
+  // Batch filters
+  const [batchCourseFilter,setBatchCourseFilter]=useState('All');
+  const [batchLocationFilter,setBatchLocationFilter]=useState('All');
 
   async function refresh(){
     setLoading(true);
@@ -118,7 +179,6 @@ export default function AdminDesk({initialRows=[]}:{initialRows?:Row[]}){
       if(!r.ok)throw Error(d.error||'Save failed.');
       setMessage('Changes saved.');
       await refresh();
-      // Update selected row with latest data
       setSelected(prev=>prev?{...prev,status,notes,meetLink}:null);
     }catch(e){setMessage((e as Error).message);}
     finally{setBusy(false);}
@@ -128,13 +188,11 @@ export default function AdminDesk({initialRows=[]}:{initialRows?:Row[]}){
     if(!question.trim())return;
     setAiBusy(true);setAiAnswer('');setAiSource('');setAiScriptTitle('');
     try{
-      // Fetch WordPress course data from the browser (user's IP — Cloudflare won't block it)
-      // then pass it to the assistant so the server never needs to call WordPress directly.
       let wpData: unknown[]|undefined;
       try{
         const wp=await fetch('/api/admin/courses',{cache:'no-store'});
         if(wp.ok){const d=await wp.json();if(Array.isArray(d))wpData=d;}
-      }catch{/* non-fatal — assistant will try server-side fetch as fallback */}
+      }catch{/* non-fatal */}
 
       const r=await fetch('/api/assistant',{
         method:'POST',
@@ -167,8 +225,132 @@ export default function AdminDesk({initialRows=[]}:{initialRows?:Row[]}){
     ['Completed',rows.filter(r=>r.status==='Completed').length],
   ];
 
+  // ── Batch derived data ──
+  const batchesWithMeta=useMemo(()=>(BATCH_DATA as BatchItem[]).map(b=>({
+    ...b,
+    _batchStatus:getBatchStatus(b),
+    _courseType:detectCourseType(b),
+    _locationGroup:detectLocation(b),
+  })),[]);
+
+  const filteredBatches=useMemo(()=>batchesWithMeta.filter(b=>{
+    if(batchCourseFilter!=='All'&&b._courseType!==batchCourseFilter)return false;
+    if(batchLocationFilter!=='All'&&b._locationGroup!==batchLocationFilter)return false;
+    return true;
+  }),[batchesWithMeta,batchCourseFilter,batchLocationFilter]);
+
+  const batchStats=useMemo(()=>({
+    upcoming:batchesWithMeta.filter(b=>b._batchStatus==='upcoming').length,
+    past:batchesWithMeta.filter(b=>b._batchStatus==='past').length,
+    recorded:batchesWithMeta.filter(b=>b._batchStatus==='recorded').length,
+  }),[batchesWithMeta]);
+
   return(
     <div className="shell">
+      <style>{`
+        @keyframes fadeInUp {
+          from { opacity: 0; transform: translateY(14px); }
+          to   { opacity: 1; transform: translateY(0); }
+        }
+        @keyframes batchPulse {
+          0%,100% { box-shadow: 0 0 0 0 rgba(22,163,74,.35); }
+          50%      { box-shadow: 0 0 0 5px rgba(22,163,74,0); }
+        }
+        .batch-table-wrap {
+          overflow-x: auto;
+          border-radius: 14px;
+          border: 1px solid #e5ede8;
+        }
+        .batch-table {
+          width: 100%;
+          border-collapse: collapse;
+          font-size: 13px;
+        }
+        .batch-table thead th {
+          background: #f4f9f6;
+          padding: 11px 14px;
+          text-align: left;
+          font-weight: 600;
+          font-size: 11px;
+          letter-spacing: .04em;
+          color: #4a7a5c;
+          text-transform: uppercase;
+          border-bottom: 1px solid #e0ece5;
+          white-space: nowrap;
+        }
+        .batch-table tbody tr {
+          border-bottom: 1px solid #eef5f0;
+          transition: transform .15s ease, box-shadow .15s ease, background .15s ease;
+          animation: fadeInUp .35s ease both;
+        }
+        .batch-table tbody tr:hover {
+          transform: translateY(-2px);
+          box-shadow: 0 4px 16px rgba(22,100,50,.08);
+          background: #f0faf4 !important;
+          position: relative;
+          z-index: 1;
+        }
+        .batch-table td {
+          padding: 11px 14px;
+          vertical-align: middle;
+          color: #1e3a2a;
+        }
+        .batch-row-upcoming td { background: #f0fdf4; }
+        .batch-row-past td { background: #fafafa; color: #8a9e91; }
+        .batch-row-recorded td { background: #f5f9ff; }
+        .badge-upcoming {
+          display:inline-flex;align-items:center;gap:4px;
+          background:#dcfce7;color:#15803d;
+          font-size:10px;font-weight:700;letter-spacing:.04em;
+          padding:3px 8px;border-radius:20px;
+          animation: batchPulse 2.2s ease-in-out infinite;
+        }
+        .badge-past {
+          display:inline-flex;align-items:center;gap:4px;
+          background:#f1f5f2;color:#6b7b70;
+          font-size:10px;font-weight:600;
+          padding:3px 8px;border-radius:20px;
+        }
+        .badge-recorded {
+          display:inline-flex;align-items:center;gap:4px;
+          background:#dbeafe;color:#1d4ed8;
+          font-size:10px;font-weight:700;
+          padding:3px 8px;border-radius:20px;
+        }
+        .batch-stats-bar {
+          display:flex;gap:12px;flex-wrap:wrap;margin-bottom:20px;
+        }
+        .batch-stat-chip {
+          display:flex;align-items:center;gap:7px;
+          padding:8px 16px;border-radius:30px;
+          font-size:12px;font-weight:600;
+          border:1px solid transparent;
+        }
+        .batch-stat-chip.upcoming { background:#dcfce7;color:#15803d;border-color:#bbf7d0; }
+        .batch-stat-chip.past     { background:#f1f5f2;color:#4a7a5c;border-color:#d1e5d8; }
+        .batch-stat-chip.recorded { background:#dbeafe;color:#1d4ed8;border-color:#bfdbfe; }
+        .batch-filter-bar {
+          display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:18px;
+        }
+        .batch-filter-bar select {
+          padding:7px 12px;border-radius:8px;border:1px solid #d1e5d8;
+          background:#fff;font-size:13px;color:#1e3a2a;
+          cursor:pointer;transition:border-color .15s;
+        }
+        .batch-filter-bar select:focus { outline:none;border-color:#22c55e; }
+        .batch-filter-label {
+          font-size:12px;font-weight:600;color:#4a7a5c;letter-spacing:.04em;text-transform:uppercase;
+        }
+        .batch-course-name { font-weight:600;color:#1a3328; }
+        .batch-location-pill {
+          display:inline-block;
+          background:#f0fdf4;color:#166534;
+          font-size:11px;font-weight:600;
+          padding:2px 8px;border-radius:10px;
+          border:1px solid #bbf7d0;
+        }
+      `}</style>
+
       {/* Sidebar */}
       <aside>
         <a className="brand" href="/"><span className="brandmark"><GraduationCap size={25}/></span><span>arivu<span className="brandgreen">pro</span><small>COUNSELLING DESK</small></span></a>
@@ -179,8 +361,8 @@ export default function AdminDesk({initialRows=[]}:{initialRows?:Row[]}){
         <button className={view==='assistant'?'nav active':'nav'} onClick={()=>{setView('assistant');setMessage('');}}>
           <Sparkles size={19}/>Direct answers &amp; AI
         </button>
-        <button className={view==='api'?'nav active':'nav'} onClick={()=>{setView('api');setMessage('');}}>
-          <ShieldCheck size={19}/>API testing
+        <button className={view==='batches'?'nav active':'nav'} onClick={()=>{setView('batches');setMessage('');}}>
+          <CalendarDays size={19}/>Batch schedule
         </button>
         <div className="asidecard">
           <div className="miniicon"><MessageCircle size={20}/></div>
@@ -195,7 +377,7 @@ export default function AdminDesk({initialRows=[]}:{initialRows?:Row[]}){
 
       <div className="body">
         <header>
-          <span>ArivuPro <ChevronRight size={14}/> <b>{view==='team'?'Counsellor Workspace':'Answer Assistant'}</b></span>
+          <span>ArivuPro <ChevronRight size={14}/> <b>{view==='team'?'Counsellor Workspace':view==='batches'?'Batch Schedule':'Answer Assistant'}</b></span>
           <div className="headerend">
             <span className="pill">ArivuPro Academy</span>
             <span className="avatar">AP</span>
@@ -277,7 +459,6 @@ export default function AdminDesk({initialRows=[]}:{initialRows?:Row[]}){
                       <span className="eyebrow">SESSION DETAILS</span>
                       <h2>{selected.name}</h2>
 
-                      {/* Contact row */}
                       <div className="contactrow">
                         <a href={`mailto:${selected.email}`} className="contactchip"><Mail size={13}/>{selected.email}</a>
                         <a href={`tel:${selected.phone}`} className="contactchip"><Phone size={13}/>{selected.phone}</a>
@@ -290,7 +471,6 @@ export default function AdminDesk({initialRows=[]}:{initialRows?:Row[]}){
                         {selected.otpVerified&&<small style={{color:'#2e8857'}}><Check size={12}/> Mobile verified</small>}
                       </div>
 
-                      {/* Google Meet link */}
                       <label>Google Meet link
                         <div className="meetrow">
                           <input
@@ -305,7 +485,6 @@ export default function AdminDesk({initialRows=[]}:{initialRows?:Row[]}){
                         </div>
                       </label>
 
-                      {/* Quick actions */}
                       <div className="actionrow">
                         <a
                           className="actionbtn actionbtn-primary"
@@ -350,22 +529,118 @@ export default function AdminDesk({initialRows=[]}:{initialRows?:Row[]}){
             </>
           )}
 
-          {/* ── Assistant view ── */}
-          {view==='api'&&(
-            <section className="card" style={{maxWidth:'1100px'}}>
-              <div className="eyebrow">WORDPRESS DATA CONNECTION</div>
-              <h1>API testing</h1>
-              <p className="subtitle">Test the server-side WordPress courses API. The API key stays on Railway and is never sent to the browser.</p>
-              <div className="toolbar" style={{justifyContent:'flex-start',gap:'12px'}}>
-                <label>Items per page<select value={apiPerPage} onChange={e=>setApiPerPage(e.target.value)}><option>10</option><option>25</option><option>50</option><option>100</option></select></label>
-                <label>Page<input value={apiPage} onChange={e=>setApiPage(e.target.value)} inputMode="numeric" style={{width:'80px'}}/></label>
-                <button className="actionbtn" onClick={testCoursesApi} disabled={apiBusy}>{apiBusy?<Loader2 size={14} className="spin"/>:<RefreshCw size={14}/>} {apiBusy?'Fetching…':'Get data'}</button>
+          {/* ── Batch Schedule view ── */}
+          {view==='batches'&&(
+            <>
+              <div className="eyebrow">BATCH SCHEDULE</div>
+              <h1>All upcoming batches<br/>at a glance.</h1>
+              <p className="subtitle">Live batch schedule across all centres and courses. Filter by course type or location to find the right batch for any student.</p>
+
+              {/* Stats bar */}
+              <div className="batch-stats-bar">
+                <div className="batch-stat-chip upcoming">
+                  <span style={{width:8,height:8,borderRadius:'50%',background:'#16a34a',display:'inline-block'}}/>
+                  {batchStats.upcoming} Upcoming
+                </div>
+                <div className="batch-stat-chip past">
+                  <span style={{width:8,height:8,borderRadius:'50%',background:'#9ca3af',display:'inline-block'}}/>
+                  {batchStats.past} Already started
+                </div>
+                <div className="batch-stat-chip recorded">
+                  <span style={{width:8,height:8,borderRadius:'50%',background:'#3b82f6',display:'inline-block'}}/>
+                  {batchStats.recorded} Recorded / self-paced
+                </div>
               </div>
-              {apiError&&<div className="notice" role="alert">{apiError}</div>}
-              {apiOutput&&<pre style={{marginTop:'20px',maxHeight:'600px',overflow:'auto',padding:'16px',borderRadius:'12px',background:'#101915',color:'#d7f5e2',fontSize:'12px',whiteSpace:'pre-wrap'}}>{apiOutput}</pre>}
-            </section>
+
+              {/* Filter bar */}
+              <div className="batch-filter-bar">
+                <span className="batch-filter-label">Course</span>
+                <select value={batchCourseFilter} onChange={e=>setBatchCourseFilter(e.target.value)}>
+                  {COURSE_TYPE_OPTIONS.map(x=><option key={x}>{x}</option>)}
+                </select>
+                <span className="batch-filter-label" style={{marginLeft:8}}>Location</span>
+                <select value={batchLocationFilter} onChange={e=>setBatchLocationFilter(e.target.value)}>
+                  {LOCATION_OPTIONS.map(x=><option key={x}>{x}</option>)}
+                </select>
+                {(batchCourseFilter!=='All'||batchLocationFilter!=='All')&&(
+                  <button
+                    className="textbtn"
+                    style={{marginLeft:4}}
+                    onClick={()=>{setBatchCourseFilter('All');setBatchLocationFilter('All');}}
+                  >
+                    <XCircle size={13}/>Clear filters
+                  </button>
+                )}
+                <span style={{marginLeft:'auto',fontSize:12,color:'#4a7a5c',fontWeight:600}}>
+                  {filteredBatches.length} batch{filteredBatches.length!==1?'es':''} shown
+                </span>
+              </div>
+
+              {/* Table */}
+              <div className="batch-table-wrap">
+                <table className="batch-table">
+                  <thead>
+                    <tr>
+                      <th>Course Name</th>
+                      <th>Start Date</th>
+                      <th>Timing</th>
+                      <th>Location</th>
+                      <th>Exam Attempt</th>
+                      <th>Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filteredBatches.length===0?(
+                      <tr>
+                        <td colSpan={6} style={{textAlign:'center',padding:'32px',color:'#8a9e91'}}>
+                          No batches match the selected filters.
+                        </td>
+                      </tr>
+                    ):filteredBatches.map((b,idx)=>(
+                      <tr
+                        key={b.id}
+                        className={`batch-row-${b._batchStatus}`}
+                        style={{animationDelay:`${Math.min(idx*30,600)}ms`}}
+                      >
+                        <td>
+                          <span className="batch-course-name">{b.title.rendered}</span>
+                          <br/>
+                          <span style={{fontSize:11,color:'#4a7a5c',opacity:.8}}>{b.course_level}</span>
+                        </td>
+                        <td style={{whiteSpace:'nowrap'}}>
+                          {b.start_date==='Purchase Anytime'||b.start_date==='Will be updated'||b.start_date==='----'
+                            ? <span style={{color:'#6b7280',fontStyle:'italic'}}>{b.start_date}</span>
+                            : b.start_date
+                          }
+                        </td>
+                        <td style={{fontSize:12,color:'#4a7a5c'}}>{b.day_timing}</td>
+                        <td>
+                          <span className="batch-location-pill">{b.location}</span>
+                        </td>
+                        <td style={{fontSize:12}}>{b.exam_attempt}</td>
+                        <td>
+                          {b._batchStatus==='upcoming'&&(
+                            <span className="badge-upcoming">
+                              <span style={{width:6,height:6,borderRadius:'50%',background:'#16a34a',display:'inline-block'}}/>
+                              Upcoming
+                            </span>
+                          )}
+                          {b._batchStatus==='past'&&(
+                            <span className="badge-past">Already Started</span>
+                          )}
+                          {b._batchStatus==='recorded'&&(
+                            <span className="badge-recorded">Anytime</span>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </>
           )}
 
+          {/* ── Assistant view ── */}
           {view==='assistant'&&(
             <>
               <div className="eyebrow">PROFESSIONAL COMMERCE SME</div>
@@ -394,14 +669,12 @@ export default function AdminDesk({initialRows=[]}:{initialRows?:Row[]}){
                     <textarea value={question} onChange={e=>setQuestion(e.target.value)} rows={5} placeholder="What does the student want to know?"/>
                   </label>
 
-                  {/* Quick prompts */}
                   <div className="chips" style={{marginBottom:16}}>
                     {['Which course suits my career goals?','Can I study while working?','What are the fees?','Am I eligible to join?'].map(x=>(
                       <button key={x} onClick={()=>setQuestion(x)}>{x}</button>
                     ))}
                   </div>
 
-                  {/* Gemini AI answer */}
                   <button className="primary" onClick={askAI} disabled={aiBusy||!question.trim()}>
                     {aiBusy?<><Loader2 size={15} className="spin"/>Generating…</>:<><Sparkles size={15}/>Generate AI answer</>}
                   </button>
@@ -433,10 +706,8 @@ export default function AdminDesk({initialRows=[]}:{initialRows?:Row[]}){
                     </article>
                   )}
 
-                  {/* Curated scripts */}
                   <DirectAnswers key={course+question} course={course} question={question}/>
 
-                  {/* SME brief */}
                   <div className="connection" style={{marginTop:20}}>
                     <span className="amberdot"/>
                     <div>
