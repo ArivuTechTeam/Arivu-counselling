@@ -42,21 +42,42 @@ const fmtDateShort=(s:string)=>{
   return d.toLocaleString('en-IN',{timeZone:'Asia/Kolkata',day:'numeric',month:'short',hour:'numeric',minute:'2-digit'});
 };
 
+// ── Pipeline stages config ────────────────────────────────────────────────────
+const PIPELINE:[string,string,string,string][]=[
+  // [value, label, color, bg]
+  ['Requested',       'Requested',        '#6b7f72', '#f1f5ee'],
+  ['Session Scheduled','Scheduled 📅',    '#1a5cb5', '#e8f0fb'],
+  ['Session Done',    'Session Done ✓',   '#2e8857', '#e6f4ec'],
+  ['Enrolled',        'Enrolled 🎉',      '#7b3fa0', '#f3e8fc'],
+  ['Follow-up',       'Follow-up 🔔',     '#8a6c1a', '#fdf6e3'],
+  ['Not Interested',  'Not Interested',   '#7a5c3e', '#fdf0e6'],
+  ['Cancelled',       'Cancelled',        '#a03030', '#fce8e8'],
+];
+
 const statusIcon=(s:string)=>{
-  if(s==='Confirmed')return <CheckCircle2 size={13}/>;
-  if(s==='Completed')return <Check size={13}/>;
+  if(s==='Session Scheduled')return <CheckCircle2 size={13}/>;
+  if(s==='Session Done')return <Check size={13}/>;
+  if(s==='Enrolled')return <Sparkles size={13}/>;
   if(s==='Cancelled')return <XCircle size={13}/>;
   if(s==='Follow-up')return <AlertCircle size={13}/>;
+  if(s==='Not Interested')return <XCircle size={13}/>;
   return <HelpCircle size={13}/>;
 };
 
 const statusColor=(s:string)=>{
-  if(s==='Confirmed')return 'statusgreen';
-  if(s==='Completed')return 'statusblue';
-  if(s==='Cancelled')return 'statusred';
-  if(s==='Follow-up')return 'statusamber';
-  return 'statusgrey';
+  const p=PIPELINE.find(x=>x[0]===s);
+  if(!p)return 'statusgrey';
+  return '';// we'll use inline style instead
 };
+
+function StatusBadge({s}:{s:string}){
+  const p=PIPELINE.find(x=>x[0]===s)||PIPELINE[0];
+  return(
+    <span className="status" style={{color:p[2],background:p[3],border:`1px solid ${p[2]}22`,gap:5}}>
+      {statusIcon(s)}{p[1]}
+    </span>
+  );
+}
 
 function gmailComposeUrl(to:string,subject:string,body:string):string{
   return `https://mail.google.com/mail/?view=cm&fs=1&to=${encodeURIComponent(to)}&su=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
@@ -221,8 +242,8 @@ export default function AdminDesk({initialRows=[]}:{initialRows?:Row[]}){
   const stats=[
     ['Total',rows.length],
     ['Requested',rows.filter(r=>r.status==='Requested').length],
-    ['Confirmed',rows.filter(r=>r.status==='Confirmed').length],
-    ['Completed',rows.filter(r=>r.status==='Completed').length],
+    ['Scheduled',rows.filter(r=>r.status==='Session Scheduled').length],
+    ['Enrolled 🎉',rows.filter(r=>r.status==='Enrolled').length],
   ];
 
   // ── Batch derived data ──
@@ -444,7 +465,7 @@ export default function AdminDesk({initialRows=[]}:{initialRows?:Row[]}){
                         <small>{r.concern}</small>
                       </div>
                       <div style={{display:'flex',flexDirection:'column',alignItems:'flex-end',gap:5}}>
-                        <span className={`status ${statusColor(r.status)}`}>{statusIcon(r.status)}{r.status}</span>
+                        <StatusBadge s={r.status}/>
                         {r.otpVerified&&<span className="verifiedbadge"><Check size={10}/>OTP</span>}
                         {r.meetLink&&<span className="meetbadge"><Video size={10}/>Meet</span>}
                       </div>
@@ -503,11 +524,29 @@ export default function AdminDesk({initialRows=[]}:{initialRows?:Row[]}){
                         </button>
                       </div>
 
-                      <label>Session status
-                        <select value={status} onChange={e=>setStatus(e.target.value)}>
-                          {statuses.map(x=><option key={x}>{x}</option>)}
-                        </select>
-                      </label>
+                      {/* ── Pipeline status picker ── */}
+                      <div style={{marginBottom:18}}>
+                        <div style={{fontSize:11,fontWeight:600,color:'#4b6052',marginBottom:10}}>Pipeline stage</div>
+                        <div style={{display:'flex',flexWrap:'wrap',gap:7}}>
+                          {PIPELINE.map(([val,,clr,bg])=>(
+                            <button key={val}
+                              onClick={()=>setStatus(val)}
+                              style={{
+                                display:'inline-flex',alignItems:'center',gap:5,
+                                padding:'7px 12px',borderRadius:20,
+                                fontSize:11,fontWeight:600,cursor:'pointer',
+                                border:`1.5px solid ${status===val?clr:clr+'44'}`,
+                                background:status===val?clr:bg,
+                                color:status===val?'#fff':clr,
+                                transform:status===val?'scale(1.05)':'scale(1)',
+                                transition:'all .15s',
+                                boxShadow:status===val?`0 4px 12px ${clr}40`:'none',
+                              }}>
+                              {statusIcon(val)}{val}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
 
                       <label>Counsellor notes &amp; next steps
                         <textarea rows={5} value={notes} onChange={e=>setNotes(e.target.value)} placeholder="Record advice, follow-ups and next steps…"/>
