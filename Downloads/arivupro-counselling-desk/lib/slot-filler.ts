@@ -18,9 +18,9 @@ export function extractSlots(text: string): SlotData {
 
   // Name patterns: "I am X", "naan X", "my name is X", "peru X", "I'm X"
   const nameMatch = text.match(
-    /(?:i(?:'?m| am)|naan|my name is|peru\s*[:=]?\s*|name[:\s]+)([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)/i
+    /(?:i(?:'?m| am)|naan|my name is|peru\s*[:=]?\s*|name[:\s]+)([A-Za-z][a-z]*(?:\s+[A-Za-z][a-z]*)?)/i
   );
-  if (nameMatch) result.name = nameMatch[1].trim();
+  if (nameMatch) result.name = nameMatch[1].trim().replace(/\b\w/g, c => c.toUpperCase());
 
   // Course mentions
   const courseMap: Record<string, string> = {

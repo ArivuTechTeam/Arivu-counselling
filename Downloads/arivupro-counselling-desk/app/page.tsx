@@ -59,14 +59,6 @@ type Stage='form'|'calendly'|'done';
 export default function StudentPage(){
   const [stage,setStage]=useState<Stage>('form');
 
-  useEffect(()=>{
-    if(document.getElementById('arivu-bot-script'))return;
-    const s=document.createElement('script');
-    s.id='arivu-bot-script';
-    s.src='/bot.js';
-    s.async=true;
-    document.body.appendChild(s);
-  },[]);
   const [busy,setBusy]=useState(false);
   const [error,setError]=useState('');
   const [emailErr,setEmailErr]=useState('');
