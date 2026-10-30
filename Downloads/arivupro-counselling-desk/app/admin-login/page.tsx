@@ -47,8 +47,9 @@ function LoginForm(){
       <div className={`login-card${mounted?' login-card-in':''}${shake?' login-shake':''}`}>
         {/* Logo */}
         <div className="login-logo-wrap">
-          <img src="/arivupro-horizontal.png" alt="ArivuPro Academy" className="login-logo-img" onError={e=>{(e.target as HTMLImageElement).style.display='none';}}/>
-          <div className="login-logo-fallback">arivu<span>pro</span></div>
+          <img src="/arivupro-logo-white.png" alt="ArivuPro Academy" className="login-logo-img"
+            onError={e=>{(e.target as HTMLImageElement).style.display='none';}}/>
+          <span className="login-logo-text">ArivuPro Academy</span>
         </div>
         <div className="login-title">Counselling Desk</div>
         <div className="login-sub">Sign in to access the admin workspace</div>
@@ -107,10 +108,9 @@ function LoginForm(){
         .login-card-in{opacity:1;transform:translateY(0) scale(1)}
         .login-shake{animation:shake .5s ease}
         @keyframes shake{0%,100%{transform:translateX(0)}20%{transform:translateX(-8px)}40%{transform:translateX(8px)}60%{transform:translateX(-5px)}80%{transform:translateX(5px)}}
-        .login-logo-wrap{display:flex;align-items:center;justify-content:center;margin-bottom:6px;min-height:48px}
-        .login-logo-img{height:44px;width:auto;object-fit:contain;filter:brightness(0) invert(1)}
-        .login-logo-fallback{font-size:28px;font-weight:800;color:#fff;letter-spacing:-1px;font-family:'Manrope',sans-serif}
-        .login-logo-fallback span{color:#4cd882}
+        .login-logo-wrap{display:flex;align-items:center;justify-content:center;gap:10px;margin-bottom:6px;min-height:48px}
+        .login-logo-img{height:36px;width:auto;object-fit:contain}
+        .login-logo-text{font-size:20px;font-weight:800;color:#fff;letter-spacing:-.5px;font-family:'Manrope',sans-serif}
         .login-title{text-align:center;font-size:13px;letter-spacing:2px;text-transform:uppercase;color:#4cd882;font-weight:700;margin-top:4px}
         .login-sub{text-align:center;color:rgba(255,255,255,0.45);font-size:12px;margin-top:6px}
         .login-field{margin-bottom:18px}
