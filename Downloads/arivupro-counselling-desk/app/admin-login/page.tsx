@@ -115,13 +115,13 @@ function LoginForm(){
         .login-sub{text-align:center;color:rgba(255,255,255,0.45);font-size:12px;margin-top:6px}
         .login-field{margin-bottom:18px}
         .login-field label{display:block;font-size:11px;font-weight:600;color:rgba(255,255,255,0.6);margin-bottom:7px;letter-spacing:.3px}
-        .login-input{display:block;width:100%;padding:13px 14px;background:rgba(255,255,255,0.07);border:1.5px solid rgba(255,255,255,0.12);border-radius:10px;font-size:14px;color:#fff;outline:none;transition:border-color .2s,background .2s;box-sizing:border-box}
-        .login-input::placeholder{color:rgba(255,255,255,0.25)}
-        .login-input:focus{border-color:#2e8857;background:rgba(46,136,87,0.08)}
+        .login-input{display:block;width:100%;padding:13px 14px;background:rgba(255,255,255,0.07) !important;border:1.5px solid rgba(255,255,255,0.12) !important;border-radius:10px;font-size:14px;color:#fff !important;outline:none;transition:border-color .2s,background .2s;box-sizing:border-box;margin-top:0 !important}
+        .login-input::placeholder{color:rgba(255,255,255,0.25) !important}
+        .login-input:focus{border-color:#2e8857 !important;background:rgba(46,136,87,0.08) !important;box-shadow:none !important}
         .login-pw-wrap{position:relative}
-        .login-pw-input{padding-right:44px}
-        .login-pw-toggle{position:absolute;right:12px;top:50%;transform:translateY(-50%);background:none;border:none;color:rgba(255,255,255,0.4);cursor:pointer;display:flex;align-items:center;padding:4px;transition:color .2s}
-        .login-pw-toggle:hover{color:rgba(255,255,255,0.8)}
+        .login-pw-input{padding-right:44px !important}
+        .login-pw-toggle{position:absolute;right:12px;top:50%;transform:translateY(-50%);background:none !important;border:none;color:rgba(255,255,255,0.5);cursor:pointer;display:flex;align-items:center;padding:4px;transition:color .2s;z-index:2}
+        .login-pw-toggle:hover{color:#fff}
         .login-error{color:#ff7b7b;background:rgba(255,80,80,0.1);border:1px solid rgba(255,80,80,0.2);border-radius:8px;padding:10px 12px;font-size:12px;margin-bottom:12px}
         .login-btn{width:100%;margin-top:8px;padding:14px;background:linear-gradient(135deg,#2e8857,#1e6b42);color:#fff;border:none;border-radius:10px;font-size:14px;font-weight:700;cursor:pointer;transition:opacity .2s,transform .15s;display:flex;align-items:center;justify-content:center;gap:8px;letter-spacing:-.2px}
         .login-btn:hover:not(:disabled){transform:translateY(-1px);opacity:.92}
